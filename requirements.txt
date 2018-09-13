@@ -1,0 +1,10 @@
+pandas
+psutil
+requests
+scikit-image
+scikit-learn
+GDAL>=2.1
+gp-emulator==1.5.5
+lightgbm>=2.1.0
+numpy>=1.13
+scipy>=1.0.0

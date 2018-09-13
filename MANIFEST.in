@@ -1,0 +1,3 @@
+include setup.py
+include SIAC/data/sen2cloud_detector.pkl
+include SIAC/util/*
