@@ -9,7 +9,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 * MCD43 : 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date
 * ECMWF CAMS Near Real Time prediction: a time step of 3 hours with the start time of 00:00:00 over the date
 * global dem: Global DEM VRT file built from ASTGTM2 DEM, and a bash script under eles/ can be used to generate with the individual files.
-* emus (`multiply_atmospheric_corection/emus`): emulators for the 6S and wv restrival, can be found at: http://www2.geog.ucl.ac.uk/~ucfafyi/emus/
+* emus: emulators for the 6S and wv restrival, can be found at: http://www2.geog.ucl.ac.uk/~ucfafyi/emus/
 
 ### LICENSE
 GNU GENERAL PUBLIC LICENSE V3
