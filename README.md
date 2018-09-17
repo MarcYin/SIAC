@@ -4,7 +4,7 @@
 ### ucfafyi@ucl.ac.uk
 
 
-This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have a proper cloud mask at the moment and no topography correction as well. Homogeneouse surface is used without considering the BRDF effects.
+This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneouse surface is used without considering the BRDF effects.
 
 
 ## Data needed:
@@ -15,7 +15,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 
 ## Installation:
 
-Download this repositories either by `git clonegit@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In main directory of it excute `pip install .` 
+Download this repositories either by `git clonegit@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` 
 
 The typical usage for Sentinel 2 and Landsat 8:
 ```python
@@ -27,9 +27,8 @@ from SIAC import SIAC_L8
 SIAC_L8('/directory/where/you/store/L8/data/') 
 ``` 
 
-An example of usage for the other sensors such as Landsat 5 is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
+An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
-[![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/MarcYin/SIAC/master)
 
 ### LICENSE
 GNU GENERAL PUBLIC LICENSE V3
