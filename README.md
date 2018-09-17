@@ -18,14 +18,16 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 Download this repositories either by `git clonegit@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In main directory of it excute `pip install .` 
 
 The typical usage for Sentinel 2 and Landsat 8:
-```from SIAC import SIAC_S2
+```python
+from SIAC import SIAC_S2
 SIAC_S2('/directory/where/you/store/S2/data/') # this can be either from AWS or Senitinel offical package
 ```
-```from SIAC import SIAC_L8                                                                           
+```python
+from SIAC import SIAC_L8                                                                           
 SIAC_L8('/directory/where/you/store/L8/data/') 
 ``` 
 
-An example of usage for the other sensors such as Landsat 5 is shown (here)[https://github.com/MarcYin/Global-analysis-ready-dataset]
+An example of usage for the other sensors such as Landsat 5 is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/MarcYin/SIAC/master)
 
