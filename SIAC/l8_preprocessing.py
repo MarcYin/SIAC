@@ -1,7 +1,7 @@
 #/usr/bin/env python
 import os
 from glob import glob
-from l8_angle import do_l8_angle
+from SIAC.l8_angle import do_l8_angle
 
 def l8_pre_processing(l8_dir):
     metafiles = []

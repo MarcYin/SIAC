@@ -1,5 +1,5 @@
 import scipy.stats as stats
-from lhd import lhd
+from SIAC.lhd import lhd
 def create_training_set ( parameters, minvals, maxvals, n_train=200 ):
     """Creates a traning set for a set of parameters specified by 
     ``parameters`` (not actually used, but useful for debugging

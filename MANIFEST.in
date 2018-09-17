@@ -1,3 +1,5 @@
 include setup.py
-include SIAC/data/sen2cloud_detector.pkl
 include SIAC/util/*
+include SIAC/emus/*.pkl
+include SIAC/data/sen2cloud_detector.pkl
+include SIAC/spectral_mapping/*

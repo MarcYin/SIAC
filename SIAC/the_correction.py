@@ -15,10 +15,11 @@ try:
 except:
     import pickle as pkl
 from numpy import clip, uint8
-from multi_process import parmap
+from SIAC.multi_process import parmap
 from scipy.interpolate import griddata
 from scipy.ndimage import binary_dilation
-from reproject import reproject_data, array_to_raster
+from SIAC.create_logger import create_logger
+from SIAC.reproject import reproject_data, array_to_raster
 
 warnings.filterwarnings("ignore")
 
@@ -48,11 +49,11 @@ class atmospheric_correction(object):
                  ang_scale   = 0.01,
                  ele_scale   = 0.001,
                  atmo_scale  = [1., 1., 1., 1., 1., 1.],
-                 #global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',
-                 #cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/',
-                 global_dem  = '/home/ucfafyi/DATA/Multiply/eles/global_dem.vrt',
-                 cams_dir    = '/home/ucfafyi/netapp_10/cams/',
-                 emus_dir    = '/home/ucfafyi/DATA/Atmospheric_correction/atmospheric_correction/emus/',
+                 global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',
+                 cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/',
+                 #global_dem  = '/home/ucfafyi/DATA/Multiply/eles/global_dem.vrt',
+                 #cams_dir    = '/home/ucfafyi/netapp_10/cams/',
+                 emus_dir    = 'SIAC/emus/',
                  cams_scale  = [1., 0.1, 46.698, 1., 1., 1.],
                  block_size  = 600,
                  rgb         = [None, None, None]
@@ -94,9 +95,9 @@ class atmospheric_correction(object):
         if (r is not None) & (g is not None) & (b is not None):
             self.ri, self.gi, self.bi = self.toa_bands.index(r), self.toa_bands.index(g), self.toa_bands.index(b)
             self._do_rgb = True
-           
+        '''   
         # create logger
-        self.logger = logging.getLogger('AtmoCor')
+        self.logger = logging.getLogger('SIAC')
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
             ch = logging.StreamHandler()
@@ -104,7 +105,8 @@ class atmospheric_correction(object):
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             ch.setFormatter(formatter)
             self.logger.addHandler(ch)
-        self.logger.propagate = False
+        '''
+        self.logger = create_logger()
          
     def _create_base_map(self,):
         '''
@@ -382,7 +384,7 @@ class atmospheric_correction(object):
                     re = map(self._do_band)
                 ret   += re
                 index += (np.where(needed==u_need[i])[0]).tolist()
-            ret = zip(*sorted(zip(index, ret)))[1]
+            ret = list(zip(*sorted(zip(index, ret))))[1]
         self.boa_rgb = ret[self.ri], ret[self.gi],ret[self.bi]
         #return ret
 

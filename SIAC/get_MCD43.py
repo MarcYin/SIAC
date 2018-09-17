@@ -1,15 +1,28 @@
 import os
 import time
 import gdal
+import logging
 import requests
 import numpy as np
 from glob import glob
 from functools import partial
 from multiprocessing import Pool
 from datetime import datetime, timedelta
-from modis_tile_cal import get_vector_hv, get_raster_hv
+from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
 from os.path import expanduser
+from SIAC.create_logger import create_logger
 home = expanduser("~")
+'''
+logger = logging.getLogger('SIAC')
+logger.setLevel(logging.INFO)     
+if not logger.handlers:     
+    ch = logging.StreamHandler() 
+    ch.setLevel(logging.DEBUG)   
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)   
+    logger.addHandler(ch)
+''' 
+logger = create_logger()
 
 try:
     username, password = np.loadtxt(home + '/earthdata_auth', dtype=str)
@@ -102,9 +115,13 @@ def daily_vrt(fnames_date, vrt_dir = None):
             gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs).FlushCache()
 
 def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/'):
+    logger.propagate = False
+    logger.info('Start downloading MCD43 for the AOI, this may take some time.')
+    logger.info('Query files...')
     ret = find_files(aoi, obs_time, temporal_window = 16)
     url_fnames = [[i, mcd43_dir + '/' + i.split('/')[-1]] for i in ret]
     p = Pool(5)
+    logger.info('Start downloading...')
     ret = p.map(downloader, url_fnames)
     p.close()
     p.join()
@@ -112,6 +129,7 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/'):
     all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in flist])          
     udates = np.unique(all_dates)  
     fnames_dates =  [[flist[all_dates==date].tolist(),date] for date in udates]
+    logger.info('Creating daily VRT...')
     par = partial(daily_vrt, vrt_dir = vrt_dir)
     p = Pool(len(fnames_dates)) 
     p.map(par, fnames_dates)

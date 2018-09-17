@@ -1,14 +1,33 @@
 import os
 import sys
+import requests
 import numpy as np
-from get_MCD43 import get_mcd43
+from glob import glob
+from SIAC.get_MCD43 import get_mcd43
 from datetime import datetime
-from the_aerosol import solve_aerosol
-from the_correction import atmospheric_correction
-#sys.path.insert(0, '/data/store01/data_dirs/students/ucfafyi/Atmospheric_correction/atmospheric_correction')
-from s2_preprocessing import s2_pre_processing
+from SIAC.the_aerosol import solve_aerosol
+from SIAC.the_correction import atmospheric_correction
+from SIAC.s2_preprocessing import s2_pre_processing
+from SIAC.downloaders import downloader
+from SIAC.multi_process import parmap
+from os.path import expanduser
+home = expanduser("~")
+file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_S2(s2_t, send_back = False):
+    if not os.path.exists(file_path + '/emus/'):
+        os.mkdir(file_path + '/emus/')
+    if len(glob(file_path + '/emus/' + 'isotropic_MSI_emulators_*_x?p_S2?.pkl')) < 12:
+        url = 'http://www2.geog.ucl.ac.uk/~ucfafyi/emus/'
+        req = requests.get(url)
+        to_down = []
+        for line in req.text.split():
+            if 'MSI' in line:
+                fname   = line.split('"')[1].split('<')[0]
+                if 'MSI' in fname:
+                    to_down.append([fname, url])
+        f = lambda fname_url: downloader(fname_url[0], fname_url[1], file_path + '/emus/')
+        parmap(f, to_down)
     rets = s2_pre_processing(s2_t)
     aero_atmos = []
     for ret in rets:
@@ -19,7 +38,17 @@ def SIAC_S2(s2_t, send_back = False):
     if send_back:
         return aero_atmos
 
-def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile):
+def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
+                  cloud_mask, metafile, mcd43 = home + '/MCD43', vrt_dir = home + '/MCD43_VRT'):
+
+    if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43'):
+        if not os.path.exists(home + '/MCD43'):
+            os.mkdir(home + '/MCD43')
+
+    if os.path.realpath(vrt_dir) in os.path.realpath(home + '/MCD43_VRT'):
+        if not os.path.exists(home + '/MCD43_VRT'):
+            os.mkdir(home + '/MCD43_VRT')
+
     base = os.path.dirname(toa_refs[0])
     base = toa_refs[0].replace('B01.jp2', '')
     with open(metafile) as f:
@@ -29,7 +58,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask
                 obs_time = datetime.strptime(sensing_time, u'%Y-%m-%dT%H:%M:%S.%fZ')
             if 'TILE_ID' in i:
                 sat = i.split('</')[0].split('>')[-1].split('_')[0]
-    get_mcd43(toa_refs[0], obs_time, mcd43_dir = '/data/nemesis/MCD43/', vrt_dir = '/home/ucfafyi/DATA/Multiply/MCD43/')
+    
+    get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir)
     #get_mcd43(toa_refs[0], obs_time, mcd43_dir = '/home/ucfafyi/hep/MCD43/', vrt_dir = '/home/ucfafyi/DATA/Multiply/MCD43/')
     sensor_sat = 'MSI', sat
     band_index  = [1,2,3,7,11,12]
@@ -37,7 +67,9 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask
     toa_bands   = (np.array(toa_refs)[band_index,]).tolist()
     view_angles = (np.array(view_ang_names)[band_index,]).tolist()
     sun_angles  = sun_ang_name
-    aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,sun_angles,obs_time,cloud_mask, gamma=10.)
+    aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
+                         sun_angles,obs_time,cloud_mask, gamma=10., spec_m_dir= \
+                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/')
     aero._solving()
     toa_bands  = toa_refs
     view_angles = view_ang_names
@@ -49,8 +81,11 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask
     tco3_unc = base + 'tco3_unc.tif'
     rgb = [toa_bands[3], toa_bands[2], toa_bands[1]]
     band_index = [0,1,2,3,4,5,6,7,8,9,10,11,12]
-    atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,sun_angles, aot = aot, cloud_mask = cloud_mask,\
-                                  tcwv = tcwv, tco3 = tco3, aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = rgb)
+    atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,\
+                                  sun_angles, aot = aot, cloud_mask = cloud_mask,\
+                                  tcwv = tcwv, tco3 = tco3, aot_unc = aot_unc, \
+                                  tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = \
+                                  rgb, emus_dir=file_path+'/emus/')
     atmo._doing_correction()
     return aero, atmo
 

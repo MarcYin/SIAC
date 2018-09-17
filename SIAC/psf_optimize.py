@@ -4,8 +4,8 @@ import sys
 sys.path.insert(0, 'util')
 from scipy import ndimage, signal, optimize
 from scipy.fftpack import dct, idct
-from multi_process import parmap
-from create_training_set import create_training_set
+from SIAC.multi_process import parmap
+from SIAC.create_training_set import create_training_set
 import scipy
 
 

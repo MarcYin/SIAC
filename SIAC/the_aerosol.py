@@ -1,3 +1,6 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 import os
 import gc
 import sys
@@ -5,7 +8,7 @@ import sys
 import ogr
 import osr
 import gdal
-import kernels
+import SIAC.kernels as kernels 
 import logging
 import warnings
 import platform
@@ -16,16 +19,17 @@ try:
     import cPickle as pkl
 except:  
     import pickle as pkl
-from smoothn import smoothn
+from SIAC.smoothn import smoothn
 from functools import partial
-from multi_process import parmap
+from SIAC.multi_process import parmap
 from scipy.fftpack import dct, idct
-from psf_optimize import psf_optimize
+from SIAC.psf_optimize import psf_optimize
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta
-from atmo_solver import solving_atmo_paras
+from SIAC.create_logger import create_logger
+from SIAC.atmo_solver import solving_atmo_paras
 from sklearn.linear_model import HuberRegressor 
-from reproject import reproject_data, array_to_raster
+from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
 
 warnings.filterwarnings("ignore") 
@@ -59,13 +63,13 @@ class solve_aerosol(object):
                  ang_scale   = 0.01,
                  ele_scale   = 0.001,
                  prior_scale = [1., 0.1, 46.698, 1., 1., 1.],
-                 emus_dir    = '/home/ucfafyi/DATA/Atmospheric_correction/atmospheric_correction/emus/',
+                 emus_dir    = 'SIAC/emus/',
                  mcd43_dir   = '/home/ucfafyi/DATA/Multiply/MCD43/',
                  global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',
                  cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/',
                  #global_dem  = '/home/ucfafyi/DATA/Multiply/eles/global_dem.vrt',
                  #cams_dir    = '/home/ucfafyi/netapp_10/cams/',
-                 spec_m_dir  = '/home/ucfafyi/DATA/Atmospheric_correction/atmospheric_correction/spectral_mapping',
+                 spec_m_dir  = 'SIAC/spectral_mapping',
                  aero_res    = 1000):                                 
         self.sensor      = sensor_sat[0]
         self.satellite   = sensor_sat[1]
@@ -105,9 +109,9 @@ class solve_aerosol(object):
             spec_map         = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.sensor).T
         self.spec_slope  = spec_map[0]
         self.spec_off    = spec_map[1]
-    
+        '''
         # create logger
-        self.logger = logging.getLogger('AtmoCor')
+        self.logger = logging.getLogger('SIAC')
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
             ch = logging.StreamHandler()
@@ -116,6 +120,8 @@ class solve_aerosol(object):
             ch.setFormatter(formatter)
             self.logger.addHandler(ch)
         self.logger.propagate = False
+        '''
+        self.logger = create_logger()
 
     def _create_base_map(self,):
         '''
@@ -150,8 +156,8 @@ class solve_aerosol(object):
                 with open(self.toa_dir + '/AOI.json', 'wb') as f:
                     f.write(gjson_str)
         if not os.path.exists(self.toa_dir + '/AOI.json'):
-            subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.logger.warning('AOI is not created and full band extend is used')
+            subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.aoi = self.toa_dir + '/AOI.json'
         else:
             self.aoi = self.toa_dir + '/AOI.json'
@@ -616,12 +622,15 @@ class solve_aerosol(object):
         self.boa_unc = self.boa_unc[:, _mask]
         eps=1.7                                     
         mask = True                                 
-        for i in range(len(self.toa)):           
-            x,y = self.boa[i][...,None], self.toa[i][...,None]
-            huber = HuberRegressor(fit_intercept=True, alpha=0.0, max_iter=100,epsilon=eps)
-            huber.fit(x,y)                          
-            mask *= ~huber.outliers_ 
-        self.mask = mask #& boa_mask & toa_mask
+        if self.boa.shape[1] > 3: 
+            for i in range(len(self.toa)):           
+                x,y = self.boa[i][...,None], self.toa[i][...,None]
+                huber = HuberRegressor(fit_intercept=True, alpha=0.0, max_iter=100,epsilon=eps)
+                huber.fit(x,y)                          
+                mask *= ~huber.outliers_ 
+            self.mask = mask #& boa_mask & toa_mask
+        else:
+            self.mask = False
     
     def _fill_nan(self,):
         def fill_nan(array):                        
@@ -655,13 +664,13 @@ class solve_aerosol(object):
         self._mask_bad_pix()
         self.logger.info('Get simulated BOA.')
         self._get_boa()
-        if self.boa.shape[1] > 3:
-            self.logger.info('Get PSF.')
-            self._get_psf()
-            self.logger.info('Get simulated TOA reflectance.')
-            self._get_convolved_toa()
-            self.logger.info('Filtering data.')
-            self._re_mask()
+        self.logger.info('Get PSF.')
+        self._get_psf()
+        self.logger.info('Get simulated TOA reflectance.')
+        self._get_convolved_toa()
+        self.logger.info('Filtering data.')
+        self._re_mask()
+        if self.mask is not False:
             self.logger.info('Loading emulators.')
             self._load_xa_xb_xc_emus()
             self.logger.info('Reading priors and elevation.')

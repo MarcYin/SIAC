@@ -11,7 +11,7 @@ from multiprocessing import Pool
 warnings.filterwarnings("ignore")
 
 file_path = os.path.dirname(os.path.realpath(__file__))
-angle_exe = file_path + '/util/l8_angles/l8_angles'
+angle_exe = file_path + '/util/l8_angles'
 
 def post_view_angle(view_angle, out_name, delete_origin = False):
     g = gdal.Open(view_angle)

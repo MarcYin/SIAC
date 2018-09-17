@@ -12,7 +12,7 @@ except:
     import pickle as pkl
 from scipy import optimize, interpolate
 #from fastDiff import fastDiff
-from multi_process import parmap
+from SIAC.multi_process import parmap
 
 #turn off multithreading
 #os.environ['OPENBLAS_NUM_THREADS'] = '1' 
@@ -210,9 +210,9 @@ class solving_atmo_paras(object):
             #res4 = optimize.minimize(self._cost, p0, jac=, method='COBYLA', options={'disp': True})
             #print res1, res2 #res3
             #psolve = res2
-            self.logger.info(bcolors.GREEN + psolve['message'] + bcolors.ENDC)
-            self.logger.info(bcolors.GREEN + 'Iterations: %d'%psolve['nit'] + bcolors.ENDC)
-            self.logger.info(bcolors.GREEN + 'Function calls: %d'%psolve['nfev'] +bcolors.ENDC)  
+            self.logger.info(bcolors.GREEN + str(psolve['message']) + bcolors.ENDC)
+            self.logger.info(bcolors.GREEN + 'Iterations: %d'%int(psolve['nit']) + bcolors.ENDC)
+            self.logger.info(bcolors.GREEN + 'Function calls: %d'%int(psolve['nfev']) +bcolors.ENDC)  
             self.aot_prior, self.tcwv_prior = psolve['x'].reshape(2, self.num_blocks_x, self.num_blocks_y)
             #self.tcwv_prior = self.tcwv_prior
             if ii != len(shapes)-1:

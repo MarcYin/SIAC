@@ -6,8 +6,8 @@ import gdal
 import numpy as np
 from glob import glob
 import multiprocessing
-from reproject import reproject_data
-from s2_angle import resample_s2_angles
+from SIAC.reproject import reproject_data
+from SIAC.s2_angle import resample_s2_angles
 from skimage.morphology import disk, binary_dilation, binary_erosion
 
 try:
