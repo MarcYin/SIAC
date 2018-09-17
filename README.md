@@ -15,7 +15,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 
 ## Installation:
 
-Download this repositories either by `git clonegit@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` 
+Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` 
 
 The typical usage for Sentinel 2 and Landsat 8:
 ```python
