@@ -1,4 +1,4 @@
-# Sentinel 2 and Landsat 8 Atmospheric correction 
+# A sensor invariant Atmospheric Correction (SIAC)
 ### Feng Yin
 ### Department of Geography, UCL
 ### ucfafyi@ucl.ac.uk
