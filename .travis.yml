@@ -16,10 +16,8 @@ install:
   - conda config --set always_yes yes --set changeps1 no
   - conda update -q conda
   - conda info -a
-  - conda create -q -n test python=$TRAVIS_PYTHON_VERSION
+  - conda create -q -n test -c conda-forge python=$TRAVIS_PYTHON_VERSION gdal=2.2.4 scipy numpy psutil six lightgbm requests scikit-learn scikit-image gp_emulator
   - source activate test
-  - conda update -c conda-forge --all
-  - conda install -c conda-forge gdal=2.2.4
   - pip install -U codecov
   - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
        pip install -U backports.functools_lru_cache;
