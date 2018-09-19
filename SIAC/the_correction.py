@@ -1,7 +1,6 @@
 #!/usr/bin/env python 
 import os
 import sys                                                                                                                                  
-#sys.path.insert(0,'/home/ucfafyi/DATA/Atmospheric_correction/atmospheric_correction/util')
 import gdal
 import psutil
 import logging

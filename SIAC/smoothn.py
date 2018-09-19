@@ -1,7 +1,7 @@
 from numpy import *
-from pylab import *
 import scipy.optimize.lbfgsb as lbfgsb
 import numpy.linalg
+from numpy.linalg import norm
 from scipy.fftpack.realtransforms import dct,idct
 import numpy as np
 import numpy.ma as ma
@@ -531,6 +531,7 @@ def peaks(n):
     z += f
   return z 
 
+'''
 def test1():
    plt.figure(1)
    plt.clf()
@@ -711,4 +712,4 @@ def sparseTest(n=1000):
   # ((Vt.T * (np.diag(np.array(eigenvalues).flatten())**2)) * Vt)
   # we see you get the same as m.T * m by squaring the eigenvalues
 
-
+'''

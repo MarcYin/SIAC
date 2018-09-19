@@ -4,7 +4,6 @@ from __future__ import print_function
 import os
 import gc
 import sys
-#sys.path.insert(0, '/home/ucfafyi/DATA/Atmospheric_correction/atmospheric_correction/util')
 import ogr
 import osr
 import gdal

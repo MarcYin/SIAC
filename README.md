@@ -17,6 +17,16 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 
 Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` 
 
+To save your time for installing GDAL and lightgbm, please use:
+
+```bash
+conda install -c conda-forge gdal=2.2.4
+conda install -c conda-forge lightgbm
+```
+
+or `pip install SIAC` or `conda install -c f0xy siac`
+
+
 The typical usage for Sentinel 2 and Landsat 8:
 ```python
 from SIAC import SIAC_S2
@@ -29,6 +39,11 @@ SIAC_L8('/directory/where/you/store/L8/data/')
 
 An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
+## Examples and Map:
+
+A [page](http://www2.geog.ucl.ac.uk/~ucfafyi/Atmo_Cor/index.html) shows some correction samples.
+
+A [map](http://www2.geog.ucl.ac.uk/~ucfafyi/map) for comparison between TOA and BOA.
 
 ### LICENSE
 GNU GENERAL PUBLIC LICENSE V3

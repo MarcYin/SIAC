@@ -14,7 +14,7 @@ from os.path import expanduser
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
-def SIAC_S2(s2_t, send_back = False):
+def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43', vrt_dir = home + '/MCD43_VRT'):
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
     if len(glob(file_path + '/emus/' + 'isotropic_MSI_emulators_*_x?p_S2?.pkl')) < 12:
@@ -31,6 +31,7 @@ def SIAC_S2(s2_t, send_back = False):
     rets = s2_pre_processing(s2_t)
     aero_atmos = []
     for ret in rets:
+        ret += (mcd43, vrt_dir)
         #sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile = ret
         aero_atmo = do_correction(*ret)
         if send_back:

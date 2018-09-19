@@ -285,10 +285,11 @@ if __name__=='__main__':
     rand_lhs = lhd(dist=(d0,d1,d2,d3),size=100)
     spac_lhs = lhd(dist=(d0,d1,d2,d3),size=100,form='spacefilling',
                    iterations=100,showcorrelations=True)
-    
+    '''
     try:
-        from scatterplot_matrix import scatterplot_matrix as spm
-        import matplotlib.pyplot as plt
+        #from scatterplot_matrix import scatterplot_matrix as spm
+        #import matplotlib.pyplot as plt
+        
     except ImportError:
         print (rand_lhs)
         print (spac_lhs)
@@ -300,4 +301,4 @@ if __name__=='__main__':
         spm(spac_lhs.T,names=names)
         plt.suptitle('Space-Filling LHS Design')
         plt.show()
-        
+       ''' 
