@@ -15,7 +15,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 
 ## Installation:
 
-Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` 
+Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` , or `pip install SIAC` or `conda install -c f0xy siac`
 
 To save your time for installing GDAL and lightgbm, please use:
 
@@ -24,7 +24,6 @@ conda install -c conda-forge gdal=2.2.4
 conda install -c conda-forge lightgbm
 ```
 
-or `pip install SIAC` or `conda install -c f0xy siac`
 
 
 The typical usage for Sentinel 2 and Landsat 8:
