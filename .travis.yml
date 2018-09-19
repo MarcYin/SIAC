@@ -16,8 +16,9 @@ install:
   - conda config --set always_yes yes --set changeps1 no
   - conda update -q conda
   - conda info -a
-  - conda create -q -n test python=$TRAVIS_PYTHON_VERSION numpy numba scipy pytest pytest-cov coverage sphinx nose
+  - conda create -q -n test python=$TRAVIS_PYTHON_VERSION
   - source activate test
+  - conda install -c conda-forge gdal=2.2.4
   - pip install -U codecov
   - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
        pip install -U backports.functools_lru_cache;
