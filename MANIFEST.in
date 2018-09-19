@@ -3,4 +3,4 @@ include SIAC/util/*
 include SIAC/data/sen2cloud_detector.pkl
 include SIAC/data/.earthdata_auth
 include SIAC/spectral_mapping/*
-recursive-include tests *.py
+include SIAC/tests/*.py
