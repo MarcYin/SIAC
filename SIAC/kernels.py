@@ -583,6 +583,7 @@ def readPOLDER(inputFile,type=1):
                     REFL[j,i] = float(s[j+6])
     return VZA,SZA,RAA,REFL
 
+'''
 def legend(*args, **kwargs):
     """
     Overwrites the pylab legend function.
@@ -594,7 +595,7 @@ def legend(*args, **kwargs):
 
     from http://www.mail-archive.com/matplotlib-users@lists.sourceforge.net/msg04256.html
     """
-    import pylab
+    #import pylab
     if kwargs.has_key('loc'):
         loc = kwargs['loc']
         loc = loc.split()
@@ -633,7 +634,7 @@ def legend(*args, **kwargs):
             return leg
 
     return pylab.legend(*args, **kwargs)
-
+'''
 
 
 def lutInvertRossHS(VZA,SZA,RAA,REFL,N=1000,fixXi=False,RossType='Thick',LiType='Dense',normalise=1,RecipFlag=True,MODISSPARSE=True):
@@ -779,8 +780,10 @@ def testLisa(inputFile,buff=30,LiType='Sparse',RossType='Thick',plot=False,verbo
         if nbands == 4:
             return doy,minrmse,minP,minFWD,minrefl,mindoy,sig[mincount],rel[mincount]
         else:
+            pass
+            '''
             if plot:
-                import pylab
+                #import pylab
                 x = [mindoy,mindoy]
                 y = [0.0,max(numpy.array([minFWD.flatten(),minrefl.flatten()]).flatten())+0.1]
                 pylab.plot(x,y)
@@ -808,6 +811,7 @@ def testLisa(inputFile,buff=30,LiType='Sparse',RossType='Thick',plot=False,verbo
                 pylab.plot(bands,maxfcc*maxsBurn,'rD',label='fcc * burn signal')
                 pylab.legend(loc=0)
                 pylab.show()
+            '''
             return doy,minrmse,minP,minFWD,minrefl,mindoy,sig[mincount],rel[mincount],maxfcc,maxa0,maxa1
     else:
         if nbands == 4:
@@ -986,8 +990,9 @@ def mimic(doPrint=False,doPlot=False,RossHS=False,RecipFlag=False,thisSza=None):
         if doPrint == True:
                 kk.printKernels(file='RossThinLiTransit.' + str(SZAS[i]) + '.dat')
                 kk.printer('')
+    '''
     if (doPlot == True):
-        import pylab
+        #import pylab
         x = [-90.0,90.0]
         y = [0.0,0.0]
         for i in range(len(SZAS)):
@@ -1006,5 +1011,5 @@ def mimic(doPrint=False,doPlot=False,RossHS=False,RecipFlag=False,thisSza=None):
             pylab.axis([-90.0,90.0,-3.0,3.0])
             pylab.legend(loc=0)
             pylab.show()
-
+    '''
     return VZA,SZA,RAA,RossThick,RossThin,LiSparse,LiDense,Roujean,LiTransit

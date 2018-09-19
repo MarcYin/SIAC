@@ -15,7 +15,7 @@ from os.path import expanduser
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
-def SIAC_L8(l8_dir, send_back = False):
+def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43', vrt_dir = home + '/MCD43_VRT'):
     file_path = os.path.dirname(os.path.realpath(__file__))
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -35,6 +35,7 @@ def SIAC_L8(l8_dir, send_back = False):
     rets = l8_pre_processing(l8_dir)
     aero_atmos = []
     for ret in rets:
+        ret += (mcd43, vrt_dir)
         #sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile = ret
         aero_atmo = do_correction(*ret)
         if send_back:

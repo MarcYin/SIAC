@@ -1,6 +1,7 @@
 import os
 import time
 import gdal
+import getpass
 import logging
 import requests
 import numpy as np
@@ -11,26 +12,36 @@ from datetime import datetime, timedelta
 from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
 from os.path import expanduser
 from SIAC.create_logger import create_logger
+from six.moves import input
+
 home = expanduser("~")
-'''
-logger = logging.getLogger('SIAC')
-logger.setLevel(logging.INFO)     
-if not logger.handlers:     
-    ch = logging.StreamHandler() 
-    ch.setLevel(logging.DEBUG)   
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)   
-    logger.addHandler(ch)
-''' 
+file_path = os.path.dirname(os.path.realpath(__file__))
 logger = create_logger()
 
-try:
-    username, password = np.loadtxt(home + '/earthdata_auth', dtype=str)
-    auth = tuple([username, password])
-except:
-    username, password = np.loadtxt('earthdata_auth', dtype=str)
-    auth = tuple([username, password])
 
+if os.path.exists(file_path + '/data/.earthdata_auth'):
+    try:
+        username, password = np.loadtxt(file_path + '/data/.earthdata_auth', dtype=str)
+        auth = tuple([username, password])
+    except:
+        logger.error('Please provide NASA Earthdata username and password for downloading MCD43 data, which can be applied here: https://urs.earthdata.nasa.gov.')
+        username = input('Username for NASA Earthdata: ')
+        password = getpass.getpass('Password for NASA Earthdata: ')
+        up = username, password                              
+        os.remove(file_path + '/data/.earthdata_auth')
+        with open(file_path + '/data/.earthdata_auth', 'wb') as f:     
+            for i in up:                                     
+                f.write((i + '\n').encode())
+        auth = tuple([username, password])
+else:
+    username = input('Username for NASA Earthdata: ')
+    password = getpass.getpass('Password for NASA Earthdata: ')
+    up = username, password
+    with open(home + '/.earthdata_auth', 'wb') as f:
+        for i in up: 
+            f.write((i + '\n').encode())
+    auth = tuple([username, password])
+    
 def find_files(aoi, obs_time, temporal_window = 16):
     days   = [(obs_time - timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(temporal_window, 0, -1)] + \
              [(obs_time + timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(0, temporal_window+1,  1)]
