@@ -1,7 +1,7 @@
 #!/usr/bin/env python 
 import os
 import sys                                                                                                                                  
-import gdal
+#import gdal
 import psutil
 import logging
 import warnings
@@ -13,6 +13,7 @@ try:
     import cPickle as pkl
 except:
     import pickle as pkl
+from osgeo import gdal
 from numpy import clip, uint8
 from SIAC.multi_process import parmap
 from scipy.interpolate import griddata

@@ -4,7 +4,7 @@ from __future__ import print_function
 import os
 import gc
 import sys
-import gdal
+#import gdal
 import SIAC.kernels as kernels 
 import logging
 import warnings
@@ -16,7 +16,7 @@ try:
     import cPickle as pkl
 except:  
     import pickle as pkl
-from osgeo import ogr, osr
+from osgeo import ogr, osr, gdal
 from SIAC.smoothn import smoothn
 from functools import partial
 from SIAC.multi_process import parmap

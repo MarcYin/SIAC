@@ -7,7 +7,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)
 [![conda](https://anaconda.org/f0xy/siac/badges/version.svg?longCache=true&style=flat)](https://anaconda.org/F0XY/siac)
 [![py version](https://img.shields.io/pypi/pyversions/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)
-[![build](https://img.shields.io/travis/SIAC/master.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)
+[![build](https://img.shields.io/travis/MarcYin/SIAC/master.svg?longCache=true&style=flat)](https://travis-ci.org/MarcYin/SIAC/)
 
 This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneouse surface is used without considering the BRDF effects.
 
