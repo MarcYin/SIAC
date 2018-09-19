@@ -4,7 +4,7 @@ requests
 scikit-image
 scikit-learn
 GDAL>=2.1, <2.3
-gp_emulator>=1.5.5
+gp_emulator>=1.6.1
 lightgbm>=2.1.0
 numpy>=1.13
 scipy>=1.0.0
