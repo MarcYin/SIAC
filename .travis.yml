@@ -21,7 +21,7 @@ install:
   - conda info -a
   - conda list
   - conda install pip
-  - pip install gp_emulator
+  - pip install gp_emulator==1.6.1
   - pip install coveralls
   - pip install codecov
 script:
