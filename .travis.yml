@@ -22,10 +22,11 @@ install:
   - conda list
   - conda install pip
   - pip install gp_emulator
+  - pip install pytest-cov
   - pip install python-coveralls
   - pip install codecov
 script:
-  - py.test 
+  - py.test --cov=tests
 after_success:
   - codecov
   - coveralls
