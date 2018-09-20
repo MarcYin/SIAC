@@ -25,7 +25,8 @@ install:
   - pip install coveralls
   - pip install codecov
 script:
-  - py.test --cov=tests
+  - py.test
+  - coverage xml
 after_success:
   - codecov
   - coveralls
