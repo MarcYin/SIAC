@@ -23,6 +23,7 @@ install:
   - conda install pip
   - pip install gp_emulator
   - pip install codecov
+  - pip install coverage>=4.4
 script:
   - py.test --cov=tests
 after_success:
