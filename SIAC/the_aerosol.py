@@ -206,7 +206,7 @@ class solve_aerosol(object):
                                 ySize=self.full_res[0], \
                                 srcNodata = np.nan,\
                                 outputType= gdal.GDT_Float32,\
-                                resample = gdal.GRIORA_NearestNeighbour).data
+                                resample = 0).data
         cloud  = cloud.astype(bool)
         RED    = None
         BLUE   = None
@@ -262,7 +262,7 @@ class solve_aerosol(object):
         self._toa_bands = []
         for band in self.toa_bands:
             g = gdal.Warp('', band, format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
-                          srcNodata = 0, dstNodata=0, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = gdal.GRIORA_NearestNeighbour)
+                          srcNodata = 0, dstNodata=0, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)
             self._toa_bands.append(g)
         self.example_file = self._toa_bands[0]
         x_max_pix         = self.example_file.RasterXSize * self.pixel_res
@@ -282,7 +282,7 @@ class solve_aerosol(object):
                                                                 yRes=self.aero_res*0.5, \
                                                                 srcNodata = None,\
                                                                 outputType= gdal.GDT_Float32, \
-                                                                resample = gdal.GRIORA_NearestNeighbour).g
+                                                                resample = 0 ).g # GRIORA_NearestNeighbour due to version changes...
 
         self.bilinear_resampler = lambda fname: reproject_data(fname, \
                                                                 self.example_file, \
@@ -290,7 +290,7 @@ class solve_aerosol(object):
                                                                 yRes=self.aero_res*0.5, \
                                                                 srcNodata = 0,\
                                                                 outputType= gdal.GDT_Float32,\
-                                                                resample = gdal.GRIORA_Bilinear).g
+                                                                resample = 1 ).g # GRIORA_Bilinear
 
     def _var_parser(self, var):
         if os.path.exists(str(var)):    
@@ -412,7 +412,7 @@ class solve_aerosol(object):
     def _read_MCD43(self,fnames):
         def warp_data(fname, aoi,  xRes, yRes):
             g = gdal.Warp('',fname, format = 'MEM', dstNodata=0, cutlineDSName=aoi, xRes = \
-                          xRes, yRes = yRes, cropToCutline=True, resampleAlg = gdal.GRIORA_NearestNeighbour)
+                          xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0)
             return g.ReadAsArray()
         par = partial(warp_data, aoi = self.aoi, xRes = self.aero_res*0.5, yRes = self.aero_res*0.5) 
         n_files = int(len(fnames)/2)
@@ -448,7 +448,7 @@ class solve_aerosol(object):
                     fnames.append(fname)
         das, ws = self._read_MCD43(fnames)   
         mg = gdal.Warp('',fnames[0], format = 'MEM', dstNodata= None, xRes = self.aero_res*0.5, yRes = \
-                       self.aero_res*0.5, cutlineDSName=self.aoi, cropToCutline=True, resampleAlg = gdal.GRIORA_NearestNeighbour)
+                       self.aero_res*0.5, cutlineDSName=self.aoi, cropToCutline=True, resampleAlg = 0)
         hg = self.example_file
         self.hx, self.hy, hmask, rmask = self._get_index(mg, hg)
 
@@ -500,11 +500,11 @@ class solve_aerosol(object):
         _view_angles = []
         for fname in self._sun_angles:     
             ang = reproject_data(fname, mg, srcNodata = None, resample = \
-                                 gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                 0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _sun_angles.append(ang)        
         for fname in self._view_angles:    
             ang = reproject_data(fname, mg, srcNodata = None, resample = \
-                                 gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                 0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _view_angles.append(ang)       
         _view_angles = np.squeeze(np.array(_view_angles))
         _sun_angles = np.squeeze(np.array(_sun_angles))

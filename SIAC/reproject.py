@@ -26,7 +26,7 @@ class reproject_data(object):
                  yRes         = None,
                  xSize        = None,
                  ySize        = None,
-                 resample     = gdal.GRIORA_Bilinear
+                 resample     = 1
                  ):
 
         self.source_img = source_img

@@ -154,7 +154,7 @@ class atmospheric_correction(object):
         self._toa_bands = []
         for band in self.toa_bands:
             g = gdal.Warp('', band, format = 'MEM', srcNodata = 0, dstNodata=0, warpOptions = \
-                          ['NUM_THREADS=ALL_CPUS'], cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = gdal.GRIORA_NearestNeighbour)
+                          ['NUM_THREADS=ALL_CPUS'], cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)
             self._toa_bands.append(g)
         self.example_file = self._toa_bands[0]
         if self.cloud_mask is None:
@@ -163,7 +163,7 @@ class atmospheric_correction(object):
         self.mask_g = array_to_raster(self.mask.astype(float), self.example_file)
         self.mask = self.mask.astype(bool)
         self.mg    = gdal.Warp('', band, format = 'MEM', srcNodata = None, xRes = self.block_size, yRes = \
-                               self.block_size, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = gdal.GRIORA_NearestNeighbour)        
+                               self.block_size, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)        
   
     def _load_xa_xb_xc_emus(self,):
         xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xap_%s.pkl'%(self.sensor, self.satellite))[0]
@@ -216,11 +216,11 @@ class atmospheric_correction(object):
         _view_angles = []
         for fname in self._sun_angles:     
             ang = reproject_data(fname, self.mg, srcNodata = None, resample = \
-                                 gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                 0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _sun_angles.append(ang)        
         for fname in self._view_angles:    
             ang = reproject_data(fname, self.mg, srcNodata = None, resample = \
-                                 gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                 0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _view_angles.append(ang)       
         _view_angles = np.array(_view_angles)
         _sun_angles = np.squeeze(np.array(_sun_angles))
@@ -266,7 +266,7 @@ class atmospheric_correction(object):
                                                          datetime.strftime(self.obs_time, '%Y_%m_%d')+'_%s.tif'%cams_names[i]])
                     var_g  = self._var_parser(atmos[i])
                     _g     = reproject_data(var_g, self.mg, srcNodata = None, resample = \
-                                            gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).g
+                                            0, dstNodata=np.nan, outputType= gdal.GDT_Float32).g
                     offset   = var_g.GetOffset()            
                     scale    = var_g.GetScale()             
                     data     = _g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
@@ -277,11 +277,11 @@ class atmospheric_correction(object):
             for i in range(3):
                 var_g    = self._var_parser(atmos[i])
                 data     = reproject_data(var_g, self.mg, srcNodata = np.nan, resample = \
-                                     gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                     0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
                 atmos[i] = data * self.atmo_scale[i]
                 unc_g    = self._var_parser(atmo_uncs[i])
                 ug     = reproject_data(unc_g, self.mg, srcNodata = np.nan, resample = \
-                                          gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                          0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
                 atmo_uncs[i] = ug
 
         self._aot, self._tcwv, self._tco3             = atmos
@@ -293,7 +293,7 @@ class atmospheric_correction(object):
         for i  in range(len(auxs)):
             var_g = self._var_parser(auxs[i])
             dat = reproject_data(var_g, self.mg, srcNodata = 0, resample = \
-                                 gdal.GRIORA_NearestNeighbour, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
+                                 0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             auxs[i] = dat * scales[i]
         self._ele, self._cmask = auxs
         self._ele[np.isnan(self._ele)] = 0
@@ -406,12 +406,12 @@ class atmospheric_correction(object):
 
             x_off = x_end - x_start
             toa = toa_g.ReadAsArray(x_start, 0, x_off, int(y_size))
-            _g = gdal.Warp('', toa_g, format = 'MEM',  outputBounds = [xmin, geo[3] + y_size * geo[5], xmax, geo[3]], resampleAlg = gdal.GRIORA_NearestNeighbour)
+            _g = gdal.Warp('', toa_g, format = 'MEM',  outputBounds = [xmin, geo[3] + y_size * geo[5], xmax, geo[3]], resampleAlg = 0)
             xRes = yRes = int(geo[1])
             xps  = [self.xap_H[ind], self.xbp_H[ind], self.xcp_H[ind]] 
             for j in range(3): 
                 xps[j]  = reproject_data(xps[j], _g,xRes=xRes, yRes = yRes,xSize=x_off, \
-                                         ySize=y_size, resample = gdal.GRIORA_NearestNeighbour, outputType= gdal.GDT_Float32).data
+                                         ySize=y_size, resample = 0, outputType= gdal.GDT_Float32).data
              
             xap_H, xbp_H, xcp_H = xps
             toa = toa * self.ref_scale + self.ref_off                             
@@ -422,7 +422,7 @@ class atmospheric_correction(object):
             for j in range(3):         
                 #var_g = xhs[j]
                 xhs[j]  = reproject_data(xhs[j], _g, xRes=xRes, yRes = yRes, xSize=x_off, \
-                                         ySize=y_size, resample = gdal.GRIORA_NearestNeighbour, \
+                                         ySize=y_size, resample = 0, \
                                          outputType= gdal.GDT_Float32).data.transpose(1,2,0)
              
             xap_dH, xbp_dH, xcp_dH = xhs
@@ -443,7 +443,7 @@ class atmospheric_correction(object):
              
             tmp = []
             for unc_g in [self._aot_unc, self._tcwv_unc, self._tco3_unc]:
-                unc = reproject_data(unc_g, _g, xSize=x_off, ySize=y_size, resample = gdal.GRIORA_NearestNeighbour, outputType= gdal.GDT_Float32).data
+                unc = reproject_data(unc_g, _g, xSize=x_off, ySize=y_size, resample = 0, outputType= gdal.GDT_Float32).data
                 tmp.append(unc)
             aot_unc, tcwv_unc, tco3_unc = tmp; del tmp
             unc  = np.sqrt(aot_dH ** 2 * aot_unc**2 + tcwv_dH ** 2 * tcwv_unc**2 + tco3_dH ** 2 * tco3_unc**2 + toa_dH**2 * 0.015**2)
