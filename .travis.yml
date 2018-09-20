@@ -12,19 +12,14 @@ install:
     fi
   - bash miniconda.sh -b -p $HOME/miniconda
   - export PATH="$HOME/miniconda/bin:$PATH"
-  - sudo apt-get install -y gdal-bin
   - hash -r
   - conda config --set always_yes yes --set changeps1 no
   - conda update -q conda
+  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six lightgbm requests scikit-learn scikit-image gdal
+  - source activate test-environment
   - conda info -a
-  - conda create -q -n test -c conda-forge python=$TRAVIS_PYTHON_VERSION gdal=2.2.4 scipy numpy psutil six lightgbm requests scikit-learn scikit-image
-  - source activate test
-  - pip install -U codecov
+  - conda list
   - pip install gp_emulator
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-       pip install -U backports.functools_lru_cache;
-    fi
-  - pip install .
-  
+  - conda install pip
 script:
   - pytest
