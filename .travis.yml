@@ -20,7 +20,12 @@ install:
   - source activate test-environment
   - conda info -a
   - conda list
-  - pip install gp_emulator
   - conda install pip
+  - pip install gp_emulator
+  - pip install python-coveralls
+  - pip install codecov
 script:
-  - pytest
+  - py.test 
+after_success:
+  - codecov
+  - coveralls
