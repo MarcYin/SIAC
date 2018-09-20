@@ -21,7 +21,7 @@ install:
   - conda info -a
   - conda list
   - conda install pip
-  - pip install gp_emulator
+  - pip install gp_emulator=1.6.4
   - pip install coveralls
   - pip install codecov
 script:
@@ -30,3 +30,4 @@ script:
 after_success:
   - codecov
   - coveralls
+  - test $TRAVIS_BRANCH = "master" && conda install conda-build && conda install anaconda-client && bash conda_upload.sh
