@@ -16,12 +16,13 @@ install:
   - conda config --set always_yes yes --set changeps1 no
   - conda config --add channels conda-forge
   - conda update -q conda
-  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six lightgbm requests scikit-learn scikit-image gdal coveralls pytest-cov python-coveralls coverage=4.5.1
+  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six lightgbm requests scikit-learn scikit-image gdal coveralls pytest-cov coverage=4.5.1
   - source activate test-environment
   - conda info -a
   - conda list
   - conda install pip
   - pip install gp_emulator
+  - pip install coveralls
   - pip install codecov
 script:
   - py.test --cov=tests
