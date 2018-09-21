@@ -49,9 +49,15 @@ about:
   license_family: AGPL
   license_file: ''
   summary: A sensor invariant Atmospheric Correction (SIAC)
-  description: "# A sensor invariant Atmospheric Correction (SIAC)\n### Feng Yin\n### Department of Geography, UCL\n### ucfafyi@ucl.ac.uk\n\n\n[![PyPI version](https://img.shields.io/pypi/v/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)\n\
-    [![conda](https://anaconda.org/f0xy/siac/badges/version.svg?longCache=true&style=flat)](https://anaconda.org/F0XY/siac)\n[![py version](https://img.shields.io/pypi/pyversions/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)\n\
-    [![build](https://img.shields.io/travis/MarcYin/SIAC/master.svg?longCache=true&style=flat)](https://travis-ci.org/MarcYin/SIAC/)\n\nThis atmospheric correction method uses MODIS MCD43 BRDF product to\
+  description: "# A sensor invariant Atmospheric Correction (SIAC)\n### Feng Yin\n### Department of Geography, UCL\n### ucfafyi@ucl.ac.uk\n\n\n\
+    [![PyPI version](https://img.shields.io/pypi/v/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)\n\
+    [![conda](https://anaconda.org/f0xy/siac/badges/version.svg?longCache=true&style=flat)](https://anaconda.org/F0XY/siac)\n\
+    [![py version](https://img.shields.io/pypi/pyversions/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)\n\
+    [![py version](https://img.shields.io/pypi/pyversions/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)\n\
+    [![build](https://img.shields.io/travis/MarcYin/SIAC/master.svg?longCache=true&style=flat)](https://travis-ci.org/MarcYin/SIAC/)\n\
+    [![codecov](https://codecov.io/gh/MarcYin/SIAC/branch/master/graph/badge.svg?longCache=true&style=flat)](https://codecov.io/gh/MarcYin/SIAC)\n\
+    [![Lisence](https://img.shields.io/pypi/l/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)\n\
+    \nThis atmospheric correction method uses MODIS MCD43 BRDF product to\
     \ get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction\
     \ as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneouse surface is used without considering the\
     \ BRDF effects.\n\n\n## Data needed:\n* MCD43 : 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date\n* ECMWF CAMS Near Real Time prediction: a time step of 3 hours with the start\
@@ -60,8 +66,8 @@ about:
     \ and the emulators for Sentinel 2, Landsat 8 and MODIS trained with 6S.V2 can be found at: http://www2.geog.ucl.ac.uk/~ucfafyi/emus/\n\n## Installation:\n\nDownload this repositories either by `git\
     \ clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` , or `pip install SIAC` or `conda install -c f0xy siac`\n\nTo save\
     \ your time for installing GDAL and lightgbm, please use:\n\n```bash\nconda install -c conda-forge gdal=2.2.4\nconda install -c conda-forge lightgbm\n```\n\n\n\nThe typical usage for Sentinel 2 and\
-    \ Landsat 8:\n```python\nfrom SIAC import SIAC_S2\nSIAC_S2('/directory/where/you/store/S2/data/') # this can be either from AWS or Senitinel offical package\n```\n```python\nfrom SIAC import SIAC_L8\
-    \                                                                           \nSIAC_L8('/directory/where/you/store/L8/data/') \n``` \n\nAn example of correction for Landsat 5 for a more detailed demostration\
+    \ Landsat 8:\n\n```python\nfrom SIAC import SIAC_S2\nSIAC_S2('/directory/where/you/store/S2/data/') # this can be either from AWS or Senitinel offical package\n```\n\n```python\nfrom SIAC import SIAC_L8\
+    \\nSIAC_L8('/directory/where/you/store/L8/data/') \n``` \n\nAn example of correction for Landsat 5 for a more detailed demostration\
     \ of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)\n\n## Examples and Map:\n\nA [page](http://www2.geog.ucl.ac.uk/~ucfafyi/Atmo_Cor/index.html) shows some correction\
     \ samples.\n\nA [map](http://www2.geog.ucl.ac.uk/~ucfafyi/map) for comparison between TOA and BOA.\n\n### LICENSE\nGNU GENERAL PUBLIC LICENSE V3\n\n\n"
   doc_url: ''
