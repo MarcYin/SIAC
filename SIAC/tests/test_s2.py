@@ -12,7 +12,7 @@ with open(myPath.replace('tests', '') + 'data/.earthdata_auth', 'wb') as f:
 
 from SIAC import SIAC_S2
 
-with open('s2_flists.txt', 'rb') as f:
+with open(myPath + '/s2_flists.txt', 'rb') as f:
     urls =  [i.split('\n')[0].encode() for i in f.readlines()]
 
 import hashlib
