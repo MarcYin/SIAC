@@ -13,7 +13,7 @@ with open(myPath.replace('tests', '') + 'data/.earthdata_auth', 'wb') as f:
 from SIAC import SIAC_S2
 
 with open(myPath + '/s2_flists.txt', 'rb') as f:
-    urls =  [i.split('\n')[0].encode() for i in f.readlines()]
+    urls =  [str(i.split('\n')[0]) for i in f.readlines()]
 
 import hashlib
 def file_as_bytes(file):
@@ -37,7 +37,7 @@ for url in urls:
     else:
         pass
 
-flists_md5 = np.loadtxt('md5Checksum', dtype='str')
+flists_md5 = np.loadtxt(myPath + '/md5Checksum', dtype='str')
 
 for f_md5 in flists_md5:
     filename, md5 = f_md5
