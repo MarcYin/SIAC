@@ -33,7 +33,7 @@ def test_s2():
                     except OSError as exc: # Guard against race condition
                         if exc.errno != errno.EEXIST:
                             raise
-                with open(filename, "w") as f:
+                with open(filename, "wb") as f:
                     f.write(req.content)
         else:
             pass
