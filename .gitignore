@@ -4,4 +4,4 @@
 *.hdf
 *.pkl
 !*/sen2cloud_detector.pkl
-SIAC/tests/S2?_MSIL1C*.SAFE
+*S2?_MSIL1C*.SAFE
