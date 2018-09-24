@@ -15,7 +15,7 @@ from os.path import expanduser
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
-def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43', vrt_dir = home + '/MCD43_VRT'):
+def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/'):
     file_path = os.path.dirname(os.path.realpath(__file__))
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -44,15 +44,15 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43', vrt_dir = home +
         return aero_atmos
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
-                  metafile, mcd43 = home + '/MCD43', vrt_dir = home + '/MCD43_VRT'):
+                  metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/'):
 
-    if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43'):
-        if not os.path.exists(home + '/MCD43'):
-            os.mkdir(home + '/MCD43')
+    if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
+        if not os.path.exists(home + '/MCD43/'):
+            os.mkdir(home + '/MCD43/')
                  
-    if os.path.realpath(vrt_dir) in os.path.realpath(home + '/MCD43_VRT'):
-        if not os.path.exists(home + '/MCD43_VRT'):
-            os.mkdir(home + '/MCD43_VRT')
+    if os.path.realpath(vrt_dir) in os.path.realpath(home + '/MCD43_VRT/'):
+        if not os.path.exists(home + '/MCD43_VRT/'):
+            os.mkdir(home + '/MCD43_VRT/')
 
     base = os.path.dirname(toa_refs[0])
     with open(metafile) as f:
