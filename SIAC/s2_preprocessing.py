@@ -22,7 +22,7 @@ cl.n_jobs = multiprocessing.cpu_count()
 
 
 def do_cloud(cloud_bands, cloud_name = None):
-    toas = [reproject_data(band, cloud_bands[0], dstNodata=0, resample=gdal.GRIORA_Average).data for band in cloud_bands]
+    toas = [reproject_data(band, cloud_bands[0], dstNodata=0, resample=5).data for band in cloud_bands]
     toas = np.array(toas)/10000.
     mask = np.all(toas >= 0.0001, axis=0)
     cloud_proba = cl.predict_proba(toas[:, mask].T)
