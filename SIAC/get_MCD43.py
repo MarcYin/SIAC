@@ -78,6 +78,7 @@ def get_one_tile(tile_date):
 def downloader(url_fname):
     url, fname = url_fname
     with requests.Session() as s:
+        s.max_redirects = 100
         s.auth = auth
         r1     = s.get(url)
         r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'})
