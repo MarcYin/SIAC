@@ -41,7 +41,10 @@ else:
         for i in up: 
             f.write((i + '\n').encode())
     auth = tuple([username, password])
-    
+
+#print(file_path + '/data/.earthdata_auth')
+#print(auth)
+
 def find_files(aoi, obs_time, temporal_window = 16):
     days   = [(obs_time - timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(temporal_window, 0, -1)] + \
              [(obs_time + timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(0, temporal_window+1,  1)]

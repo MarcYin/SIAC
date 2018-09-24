@@ -21,7 +21,7 @@ def test_s2():
             return file.read()
 
     for url in urls:
-        url = str(url.decode())
+        url = url
         filename = '/'.join(url.split('/')[8:])
         if not os.path.exists(filename):
             req = requests.get(url)
