@@ -70,7 +70,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     sun_angles  = sun_ang_name
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
                          sun_angles,obs_time,cloud_mask, gamma=10., spec_m_dir= \
-                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/')
+                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir)
     aero._solving()
     toa_bands  = toa_refs
     view_angles = view_ang_names
