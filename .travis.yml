@@ -25,7 +25,12 @@ install:
   - pip install coveralls
   - pip install codecov
 script:
-  - travis_wait 60 py.test -s --cov
+  # Output something every 10 minutes or Travis kills the job
+  - while sleep 30m; do echo "=====[ $SECONDS seconds still running ]====="; done &
+  - py.test -s --cov
+  #Killing background sleep loop
+  - kill %1
+  #- travis_wait 60 py.test -s --cov
   - coverage xml
 after_success:
   - codecov
