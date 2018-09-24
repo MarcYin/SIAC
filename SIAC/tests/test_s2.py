@@ -38,15 +38,6 @@ def test_s2():
         else:
             pass
 
-    flists_md5 = np.loadtxt(myPath + '/md5Checksum', dtype='str')
-
-    for f_md5 in flists_md5:
-        filename, md5 = f_md5
-        if os.path.exists(filename):
-            assert (hashlib.md5(file_as_bytes(open(filename, 'rb'))).hexdigest() == md5, 'file size is not right')
-        else:
-            raise IOError
-
     s2_file_dir = filename.split('/')[0]
     SIAC_S2(s2_file_dir)
 
