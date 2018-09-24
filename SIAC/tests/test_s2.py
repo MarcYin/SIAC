@@ -13,7 +13,7 @@ with open(myPath.replace('tests', '') + 'data/.earthdata_auth', 'wb') as f:
 def test_s2():
     from SIAC import SIAC_S2
     with open(myPath + '/s2_flists.txt', 'rb') as f:
-        urls =  [i.encode().split('\n')[0] for i in f.readlines()]
+        urls =  [i.decode().split('\n')[0] for i in f.readlines()]
 
     import hashlib
     def file_as_bytes(file):
@@ -21,7 +21,7 @@ def test_s2():
             return file.read()
 
     for url in urls:
-        url = str(url.encode())
+        url = str(url.decode())
         filename = '/'.join(url.split('/')[8:])
         if not os.path.exists(filename):
             req = requests.get(url)
