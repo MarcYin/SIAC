@@ -80,7 +80,7 @@ def downloader(url_fname):
     with requests.Session() as s:
         s.auth = auth
         r1     = s.get(url)
-        r      = s.get(r1.url, stream=True)
+        r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'})
         if r.ok:
             remote_size = int(r.headers['Content-Length'])
             if os.path.exists(fname):

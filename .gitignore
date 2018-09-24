@@ -5,3 +5,4 @@
 *.pkl
 !*/sen2cloud_detector.pkl
 *S2?_MSIL1C*.SAFE
+.coverage*
