@@ -19,7 +19,7 @@ def downloader(fname, url_root, file_dir):
     new_url = url_root + fname
     new_req = requests.get(new_url, stream=True)
     if new_req.ok:   
-        logger.info('downloading %s' % fname)
+        logger.info('downloading %s and save it at %s' % (fname, os.path.join(file_dir, fname)))
         with open(os.path.join(file_dir, fname), 'wb') as fp:
             for chunk in new_req.iter_content(chunk_size=1024):
                 if chunk:
