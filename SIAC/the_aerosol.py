@@ -595,7 +595,8 @@ class solve_aerosol(object):
         if sys.version_info >= (3,0):
             f = lambda em: pkl.load(open(em, 'rb'), encoding = 'latin1')
         else:     
-            f = lambda em: pkl.load(open(em, 'rb'))
+            f = lambda em: pkl.load(open(str(em), 'rb'))
+        print([xap_emu, xbp_emu, xcp_emu])
         self.emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
 
     def _get_convolved_toa(self,):       

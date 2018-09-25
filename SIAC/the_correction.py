@@ -179,7 +179,8 @@ class atmospheric_correction(object):
         if sys.version_info >= (3,0):
             f = lambda em: pkl.load(open(em, 'rb'), encoding = 'latin1')
         else:     
-            f = lambda em: pkl.load(open(em, 'rb'))
+            f = lambda em: pkl.load(open(str(em), 'rb'))
+        print([xap_emu, xbp_emu, xcp_emu])
         self.xap_emus, self.xbp_emus, self.xcp_emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
     
     def _var_parser(self, var):
@@ -388,7 +389,7 @@ class atmospheric_correction(object):
                     re = parmap(self._do_chunk, bands_to_do, min(int(proc), len(bands_to_do)))
                 else:
                     self._chunks = int(np.ceil(1. / proc))
-                    re = map(self._do_band)
+                    re = list(map(self._do_chunk, bands_to_do))
                 ret   += re
                 index += (np.where(needed==u_need[i])[0]).tolist()
             ret = list(zip(*sorted(zip(index, ret))))[1]
