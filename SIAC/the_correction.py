@@ -1,6 +1,7 @@
 #!/usr/bin/env python 
 import os
 import sys                                                                                                                                  
+import ogr
 import gdal
 import psutil
 import logging
@@ -112,34 +113,40 @@ class atmospheric_correction(object):
         '''
         Deal with different types way to define the AOI, if none is specified, then the image bound is used.
         '''
+        ogr.UseExceptions() 
+        gdal.UseExceptions()
         if self.aoi is not None:
             if os.path.exists(self.aoi):
-                try:
+                try:     
                     g = gdal.Open(self.aoi)
                     subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir + '/AOI.json', self.aoi])
-                except:
-                    try:
-                        g = ogr.Open(self.aoi)
+                except:  
+                    try: 
+                        gr = ogr.Open(self.aoi)
+                        l = gr.GetLayer(0)
+                        f = l.GetFeature(0)
+                        g = f.GetGeometryRef()                                                                                                
                     except:
                         raise IOError('AOI file cannot be opened by gdal, please check it or transform into format can be opened by gdal')
-            else:
-                try:
-                    g = ogr.CreateGeometryFromJson(aoi)
-                except:
-                    try:
-                        g = ogr.CreateGeometryFromGML(aoi)
+            else:        
+                try:     
+                    g = ogr.CreateGeometryFromJson(self.aoi)
+                except:  
+                    try: 
+                        g = ogr.CreateGeometryFromGML(self.aoi)
                     except:
                         try:
-                            g = ogr.CreateGeometryFromWkt(aoi)
+                            g = ogr.CreateGeometryFromWkt(self.aoi)
                         except:
                             try:
-                                g = ogr.CreateGeometryFromWkb(aoi)
+                                g = ogr.CreateGeometryFromWkb(self.aoi)
                             except:
                                 raise IOError('The AOI has to be one of GeoJSON, GML, Wkt or Wkb.')
-                gjson_str = '''{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":%s}]}'''% g.ExportToJson()
-                
-                with open(self.toa_dir + '/AOI.json', 'wb') as f:
-                    f.write(gjson_str)
+            gjson_str = '''{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":%s}]}'''% g.ExportToJson()
+            with open(self.toa_dir + '/AOI.json', 'wb') as f:
+                f.write(gjson_str)
+        ogr.DontUseExceptions() 
+        gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
             subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.logger.warning('AOI is not created and full band extend is used')
