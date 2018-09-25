@@ -31,6 +31,7 @@ install:
       rm -rf gp_emulator
     else
       pip install gp_emulator==1.6.1
+    fi
   - pip install coveralls
   - pip install codecov
 script:
