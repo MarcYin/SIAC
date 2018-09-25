@@ -261,7 +261,7 @@ class solve_aerosol(object):
         '''
         self._toa_bands = []
         for band in self.toa_bands:
-            g = gdal.Warp('', band, format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+            g = gdal.Warp('', str(band), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
                           srcNodata = 0, dstNodata=0, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)
             self._toa_bands.append(g)
         self.example_file = self._toa_bands[0]
