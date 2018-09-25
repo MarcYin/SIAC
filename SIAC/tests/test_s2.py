@@ -39,7 +39,7 @@ def test_s2():
             pass
 
     s2_file_dir = filename.split('/')[0]
-    SIAC_S2(s2_file_dir)
+    SIAC_S2(s2_file_dir, aoi = myPath + '/aoi.geojson')
 
     with open(myPath.replace('tests', '') + 'data/.earthdata_auth', 'wb') as f:
         f.write(('').encode())  
