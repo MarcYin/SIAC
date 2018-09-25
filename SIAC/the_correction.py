@@ -180,7 +180,7 @@ class atmospheric_correction(object):
             f = lambda em: pkl.load(open(em, 'rb'), encoding = 'latin1')
         else:     
             f = lambda em: pkl.load(open(str(em), 'rb'))
-        print([xap_emu, xbp_emu, xcp_emu])
+        #print([xap_emu, xbp_emu, xcp_emu])
         self.xap_emus, self.xbp_emus, self.xcp_emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
     
     def _var_parser(self, var):

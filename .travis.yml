@@ -21,8 +21,10 @@ install:
   - conda info -a
   - conda list
   - conda install pip
-  #- pip install gp_emulator==1.6.1
-  - wget https://github.com/MarcYin/gp_emulator/archive/62f288792e1b24a12891fc0ad32896cb7cb5eda4.zip -O gp_emulator.zip;unzip gp_emulator.zip; rm gp_emulator.zip;mv gp_emulator* gp_emulator;cd gp_emulator;python setup.py install;cd ..;rm -rf gp_emulator
+  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
+      wget https://github.com/MarcYin/gp_emulator/archive/62f288792e1b24a12891fc0ad32896cb7cb5eda4.zip -O gp_emulator.zip;unzip gp_emulator.zip; rm gp_emulator.zip;mv gp_emulator* gp_emulator;cd gp_emulator;python setup.py install;cd ..;rm -rf gp_emulator
+    else
+      pip install gp_emulator==1.6.1
   - pip install coveralls
   - pip install codecov
 script:
