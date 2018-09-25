@@ -144,7 +144,7 @@ class atmospheric_correction(object):
                                 raise IOError('The AOI has to be one of GeoJSON, GML, Wkt or Wkb.')
             gjson_str = '''{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":%s}]}'''% g.ExportToJson()
             with open(self.toa_dir + '/AOI.json', 'wb') as f:
-                f.write(gjson_str)
+                f.write(gjson_str.encode())
         ogr.DontUseExceptions() 
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
