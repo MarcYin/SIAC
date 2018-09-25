@@ -15,7 +15,7 @@ from os.path import expanduser
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
-def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/'):
+def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None):
     file_path = os.path.dirname(os.path.realpath(__file__))
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -35,7 +35,7 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
     rets = l8_pre_processing(l8_dir)
     aero_atmos = []
     for ret in rets:
-        ret += (mcd43, vrt_dir)
+        ret += (mcd43, vrt_dir, aoi)
         #sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile = ret
         aero_atmo = do_correction(*ret)
         if send_back:
@@ -44,7 +44,7 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
         return aero_atmos
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
-                  metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/'):
+                  metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None):
 
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
@@ -96,7 +96,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,sun_angles, \
                                   aot = aot, cloud_mask = cloud_mask,tcwv = tcwv, tco3 = tco3, \
                                   aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, \
-                                  rgb = rgb, ref_scale = scale, ref_off = off, emus_dir=file_path+'/emus/')
+                                  rgb = rgb, ref_scale = scale, ref_off = off, emus_dir=file_path+'/emus/', aoi=aoi)
     atmo._doing_correction()
     return aero, atmo
 
