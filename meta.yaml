@@ -7,7 +7,7 @@ source:
   git_tag: master
 
 build:
-    script: pip install gp_emulator==1.6.1 && python setup.py install
+    script: pip install gp_emulator && python setup.py install
     script_env:
      - VERSION
      - CONDA_BLD_PATH
@@ -40,8 +40,7 @@ requirements:
     - networkx
 
 test:
-  imports:
-    - SIAC
+    - 
 about:
   home: https://github.com/MarcYin/SIAC
   license: GNU Affero General Public License v3.0
