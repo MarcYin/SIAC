@@ -25,6 +25,7 @@ requirements:
     - requests
     - scikit-learn
     - scikit-image
+    - networkx
   run:
     - python
     - gdal >=2.1,<2.3
@@ -36,13 +37,11 @@ requirements:
     - requests
     - scikit-learn
     - scikit-image
+    - networkx
 
 test:
-  requires:
-    - pytest
-  commands:
-    - pytest ..
-
+  imports:
+    - SIAC
 about:
   home: https://github.com/MarcYin/SIAC
   license: GNU Affero General Public License v3.0
