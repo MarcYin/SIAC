@@ -7,10 +7,13 @@ source:
   git_tag: master
 
 build:
-    script: pip install gp_emulator && python setup.py install
-    script_env:
-     - VERSION
-     - CONDA_BLD_PATH
+  channels:
+    - anaconda
+    - conda-forge
+  script: pip install networkx && pip install gp_emulator && python setup.py install --single-version-externally-managed --record=record.txt
+  script_env:
+    - VERSION
+    - CONDA_BLD_PATH
 
 requirements:
   host:
@@ -25,7 +28,6 @@ requirements:
     - requests
     - scikit-learn
     - scikit-image
-    - networkx
   run:
     - python
     - gdal >=2.1,<2.3
@@ -37,11 +39,9 @@ requirements:
     - requests
     - scikit-learn
     - scikit-image
-    - networkx
-
 test:
   commands:
-    - python ../SIAC/tests/test_dependency.py
+    - python SIAC/tests/test_dependency.py
 about:
   home: https://github.com/MarcYin/SIAC
   license: GNU Affero General Public License v3.0
