@@ -40,10 +40,8 @@ requirements:
     - networkx
 
 test:
-  requires:
-    - pytest
   commands:
-    - pytest --cov=../SIAC/tests/test_dependency.py
+    - python ../SIAC/tests/test_dependency.py
 about:
   home: https://github.com/MarcYin/SIAC
   license: GNU Affero General Public License v3.0
