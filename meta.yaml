@@ -41,7 +41,7 @@ requirements:
     - scikit-image
 test:
   commands:
-    - python SIAC/tests/test_dependency.py
+    - echo 'Hello world'
 about:
   home: https://github.com/MarcYin/SIAC
   license: GNU Affero General Public License v3.0
