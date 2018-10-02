@@ -10,7 +10,7 @@ try:
     import cPickle as pkl
 except:
     import pickle as pkl
-from scipy import optimize, interpolate
+from scipy import optimize, interpolate, sparse
 #from fastDiff import fastDiff
 from SIAC.multi_process import parmap
 
@@ -28,6 +28,23 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+def compose_dtd(nx, ny):
+    ns = nx*ny                                                              
+    n = int(np.sqrt(ns))
+    d1 = 2 * np.ones(ns)
+    d1[ny-1::ny] = 1
+    d1[0::ny] = 1
+    d2 = np.ones(ns) * -1
+    d2[ny-1::ny] = 0
+    d3 = 2 * np.ones(ns)
+    d3[:ny] = 1
+    d3[ns-ny:] = 1
+    d4 = np.ones(ns) * -1
+    dtdx = sparse.spdiags([d1, d2[::-1], d2], [0, 1, -1], ns, ns)                                                                                                                      
+    dtdy = sparse.spdiags([d3, d4, d4], [0, ny, -ny], ns, ns)
+    dtd = dtdx + dtdy
+    return dtd, dtdx, dtdy
 
 class solving_atmo_paras(object): 
     '''
@@ -223,8 +240,12 @@ class solving_atmo_paras(object):
                 #self.tcwv_unc  [mask] = self.prior_uncs[1].reshape(shape)[mask]
             else:
                 self._obs_cost_test(psolve['x'], do_unc = True)     
-                unc = (np.nansum([self.obs_unc.reshape(2, -1), 1. / self.prior_uncs**2 + self.gamma**2], axis = 0)) ** -0.5
-                self.aot_unc,   self.tcwv_unc   = unc.reshape(2, self.num_blocks_x, self.num_blocks_y)
+                nx, ny = self.prior_uncs.shape
+                dtd = compose_dtd(nx, ny)[0].todense()
+                to_inv = np.nansum([np.diag((self.obs_unc).ravel()), np.diag((self.prior_uncs**-2).ravel()), self.gamma**2 * dtd], axis = 0)
+                unc = np.diag(np.linalg.inv(to_inv))** 0.5
+                #unc = (np.nansum([self.obs_unc.reshape(nx, -1), self.prior_uncs**-2 ,  self.gamma**2], axis = 0)) ** -0.5
+                self.aot_unc,   self.tcwv_unc   = unc.reshape(nx, self.num_blocks_x, self.num_blocks_y)
         self.tco3_prior, self.tco3_unc  = self._grid_conversion(self.tco3_prior, shape), self._grid_conversion(self.tco3_unc, shape)
         post_solved = np.array([self.aot_prior, self.tcwv_prior, self.tco3_prior]) 
         post_unc    = np.array([self.aot_unc,   self.tcwv_unc,   self.tco3_unc]) 
