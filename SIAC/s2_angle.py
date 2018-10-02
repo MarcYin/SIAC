@@ -236,14 +236,14 @@ def resample_s2_angles(metafile):
         gmls = glob(s2_file_dir + '/QI_DATA/*MSK_DETFOO*.gml')
         sun_ang_name = s2_file_dir + '/ANG_DATA/' + 'SAA_SZA.tif'
         view_ang_names = [s2_file_dir + '/ANG_DATA/' + 'VAA_VZA_%s.tif'%band for band in bands]
-        toa_refs = glob(s2_file_dir + '/IMG_DATA/*B*.jp2')
+        toa_refs = glob(s2_file_dir + '/IMG_DATA/*B??.jp2')
     elif 'metadata.xml' in metafile:
         if not os.path.exists(s2_file_dir + '/angles/'):
             os.mkdir(s2_file_dir + '/angles/')
         gmls = glob(s2_file_dir + '/qi/*MSK_DETFOO*.gml')
         sun_ang_name = s2_file_dir + '/angles/' + 'SAA_SZA.tif'
         view_ang_names = [s2_file_dir + '/angles/' + 'VAA_VZA_%s.tif'%band for band in bands]
-        toa_refs = glob(s2_file_dir + '/*B*.jp2')
+        toa_refs = glob(s2_file_dir + '/*B??.jp2')
     else:                                               
         raise IOError('Invalid metafile please use the default AWS or SCIHUB format.')
     gmls = sorted(gmls, key = lambda gml: bands.index('B' + gml.split('B')[-1][:2]))
