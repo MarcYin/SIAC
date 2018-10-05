@@ -11,6 +11,7 @@ try:
 except:
     import pickle as pkl
 from scipy import optimize, interpolate, sparse
+from scipy.sparse import linalg
 #from fastDiff import fastDiff
 from SIAC.multi_process import parmap
 
@@ -241,9 +242,16 @@ class solving_atmo_paras(object):
             else:
                 self._obs_cost_test(psolve['x'], do_unc = True)     
                 nx, ny = self.prior_uncs.shape
-                dtd = compose_dtd(nx, ny)[0].todense()
-                to_inv = np.nansum([np.diag((self.obs_unc).ravel()), np.diag((self.prior_uncs**-2).ravel()), self.gamma**2 * dtd], axis = 0)
-                unc = np.diag(np.linalg.inv(to_inv))** 0.5
+                dtd = compose_dtd(1, ny)[0]
+                self.obs_unc[np.isnan(self.obs_unc)] = 0
+                #self.prior_uncs[np.isnan(self.prior_uncs)] =  np.mean(self.prior_uncs[~np.isnan(self.prior_uncs)])
+                to_inv = np.nansum([sparse.diags((self.obs_unc[0]).ravel()), sparse.diags((self.prior_uncs[0]**-2).ravel()), self.gamma**2 * dtd], axis = 0)
+                aot_unc  = (linalg.inv(to_inv).diagonal())** 0.5
+
+                to_inv = np.nansum([sparse.diags((self.obs_unc[1]).ravel()), sparse.diags((self.prior_uncs[1]**-2).ravel()), self.gamma**2 * dtd], axis = 0)
+                tcwv_unc = (linalg.inv(to_inv).diagonal())** 0.5
+
+                unc = np.array([aot_unc, tcwv_unc])
                 #unc = (np.nansum([self.obs_unc.reshape(nx, -1), self.prior_uncs**-2 ,  self.gamma**2], axis = 0)) ** -0.5
                 self.aot_unc,   self.tcwv_unc   = unc.reshape(nx, self.num_blocks_x, self.num_blocks_y)
         self.tco3_prior, self.tco3_unc  = self._grid_conversion(self.tco3_prior, shape), self._grid_conversion(self.tco3_unc, shape)
