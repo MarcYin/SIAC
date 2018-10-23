@@ -10,4 +10,4 @@ export VERSION=`date +%Y.%m.%d`
 conda build . -c conda-forge
 ls $CONDA_BLD_PATH
 ls $CONDA_BLD_PATH/$OS
-anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER -l nightly $(ls $CONDA_BLD_PATH/$OS/$PKG_NAME-$VERSION*.tar.bz2) --force
+anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER $(ls $CONDA_BLD_PATH/$OS/$PKG_NAME-$VERSION*.tar.bz2) --force
