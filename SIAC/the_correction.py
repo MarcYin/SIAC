@@ -1,6 +1,6 @@
 #!/usr/bin/env python 
 import os
-import sys                                                                                                                                  
+import sys
 import ogr
 import gdal
 import psutil

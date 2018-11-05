@@ -2,6 +2,7 @@ language: python
 python:
   - "2.7"
   - "3.6"
+  - "3.7"
 install:
   - sudo apt-get update
   - echo $TRAVIS_PYTHON_VERSION
@@ -16,7 +17,7 @@ install:
   - conda config --set always_yes yes --set changeps1 no
   - conda config --add channels conda-forge
   - conda update -q conda
-  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six lightgbm requests scikit-learn scikit-image gdal=2.2.4 coveralls pytest-cov coverage=4.5.1 h5py
+  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six lightgbm requests scikit-learn scikit-image gdal>=2.1 coveralls pytest-cov coverage=4.5.1 h5py
   - source activate test-environment
   - conda info -a
   - conda list
