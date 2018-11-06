@@ -24,8 +24,10 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 ## Installation:
 
 1. Directly from github 
-⋅⋅⋅Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. 
-⋅⋅⋅In the main directory of SIAC excute `pip install .` 
+
+```bash
+pip install https://github.com/multiply-org/atmospheric_correction/archive/master.zip
+```
 
 
 2. Using PyPI
