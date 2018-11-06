@@ -3,7 +3,7 @@ psutil
 requests
 scikit-image
 scikit-learn
-GDAL>=2.1, <2.3
+GDAL>=2.1
 gp_emulator>=1.6.1
 lightgbm>=2.1.0
 numpy>=1.13
