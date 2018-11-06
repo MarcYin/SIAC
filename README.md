@@ -23,9 +23,26 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 
 ## Installation:
 
-Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. In the main directory of it excute `pip install .` , or `pip install SIAC` or `conda install -c f0xy -c conda-forge siac`
+1. Directly from github 
+⋅⋅⋅Download this repositories either by `git clone git@ github.com:MarcYin/SIAC.git` or download the zip file and unzip it. 
+⋅⋅⋅In the main directory of SIAC excute `pip install .` 
 
-To save your time for installing GDAL and lightgbm, please use:
+
+2. Using PyPI
+
+```bash
+pip install SIAC
+```
+
+
+3. Using anaconda
+
+```bash
+conda install -c f0xy -c conda-forge siac
+```
+
+
+To save your time for installing GDAL and lightgbm (Tow dependencies), please use:
 
 ```bash
 conda install -c conda-forge gdal=2.2.4

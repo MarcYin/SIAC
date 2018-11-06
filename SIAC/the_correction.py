@@ -1,8 +1,8 @@
 #!/usr/bin/env python 
 import os
 import sys
-import ogr
-import gdal
+#import ogr
+#import gdal
 import psutil
 import logging
 import warnings
@@ -14,7 +14,7 @@ try:
     import cPickle as pkl
 except:
     import pickle as pkl
-#from osgeo import gdal
+from osgeo import gdal, ogr
 from numpy import clip, uint8
 from SIAC.multi_process import parmap
 from scipy.interpolate import griddata
@@ -113,8 +113,8 @@ class atmospheric_correction(object):
         '''
         Deal with different types way to define the AOI, if none is specified, then the image bound is used.
         '''
-        ogr.UseExceptions() 
         gdal.UseExceptions()
+        ogr.UseExceptions() 
         if self.aoi is not None:
             if os.path.exists(self.aoi):
                 try:     

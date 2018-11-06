@@ -4,9 +4,9 @@ from __future__ import print_function
 import os
 import gc
 import sys
-import ogr
-import osr
-import gdal
+#import ogr
+#import osr
+#import gdal
 import SIAC.kernels as kernels 
 import logging
 import warnings
@@ -18,7 +18,7 @@ try:
     import cPickle as pkl
 except:  
     import pickle as pkl
-#from osgeo import ogr, osr, gdal
+from osgeo import ogr, osr, gdal
 from SIAC.smoothn import smoothn
 from functools import partial
 from SIAC.multi_process import parmap
@@ -127,8 +127,8 @@ class solve_aerosol(object):
         '''
         Deal with different types way to define the AOI, if none is specified, then the image bound is used.
         '''
-        ogr.UseExceptions()
         gdal.UseExceptions()
+        ogr.UseExceptions()
         if self.aoi is not None:
             if os.path.exists(self.aoi):
                 try:
