@@ -418,9 +418,9 @@ class solve_aerosol(object):
     
     def _read_MCD43(self,fnames):
         def warp_data(fname, aoi,  xRes, yRes):
-            g = gdal.Warp('',fname, format = 'MEM', dstNodata=0, cutlineDSName=aoi, xRes = \
-                          xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0)
-            return g.ReadAsArray()
+            g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, \
+                          cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
+            return g.ReadAsArray()                                                                          # no reason you have to specify the srcNodata to use dstNodata
         par = partial(warp_data, aoi = self.aoi, xRes = self.aero_res*0.5, yRes = self.aero_res*0.5) 
         n_files = int(len(fnames)/2)
         ret = parmap(par, fnames) 
