@@ -10,7 +10,7 @@ build:
   channels:
     - anaconda
     - conda-forge
-  script: pip install networkx && pip install gp_emulator && python setup.py install --single-version-externally-managed --record=record.txt
+  script: pip install networkx && pip install gp_emulator && pip install lightgbm >=2.1.0 && python setup.py install --single-version-externally-managed --record=record.txt
   script_env:
     - VERSION
     - CONDA_BLD_PATH
@@ -24,18 +24,16 @@ requirements:
     - scipy >=1.0
     - psutil
     - six
-    - lightgbm >=2.1.0
     - requests
     - scikit-learn
     - scikit-image
   run:
     - python
-    - gdal >=2.1,<2.3
+    - gdal >=2.1
     - numpy >=1.13
     - scipy >=1.0
     - psutil
     - six
-    - lightgbm >=2.1.0
     - requests
     - scikit-learn
     - scikit-image
