@@ -19,7 +19,7 @@ requirements:
   host:
     - python
     - setuptools
-    - gdal >=2.1,<2.3
+    - gdal >=2.1
     - numpy >=1.13
     - scipy >=1.0
     - psutil
