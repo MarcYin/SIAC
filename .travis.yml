@@ -21,9 +21,9 @@ install:
   - conda info -a
   - conda install pip
   - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-      pip install https://github.com/MarcYin/gp_emulator/archive/master.zip
+      pip install https://github.com/MarcYin/gp_emulator/archive/master.zip;
     else
-      pip install gp_emulato;
+      pip install gp_emulator==1.6.1;
     fi
   - pip install coveralls
   - pip install codecov
