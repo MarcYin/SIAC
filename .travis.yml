@@ -19,7 +19,6 @@ install:
   - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six lightgbm requests scikit-learn scikit-image gdal>=2.1 coveralls pytest-cov coverage=4.5.1 h5py
   - source activate test-environment
   - conda info -a
-  - conda list
   - conda install pip
   - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
       pip install https://github.com/MarcYin/gp_emulator/archive/master.zip
@@ -28,6 +27,7 @@ install:
     fi
   - pip install coveralls
   - pip install codecov
+  - conda list
 script:
   # Output something every 10 minutes or Travis kills the job
   - while sleep 9m; do echo "=====[ $SECONDS seconds still running ]====="; done &
