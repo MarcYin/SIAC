@@ -64,6 +64,7 @@ def find_files(aoi, obs_time, temporal_window = 16):
 
 def get_one_tile(tile_date):
     base = 'https://e4ftl01.cr.usgs.gov/MOTA/MCD43A1.006/'
+    #base - 'https://e4ftl01.cr.usgs.gov/MOTA/MCD43A1.006/'
     tile, date = tile_date
     for j in range(100):
         r = requests.get(base + date)
