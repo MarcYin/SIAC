@@ -10,7 +10,7 @@ with open('README.md', 'rb') as f:
     readme = f.read().decode()
 
 setup(name                          = 'SIAC',
-      version                       = verison,
+      version                       = version,
       description                   = 'A sensor invariant Atmospheric Correction (SIAC)',
       long_description              = readme,
       long_description_content_type ='text/markdown',
