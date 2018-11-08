@@ -1,6 +1,6 @@
 package:
   name: siac
-  version: {{ environ['VERSION'] }}
+  version: {{ environ['SIAC_VERSION'] }}
 
 source:
   git_url: https://github.com/MarcYin/SIAC.git

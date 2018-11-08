@@ -12,7 +12,6 @@ install:
     fi
   - bash miniconda.sh -b -p $HOME/miniconda
   - export PATH="$HOME/miniconda/bin:$PATH"
-  #- hash -r
   - conda config --set always_yes yes --set changeps1 no
   - conda config --add channels conda-forge
   - conda update -q conda
@@ -33,7 +32,7 @@ script:
   #Killing background sleep loop
   - kill %1
   - coverage xml
-  - echo $TRAVIS_TAG
+  - export SIAC_VERSION=$TRAVIS_TAG
 deploy:
   provider: pypi
   user: $PYPI_USER
@@ -45,5 +44,5 @@ after_success:
   - codecov
   - coveralls
   - rm -rf SIAC/emus/*.pkl S2?_MSIL1C*.SAFE
-  #- test $TRAVIS_BRANCH = "master"
-  - bash conda_upload.sh
+  - if [ -z "$SIAC_VERSION" ]; then echo "No git tag was set skipping anaconda build"; else bash conda_upload.sh ; fi
+# - bash conda_upload.sh
