@@ -37,6 +37,7 @@ f this code has received funding from the European Union’s Horizon 2020 resear
    Introduction.rst
    Installation.rst
    Quickstart.rst
+   Data_access_and_adaption_for_Landsat5.rst
    Annex_technical.rst
    
 
