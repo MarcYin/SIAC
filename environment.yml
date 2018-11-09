@@ -5,6 +5,7 @@ channels:
 dependencies:
   - python=3.6*
   - gdal>2.1
+  - lightgbm
   - numpy>=1.13
   - scipy=1.0
   - psutil
