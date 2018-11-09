@@ -1,0 +1,14 @@
+name: siac-dev
+
+channels:
+  - conda-forge
+dependencies:
+  - python=3.6*
+  - gdal>2.21
+  - numpy>=1.13
+  - scipy=1.0
+  - psutil
+  - six
+  - requests
+  - scikit-learn
+  - scikit-image
