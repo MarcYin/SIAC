@@ -25,7 +25,6 @@ installed on different machines.
 
 
 
-.
 Development of this code has received funding from the European Union’s Horizon 2020 research and innovation programme under grant agreement No 687320, under project H2020 MULTIPLY.
 f this code has received funding from the European Union’s Horizon 2020 research and innovation programme under grant agreement No 687320, under project `H2020 MULTIPLY <http://www.multiply-h2020.eu/>`_.
 
