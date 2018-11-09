@@ -114,7 +114,7 @@ def array_to_raster(array, example_file):
 
 
 if __name__=='__main__':
-    ele = reproject_data('/home/ucfafyi/DATA/Multiply/eles/global_dem.vrt','/data/nemesis/S2_data/32/U/PU/2017/12/15/0/B02.jp2', outputType= gdal.GDT_Float32, ) 
+    ele = reproject_data('~/DATA/Multiply/eles/global_dem.vrt','/data/nemesis/S2_data/32/U/PU/2017/12/15/0/B02.jp2', outputType= gdal.GDT_Float32, ) 
     #ele.get_it()
     mask = (ele.data == -32768) | (~np.isfinite(ele.data))
     ele.data = ma.array(ele.data, mask = mask)

@@ -64,11 +64,9 @@ class solve_aerosol(object):
                  ele_scale   = 0.001,
                  prior_scale = [1., 0.1, 46.698, 1., 1., 1.],
                  emus_dir    = 'SIAC/emus/',
-                 mcd43_dir   = '/home/ucfafyi/DATA/Multiply/MCD43/',
+                 mcd43_dir   = '~/DATA/Multiply/MCD43/',
                  global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',
                  cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/',
-                 #global_dem  = '/home/ucfafyi/DATA/Multiply/eles/global_dem.vrt',
-                 #cams_dir    = '/home/ucfafyi/netapp_10/cams/',
                  spec_m_dir  = 'SIAC/spectral_mapping',
                  aero_res    = 1000):                                 
         self.sensor      = sensor_sat[0]
@@ -104,24 +102,12 @@ class solve_aerosol(object):
         self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.006.*.hdf'
         self.toa_dir     =  os.path.abspath('/'.join(toa_bands[0].split('/')[:-1]))
         try:
-            spec_map         = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.satellite).T
+            spec_map     = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.satellite).T
         except:
-            spec_map         = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.sensor).T
+            spec_map     = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.sensor).T
         self.spec_slope  = spec_map[0]
         self.spec_off    = spec_map[1]
-        '''
-        # create logger
-        self.logger = logging.getLogger('SIAC')
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            ch = logging.StreamHandler()
-            ch.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            ch.setFormatter(formatter)
-            self.logger.addHandler(ch)
-        self.logger.propagate = False
-        '''
-        self.logger = create_logger()
+        self.logger      = create_logger()
 
     def _create_base_map(self,):
         '''
@@ -568,25 +554,6 @@ class solve_aerosol(object):
         hy = hy[rmask]
         hx = hx[rmask]
         return hx, hy, hmask, rmask
-    '''    
-    def _load_xa_xb_xc_emus(self,):
-        #Find needed emulators based on the sensor and satellite names.
-
-        xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xap_%s.pkl'%(self.sensor, self.satellite))[0]
-        xbp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xbp_%s.pkl'%(self.sensor, self.satellite))[0]
-        xcp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xcp_%s.pkl'%(self.sensor, self.satellite))[0]
-        def read_emus(fname):
-            if sys.version_info >= (3,0):
-                #f = open(fname, mode='rb', encoding = 'latin1')
-                f = lambda em: pkl.load(open(em, 'rb'), encoding = 'latin1')
-            else:
-                #f = open(fname, mode='rb')
-                f = lambda em: pkl.load(open(em, 'rb'))
-            return pkl.load(f)
-        gc.disable()
-        self.emus = parmap(read_emus, [xap_emu, xbp_emu, xcp_emu])
-        gc.enable()
-    '''
 
     def _load_xa_xb_xc_emus(self,):
         xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xap_%s.pkl'%(self.sensor, self.satellite))[0]
@@ -596,7 +563,6 @@ class solve_aerosol(object):
             f = lambda em: pkl.load(open(em, 'rb'), encoding = 'latin1')
         else:     
             f = lambda em: pkl.load(open(str(em), 'rb'))
-        #print([xap_emu, xbp_emu, xcp_emu])
         self.emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
 
     def _get_convolved_toa(self,):       
@@ -784,7 +750,7 @@ def test_s2():
 
 def test_l8():
     sensor_sat = 'OLI', 'L8'
-    base = '/home/ucfafyi/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/LC08_L1TP_014034_20170831_20170915_01_T1_'
+    base = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/LC08_L1TP_014034_20170831_20170915_01_T1_'
     toa_bands  = [base + i + '.TIF' for i in ['B2', 'B3', 'B4', 'B5', 'B6', 'B7']]
     view_angles = [base + 'sensor_%s'%i +'.tif'  for i in ['B02', 'B03', 'B04', 'B05', 'B06', 'B07']]
     sun_angles = base + 'solar_B01.tif'
@@ -851,6 +817,3 @@ if __name__ == '__main__':
     #l8_aero = test_l8()
     s2_aero = test_s2()
     #m_aero = test_modis()
-
-
-

@@ -6,13 +6,13 @@ import logging
 import requests
 import numpy as np
 from glob import glob
+from six.moves import input
 from functools import partial
+from os.path import expanduser
 from multiprocessing import Pool
 from datetime import datetime, timedelta
-from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
-from os.path import expanduser
 from SIAC.create_logger import create_logger
-from six.moves import input
+from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
 
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
@@ -42,8 +42,6 @@ else:
             f.write((i + '\n').encode())
     auth = tuple([username, password])
 
-#print(file_path + '/data/.earthdata_auth')
-#print(auth)
 
 def find_files(aoi, obs_time, temporal_window = 16):
     days   = [(obs_time - timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(temporal_window, 0, -1)] + \
@@ -64,7 +62,6 @@ def find_files(aoi, obs_time, temporal_window = 16):
 
 def get_one_tile(tile_date):
     base = 'https://e4ftl01.cr.usgs.gov/MOTA/MCD43A1.006/'
-    #base - 'https://e4ftl01.cr.usgs.gov/MOTA/MCD43A1.006/'
     tile, date = tile_date
     for j in range(100):
         r = requests.get(base + date)
@@ -153,10 +150,10 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/'):
     p.join()
 
 if __name__ == '__main__':
-    aoi = '/home/ucfafyi/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/AOI.json'
-    aoi = '/home/ucfafyi/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/aot.tif'
+    aoi = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/AOI.json'
+    aoi = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/aot.tif'
     obs_time = datetime(2017, 7, 8, 10, 8, 20)
-    ret = get_mcd43(aoi, obs_time, mcd43_dir = '/home/ucfafyi/hep/MCD43/', vrt_dir = '/home/ucfafyi/DATA/Multiply/MCD43/')
+    ret = get_mcd43(aoi, obs_time, mcd43_dir = '~/hep/MCD43/', vrt_dir = '~/DATA/Multiply/MCD43/')
 
 
 

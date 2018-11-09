@@ -1,8 +1,6 @@
 #!/usr/bin/env python 
 import os
 import sys
-#import ogr
-#import gdal
 import psutil
 import logging
 import warnings
@@ -52,8 +50,6 @@ class atmospheric_correction(object):
                  atmo_scale  = [1., 1., 1., 1., 1., 1.],
                  global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',
                  cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/',
-                 #global_dem  = '/home/ucfafyi/DATA/Multiply/eles/global_dem.vrt',
-                 #cams_dir    = '/home/ucfafyi/netapp_10/cams/',
                  emus_dir    = 'SIAC/emus/',
                  cams_scale  = [1., 0.1, 46.698, 1., 1., 1.],
                  block_size  = 600,
@@ -96,17 +92,7 @@ class atmospheric_correction(object):
         if (r is not None) & (g is not None) & (b is not None):
             self.ri, self.gi, self.bi = self.toa_bands.index(r), self.toa_bands.index(g), self.toa_bands.index(b)
             self._do_rgb = True
-        '''   
-        # create logger
-        self.logger = logging.getLogger('SIAC')
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            ch = logging.StreamHandler()
-            ch.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            ch.setFormatter(formatter)
-            self.logger.addHandler(ch)
-        '''
+
         self.logger = create_logger()
          
     def _create_base_map(self,):
@@ -585,7 +571,7 @@ def test_s2():
     return ret, atmo
 def test_l8():
     sensor_sat = 'OLI', 'L8'
-    base = '/home/ucfafyi/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/LC08_L1TP_014034_20170831_20170915_01_T1_'                             
+    base = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/LC08_L1TP_014034_20170831_20170915_01_T1_'                             
     toa_bands  = [base + i + '.TIF' for i in ['B2', 'B3', 'B4', 'B5', 'B6', 'B7']]
     view_angles = [base + 'sensor_%s'%i +'.tif'  for i in ['B02', 'B03', 'B04', 'B05', 'B06', 'B07']]
     sun_angles = base + 'solar_B01.tif'
@@ -656,7 +642,7 @@ def test_modis():
     aot_unc = toa_dir + '/aot_unc.tif'
     tcwv_unc = toa_dir + '/tcwv_unc.tif'
     tco3_unc = toa_dir + '/tco3_unc.tif'
-    emus_dir   = '/data/store01/data_dirs/students/ucfafyi/Multiply/emus/old_emus/'
+    emus_dir   = '~/DATA/Multiply/emus/old_emus/'
     rgb = [toa_bands[2], toa_bands[1], toa_bands[0]]
     atmo = atmospheric_correction(sensor_sat, toa_bands, band_index,view_angles,sun_angles, aot = aot, cloud_mask = cloud_mask, ref_scale = scale, ref_off = off,\
                                   tcwv = tcwv, tco3 = tco3, aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = rgb, emus_dir =emus_dir,block_size=3000)
@@ -667,10 +653,4 @@ if __name__ == '__main__':
     s_ret, s_atmo = test_s2()
     #l_ret, l_atmo = test_l8()
     #m_ret, m_atmo = test_modis()
-
-
-
-
-
-
 
