@@ -32,7 +32,6 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
     aero_atmos = []
     for ret in rets:
         ret += (mcd43, vrt_dir, aoi)
-        #sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile = ret
         aero_atmo = do_correction(*ret)
         if send_back:
             aero_atmos.append(aero_atmo)
@@ -61,7 +60,6 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                 sat = i.split('</')[0].split('>')[-1].split('_')[0]
     
     get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir)
-    #get_mcd43(toa_refs[0], obs_time, mcd43_dir = '/home/ucfafyi/hep/MCD43/', vrt_dir = '/home/ucfafyi/DATA/Multiply/MCD43/')
     sensor_sat = 'MSI', sat
     band_index  = [1,2,3,7,11,12]
     band_wv    = [469, 555, 645, 859, 1640, 2130]

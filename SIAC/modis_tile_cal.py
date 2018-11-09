@@ -87,8 +87,8 @@ def mtile_cal(lat, lon):
     return h,v
 
 if __name__ == '__main__':
-    aoi = '/home/ucfafyi/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/AOI.json'
-    example_file = '/home/ucfafyi/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/aot.tif'
+    aoi          = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/AOI.json'
+    example_file = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/aot.tif'
     print(get_vector_hv(aoi))
     print(get_vector_hv(ogr.Open(aoi)))
     print(get_raster_hv(example_file))

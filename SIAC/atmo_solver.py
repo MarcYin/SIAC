@@ -12,13 +12,7 @@ except:
     import pickle as pkl
 from scipy import optimize, interpolate, sparse
 from scipy.sparse import linalg
-#from fastDiff import fastDiff
 from SIAC.multi_process import parmap
-
-#turn off multithreading
-#os.environ['OPENBLAS_NUM_THREADS'] = '1' 
-#os.environ['MKL_NUM_THREADS'] = '1'
-#os.environ['OMP_NUM_THREADS'] = '1'
 
 class bcolors:
     HEADER = '\033[95m'
@@ -445,7 +439,7 @@ if __name__ == '__main__':
     Hy       = np.random.choice(10980, 50000)
     full_res = (10980, 10980) 
     aero_res = 600
-    emus_dir = '/home/ucfafyi/DATA/Multiply/emus/'
+    emus_dir = '~/DATA/Multiply/emus/'
     sensor   = 'MSI'
     xap_emu  = glob(emus_dir + '/isotropic_%s_emulators_*xap*.pkl'%(sensor))[0]     
     xbp_emu  = glob(emus_dir + '/isotropic_%s_emulators_*xbp*.pkl'%(sensor))[0]
