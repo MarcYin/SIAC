@@ -895,8 +895,8 @@ purporse.
 .. code:: 
 
     import numpy as np
-    from the_aerosol import solve_aerosol
-    from the_correction import atmospheric_correction
+    from SIAC.the_aerosol import solve_aerosol
+    from SIAC.the_correction import atmospheric_correction
     sensor_sat = 'OLI', 'L8'
     toa_bands = ['landsat/'+i for i in bands]
     view_angles = ['landsat/landsat_ang/LT05_L1TP_202034_20110905_20161006_01_T1_VZA_VAA_%s.TIF'%i  \
