@@ -1046,10 +1046,10 @@ purporse.
 | |image2|    | |image3|    |
 +-------------+-------------+
 
-.. |image0| image:: image/TOA_overview.png
-   .. |image1| image:: image/BOA_overview.png
-      .. |image2| image:: image/TOA_overview.png
-         .. |image3| image:: image/BOA_overview.png
+.. |image0| image:: TOA_overview.png
+   .. |image1| image:: BOA_overview.png
+      .. |image2| image:: TOA_overview.png
+         .. |image3| image:: BOA_overview.png
 
 .. code:: ipython3
 
