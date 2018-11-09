@@ -96,7 +96,7 @@ LOGIN <https://urs.earthdata.nasa.gov/>`__. The function
 data, but remember to change the username and passoword in the
 ``util/earthdata_auth`` file:
 
-.. code:: ipython3
+.. code:: 
 
     !cat util/earthdata_auth
 
@@ -107,15 +107,12 @@ data, but remember to change the username and passoword in the
     password
 
 
-.. code:: ipython3
+.. code:: 
 
     import sys
     sys.path.insert(0, 'util')
     from get_MCD43 import get_mcd43, find_files
     from datetime import datetime
-
-.. code:: ipython3
-
     # the great gdal virtual file system and google cloud landsat public datasets
     google_cloud_base = '/vsicurl/https://storage.googleapis.com/gcp-public-data-landsat/'
     aoi = google_cloud_base + 'LE07/01/202/034/LE07_L1TP_202034_20060611_20170108_01_T1/LE07_L1TP_202034_20060611_20170108_01_T1_B1.TIF'
@@ -133,11 +130,11 @@ data, but remember to change the username and passoword in the
 
 To download them and used them and creat a daily global VRT file:
 
-.. code:: ipython3
+.. code:: 
 
     #get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT')
 
-.. code:: ipython3
+.. code:: 
 
     ls ./MCD43/ ./MCD43_VRT/ ./MCD43_VRT/2006-05-27/*.vrt
 
@@ -249,7 +246,7 @@ To download them and used them and creat a daily global VRT file:
     2006-06-05/  2006-06-16/  2006-06-27/  2011-08-30/  2011-09-10/  2011-09-21/
 
 
-.. code:: ipython3
+.. code:: 
 
     !gdalinfo ./MCD43_VRT/2006-05-27/MCD43_2006147_BRDF_Albedo_Parameters_Band5.vrt
 
@@ -298,21 +295,7 @@ which enables access of chuncks of data from a virtul mosaic to be
 possible and saves a lot of unnecessary downloading of data outside the
 area of interest. And this can be done easily with gdal as well:
 
-| \`\`\`python #!/usr/bin/env python
-| import os import sys import gdal from datetime import datetime #fname
-= sys.argv[1] try: g = gdal.Open(fname) except: raise IOError('File
-cannot opened!') subs = [i[0] for i in g.GetSubDatasets()]
-
-def translate(sub): ret = sub.split(':') fname, para =
-ret[2].split('"')[1], ret[-1] ret = fname.split('.') day =
-datetime.strptime(ret[-5].split('A')[1], '%Y%j').strftime('%Y\_%m\_%d')
-fname = '*'.join(ret[:-2]) + '*\ %s.tif'%para fname = day+ '/' + fname
-if os.path.exists(fname): pass else: if os.path.exists('./%s'%day): pass
-else: os.mkdir('./%s'%day) gdal.Translate(fname,
-sub,creationOptions=["TILED=YES", "COMPRESS=DEFLATE"]) for sub in subs:
-translate(sub) \`\`\`
-
-.. code:: ipython3
+.. code:: 
 
     #!/usr/bin/env python                                                                     
     import os
@@ -347,7 +330,7 @@ translate(sub) \`\`\`
     for sub in subs:
         translate(sub)
 
-.. code:: ipython3
+.. code:: 
 
     ls MCD43/2006_05_26/
 
@@ -355,35 +338,35 @@ translate(sub) \`\`\`
 .. parsed-literal::
 
     flist.txt
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band1.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band2.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band3.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band4.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band5.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band6.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band7.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_nir.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_shortwave.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_vis.tif
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band1.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band1.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band2.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band3.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band4.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band5.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band6.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_Band7.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_nir.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_shortwave.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Band_Mandatory_Quality_vis.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band1.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band1.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band2.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band2.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band2.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band3.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band3.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band3.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band4.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band4.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band4.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band5.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band5.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band5.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band6.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band6.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band6.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band7.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band7.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band7.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_nir.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_nir.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_nir.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_shortwave.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_shortwave.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_shortwave.tif.aux.xml
-    [38;5;13mMCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_vis.tif
+    MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_vis.tif
     MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_vis.tif.aux.xml
 
 
@@ -391,11 +374,11 @@ So we basically converted the MODIS HDF format into GeoTiff format and
 an important argument for the ``gdal.translate`` is ``TILED=YES`` which
 will make small chunk access of dataset to be possible.
 
-.. code:: ipython3
-
+.. code::
+    
+    #!/usr/bin/env python 
     import pylab as plt
     import numpy as np
-    %matplotlib notebook
     from reproject import reproject_data
     # hear we try to reproject the RGB band
     # from MCD43 to the aoi used above, whcih
@@ -413,7 +396,6 @@ will make small chunk access of dataset to be possible.
     b[b>1] = np.nan
     g[g>1] = np.nan
     plt.imshow(np.array([r,g,b]).transpose(1,2,0)*4)
-
 
 
 .. parsed-literal::
@@ -438,7 +420,7 @@ will make small chunk access of dataset to be possible.
 I have also put the created tif file into the UCL geography file server
 at http://www2.geog.ucl.ac.uk/~ucfafyi/test\_files/2006\_05\_26/
 
-.. code:: ipython3
+.. code:: 
 
     from IPython.core.display import HTML
     #HTML("http://www2.geog.ucl.ac.uk/~ucfafyi/test_files/2006_05_26/")
@@ -446,9 +428,9 @@ at http://www2.geog.ucl.ac.uk/~ucfafyi/test\_files/2006\_05\_26/
 And if we change from the VRT file to the url to the tif files, it will
 also works!!!
 
-.. code:: ipython3
+.. code:: 
 
-    %matplotlib notebook
+    
     url = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/test_files/2006_05_26/'
     source = url + 'MCD43A1_A2006146_h17v05_006_BRDF_Albedo_Parameters_Band1.tif'
     
@@ -497,7 +479,7 @@ global DEM VRT file is generated with:
     ls *.tif>file_list.txt                                         
     gdalbuildvrt -te -180 -90 180 90 global_dem.vrt -input_file_list file_list.txt
 
-.. code:: ipython3
+.. code:: 
 
     print(gdal.Info('/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',showFileList=False))
 
@@ -528,9 +510,9 @@ global DEM VRT file is generated with:
     
 
 
-.. code:: ipython3
+.. code:: 
 
-    %matplotlib notebook
+    
     source = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt'
     ele = reproject_data(source, aoi).data * 0.001
     plt.imshow(ele)
@@ -682,9 +664,9 @@ and reanalysis data:
             print(t)
             gdal.Translate(header + '/'+header+'_'+i+'.tif', temp%(filename,i), outputSRS='EPSG:4326', creationOptions=["TILED=YES", "COMPRESS=DEFLATE"])
 
-.. code:: ipython3
+.. code:: 
 
-    %matplotlib notebook
+    
     # here we test with subset of global AOT 550
     # over the aoi 
     source = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/2015_09_08/2015_09_08_aod550.tif'
@@ -734,7 +716,7 @@ the
 `AOI <http://geojson.io/#data=data:application/json,%7B%22type%22%3A%22FeatureCollection%22%2C%22features%22%3A%5B%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Polygon%22%2C%22coordinates%22%3A%5B%5B%5B-6.6707611083984375%2C37.334678404943254%5D%2C%5B-6.5979766845703125%2C37.04038016980843%5D%2C%5B-6.273193359375%2C36.84336173438382%5D%2C%5B-6.01776123046875%2C36.90817608096904%5D%2C%5B-6.0514068603515625%2C37.24180850465067%5D%2C%5B-6.3164520263671875%2C37.42906945530332%5D%2C%5B-6.6707611083984375%2C37.334678404943254%5D%5D%5D%7D%7D%5D%7D>`__
 in Spain, and we stored it as a Geojson file.
 
-.. code:: ipython3
+.. code:: 
 
     import requests
     # Landsat 5
@@ -777,7 +759,7 @@ in Spain, and we stored it as a Geojson file.
         REFLECTANCE_ADD_BAND_7 = -0.008371
 
 
-.. code:: ipython3
+.. code:: 
 
     # since landsat angles has to be produced
     # from the angular text file
@@ -812,7 +794,7 @@ in Spain, and we stored it as a Geojson file.
     list(map(os.remove, glob('angle_s*_B*.img*')))
     os.chdir(cwd)
 
-.. code:: ipython3
+.. code:: 
 
     sza, saa = gdal.Warp('', 'landsat/landsat_ang/'+ header + 'SZA_SAA.TIF',format = 'MEM', warpOptions = \
                   ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName= 'aoi.json', \
@@ -821,7 +803,7 @@ in Spain, and we stored it as a Geojson file.
     rgb[rgb<0] = np.nan
     rgba = np.r_[rgb, ~alpha[None, ...]]
 
-.. code:: ipython3
+.. code:: 
 
     plt.figure(figsize=(8,8))
     plt.imshow(rgba.transpose(1,2,0)*2)
@@ -847,7 +829,7 @@ in Spain, and we stored it as a Geojson file.
 
 
 
-.. code:: ipython3
+.. code:: 
 
     # We save all the remote file to local
     # also convert it to reflectance...
@@ -873,9 +855,9 @@ in Spain, and we stored it as a Geojson file.
     g.FlushCache()
     aoi_mask = np.isnan(data)
 
-.. code:: ipython3
+.. code:: 
 
-    %matplotlib notebook
+    
     plt.imshow(gdal.Open('landsat/LT05_L1TP_202034_20110905_20161006_01_T1_B1.TIF').ReadAsArray())
     plt.colorbar()
 
@@ -910,7 +892,7 @@ In reality, we need the emulators for this sensor, but at the moment we
 do not have, so we instead use Landsat 8 emultors just for demostration
 purporse.
 
-.. code:: ipython3
+.. code:: 
 
     import numpy as np
     from the_aerosol import solve_aerosol
@@ -1040,20 +1022,22 @@ purporse.
     2018-09-13 18:45:39,423 - AtmoCor - INFO - Done.
 
 
+
+
 +-------------+-------------+
 | TOA image   | BOA image   |
 +=============+=============+
 | |image2|    | |image3|    |
 +-------------+-------------+
 
-.. |image0| image:: TOA_overview.png
-   .. |image1| image:: BOA_overview.png
-      .. |image2| image:: TOA_overview.png
-         .. |image3| image:: BOA_overview.png
+.. |image0| image:: https://github.com/MarcYin/Global-analysis-ready-dataset/blob/master/landsat/TOA_overview.png?raw=true
+.. |image1| image:: https://github.com/MarcYin/Global-analysis-ready-dataset/blob/master/landsat/BOA_overview.png?raw=true
+.. |image2| image:: https://github.com/MarcYin/Global-analysis-ready-dataset/blob/master/landsat/TOA_overview.png?raw=true
+.. |image3| image:: https://github.com/MarcYin/Global-analysis-ready-dataset/blob/master/landsat/BOA_overview.png?raw=true
 
-.. code:: ipython3
+.. code:: 
 
-    %matplotlib notebook
+    
     toa = []
     boa = []
     for i in range(6):
@@ -1089,4 +1073,5 @@ images, but it can only treated as a test and if one wants to do the
 real AC of Landsat 5 collection, the emulators and spectral mapping
 should be created for Landsat 5 TM sensor also a more resonable prior
 should be used.
+
 
