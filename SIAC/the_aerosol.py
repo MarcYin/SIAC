@@ -119,7 +119,7 @@ class solve_aerosol(object):
             if os.path.exists(self.aoi):
                 try:
                     g = gdal.Open(self.aoi)
-                    subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir + '/AOI.json', self.aoi])
+                    subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir + '/AOI.json', self.aoi])
                 except:
                     try:
                         gr = ogr.Open(str(self.aoi))
@@ -150,7 +150,7 @@ class solve_aerosol(object):
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
             self.logger.warning('AOI is not created and full band extend is used')
-            subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.aoi = self.toa_dir + '/AOI.json'
         else:
             self.aoi = self.toa_dir + '/AOI.json'
