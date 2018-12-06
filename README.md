@@ -48,8 +48,7 @@ conda install -c f0xy -c conda-forge siac
 To save your time for installing GDAL and lightgbm (Tow dependencies), please use:
 
 ```bash
-conda install -c conda-forge gdal=2.2.4
-conda install -c conda-forge lightgbm
+conda install -c conda-forge gdal>2.1
 ```
 
 

@@ -105,7 +105,7 @@ class atmospheric_correction(object):
             if os.path.exists(self.aoi):
                 try:     
                     g = gdal.Open(self.aoi)
-                    subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir + '/AOI.json', self.aoi])
+                    subprocess.call(['gdaltindex', '-f', 'GeoJSON',  '-t_srs', 'EPSG:4326', self.toa_dir + '/AOI.json', self.aoi])
                 except:  
                     try: 
                         gr = ogr.Open(self.aoi)
@@ -134,7 +134,7 @@ class atmospheric_correction(object):
         ogr.DontUseExceptions() 
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
-            subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.logger.warning('AOI is not created and full band extend is used')
             self.aoi = self.toa_dir + '/AOI.json'
         else:
