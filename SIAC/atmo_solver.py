@@ -294,20 +294,40 @@ class solving_atmo_paras(object):
         
         if is_full:
             dJ = np.nansum(np.array(full_dJ), axis=(1,))
-            J_ = np.zeros((2,) + self.full_res)
-            J_[:, self.Hx, self.Hy] = dJ
-            subs1 = [np.array_split(sub, self.num_blocks_y, axis=2) for sub in np.array_split(J_, self.num_blocks_x, axis=1)]
+            dJ    [np.isnan(dJ)]     = 0
+            full_J[np.isnan(full_J)] = 0
+            #J_ = np.zeros((2,) + self.full_res)
+            #J_[:, self.Hx, self.Hy] = dJ
+            #subs1 = [np.array_split(sub, self.num_blocks_y, axis=2) for sub in np.array_split(J_, self.num_blocks_x, axis=1)]
 
-            J        = np.zeros(self.full_res)
-            J[self.Hx, self.Hy] = full_J 
-            subs2 = [np.array_split(sub, self.num_blocks_y, axis=1) for sub in np.array_split(J, self.num_blocks_x, axis=0)]
+            #J        = np.zeros(self.full_res)
+            #J[self.Hx, self.Hy] = full_J 
+            #subs2 = [np.array_split(sub, self.num_blocks_y, axis=1) for sub in np.array_split(J, self.num_blocks_x, axis=0)]
 
-            J_ = np.zeros((2, self.num_blocks_x, self.num_blocks_y))
-            J  = np.zeros((   self.num_blocks_x, self.num_blocks_y))            
-            for i in range(self.num_blocks_x):
-                for j in range(self.num_blocks_y):
-                    J_[:, i,j] = np.nansum(subs1[i][j], axis=(1,2))
-                    J [   i,j] = np.nansum(subs2[i][j], axis=(0,1))
+            #J_ = np.zeros((2, self.num_blocks_x, self.num_blocks_y))
+            #J  = np.zeros((   self.num_blocks_x, self.num_blocks_y))
+
+            nx, ny         = (np.ceil(np.array(self.full_res) / np.array([self.num_blocks_x, self.num_blocks_y])) \
+                                                             *  np.array([self.num_blocks_x, self.num_blocks_y])).astype(int)
+            #end_x, end_y   = np.array(self.full_res) - np.array([nx, ny])
+            x_size, y_size = int(nx / self.num_blocks_x), int(ny / self.num_blocks_y)
+
+            J_ = np.zeros((2, nx, ny))
+            J  = np.zeros((   nx, ny))
+            #J_[:], J[:] = np.nan, np.nan
+
+            J_[:, self.Hx, self.Hy] = dJ 
+            J [   self.Hx, self.Hy] = full_J
+
+            J_ = J_.reshape(2, self.num_blocks_x, x_size, self.num_blocks_y, y_size)
+            J  =  J.reshape(   self.num_blocks_x, x_size, self.num_blocks_y, y_size)
+            J_ = np.sum(J_, axis=(2,4))
+            J  = np.sum(J,  axis=(1,3))
+
+            #for i in range(self.num_blocks_x):
+            #    for j in range(self.num_blocks_y):
+            #        J_[:, i,j] = np.nansum(subs1[i][j], axis=(1,2))
+            #        J [   i,j] = np.nansum(subs2[i][j], axis=(0,1))
 
             J_[:, ~self._coarse_mask] = 0
             J [   ~self._coarse_mask] = 0
