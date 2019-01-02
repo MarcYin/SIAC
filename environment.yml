@@ -1,4 +1,4 @@
-name: siac-dev
+name: test-environment
 
 channels:
   - conda-forge
