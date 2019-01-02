@@ -44,3 +44,5 @@ def test_s2():
     with open(myPath.replace('tests', '') + 'data/.earthdata_auth', 'wb') as f:
         f.write(('').encode())  
     assert True
+#if __name__ == '__main__':
+#    test_s2()
