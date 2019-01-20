@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import requests
 import numpy as np
 from glob import glob
@@ -87,4 +88,16 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                                   rgb, emus_dir=file_path+'/emus/')
     atmo._doing_correction()
     return aero, atmo
+
+def exe():
+    parser = argparse.ArgumentParser(description='Sentinel 2 Atmospheric Correction Excutable')
+    parser.add_argument('-f', "--file_path",      help='Sentinel 2 file path', required=True)
+    parser.add_argument("-m", "--MCD43_file_dir", help="Directory where you store MCD43A1.006 data", default = home + '/MCD43/')
+    parser.add_argument("-v", "--vrt_dir",        help="Where MCD43 vrt stored.",                    default = home + '/MCD43_VRT/')
+    parser.add_argument("-a", "--aoi",            help="Area of Interest.",                          default = None)
+    args = parser.parse_args()
+    SIAC_S2(s2_t=args.file_path, mcd43=args.MCD43_file_dir, vrt_dir=args.vrt_dir, aoi=args.aoi)
+
+if __name__ == '__main__':
+    exe()
 
