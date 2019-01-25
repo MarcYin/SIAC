@@ -17,28 +17,74 @@ from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 logger = create_logger()
-
+test_url = 'https://e4ftl01.cr.usgs.gov/MOTA/MCD43A1.006/2000.02.24/MCD43A1.A2000055.h32v08.006.2016101152216.hdf.xml'
 
 if os.path.exists(file_path + '/data/.earthdata_auth'):
     try:
         username, password = np.loadtxt(file_path + '/data/.earthdata_auth', dtype=str)
         auth = tuple([username, password])
+        with requests.Session() as s:
+            s.auth = auth
+            r1     = s.get(test_url)
+            r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
+        while r.status_code == 401:                 
+            logger.error('Wrong username and password stored, please enter again')
+            username = input('Username for NASA Earthdata: ')      
+            password = getpass.getpass('Password for NASA Earthdata: ')
+            auth = tuple([username, password])
+            with requests.Session() as s:
+                s.auth = auth
+                r1     = s.get(test_url)
+                r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
+            
+        os.remove(file_path + '/data/.earthdata_auth')    
+        with open(file_path + '/data/.earthdata_auth', 'wb') as f:
+            for i in auth:                                 
+                f.write((i + '\n').encode())              
+        auth = tuple([username, password])
+
     except:
         logger.error('Please provide NASA Earthdata username and password for downloading MCD43 data, which can be applied here: https://urs.earthdata.nasa.gov.')
         username = input('Username for NASA Earthdata: ')
         password = getpass.getpass('Password for NASA Earthdata: ')
-        up = username, password                              
+        auth = username, password                              
+        with requests.Session() as s:
+            s.auth = auth
+            r1     = s.get(test_url)
+            r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
+        while r.status_code == 401:                 
+            logger.error('Wrong username and password typed, please enter again')
+            username = input('Username for NASA Earthdata: ')      
+            password = getpass.getpass('Password for NASA Earthdata: ')
+            auth = tuple([username, password])
+            with requests.Session() as s:
+                s.auth = auth
+                r1     = s.get(test_url)
+                r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
         os.remove(file_path + '/data/.earthdata_auth')
         with open(file_path + '/data/.earthdata_auth', 'wb') as f:     
-            for i in up:                                     
+            for i in auth:                                     
                 f.write((i + '\n').encode())
         auth = tuple([username, password])
 else:
     username = input('Username for NASA Earthdata: ')
     password = getpass.getpass('Password for NASA Earthdata: ')
-    up = username, password
-    with open(home + '/.earthdata_auth', 'wb') as f:
-        for i in up: 
+    auth = username, password
+    with requests.Session() as s:
+        s.auth = auth
+        r1     = s.get(test_url)
+        r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
+    while r.status_code == 401:                 
+        logger.error('Wrong username and password typed, please enter again')
+        username = input('Username for NASA Earthdata: ')      
+        password = getpass.getpass('Password for NASA Earthdata: ')
+        auth = tuple([username, password])
+        with requests.Session() as s:
+            s.auth = auth
+            r1     = s.get(test_url)
+            r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
+    with open(file_path + '/data/.earthdata_auth', 'wb') as f:
+        for i in auth: 
             f.write((i + '\n').encode())
     auth = tuple([username, password])
 

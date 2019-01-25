@@ -8,6 +8,7 @@ export CONDA_BLD_PATH=~/conda-bld
 export VERSION=$SIAC_VERSION
 conda build . -c conda-forge
 ls -lah $CONDA_BLD_PATH/$OS 
+ls -lah $CONDA_BLD_PATH
 anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER $(ls $CONDA_BLD_PATH/$OS/$PKG_NAME-$VERSION*.tar.bz2) --force
 
 # Only need to change these two variables
@@ -19,6 +20,5 @@ anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER $(ls $CONDA_BLD_PATH/$OS/$PKG_NA
 #export CONDA_BLD_PATH=~/conda-bld
 #export VERSION=`date +%Y.%m.%d`
 #conda build . -c conda-forge
-#ls $CONDA_BLD_PATH
 #ls $CONDA_BLD_PATH/$OS
 #anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER $(ls $CONDA_BLD_PATH/$OS/$PKG_NAME-$VERSION*.tar.bz2) --force
