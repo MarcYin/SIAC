@@ -19,7 +19,7 @@ requirements:
   host:
     - python
     - setuptools
-    - gdal >=2.1
+    - gdal >=2.1,<2.4
     - numpy >=1.13
     - scipy >=1.0
     - psutil
@@ -29,7 +29,7 @@ requirements:
     - scikit-image
   run:
     - python
-    - gdal >=2.1
+    - gdal >=2.1,<2.4
     - numpy >=1.13
     - scipy >=1.0
     - psutil
