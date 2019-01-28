@@ -4,13 +4,11 @@ from __future__ import print_function
 import os
 import gc
 import sys
-#import ogr
-#import osr
-#import gdal
 import SIAC.kernels as kernels 
 import logging
-import warnings
 import platform
+import warnings
+warnings.filterwarnings("ignore") 
 import subprocess
 import numpy as np
 from glob import glob
@@ -32,7 +30,6 @@ from sklearn.linear_model import HuberRegressor
 from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
 
-warnings.filterwarnings("ignore") 
 
 class solve_aerosol(object):
     '''
