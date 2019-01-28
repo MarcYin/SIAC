@@ -11,6 +11,7 @@ build:
     - anaconda
     - conda-forge
   script: pip install networkx gp_emulator lightgbm >=2.1.0 && python setup.py install --single-version-externally-managed --record=record.txt
+  noarch: generic 
   script_env:
     - VERSION
     - CONDA_BLD_PATH
