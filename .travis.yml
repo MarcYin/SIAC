@@ -24,6 +24,7 @@ install:
       pip install gp_emulator==1.6.1;
     fi
   - pip install lightgbm >=2.1.0 coveralls codecov
+  - conda install conda-build anaconda-client
   - conda list
 script:
   # Output something every 10 minutes or Travis kills the job
