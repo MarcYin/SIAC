@@ -28,10 +28,10 @@ install:
 script:
   # Output something every 10 minutes or Travis kills the job
   - while sleep 9m; do echo "=====[ $SECONDS seconds still running ]====="; done &
-  - py.test -s --cov
+  #- py.test -s --cov
   #Killing background sleep loop
   - kill %1
-  - coverage xml
+  #- coverage xml
   - export SIAC_VERSION=v2.1.2 #$TRAVIS_TAG
 deploy:
   provider: pypi
@@ -41,8 +41,8 @@ deploy:
     tags: true
     branch: master
 after_success:
-  - codecov
-  - coveralls
+  #- codecov
+  #- coveralls
   - rm -rf SIAC/emus/*.pkl S2?_MSIL1C*.SAFE
   - bash conda_upload.sh
   #- if [ -z "$SIAC_VERSION" ]; then echo "No git tag was set skipping anaconda build"; else bash conda_upload.sh ; fi
