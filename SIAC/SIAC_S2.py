@@ -2,6 +2,8 @@ import os
 import sys
 import argparse
 import requests
+import warnings
+warnings.filterwarnings("ignore") 
 import numpy as np
 from glob import glob
 from SIAC.get_MCD43 import get_mcd43
@@ -14,6 +16,7 @@ from SIAC.multi_process import parmap
 from os.path import expanduser
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
+
 
 def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None):
     if not os.path.exists(file_path + '/emus/'):

@@ -100,7 +100,7 @@ def find_files(aoi, obs_time, temporal_window = 16):
         except:
             raise IOError('AOI has to be raster or vector object/files.')
     fls = zip(np.repeat(tiles, len(days)), np.tile(days, len(tiles)))
-    p = Pool(18)
+    p = Pool(8)
     ret = p.map(get_one_tile, fls)
     p.close()
     p.join()
