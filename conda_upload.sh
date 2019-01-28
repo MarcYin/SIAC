@@ -10,7 +10,7 @@ conda build .
 export CONDA_PACKAGE=`conda build --output . | grep bz2`
 echo $CONDA_PACKAGE
 ls -lah $CONDA_BLD_PATH/$OS 
-ls -lah $CONDA_BLD_PATH/
+ls -lah $CONDA_BLD_PATH/siac*
 ls -lah $CONDA_BLD_PATH/noarch
 anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER $CONDA_PACKAGE --force
 
