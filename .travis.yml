@@ -2,6 +2,11 @@ language: python
 python:
   - "2.7"
   - "3.6"
+matrix:
+  include:
+    - python: 3.7
+      dist: xenial
+      sudo: true
 install:
   - sudo apt-get update
   - echo $TRAVIS_PYTHON_VERSION
@@ -46,7 +51,7 @@ after_success:
   #- codecov
   #- coveralls
   - rm -rf SIAC/emus/*.pkl S2?_MSIL1C*.SAFE
-  #- bash conda_upload.sh
+  - bash conda_upload.sh
   #- conda install conda-build && conda install anaconda-client && PKG_NAME=siac && USER=f0xy && OS=$TRAVIS_OS_NAME-64 && mkdir ~/conda-bld && conda config --set anaconda_upload no && export CONDA_BLD_PATH=~/conda-bld && export VERSION=$SIAC_VERSION && conda build . && ls -lah $CONDA_BLD_PATH/$OS && ls -lah $CONDA_BLD_PATH/noarch && export CONDA_PACKAGE=`conda build --output . | grep bz2` && anaconda -t $CONDA_UPLOAD_TOKEN upload -u $USER $CONDA_PACKAGE --force
-  - conda build .
+  #- conda build .
   #- if [ -z "$SIAC_VERSION" ]; then echo "No git tag was set skipping anaconda build"; else bash conda_upload.sh ; fi
