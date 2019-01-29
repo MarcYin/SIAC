@@ -20,7 +20,7 @@ install:
   - conda config --set always_yes yes --set changeps1 no
   - conda config --add channels conda-forge
   - conda update -q conda
-  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six requests scikit-learn scikit-image 'gdal>=2.1,<2.4' pytest-cov coverage pip
+  - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six requests scikit-learn scikit-image 'gdal>=2.1,<2.4' pytest-cov coverage pip conda-build anaconda-client
   - source activate test-environment
   - conda info -a
   - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
@@ -29,7 +29,6 @@ install:
       pip install gp_emulator==1.6.1;
     fi
   - pip install lightgbm >=2.1.0 coveralls codecov
-  - conda install conda-build anaconda-client
   - conda list
 script:
   # Output something every 10 minutes or Travis kills the job
@@ -37,6 +36,7 @@ script:
   - py.test -s --cov
   #Killing background sleep loop
   - kill %1
+  - cp /dev/null SIAC/data/.earthdata_auth
   - coverage xml
   - export SIAC_VERSION=$TRAVIS_TAG
 deploy:
@@ -51,6 +51,6 @@ after_success:
   - codecov
   - coveralls
   - rm -rf SIAC/emus/*.pkl S2?_MSIL1C*.SAFE
-  - rm -rf ~/miniconda.sh
+  #- rm -rf ~/miniconda.sh
   #- bash conda_upload.sh
   - if [ -z "$SIAC_VERSION" ]; then echo "No git tag was set skipping anaconda build"; else bash conda_upload.sh ; fi
