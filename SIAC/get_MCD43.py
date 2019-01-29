@@ -19,6 +19,21 @@ file_path = os.path.dirname(os.path.realpath(__file__))
 logger = create_logger()
 test_url = 'https://e4ftl01.cr.usgs.gov/MOTA/MCD43A1.006/2000.02.24/MCD43A1.A2000055.h32v08.006.2016101152216.hdf.xml'
 
+try:
+    auth = tuple([os.environ['Earthdata_user'], os.environ['Earthdata_pass']])
+    with requests.Session() as s:                                            
+        s.auth = auth                                                        
+        r1     = s.get(test_url)                                             
+        r      = s.get(r1.url, stream=True, headers={'user-agent': 'My app'}) 
+    if r.status_code == 401:
+        logger.error('Wrong username and password are set for Earthdata_user and Earthdata_pass Environment variables.') 
+    else:
+        with open(file_path + '/data/.earthdata_auth', 'wb') as f:
+            for i in auth:               
+                f.write((i + '\n').encode())
+except:
+    logger.error('Environment variables Earthdata_user and Earthdata_pass for accessing NASA Earthdata are not set, and trying to read from file or input.')
+
 if os.path.exists(file_path + '/data/.earthdata_auth'):
     try:
         username, password = np.loadtxt(file_path + '/data/.earthdata_auth', dtype=str)

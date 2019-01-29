@@ -1,5 +1,5 @@
-conda install conda-build  
-conda install anaconda-client 
+#conda install conda-build  
+#conda install anaconda-client 
 PKG_NAME=siac && USER=f0xy  
 mkdir ~/conda-bld 
 conda config --set anaconda_upload no  
