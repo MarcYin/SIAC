@@ -45,6 +45,11 @@ class reproject_data(object):
         self.xSize      = xSize
         self.ySize      = ySize
         self.resample   = resample
+        if self.srcNodata is None:
+            try:                           
+                self.srcNodata = ' '.join([i.split("=")[1] for i in gdal.Info(self.source_img).split('\n') if' NoData' in i])
+            except:                        
+                self.srcNodata = None
         if (self.target_img is None) & (self.dstSRS is None):
             raise IOError('Projection should be specified ether from a file or a projection code.')
         elif self.target_img is not None:
