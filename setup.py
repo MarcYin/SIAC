@@ -4,7 +4,7 @@ from setuptools import setup
 try:
     version = os.environ['SIAC_VERSION']
 except:
-    version = '2.1.2'
+    version = '2.1.3'
 
 with open('README.md', 'rb') as f:
     readme = f.read().decode()
