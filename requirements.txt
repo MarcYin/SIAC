@@ -7,3 +7,4 @@ gp_emulator>=1.6.1
 lightgbm>=2.1.0
 numpy>=1.13
 scipy>=1.0.0
+gdal>=2.1
