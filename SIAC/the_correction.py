@@ -134,7 +134,12 @@ class atmospheric_correction(object):
         ogr.DontUseExceptions() 
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
-            subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            g = gdal.Open(self.toa_bands[0])
+            proj = g.GetProjection()
+            if 'WGS 84' in proj:
+                subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            else:
+                subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.logger.warning('AOI is not created and full band extend is used')
             self.aoi = self.toa_dir + '/AOI.json'
         else:
@@ -209,11 +214,20 @@ class atmospheric_correction(object):
         _sun_angles = [] 
         _view_angles = []
         for fname in self._sun_angles:     
-            ang = reproject_data(fname, self.mg, srcNodata = None, resample = \
+            #nodatas = [float(i.split("=")[1]) for i in gdal.Info(fname).split('\n') if' NoData' in i] 
+            try:
+                nodatas = ' '.join([i.split("=")[1] for i in gdal.Info(fname).split('\n') if' NoData' in i])
+            except:
+                nodatas = None
+            ang = reproject_data(fname, self.mg, srcNodata = nodatas, resample = \
                                  0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _sun_angles.append(ang)        
         for fname in self._view_angles:    
-            ang = reproject_data(fname, self.mg, srcNodata = None, resample = \
+            try:                           
+                nodatas = ' '.join([i.split("=")[1] for i in gdal.Info(fname).split('\n') if' NoData' in i])
+            except:                        
+                nodatas = None 
+            ang = reproject_data(fname, self.mg, srcNodata = nodatas, resample = \
                                  0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _view_angles.append(ang)       
         _view_angles = np.array(_view_angles)

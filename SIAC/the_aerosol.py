@@ -146,8 +146,13 @@ class solve_aerosol(object):
         ogr.DontUseExceptions()
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
+            g = gdal.Open(self.toa_bands[0])    
+            proj = g.GetProjection()            
+            if 'WGS 84' in proj:                
+                subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            else:                               
+                subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.logger.warning('AOI is not created and full band extend is used')
-            subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             self.aoi = self.toa_dir + '/AOI.json'
         else:
             self.aoi = self.toa_dir + '/AOI.json'
@@ -242,7 +247,7 @@ class solve_aerosol(object):
         mask     = binary_erosion (mask, structure = np.ones((3,3)).astype(bool), iterations=5).astype(bool)
         #mask     = binary_dilation(mask, structure = np.ones((3,3)).astype(bool), iterations=30).astype(bool)
         mask = binary_dilation(mask, structure = np.ones((3,3)).astype(bool), iterations=30+ker_size).astype(bool)
-        #mask[:30,:]  = mask[:,:30] = mask[:,-30:] = mask[-30:,:] =  True
+        mask[:30,:]  = mask[:,:30] = mask[:,-30:] = mask[-30:,:] =  True
         self.bad_pix = mask
 
     def _create_band_gs(self,):
@@ -489,10 +494,18 @@ class solve_aerosol(object):
         _sun_angles = [] 
         _view_angles = []
         for fname in self._sun_angles:     
+            try:                           
+                nodatas = ' '.join([i.split("=")[1] for i in gdal.Info(fname).split('\n') if' NoData' in i])
+            except:                        
+                nodatas = None 
             ang = reproject_data(fname, mg, srcNodata = None, resample = \
                                  0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _sun_angles.append(ang)        
         for fname in self._view_angles:    
+            try:                           
+                nodatas = ' '.join([i.split("=")[1] for i in gdal.Info(fname).split('\n') if' NoData' in i])
+            except:                        
+                nodatas = None 
             ang = reproject_data(fname, mg, srcNodata = None, resample = \
                                  0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             _view_angles.append(ang)       
@@ -591,7 +604,7 @@ class solve_aerosol(object):
         self.toa     = self.toa    [:, _mask] 
         self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
         self.boa_unc = self.boa_unc[:, _mask]
-        eps=1.7                                     
+        eps=1.35
         mask = True                                 
         if self.boa.shape[1] > 3: 
             for i in range(len(self.toa)):           
