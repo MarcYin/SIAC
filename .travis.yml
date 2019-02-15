@@ -38,7 +38,7 @@ script:
   - kill %1
   - cp /dev/null SIAC/data/.earthdata_auth
   - coverage xml
-  - export SIAC_VERSION=$TRAVIS_TAG
+  #- export SIAC_VERSION=$TRAVIS_TAG
 deploy:
   provider: pypi
   user: $PYPI_USER
