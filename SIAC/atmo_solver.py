@@ -68,7 +68,8 @@ class solving_atmo_paras(object):
                  gamma   = 0.5,
                  alpha   = -1.6,# from nasa modis climatology
                  subsample = 1,
-                 subsample_start = 0
+                 subsample_start = 0,
+                 log_file = None
                  ):
         
         self.boa             = boa
@@ -110,6 +111,11 @@ class solving_atmo_paras(object):
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             ch.setFormatter(formatter)
             self.logger.addHandler(ch)
+        if log_file is not None:    
+            fh = logging.FileHandler(log_file)
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(formatter)
+            self.logger.addHandler(fh)
         self.logger.propagate = False
         self.logger.info('MultiGrid solver in process...')
 
@@ -251,6 +257,10 @@ class solving_atmo_paras(object):
         self.tco3_prior, self.tco3_unc  = self._grid_conversion(self.tco3_prior, shape), self._grid_conversion(self.tco3_unc, shape)
         post_solved = np.array([self.aot_prior, self.tcwv_prior, self.tco3_prior]) 
         post_unc    = np.array([self.aot_unc,   self.tcwv_unc,   self.tco3_unc]) 
+        handlers = self.logger.handlers[:]
+        for handler in handlers:
+            handler.close()
+            self.logger.removeHandler(handler)
         return [post_solved, post_unc]
 
     def _helper(self, inp):

@@ -30,7 +30,6 @@ from sklearn.linear_model import HuberRegressor
 from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
 
-
 class solve_aerosol(object):
     '''
     Prepareing modis data to be able to pass into 
@@ -55,6 +54,7 @@ class solve_aerosol(object):
                  aot_unc     = None,
                  wv_unc      = None,
                  o3_unc      = None, 
+                 log_file    = None,
                  ref_scale   = 0.0001,
                  ref_off     = 0,
                  ang_scale   = 0.01,
@@ -85,6 +85,7 @@ class solve_aerosol(object):
         self.aot_unc     = aot_unc
         self.wv_unc      = wv_unc
         self.o3_unc      = o3_unc
+        self.log_file    = log_file
         self.ref_scale   = ref_scale
         self.ref_off     = ref_off
         self.ang_scale   = ang_scale
@@ -104,7 +105,7 @@ class solve_aerosol(object):
             spec_map     = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.sensor).T
         self.spec_slope  = spec_map[0]
         self.spec_off    = spec_map[1]
-        self.logger      = create_logger()
+        self.logger      = create_logger(self.log_file)
 
     def _create_base_map(self,):
         '''
@@ -646,60 +647,73 @@ class solve_aerosol(object):
         self._parse_angles()
         self.logger.info('Mask bad pixeles.')
         self._mask_bad_pix()
-        self.logger.info('Get simulated BOA.')
-        self._get_boa()
-        self.logger.info('Get PSF.')
-        self._get_psf()
-        self.logger.info('Get simulated TOA reflectance.')
-        self._get_convolved_toa()
-        self.logger.info('Filtering data.')
-        self._re_mask()
-        if self.mask is not False:
-            self.logger.info('Loading emulators.')
-            self._load_xa_xb_xc_emus()
-            self.logger.info('Reading priors and elevation.')
-            self._read_aux()
-            self._fill_nan()
-            if self.mask.sum() ==0:
+        if not np.all(self.bad_pix):
+            self.logger.info('Get simulated BOA.')
+            self._get_boa()
+            self.logger.info('Get PSF.')
+            self._get_psf()
+            self.logger.info('Get simulated TOA reflectance.')
+            self._get_convolved_toa()
+            self.logger.info('Filtering data.')
+            self._re_mask()
+            if self.mask is not False:
+                self.logger.info('Loading emulators.')
+                self._load_xa_xb_xc_emus()
+                self.logger.info('Reading priors and elevation.')
+                self._read_aux()
+                self._fill_nan()
+                self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
+                if self.mask.sum() ==0:
+                    self.logger.info('No valid value is found for retrieval of atmospheric parameters and priors are stored.')
+                    ret = np.array([[self._aot, self._tcwv, self._tco3], [self._aot_unc, self._tcwv_unc, self._tco3_unc]])
+                    self.aero_res /=2
+                    #self.ySize *=2
+                    #self.xSize *=2
+                    self.ySize, self.xSize = self._aot.shape
+                else:
+                    self.aero = solving_atmo_paras(self.boa, 
+                                                   self.toa,
+                                                   self._sza, 
+                                                   self._vza,
+                                                   self._saa, 
+                                                   self._vaa,
+                                                   self._aot, 
+                                                   self._tcwv,
+                                                   self._tco3, 
+                                                   self._ele,
+                                                   self._aot_unc,
+                                                   self._tcwv_unc,
+                                                   self._tco3_unc,
+                                                   self.boa_unc,
+                                                   self.hx, self.hy,
+                                                   self.mask,
+                                                   self.full_res,
+                                                   self.aero_res,
+                                                   self.emus,
+                                                   self.band_index,
+                                                   self.boa_wv,
+                                                   pix_res = self.pixel_res,
+                                                   gamma = self.gamma,
+                                                   log_file = self.log_file
+                                                   )
+                    ret = self.aero._multi_grid_solver()
+            else:
                 self.logger.info('No valid value is found for retrieval of atmospheric parameters and priors are stored.')
+                self._read_aux()       
+                self._fill_nan()
+                self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
                 ret = np.array([[self._aot, self._tcwv, self._tco3], [self._aot_unc, self._tcwv_unc, self._tco3_unc]])
                 self.aero_res /=2
                 #self.ySize *=2
                 #self.xSize *=2
                 self.ySize, self.xSize = self._aot.shape
-            else:
-                self.aero = solving_atmo_paras(self.boa, 
-                                               self.toa,
-                                               self._sza, 
-                                               self._vza,
-                                               self._saa, 
-                                               self._vaa,
-                                               self._aot, 
-                                               self._tcwv,
-                                               self._tco3, 
-                                               self._ele,
-                                               self._aot_unc,
-                                               self._tcwv_unc,
-                                               self._tco3_unc,
-                                               self.boa_unc,
-                                               self.hx, self.hy,
-                                               self.mask,
-                                               self.full_res,
-                                               self.aero_res,
-                                               self.emus,
-                                               self.band_index,
-                                               self.boa_wv,
-                                               pix_res = self.pixel_res,
-                                               gamma = self.gamma)
-                ret = self.aero._multi_grid_solver()
         else:
             self.logger.info('No valid value is found for retrieval of atmospheric parameters and priors are stored.')
             self._read_aux()       
             self._fill_nan()
+            self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
             ret = np.array([[self._aot, self._tcwv, self._tco3], [self._aot_unc, self._tcwv_unc, self._tco3_unc]])
             self.aero_res /=2
-            #self.ySize *=2
-            #self.xSize *=2
             self.ySize, self.xSize = self._aot.shape
             
         solved     = ret[0].reshape(3, self.ySize, self.xSize)
@@ -712,6 +726,10 @@ class solve_aerosol(object):
         parmap(par, name_arrays)
         self.post_aot,     self.post_tcwv,     self.post_tco3,    = solved
         self.post_aot_unc, self.post_tcwv_unc, self.post_tco3_unc = unc
+        handlers = self.logger.handlers[:]
+        for handler in handlers:
+            handler.close()
+            self.logger.removeHandler(handler)
     
 def get_kk(angles):
     vza ,sza,raa = angles

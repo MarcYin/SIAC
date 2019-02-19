@@ -42,6 +42,7 @@ class atmospheric_correction(object):
                  tco3_unc    = None,
                  cloud_mask  = None,
                  obs_time    = None,
+                 log_file    = None,
                  a_z_order   = 1,
                  ref_scale   = 0.0001,
                  ref_off     = 0,
@@ -93,7 +94,7 @@ class atmospheric_correction(object):
             self.ri, self.gi, self.bi = self.toa_bands.index(r), self.toa_bands.index(g), self.toa_bands.index(b)
             self._do_rgb = True
 
-        self.logger = create_logger()
+        self.logger = create_logger(log_file)
          
     def _create_base_map(self,):
         '''
@@ -553,6 +554,10 @@ class atmospheric_correction(object):
             self.logger.info('Composing RGB.')
             self._compose_rgb()
         self.logger.info('Done.')
+        handlers = self.logger.handlers[:]
+        for handler in handlers:
+            handler.close()
+            self.logger.removeHandler(handler)
         return ret
          
 def test_s2():
