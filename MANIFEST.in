@@ -1,5 +1,5 @@
 include setup.py
-include VERSION
+include SIAC/VERSION
 include SIAC/util/*
 include SIAC/data/sen2cloud_detector.pkl
 include SIAC/data/.earthdata_auth

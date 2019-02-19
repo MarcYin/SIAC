@@ -1,7 +1,7 @@
 import os
 import logging
 file_path = os.path.dirname(os.path.realpath(__file__))                                                                                                                                                                 
-version_file = os.path.dirname(file_path) + '/VERSION'
+version_file = file_path + '/VERSION'
 with open(version_file, 'rb') as f:
     version = f.read().decode().strip()
 def create_logger(fname = None):

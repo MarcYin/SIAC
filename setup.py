@@ -5,7 +5,7 @@ file_path = os.path.dirname(os.path.realpath(__file__))
 try:
     version = os.environ['SIAC_VERSION']
 except:
-    version_file = open(os.path.join(file_path, 'VERSION'), 'rb')
+    version_file = open(os.path.join(file_path, 'SIAC/VERSION'), 'rb')
     version = version_file.read().decode().strip()
 
 with open('README.md', 'rb') as f:
