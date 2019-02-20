@@ -19,19 +19,17 @@ def test_s2():
         urls =  [i.decode().split('\n')[0] for i in f.readlines()]
 
     for url in urls:
-            filename = '/'.join(url.split('/')[8:])
-            if not os.path.exists(filename):
-                req = requests.get(url)
-                if req.ok:
-                    print('downloading %s' % filename)
-                    if not os.path.exists(os.path.dirname(filename)):
-                        try:
-                            os.makedirs(os.path.dirname(filename))
-                        except OSError as exc: # Guard against race condition
-                            if exc.errno != errno.EEXIST:
-                                raise
-                    with open(filename, "wb") as f:
-                        f.write(req.content)
+        filename = '/'.join(url.split('/')[8:])
+        if not os.path.exists(filename):
+            if not os.path.exists(os.path.dirname(filename)):           
+                try:               
+                    os.makedirs(os.path.dirname(filename))
+                except OSError as exc: # Guard against race condition               
+                    if exc.errno != errno.EEXIST:          
+                        raise              
+            downloader(filename, '/'.join(url.split('/')[:8]) + '/', './')
+        else:
+            pass
 
     with open(myPath + '/MCD43.txt', 'rb') as f:             
         MCD43 =  [i.decode().split('\n')[0] for i in f.readlines()]
