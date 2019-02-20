@@ -25,4 +25,4 @@ def downloader(fname, url_root, file_dir):
             #    if chunk:
             fp.write(new_req.content)
     else:            
-        logger.error('new_req.content')
+        logger.error(new_req.content)
