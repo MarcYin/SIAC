@@ -27,7 +27,7 @@ def test_s2():
                 except OSError as exc: # Guard against race condition               
                     if exc.errno != errno.EEXIST:          
                         raise              
-                downloader(filename, '/'.join(url.split('/')[:8]) + '/', './')
+            downloader(filename, '/'.join(url.split('/')[:8]) + '/', './')
         else:
             pass
     with open(myPath + '/MCD43.txt', 'rb') as f:             
