@@ -3,8 +3,8 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-A sensor invariant Atmospheric Correction (SIAC)
-================================================
+MULTIPLY - Sensor Invariant Atmospheric Correction (SIAC)
+=========================================================
 
 This atmospheric correction method uses MODIS MCD43 BRDF product to get
 a coarse resolution simulation of earth surface. A model based on MODIS
@@ -34,16 +34,21 @@ f this code has received funding from the European Union’s Horizon 2020 resear
    :maxdepth: 2
    :caption: Contents:
 
-   Introduction.rst
-   Installation.rst
-   Quickstart.rst
-   Data_access_and_adaption_for_Landsat5.rst
-   Annex_technical.rst
-   
+   01_Introduction.rst
+   02_Installation.rst
+   03_Quickstart.rst
+   04_Data_access_and_adaption_for_Landsat5.rst
+   05_Annex_technical.rst
 
+.. toctree::
+    :maxdepth: 2
+    :caption: anything else
+
+    Authors <authors>
+    Changelog <changes>
 
 Indices and tables
-==================
+------------------
 
 * :ref:`genindex`
 * :ref:`modindex`
