@@ -21,7 +21,13 @@ def test_s2():
     for url in urls:
         filename = '/'.join(url.split('/')[8:])
         if not os.path.exists(filename):
-            downloader(filename, '/'.join(url.split('/')[:8]) + '/', './')
+            if not os.path.exists(os.path.dirname(filename)):           
+                try:               
+                    os.makedirs(os.path.dirname(filename))
+                except OSError as exc: # Guard against race condition               
+                    if exc.errno != errno.EEXIST:          
+                        raise              
+                downloader(filename, '/'.join(url.split('/')[:8]) + '/', './')
         else:
             pass
     with open(myPath + '/MCD43.txt', 'rb') as f:             
