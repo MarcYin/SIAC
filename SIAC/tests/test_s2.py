@@ -32,7 +32,8 @@ def test_s2():
             pass
     with open(myPath + '/MCD43.txt', 'rb') as f:             
         MCD43 =  [i.decode().split('\n')[0] for i in f.readlines()]
-
+    if not os.path.exists(os.path.expanduser("~") + '/MCD43/'):
+        os.makedirs(os.path.expanduser("~") + '/MCD43/')
     par = partial(downloader, url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/MCD43/', file_dir = os.path.expanduser("~") + '/MCD43/')
     p = Pool(8)
     p.map(par, MCD43)
