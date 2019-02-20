@@ -18,6 +18,7 @@ from SIAC.multi_process import parmap
 from scipy.interpolate import griddata
 from scipy.ndimage import binary_dilation
 from SIAC.create_logger import create_logger
+from SIAC.raster_boundary import get_boundary
 from SIAC.reproject import reproject_data, array_to_raster
 
 warnings.filterwarnings("ignore")
@@ -106,7 +107,10 @@ class atmospheric_correction(object):
             if os.path.exists(self.aoi):
                 try:     
                     g = gdal.Open(self.aoi)
-                    subprocess.call(['gdaltindex', '-f', 'GeoJSON',  '-t_srs', 'EPSG:4326', self.toa_dir + '/AOI.json', self.aoi])
+                    #subprocess.call(['gdaltindex', '-f', 'GeoJSON',  '-t_srs', 'EPSG:4326', self.toa_dir + '/AOI.json', self.aoi])
+                    geojson = get_boundary(self.aoi)[0]
+                    with open(self.toa_dir + '/AOI.json', 'wb') as f:
+                        f.write(geojson.encode())
                 except:  
                     try: 
                         gr = ogr.Open(self.aoi)
@@ -135,12 +139,15 @@ class atmospheric_correction(object):
         ogr.DontUseExceptions() 
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
-            g = gdal.Open(self.toa_bands[0])
-            proj = g.GetProjection()
-            if 'WGS 84' in proj:
-                subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
-            else:
-                subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            #g = gdal.Open(self.toa_bands[0])
+            #proj = g.GetProjection()
+            #if 'WGS 84' in proj:
+            #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            #else:
+            #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            geojson = get_boundary(self.toa_bands[0])[0]
+            with open(self.toa_dir + '/AOI.json', 'wb') as f:                   
+                f.write(geojson.encode())
             self.logger.warning('AOI is not created and full band extend is used')
             self.aoi = self.toa_dir + '/AOI.json'
         else:

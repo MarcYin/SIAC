@@ -16,15 +16,16 @@ try:
     import cPickle as pkl
 except:  
     import pickle as pkl
+from functools import partial
 from osgeo import ogr, osr, gdal
 from SIAC.smoothn import smoothn
-from functools import partial
-from SIAC.multi_process import parmap
 from scipy.fftpack import dct, idct
-from SIAC.psf_optimize import psf_optimize
+from SIAC.multi_process import parmap
 from scipy.interpolate import griddata
 from datetime import datetime, timedelta
+from SIAC.psf_optimize import psf_optimize
 from SIAC.create_logger import create_logger
+from SIAC.raster_boundary import get_boundary
 from SIAC.atmo_solver import solving_atmo_paras
 from sklearn.linear_model import HuberRegressor 
 from SIAC.reproject import reproject_data, array_to_raster
@@ -117,7 +118,10 @@ class solve_aerosol(object):
             if os.path.exists(self.aoi):
                 try:
                     g = gdal.Open(self.aoi)
-                    subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir + '/AOI.json', self.aoi])
+                    #subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir + '/AOI.json', self.aoi])
+                    geojson = get_boundary(self.aoi)[0]
+                    with open(self.toa_dir + '/AOI.json', 'wb') as f:
+                        f.write(geojson.encode())
                 except:
                     try:
                         gr = ogr.Open(str(self.aoi))
@@ -147,12 +151,16 @@ class solve_aerosol(object):
         ogr.DontUseExceptions()
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
-            g = gdal.Open(self.toa_bands[0])    
-            proj = g.GetProjection()            
-            if 'WGS 84' in proj:                
-                subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
-            else:                               
-                subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            #g = gdal.Open(self.toa_bands[0])    
+            #proj = g.GetProjection()            
+            #if 'WGS 84' in proj:                
+            #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            #else:                               
+            #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+            geojson = get_boundary(self.toa_bands[0])[0]
+            with open(self.toa_dir + '/AOI.json', 'wb') as f:                   
+                f.write(geojson.encode())
+
             self.logger.warning('AOI is not created and full band extend is used')
             self.aoi = self.toa_dir + '/AOI.json'
         else:
