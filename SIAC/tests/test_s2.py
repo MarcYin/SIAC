@@ -38,11 +38,11 @@ def test_s2():
         os.makedirs(os.path.expanduser("~") + '/MCD43/')
     #downloader('MCD43.zip', url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/', file_dir = './')
    
-    par = partial(downloader, url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/MCD43/', file_dir = os.path.expanduser("~") + '/MCD43/')
-    p = Pool(4)
-    p.map(par, MCD43)
-    p.close()
-    p.join()
+    #par = partial(downloader, url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/MCD43/', file_dir = os.path.expanduser("~") + '/MCD43/')
+    #p = Pool(4)
+    #p.map(par, MCD43)
+    #p.close()
+    #p.join()
     #with zipfile.ZipFile("MCD43.zip","r") as zip_ref:
     #    zip_ref.extractall(os.path.expanduser("~"))
     #os.remove("MCD43.zip")
