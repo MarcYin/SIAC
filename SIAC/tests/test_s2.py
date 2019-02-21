@@ -36,15 +36,15 @@ def test_s2():
         MCD43 =  [i.decode().split('\n')[0] for i in f.readlines()]
     if not os.path.exists(os.path.expanduser("~") + '/MCD43/'):
         os.makedirs(os.path.expanduser("~") + '/MCD43/')
-    downloader('MCD43.zip', url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/', file_dir = './')
+    #downloader('MCD43.zip', url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/', file_dir = './')
    
-    #par = partial(downloader, url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/MCD43/', file_dir = os.path.expanduser("~") + '/MCD43/')
-    #p = Pool(2)
-    #p.map(par, MCD43)
-    #p.close()
-    #p.join()
-    with zipfile.ZipFile("MCD43.zip","r") as zip_ref:
-        zip_ref.extractall(os.path.expanduser("~"))
+    par = partial(downloader, url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/MCD43/', file_dir = os.path.expanduser("~") + '/MCD43/')
+    p = Pool(4)
+    p.map(par, MCD43)
+    p.close()
+    p.join()
+    #with zipfile.ZipFile("MCD43.zip","r") as zip_ref:
+    #    zip_ref.extractall(os.path.expanduser("~"))
     #os.remove("MCD43.zip")
 
     s2_file_dir = filename.split('/')[0]
