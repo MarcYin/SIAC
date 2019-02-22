@@ -145,9 +145,16 @@ class atmospheric_correction(object):
             #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
             #else:
             #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
-            geojson = get_boundary(self.toa_bands[0])[0]
-            with open(self.toa_dir + '/AOI.json', 'wb') as f:                   
-                f.write(geojson.encode())
+            if 'WGS 84' in proj:                                           
+                #subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+                geojson = get_boundary(self.toa_bands[0], to_wgs84 = False)                                                                                             
+                with open(self.toa_dir + '/AOI.json', 'wb') as f:          
+                    f.write(geojson.encode())                              
+            else:                                                          
+                #subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+                geojson = get_boundary(self.toa_bands[0])[0]               
+                with open(self.toa_dir + '/AOI.json', 'wb') as f:          
+                    f.write(geojson.encode()) 
             self.logger.warning('AOI is not created and full band extend is used')
             self.aoi = self.toa_dir + '/AOI.json'
         else:

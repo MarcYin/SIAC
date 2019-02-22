@@ -151,15 +151,18 @@ class solve_aerosol(object):
         ogr.DontUseExceptions()
         gdal.DontUseExceptions()
         if not os.path.exists(self.toa_dir + '/AOI.json'):
-            #g = gdal.Open(self.toa_bands[0])    
-            #proj = g.GetProjection()            
-            #if 'WGS 84' in proj:                
-            #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
-            #else:                               
-            #    subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
-            geojson = get_boundary(self.toa_bands[0])[0]
-            with open(self.toa_dir + '/AOI.json', 'wb') as f:                   
-                f.write(geojson.encode())
+            g = gdal.Open(self.toa_bands[0])    
+            proj = g.GetProjection()            
+            if 'WGS 84' in proj:                
+                #subprocess.call(['gdaltindex', '-f', 'GeoJSON', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+                geojson = get_boundary(self.toa_bands[0], to_wgs84 = False)
+                with open(self.toa_dir + '/AOI.json', 'wb') as f:
+                    f.write(geojson.encode())
+            else:                               
+                #subprocess.call(['gdaltindex', '-f', 'GeoJSON', '-t_srs', 'EPSG:4326', self.toa_dir +'/AOI.json', self.toa_bands[0]])
+                geojson = get_boundary(self.toa_bands[0])[0]
+                with open(self.toa_dir + '/AOI.json', 'wb') as f:                   
+                    f.write(geojson.encode())
 
             self.logger.warning('AOI is not created and full band extend is used')
             self.aoi = self.toa_dir + '/AOI.json'
@@ -592,6 +595,11 @@ class solve_aerosol(object):
         ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
         gaus_2d = np.outer(xgaus, ygaus) 
         def convolve(img, gaus_2d, hx, hy):
+            x_size, y_size = img.shape
+            if x_size % 2 != 0:
+                img = np.insert(img, -1, array[-1, :], axis=0)
+            if y_size % 2 != 0:
+                img = np.insert(img, -1, array[:, -1], axis=1)
             dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
                   norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
             return dat
@@ -655,7 +663,7 @@ class solve_aerosol(object):
         self._parse_angles()
         self.logger.info('Mask bad pixeles.')
         self._mask_bad_pix()
-        if not np.all(self.bad_pix):
+        if np.sum(~self.bad_pix) > 10:
             self.logger.info('Get simulated BOA.')
             self._get_boa()
             self.logger.info('Get PSF.')

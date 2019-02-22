@@ -1,4 +1,5 @@
 import os, sys
+import time
 import requests
 import zipfile
 import numpy as np
@@ -18,24 +19,29 @@ def test_s2():
     from SIAC.downloaders import downloader
     with open(myPath + '/s2_flists.txt', 'rb') as f:
         urls =  [i.decode().split('\n')[0] for i in f.readlines()]
-
+    headers = = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36')
     for url in urls:
         filename = '/'.join(url.split('/')[8:])
         if not os.path.exists(filename):
-            if not os.path.exists(os.path.dirname(filename)):           
-                try:               
-                    os.makedirs(os.path.dirname(filename))
-                except OSError as exc: # Guard against race condition               
-                    if exc.errno != errno.EEXIST:          
-                        raise              
-            downloader(filename, '/'.join(url.split('/')[:8]) + '/', './')
+            req = requests.get(url)
+            if req.ok:
+                print('downloading %s' % filename)
+                if not os.path.exists(os.path.dirname(filename)):
+                    try:
+                        os.makedirs(os.path.dirname(filename))
+                    except OSError as exc: # Guard against race condition
+                        if exc.errno != errno.EEXIST:
+                            raise
+                with open(filename, "wb") as f:
+                    f.write(req.content)
+            time.sleep(1)
         else:
             pass
 
-    with open(myPath + '/MCD43.txt', 'rb') as f:             
-        MCD43 =  [i.decode().split('\n')[0] for i in f.readlines()]
-    if not os.path.exists(os.path.expanduser("~") + '/MCD43/'):
-        os.makedirs(os.path.expanduser("~") + '/MCD43/')
+    #with open(myPath + '/MCD43.txt', 'rb') as f:             
+    #    MCD43 =  [i.decode().split('\n')[0] for i in f.readlines()]
+    #if not os.path.exists(os.path.expanduser("~") + '/MCD43/'):
+    #    os.makedirs(os.path.expanduser("~") + '/MCD43/')
     #downloader('MCD43.zip', url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/', file_dir = './')
    
     #par = partial(downloader, url_root = 'http://www2.geog.ucl.ac.uk/~ucfafyi/mcd43/MCD43/', file_dir = os.path.expanduser("~") + '/MCD43/')

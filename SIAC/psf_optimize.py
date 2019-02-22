@@ -51,17 +51,25 @@ class psf_optimize(object):
         self.bad_pixs = cloud_dilation( (self.high_img < 0.0001) | self.cloud  | (self.high_img >= 1), iteration=int(size/2))
         #xstd, ystd = 29.75, 39
         #ker = self.gaussian(self.xstd, self.ystd, 0)
-        gaus_2d = self.dct_gaussian(self.xstd, self.ystd, self.high_img.shape)
         if (self.xstd < 1.) or (self.ystd < 1.):
             self.conved = self.high_img
         else:
-            self.conved = idct(idct(dct(dct(self.high_img, axis=0, norm = 'ortho'), axis=1, norm='ortho') * gaus_2d, \
-                                                           axis=1, norm = 'ortho'), axis=0, norm='ortho')
+            data = self._pad_even_shape(self.high_img)
+            gaus_2d = self.dct_gaussian(self.xstd, self.ystd, data.shape)
+            self.conved = idct(idct(dct(dct(data, axis=0, norm = 'ortho'), axis=1, norm='ortho') * gaus_2d, \
+                                                  axis=1, norm = 'ortho'), axis=0, norm='ortho')
         #self.conved = signal.fftconvolve(self.high_img, ker, mode='same')
-
         l_mask = (~self.low_img.mask) & (self.qa<self.qa_thresh) & (~np.isnan(self.low_img)) & (~np.isnan(self.qa))
         h_mask =  ~self.bad_pixs[self.Hx, self.Hy]
         self.lh_mask = l_mask & h_mask
+
+    def _pad_even_shape(self, array):
+        x_size, y_size = array.shape
+        if x_size % 2 != 0:
+            array = np.insert(array, -1, array[-1, :], axis=0)
+        if y_size % 2 != 0:
+            array = np.insert(array, -1, array[:, -1], axis=1)
+        return array
 
     def dct_gaussian(self, xstd, ystd, shape):
         win_x, win_y = shape
