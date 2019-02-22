@@ -587,12 +587,23 @@ class solve_aerosol(object):
             f = lambda em: pkl.load(open(str(em), 'rb'))
         self.emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
 
+    def _pad_even_shape(self, array):
+        x_size, y_size = array.shape                                                                                                                                                          
+        if x_size % 2 != 0:
+            array = np.insert(array, -1, array[-1, :], axis=0)
+        if y_size % 2 != 0:
+            array = np.insert(array, -1, array[:, -1], axis=1)
+        return array
+    
+
     def _get_convolved_toa(self,):       
                                          
         imgs = [band_g.ReadAsArray() for band_g in self._toa_bands]                       
         self.bad_pixs = self.bad_pix[self.hx, self.hy]
-        xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0]) /self.full_res[0])**2))
-        ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
+        if self.full_res[0] %2 != 0:
+            xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0] + 1) /(self.full_res[0] + 1))**2))
+        if self.full_res[1] %2 != 0:
+            ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1] + 1) /(self.full_res[1] + 1))**2))
         gaus_2d = np.outer(xgaus, ygaus) 
         def convolve(img, gaus_2d, hx, hy):
             x_size, y_size = img.shape
@@ -602,14 +613,13 @@ class solve_aerosol(object):
                 img = np.insert(img, -1, img[:, -1], axis=1)
             dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
                   norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
-            return dat[:x_size, :y_size]
+            return dat
         par = partial(convolve, gaus_2d = gaus_2d, hx = self.hx, hy = self.hy)
         if np.array(self.ref_scale).ndim ==2:
             self.ref_scale = self.ref_scale[self.hx, self.hy]
         if np.array(self.ref_off).ndim == 2:
             self.ref_off = self.ref_off[self.hx, self.hy]
         self.toa  = np.array(parmap(par,imgs)) * self.ref_scale+self.ref_off
-
 
     def _re_mask(self,):
         boa_mask = np.all(self.boa >= 0.001, axis = 0) &\
