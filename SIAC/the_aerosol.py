@@ -602,8 +602,12 @@ class solve_aerosol(object):
         self.bad_pixs = self.bad_pix[self.hx, self.hy]
         if self.full_res[0] %2 != 0:
             xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0] + 1) /(self.full_res[0] + 1))**2))
+        else:
+            xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0]) /self.full_res[0])**2))
         if self.full_res[1] %2 != 0:
             ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1] + 1) /(self.full_res[1] + 1))**2))
+        else:
+            ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
         gaus_2d = np.outer(xgaus, ygaus) 
         def convolve(img, gaus_2d, hx, hy):
             x_size, y_size = img.shape
