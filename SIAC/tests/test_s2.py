@@ -19,11 +19,11 @@ def test_s2():
     from SIAC.downloaders import downloader
     with open(myPath + '/s2_flists.txt', 'rb') as f:
         urls =  [i.decode().split('\n')[0] for i in f.readlines()]
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36'}
+    #headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36'}
     for url in urls:
         filename = '/'.join(url.split('/')[8:])
         if not os.path.exists(filename):
-            req = requests.get(url)
+            req = requests.get(url)#, headers=headers)
             if req.ok:
                 print('downloading %s' % filename)
                 if not os.path.exists(os.path.dirname(filename)):
@@ -34,6 +34,8 @@ def test_s2():
                             raise
                 with open(filename, "wb") as f:
                     f.write(req.content)
+            else:
+                print(req.content)
             time.sleep(1)
         else:
             pass

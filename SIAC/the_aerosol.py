@@ -597,12 +597,12 @@ class solve_aerosol(object):
         def convolve(img, gaus_2d, hx, hy):
             x_size, y_size = img.shape
             if x_size % 2 != 0:
-                img = np.insert(img, -1, array[-1, :], axis=0)
+                img = np.insert(img, -1, img[-1, :], axis=0)
             if y_size % 2 != 0:
-                img = np.insert(img, -1, array[:, -1], axis=1)
+                img = np.insert(img, -1, img[:, -1], axis=1)
             dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
                   norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
-            return dat
+            return dat[:x_size, :y_size]
         par = partial(convolve, gaus_2d = gaus_2d, hx = self.hx, hy = self.hy)
         if np.array(self.ref_scale).ndim ==2:
             self.ref_scale = self.ref_scale[self.hx, self.hy]
