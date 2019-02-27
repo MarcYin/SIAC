@@ -10,6 +10,7 @@ from six.moves import input
 from functools import partial
 from os.path import expanduser
 from multiprocessing import Pool
+from pathlib import Path
 from datetime import datetime, timedelta
 from SIAC.create_logger import create_logger
 from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
@@ -105,7 +106,7 @@ def get_auth(logger):
     return auth
 
 
-def find_files(aoi, obs_time, temporal_window = 16):
+def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16):
     days   = [(obs_time - timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(temporal_window, 0, -1)] + \
              [(obs_time + timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(0, temporal_window+1,  1)]
     try:
@@ -116,10 +117,24 @@ def find_files(aoi, obs_time, temporal_window = 16):
         except:
             raise IOError('AOI has to be raster or vector object/files.')
     fls = zip(np.repeat(tiles, len(days)), np.tile(days, len(tiles)))
-    p = Pool(8)
-    ret = p.map(get_one_tile, fls)
-    p.close()
-    p.join()
+    mcd43_path = Path(mcd43_dir)
+    ret = []
+    need_grab = []
+    for (tile, the_date) in fls:
+        the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
+        potential_fname = f"MCD43A1.A{the_jday:s}.{tile}.*.hdf"
+        the_files = [f.as_posix() 
+                     for f in mcd43_path.rglob(f"**/{potential_fname}")]
+        if len(the_files) == 1:
+            ret.append(the_files[0])
+        else:
+            need_grab.append((tile, the_date))
+    if len(need_grab) > 0:
+        p = Pool(8)
+        ret_get = p.map(get_one_tile, need_grab)
+        p.close()
+        p.join()
+        ret.extend(ret_get)
     return ret
 
 def get_one_tile(tile_date):
@@ -195,18 +210,27 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     vrt_dir   = os.path.expanduser(vrt_dir)
     logger = create_logger(log_file)
     logger.propagate = False
-    logger.info('Start downloading MCD43 for the AOI, this may take some time.')
-    logger.info('Query files...')
-    ret = find_files(aoi, obs_time, temporal_window = 16)
-    url_fnames = [[i, mcd43_dir + '/' + i.split('/')[-1]] for i in ret]
-    p = Pool(5)
-    logger.info('Start downloading...')
-    auth = get_auth(logger)
-    par = partial(downloader, auth = auth)
-    ret = p.map(par, url_fnames)
-    p.close()
-    p.join()
-    flist = np.array(url_fnames)[:,1]
+    logger.info('Querying MCD43 files...')
+    
+    ret = find_files(aoi, obs_time, mcd43_dir, temporal_window = 16)
+    urls = [granule for granule in ret if granule.find("http") >= 0]
+    url_fnames= [granule for granule in ret if granule.find("http") < 0]
+    flist = url_fnames
+    logger.info("Will need to download %d files, ".format(len(urls)) +
+                "%d are already present".format(len(url_fnames)))
+    if len(urls) > 0:
+        logger.info('Start downloading MCD43 for the AOI, this may take some time.')
+
+        url_fnames_to_get = [[i, mcd43_dir + '/' + i.split('/')[-1]] for i in urls]
+        p = Pool(5)
+        logger.info('Start downloading...')
+        auth = get_auth(logger)
+        par = partial(downloader, auth = auth)
+        ret = p.map(par, url_fnames_to_get)
+        p.close()
+        p.join()
+        flist = flist.extend([x[1] for x in url_fnames_to_get])
+    flist = np.array(flist)
     all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in flist])          
     udates = np.unique(all_dates)  
     fnames_dates =  [[flist[all_dates==date].tolist(),date] for date in udates]
