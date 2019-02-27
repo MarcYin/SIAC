@@ -10,7 +10,6 @@ from six.moves import input
 from functools import partial
 from os.path import expanduser
 from multiprocessing import Pool
-from pathlib import Path
 from datetime import datetime, timedelta
 from SIAC.create_logger import create_logger
 from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
@@ -117,14 +116,13 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16):
         except:
             raise IOError('AOI has to be raster or vector object/files.')
     fls = zip(np.repeat(tiles, len(days)), np.tile(days, len(tiles)))
-    mcd43_path = Path(mcd43_dir)
     ret = []
     need_grab = []
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
-        potential_fname = f"MCD43A1.A{the_jday:s}.{tile}.*.hdf"
-        the_files = [f.as_posix() 
-                     for f in mcd43_path.rglob(f"**/{potential_fname}")]
+        potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
+        the_files = [f for f in glob(mcd43_dir + "/" + potential_fname, 
+                                     recursive=True)]
         if len(the_files) == 1:
             ret.append(the_files[0])
         else:
@@ -211,13 +209,12 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     logger = create_logger(log_file)
     logger.propagate = False
     logger.info('Querying MCD43 files...')
-    
     ret = find_files(aoi, obs_time, mcd43_dir, temporal_window = 16)
     urls = [granule for granule in ret if granule.find("http") >= 0]
     url_fnames= [granule for granule in ret if granule.find("http") < 0]
     flist = url_fnames
-    logger.info("Will need to download %d files, ".format(len(urls)) +
-                "%d are already present".format(len(url_fnames)))
+    logger.info("Will need to download {:d} files, ".format(len(urls)) +
+                "{:d} are already present".format(len(url_fnames)))
     if len(urls) > 0:
         logger.info('Start downloading MCD43 for the AOI, this may take some time.')
 
