@@ -118,6 +118,7 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16):
     fls = zip(np.repeat(tiles, len(days)), np.tile(days, len(tiles)))
     ret = []
     need_grab = []
+    
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
         potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
@@ -226,7 +227,7 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
         ret = p.map(par, url_fnames_to_get)
         p.close()
         p.join()
-        flist = flist.extend([x[1] for x in url_fnames_to_get])
+        flist.extend([x[1] for x in url_fnames_to_get])
     flist = np.array(flist)
     all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in flist])          
     udates = np.unique(all_dates)  
