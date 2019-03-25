@@ -122,8 +122,7 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16):
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
         potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
-        the_files = [f for f in glob(mcd43_dir + "/" + potential_fname, 
-                                     recursive=True)]
+        the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
         if len(the_files) == 1:
             ret.append(the_files[0])
         else:
