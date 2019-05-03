@@ -4,6 +4,7 @@ import gdal
 import getpass
 import logging
 import requests
+import tempfile 
 import numpy as np
 from glob import glob
 from six.moves import input
@@ -13,6 +14,8 @@ from multiprocessing import Pool
 from datetime import datetime, timedelta
 from SIAC.create_logger import create_logger
 from SIAC.modis_tile_cal import get_vector_hv, get_raster_hv
+#from create_logger import create_logger
+#from modis_tile_cal import get_vector_hv, get_raster_hv
 
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
@@ -105,7 +108,7 @@ def get_auth(logger):
     return auth
 
 
-def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16):
+def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16,jasmin = False):
     days   = [(obs_time - timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(temporal_window, 0, -1)] + \
              [(obs_time + timedelta(days = int(i))).strftime('%Y.%m.%d') for i in np.arange(0, temporal_window+1,  1)]
     try:
@@ -121,8 +124,13 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16):
     
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
-        potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
-        the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
+        if jasmin:
+            jasmin_date = datetime.strptime(the_date, '%Y.%m.%d').strftime('/%Y/%m/%d/')
+            potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
+            the_files = [f for f in glob(mcd43_dir + "/" +  jasmin_date + potential_fname)]
+        else:
+            potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
+            the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
         if len(the_files) == 1:
             ret.append(the_files[0])
         else:
@@ -178,16 +186,18 @@ def downloader(url_fname, auth):
         else:
             print(r.content)
         
-def daily_vrt(fnames_date, vrt_dir = None):
+def daily_vrt_jasmin(fnames_date, vrt_dir = None):
     temp1 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Band_Mandatory_Quality_%s'
     temp2 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Parameters_%s'
 
     fnames, date = fnames_date
     fnames = list(map(os.path.abspath, fnames))
-
+    all_files = fnames
+    ''' this maybe problematic when reading and writing the same time
     all_files = []
     for fname in fnames:
         all_files += glob(os.path.dirname(fname) + '/MCD43A1.A%s.h??v??.006.*.hdf'%date)
+    '''
     if vrt_dir is None:
         vrt_dir = './MCD43_VRT/' 
     if not os.path.exists(vrt_dir):
@@ -203,13 +213,37 @@ def daily_vrt(fnames_date, vrt_dir = None):
                 bs.append(temp%(fname, band))                                        
             gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs).FlushCache()
 
-def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', log_file = None):
+def daily_vrt(fnames_date, vrt_dir = None):
+    temp1 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Band_Mandatory_Quality_%s'
+    temp2 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Parameters_%s'
+
+    fnames, date = fnames_date
+    fnames = list(map(os.path.abspath, fnames))
+    all_files = []
+    for fname in fnames:
+        all_files += glob(os.path.dirname(fname) + '/MCD43A1.A%s.h??v??.006.*.hdf'%date)
+    if vrt_dir is None:
+        vrt_dir = './MCD43_VRT/'
+    if not os.path.exists(vrt_dir):
+        os.mkdir(vrt_dir)
+    d = datetime.strptime(date, '%Y%j').strftime('%Y-%m-%d')
+    date_dir = vrt_dir + '/' + '%s/'%d
+    if not os.path.exists(date_dir):
+        os.mkdir(date_dir)
+    for temp in [temp1, temp2]:
+        for band in ['Band1','Band2','Band3','Band4','Band5','Band6','Band7', 'vis', 'nir', 'shortwave']:
+            bs = []
+            for fname in all_files:
+                bs.append(temp%(fname, band))
+            gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs).FlushCache()
+
+def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', log_file = None, jasmin = False):
     mcd43_dir = os.path.expanduser(mcd43_dir) # incase ~ used
     vrt_dir   = os.path.expanduser(vrt_dir)
     logger = create_logger(log_file)
     logger.propagate = False
     logger.info('Querying MCD43 files...')
-    ret = find_files(aoi, obs_time, mcd43_dir, temporal_window = 16)
+    ret = find_files(aoi, obs_time, mcd43_dir, temporal_window = 16, jasmin=jasmin)
     urls = [granule for granule in ret if granule.find("http") >= 0]
     url_fnames= [granule for granule in ret if granule.find("http") < 0]
     flist = url_fnames
@@ -217,7 +251,6 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
                 "{:d} are already present".format(len(url_fnames)))
     if len(urls) > 0:
         logger.info('Start downloading MCD43 for the AOI, this may take some time.')
-
         url_fnames_to_get = [[i, mcd43_dir + '/' + i.split('/')[-1]] for i in urls]
         p = Pool(5)
         logger.info('Start downloading...')
@@ -232,15 +265,25 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     udates = np.unique(all_dates)  
     fnames_dates =  [[flist[all_dates==date].tolist(),date] for date in udates]
     logger.info('Creating daily VRT...')
-    par = partial(daily_vrt, vrt_dir = vrt_dir)
-    p = Pool(len(fnames_dates)) 
-    p.map(par, fnames_dates)
-    p.close()                           
-    p.join()
+    if jasmin:
+        vrt_dir = tempfile.TemporaryDirectory(dir  =  "/tmp/").name + '/'
+        par = partial(daily_vrt_jasmin, vrt_dir = vrt_dir)
+        p = Pool(len(fnames_dates)) 
+        p.map(par, fnames_dates)
+        p.close()                           
+        p.join()
+    else:
+        par = partial(daily_vrt, vrt_dir = vrt_dir)
+        p = Pool(len(fnames_dates))
+        p.map(par, fnames_dates)
+        p.close()                           
+        p.join()
+    #par(fnames_dates[0])
     handlers = logger.handlers[:]
     for handler in handlers:
         handler.close()
         logger.removeHandler(handler)
+    return vrt_dir
 
 if __name__ == '__main__':
     aoi = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/AOI.json'
