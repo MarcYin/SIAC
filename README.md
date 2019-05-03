@@ -28,7 +28,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 1. Directly from github 
 
 ```bash
-pip install https://github.com/multiply-org/atmospheric_correction/archive/master.zip
+pip install https://github.com/MarcYin/SIAC/archive/master.zip
 ```
 
 
