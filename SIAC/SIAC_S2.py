@@ -52,6 +52,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     if jasmin:
         global_dem  = '/work/scratch/marcyin/DEM/global_dem.vrt'
         cams_dir    = '/work/scratch/marcyin/CAMS/'
+        vrt_dir     = '/work/scratch/marcyin/MCD43_VRT/'
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
             os.mkdir(home + '/MCD43/')
@@ -78,9 +79,9 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
         for handler in handlers:
             handler.close()
             logger.removeHandler(handler)
-        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
+        if not jasmin:
+            vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
         #logger = create_logger(log_file)
-        print(vrt_dir)
     else:
         logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
     sensor_sat = 'MSI', sat
