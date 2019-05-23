@@ -4,6 +4,7 @@ from __future__ import print_function
 import os
 import gc
 import sys
+import psutil
 import SIAC.kernels as kernels 
 import logging
 import platform
@@ -17,6 +18,7 @@ try:
 except:  
     import pickle as pkl
 from functools import partial
+from multiprocessing import Pool
 from osgeo import ogr, osr, gdal
 from SIAC.smoothn import smoothn
 from scipy.fftpack import dct, idct
@@ -30,6 +32,12 @@ from SIAC.atmo_solver import solving_atmo_paras
 from sklearn.linear_model import HuberRegressor 
 from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
+
+procs =  psutil.cpu_count()
+def warp_data(fname, aoi,  xRes, yRes):
+    g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, \
+		  cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
+    return g.ReadAsArray()                                                                          # no reason you have to specify the srcNodata to use dstNodata
 
 class solve_aerosol(object):
     '''
@@ -417,13 +425,15 @@ class solve_aerosol(object):
         return bounds, raster_wkt
     
     def _read_MCD43(self,fnames):
-        def warp_data(fname, aoi,  xRes, yRes):
-            g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, \
-                          cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
-            return g.ReadAsArray()                                                                          # no reason you have to specify the srcNodata to use dstNodata
         par = partial(warp_data, aoi = self.aoi, xRes = self.aero_res*0.5, yRes = self.aero_res*0.5) 
+        p = Pool()
+        p = Pool(procs)
+        ret = p.map(par,  fnames)
+        #ret  =list( map(par,  view_ang_name_gmls))
+        p.close()
+        p.join()
         n_files = int(len(fnames)/2)
-        ret = parmap(par, fnames) 
+        #ret = parmap(par, fnames) 
         das = np.array(ret[:n_files])     
         qas = np.array(ret[n_files:]) 
         ws  = 0.618034**qas       
@@ -578,9 +588,9 @@ class solve_aerosol(object):
         return hx, hy, hmask, rmask
 
     def _load_xa_xb_xc_emus(self,):
-        xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xap_%s.pkl'%(self.sensor, self.satellite))[0]
-        xbp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xbp_%s.pkl'%(self.sensor, self.satellite))[0]
-        xcp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xcp_%s.pkl'%(self.sensor, self.satellite))[0]
+        xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xap_%s.pkl'%(self.sensor, self.satellite))[0]
+        xbp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xbp_%s.pkl'%(self.sensor, self.satellite))[0]
+        xcp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xcp_%s.pkl'%(self.sensor, self.satellite))[0]
         if sys.version_info >= (3,0):
             f = lambda em: pkl.load(open(em, 'rb'), encoding = 'latin1')
         else:     
