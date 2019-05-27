@@ -386,7 +386,11 @@ class atmospheric_correction(object):
     def _get_boa(self,):
 
         pix_mem = 180.
-        av_ram = psutil.virtual_memory().available
+        if 'jasmin_memory_limit' in os.environ:
+            jasmin_memory_limit = float(os.environ['jasmin_memory_limit']) - 10000
+        else:
+            jasmin_memory_limit = psutil.virtual_memory().available + 10000
+        av_ram = min(psutil.virtual_memory().available - 10000, jasmin_memory_limit)
         needed = np.array([i.RasterXSize * i.RasterYSize * pix_mem for i in self._toa_bands])
         u_need = np.unique(needed)
         procs  = av_ram / u_need

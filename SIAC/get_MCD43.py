@@ -125,6 +125,7 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16,jasmin = False):
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
         if jasmin:
+            mcd43_dir = '/neodc/modis/data/MCD43A1/collection6/'
             jasmin_date = datetime.strptime(the_date, '%Y.%m.%d').strftime('/%Y/%m/%d/')
             potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
             the_files = [f for f in glob(mcd43_dir + "/" +  jasmin_date + potential_fname)]
@@ -266,7 +267,9 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     fnames_dates =  [[flist[all_dates==date].tolist(),date] for date in udates]
     logger.info('Creating daily VRT...')
     if jasmin:
-        vrt_dir = tempfile.TemporaryDirectory(dir  =  "/tmp/").name + '/'
+        vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
+        if not os.path.exists(vrt_dir):
+            os.mkdir(vrt_dir)
         par = partial(daily_vrt_jasmin, vrt_dir = vrt_dir)
         p = Pool(len(fnames_dates)) 
         p.map(par, fnames_dates)

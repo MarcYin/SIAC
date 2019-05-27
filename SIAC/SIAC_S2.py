@@ -52,7 +52,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     if jasmin:
         global_dem  = '/work/scratch/marcyin/DEM/global_dem.vrt'
         cams_dir    = '/work/scratch/marcyin/CAMS/'
-        vrt_dir     = '/work/scratch/marcyin/MCD43_VRT/'
+        os.environ['jasmin_memory_limit'] = '6.4e+10'
+        #vrt_dir     = '/work/scratch/marcyin/MCD43_VRT/'
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
             os.mkdir(home + '/MCD43/')
@@ -79,8 +80,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
         for handler in handlers:
             handler.close()
             logger.removeHandler(handler)
-        if not jasmin:
-            vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
+        #if not jasmin:
+        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
         #logger = create_logger(log_file)
     else:
         logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
@@ -112,7 +113,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                                   tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = \
                                   rgb, emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir)
     atmo._doing_correction()
-    shutil.rmtree(vrt_dir)
+    if jasmin:
+        shutil.rmtree(vrt_dir)
     return aero, atmo
 
 def exe():
