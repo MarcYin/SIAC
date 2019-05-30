@@ -230,13 +230,12 @@ def fill_bad(array, mask):
     array = griddata(valid, value, mesh, method='nearest')
     return array
 '''
-
 def resample_s2_angles(metafile):
     #check the available rams and decide cores can be used
     #start multiprocessing
     bands    = ['B01', 'B02', 'B03','B04','B05' ,'B06', 'B07', 'B08','B8A', 'B09', 'B10', 'B11', 'B12'] #all bands
     band_ram = 5e9
-    av_ram = psutil.virtual_memory().available 
+    av_ram = psutil.virtual_memory().available
     procs = np.min([int(av_ram / band_ram), psutil.cpu_count(), len(bands)])
     if procs < 1:
         raise MemoryError('At least 500MB ram is needed.')
@@ -255,14 +254,16 @@ def resample_s2_angles(metafile):
         sun_ang_name = s2_file_dir + '/angles/' + 'SAA_SZA.tif'
         view_ang_names = [s2_file_dir + '/angles/' + 'VAA_VZA_%s.tif'%band for band in bands]
         toa_refs = glob(s2_file_dir + '/*B??.jp2')
-    else:                                               
+    else:
         raise IOError('Invalid metafile please use the default AWS or SCIHUB format.')
     gmls = sorted(gmls, key = lambda gml: bands.index('B' + gml.split('B')[-1][:2]))
+    inds = [bands.index('B' + gml.split('B')[-1][:2]) for gml in gmls]
     toa_refs = sorted(toa_refs, key = lambda toa_ref: bands.index('B' + toa_ref.split('B')[-1][:2]))
     cloud_name = s2_file_dir+'/cloud.tif'
     example_file = toa_refs[1]
     vaa, vza = parse_xml(metafile, example_file, sun_ang_name)
-    view_ang_name_gmls = zip(toa_refs, view_ang_names, gmls)
+    # some gmls may lost....
+    view_ang_name_gmls = zip(np.array(toa_refs)[inds], np.array(view_ang_names)[inds], np.array(gmls)[inds])
     band_dict = dict(zip(bands, range(13)))
     par = partial(get_angle, vaa=vaa, vza=vza, band_dict=band_dict)
     p = Pool(procs)
@@ -272,6 +273,13 @@ def resample_s2_angles(metafile):
     p.join()
     ret = np.array(ret)
     view_ang_names = np.array(view_ang_names)
+ 
+    # in dealing with lost angle gmls
+    if (ret.sum()<13) & (ret.sum()>0):
+        ret = np.zeros(13)
+        ret[inds] = 1
+        ret.astype(bool)
+ 
     if ret.sum()>0:
         bad_angs       = view_ang_names[~ret]
         src_files      = view_ang_names[ret][abs(np.arange(13)[~ret][...,None] - np.arange(13)[ret]).argmin(axis=1)]
