@@ -12,9 +12,9 @@ try:
     import cPickle as pkl
 except:
     import pickle as pkl
-from Two_NN import Two_NN
 from osgeo import gdal, ogr
 from numpy import clip, uint8
+from SIAC.Two_NN import Two_NN
 from SIAC.multi_process import parmap
 from scipy.interpolate import griddata
 from scipy.ndimage import binary_dilation

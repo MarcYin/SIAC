@@ -17,8 +17,8 @@ try:
     import cPickle as pkl
 except:  
     import pickle as pkl
-from Two_NN import Two_NN
 from functools import partial
+from SIAC.Two_NN import Two_NN
 from multiprocessing import Pool
 from osgeo import ogr, osr, gdal
 from SIAC.smoothn import smoothn
