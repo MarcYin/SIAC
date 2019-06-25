@@ -17,6 +17,7 @@ try:
     import cPickle as pkl
 except:  
     import pickle as pkl
+from Two_NN import Two_NN
 from functools import partial
 from multiprocessing import Pool
 from osgeo import ogr, osr, gdal
@@ -109,11 +110,13 @@ class solve_aerosol(object):
         self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.006.*.hdf'
         self.toa_dir     =  os.path.abspath('/'.join(toa_bands[0].split('/')[:-1]))
         try:
-            spec_map     = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.satellite).T
+            #spec_map     = np.loadtxt(spec_m_dir + '/Aqua_%s_spectral_mapping.txt'%self.satellite).T
+            self.spec_map     = Two_NN(np_model_file=spec_m_dir + '/Aqua_%s_spectral_mapping.npz'%self.satellite)
         except:
-            spec_map     = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.sensor).T
-        self.spec_slope  = spec_map[0]
-        self.spec_off    = spec_map[1]
+            #spec_map     = np.loadtxt(spec_m_dir + '/TERRA_%s_spectral_mapping.txt'%self.sensor).T
+            self.spec_map     = Two_NN(np_model_file=spec_m_dir + '/Aqua_%s_spectral_mapping.npz'%self.sensor)
+        #self.spec_slope  = spec_map[0]
+        #self.spec_off    = spec_map[1]
         self.logger      = create_logger(self.log_file)
 
     def _create_base_map(self,):
@@ -586,7 +589,7 @@ class solve_aerosol(object):
         hy = hy[rmask]
         hx = hx[rmask]
         return hx, hy, hmask, rmask
-
+    '''
     def _load_xa_xb_xc_emus(self,):
         xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xap_%s.pkl'%(self.sensor, self.satellite))[0]
         xbp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_optimization_xbp_%s.pkl'%(self.sensor, self.satellite))[0]
@@ -596,6 +599,25 @@ class solve_aerosol(object):
         else:     
             f = lambda em: pkl.load(open(str(em), 'rb'))
         self.emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
+    '''
+
+    def _load_xa_xb_xc_emus(self,):
+        xaps = []
+        xbps = []
+        xcps = []
+        for band in self.toa_bands:
+            band_name = 'B' + band.upper().split('/')[-1].split('B')[-1].split('.')[0]
+            xap_emu = glob(self.emus_dir + '/isotropic_%s_%s_%s_xap.npz'%(self.sensor, self.satellite, band_name))[0]
+            xbp_emu = glob(self.emus_dir + '/isotropic_%s_%s_%s_xbp.npz'%(self.sensor, self.satellite, band_name))[0]
+            xcp_emu = glob(self.emus_dir + '/isotropic_%s_%s_%s_xcp.npz'%(self.sensor, self.satellite, band_name))[0]
+            xap = Two_NN(np_model_file=xap_emu)
+            xbp = Two_NN(np_model_file=xbp_emu)
+            xcp = Two_NN(np_model_file=xcp_emu)
+            xaps.append(xap)
+            xbps.append(xbp)
+            xcps.append(xcp)
+        self.emus = [xaps, xbps, xcps]
+
 
     def _pad_even_shape(self, array):
         x_size, y_size = array.shape                                                                                                                                                          
@@ -604,7 +626,6 @@ class solve_aerosol(object):
         if y_size % 2 != 0:
             array = np.insert(array, -1, array[:, -1], axis=1)
         return array
-    
 
     def _get_convolved_toa(self,):       
                                          
@@ -634,8 +655,59 @@ class solve_aerosol(object):
         if np.array(self.ref_off).ndim == 2:
             self.ref_off = self.ref_off[self.hx, self.hy]
         self.toa  = np.array(parmap(par,imgs)) * self.ref_scale+self.ref_off
-
+    """
     def _re_mask(self,):
+        boa_mask = np.all(self.boa >= 0.001, axis = 0) &\
+                   np.all(self.boa < 1,      axis = 0)
+        toa_mask = ~self.bad_pix[self.hx, self.hy]
+        '''
+        swir1_diff    =  self.boa[-2] - self.toa[-2]
+        p15, p50, p85 = np.nanpercentile(swir1_diff, [15, 50, 85])
+        swir1_mask    = (swir1_diff <= p85) & (swir1_diff >= p15)
+
+        swir2_diff    =  self.boa[-1] - self.toa[-1]
+        p15, p50, p85 = np.nanpercentile(swir2_diff, [15, 50, 85])
+        swir2_mask    = (swir2_diff <= p85) & (swir2_diff >= p15) & \
+                        (swir2_diff <= p50 + 0.02) & (swir2_diff >= p50 - 0.02) & \
+                        (abs(swir2_diff) < 0.05)
+
+        p10, p50, p90 = np.nanpercentile(self.toa[0], [10, 50, 90])
+        blue_mask     =  (self.toa[0] >= p10) & (self.toa[0] <= p90)
+        p10, p50, p90 = np.nanpercentile(self.toa[-1], [10, 50, 90])
+        swir2_mask    =  swir2_mask & (self.toa[-1] >= p10) & (self.toa[-1] <= p90)
+        '''
+        _mask        = boa_mask & toa_mask #& swir1_mask & swir2_mask & blue_mask
+        self.hx      = self.hx       [_mask]
+        self.hy      = self.hy       [_mask]
+        self.toa     = self.toa    [:, _mask] 
+        #self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
+        self.boa     = np.array(self.spec_map.predict(self.boa[:, _mask].T)).squeeze()
+        self.boa_unc = self.boa_unc[:, _mask]
+        eps=1.35
+        mask = True                                 
+        if self.boa.shape[1] > 3: 
+            for i in range(len(self.toa)):           
+                x,y = self.boa[i][...,None], self.toa[i]
+                huber = HuberRegressor(fit_intercept=True, alpha=0.0, max_iter=100,epsilon=eps)
+                huber.fit(x,y)                          
+                mask *= ~huber.outliers_ 
+            self.mask = mask #& boa_mask & toa_mask
+        else:
+            self.mask = False
+    """
+    def _re_mask(self,):
+        pmins = [[ 0.81793009, -1.55666629,  0.03879234,  0.02664923],
+                 [ 0.50218134, -0.94398654, -0.36284911,  0.02876391],
+                 [ 0.61609484, -1.12717424, -0.24037129,  0.0239488 ],
+                 [ 0.67499803, -1.1988073 , -0.18331019,  0.02179141],
+                 [ 0.23458873, -0.4048219 , -0.56692888,  0.02484466],
+                 [ 0.08220874, -0.13492051, -0.74972003, -0.0331204 ]]
+        pmaxs = [[-0.76916621,  1.8524333 , -1.43464388,  0.34984857],
+                 [-0.91464915,  1.96174322, -1.38302832,  0.28090987],
+                 [-0.9199249 ,  1.9681306 , -1.3704881 ,  0.28924671],
+                 [-0.87389258,  1.89261443, -1.30929285,  0.28807412],
+                 [-0.71647392,  1.34657557, -0.79536697,  0.13551599],
+                 [-0.34076349,  0.60544841, -0.34178543,  0.09669959]]
         boa_mask = np.all(self.boa >= 0.001, axis = 0) &\
                    np.all(self.boa < 1,      axis = 0)
         toa_mask = ~self.bad_pix[self.hx, self.hy]
@@ -643,18 +715,21 @@ class solve_aerosol(object):
         self.hx      = self.hx       [_mask]
         self.hy      = self.hy       [_mask]
         self.toa     = self.toa    [:, _mask] 
-        self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
+        #self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
+        self.boa     = np.array(self.spec_map.predict(self.boa[:, _mask].T)).squeeze()
         self.boa_unc = self.boa_unc[:, _mask]
-        eps=1.35
         mask = True                                 
         if self.boa.shape[1] > 3: 
             for i in range(len(self.toa)):           
-                x,y = self.boa[i][...,None], self.toa[i][...,None]
-                huber = HuberRegressor(fit_intercept=True, alpha=0.0, max_iter=100,epsilon=eps)
-                huber.fit(x,y)                          
-                mask *= ~huber.outliers_ 
+                pmin = np.poly1d(pmins[i])
+                pmax = np.poly1d(pmaxs[i])
+                diff = self.toa[i] - self.boa[i]
+                mas  = (diff >= pmin(self.boa[i])) & (diff <= pmax(self.boa[i]))
+                mmin, mmax = np.percentile(self.toa[i][mas] - self.boa[i][mas], [5, 95])
+                mas  = mas & (diff >= mmin) & (diff <= mmax)
+                mask = mask & mas
             self.mask = mask #& boa_mask & toa_mask
-        else:
+        else:        
             self.mask = False
     
     def _fill_nan(self,):
@@ -671,8 +746,8 @@ class solve_aerosol(object):
         self._vaa = np.array(parmap(fill_nan, list(self._vaa)))
         self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3 = \
         parmap(fill_nan, [self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3])
-        self._aot = self._aot * 1.3 - 0.08
-        self._aot = np.maximum(self._aot, 0)
+        self._aot = self._aot
+        self._aot = np.maximum(self._aot, 0.01)
 
     def _solving(self,):
         self.logger.propagate = False

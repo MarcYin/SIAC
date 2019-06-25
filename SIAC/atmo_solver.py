@@ -146,55 +146,82 @@ class solving_atmo_paras(object):
         level_y = math.log(by, 2)
         level   = int(min(level_x, level_y))
         scale_factors = 1. / 2**np.arange(level)[::-1]
-        shapes        = (np.array([bx, by])[..., None] * scale_factors).astype(int).T#[-7:]
+        shapes        = (np.array([bx, by])[..., None] * scale_factors).astype(int).T#[-5:]
         #shapes[0]     = np.array([3,3])
         shape_dict    = dict(zip(range(len(shapes)), shapes))
         #order        = [0, 1, 2, 1, 0, 1, 2, 3, 4, 3, 2, 3, 4] + range(5, len(shapes))
         order         =  range(len(shapes))
-        self.xap_emus    = self.emus[0][self.band_indexs]
-        self.xbp_emus    = self.emus[1][self.band_indexs]
-        self.xcp_emus    = self.emus[2][self.band_indexs]
-        self.up_bounds   = self.xap_emus[0].inputs[:,3:5].max(axis=0)
-        self.bot_bounds  = self.xap_emus[0].inputs[:,3:5].min(axis=0) 
-        self.bot_bounds[:] = 0.
+        self.xap_emus    = self.emus[0]#[self.band_indexs]
+        self.xbp_emus    = self.emus[1]#[self.band_indexs]
+        self.xcp_emus    = self.emus[2]#[self.band_indexs]
+        self.up_bounds  = np.array([2.,    5 ])                                         
+        self.bot_bounds = np.array([0.001, 0.]) 
+        #self.up_bounds   = self.xap_emus[0].inputs[:,3:5].max(axis=0)
+        #self.bot_bounds  = self.xap_emus[0].inputs[:,3:5].min(axis=0) 
+        #self.bot_bounds[:] = 0.
 
         self.logger.info('Total %d level of grids are going to be used.'% (len(shapes)))
         #for ii, shape in enumerate(shapes):
-        for ii in order:
-            #import pdb; pdb.set_trace()
+        for _, ii in enumerate(order):
             shape = shape_dict[ii]
             print('+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
             self.logger.info(bcolors.BLUE + 'Optimizing at grid level %d' % (ii+1) + bcolors.ENDC)
             self.num_blocks_x, self.num_blocks_y = shape
-            self.control_variables = np.zeros((self.boa.shape[0], 7,shape[0], shape[1]))
-
+            self.control_variables = np.zeros((self.boa.shape[0], 7, shape[0], shape[1]))
+            if _ ==0:
+            #self.aot, self.tcwv = self.aot_prior.copy(), self.tcwv_prior.copy()
+                self.aot, self.tcwv = self._grid_conversion(self.aot_prior.copy(), shape), self._grid_conversion(self.tcwv_prior.copy(), shape)
             if self.vza.ndim == 2:
-                for i, parameter in enumerate([self.sza, self.vza, self.raa, self.aot_prior, self.tcwv_prior, self.tco3_prior, self.ele]):
+                for i, parameter in enumerate([self.sza, self.vza, self.raa, self.aot, self.tcwv, self.tco3_prior, self.ele]):
                     self.control_variables[:, i, :, :] = self._grid_conversion(parameter, shape)
-
+     
             elif self.vza.ndim == 3:
+     
+                same_ind = [0,3,4,5,6]
+                same_var = [self.sza, self.aot, self.tcwv, self.tco3_prior, self.ele]
+                for i, parameter in enumerate(same_var):
+                    self.control_variables[:, same_ind[i], :, :] = self._grid_conversion(parameter, shape)
+     
+                ang_ind = [1,2]
                 for j in range(len(self.vza)):
-                    for i, parameter in enumerate([self.sza, self.vza[j], self.raa[j], self.aot_prior, self.tcwv_prior, self.tco3_prior, self.ele]):
-                        self.control_variables[j, i, :, :] = self._grid_conversion(parameter, shape)
-
+                    for i, parameter in enumerate([self.vza[j], self.raa[j]]):
+                        self.control_variables[j, ang_ind[i], :, :] = self._grid_conversion(parameter, shape)
+         
             self.prior_uncs = np.zeros((2, shape[0], shape[1]))
             for i, parameter in enumerate([self.aot_unc, self.tcwv_unc]):
                 self.prior_uncs[i] = self._grid_conversion(parameter, shape)
-
-            self._coarse_num = np.zeros(self.full_res)
-            self._coarse_num[self.Hx, self.Hy] = 1
-            subs = [np.array_split(sub, self.num_blocks_y, axis=1) for sub in np.array_split(self._coarse_num, self.num_blocks_x, axis=0)]           
-            self._coarse_num = np.zeros((self.num_blocks_x, self.num_blocks_y))
-            for i in range(self.num_blocks_x):
-                for j in range(self.num_blocks_y):
-                    self._coarse_num[i,j]        = subs[i][j].sum()
+     
+            self.priors = np.zeros((2, shape[0], shape[1]))
+            for i, parameter in enumerate([self.aot_prior, self.tcwv_prior]):
+                self.priors[i] = self._grid_conversion(parameter, shape)
+     
+            #self._coarse_num = np.zeros(self.full_res)
+            #self._coarse_num[self.Hx, self.Hy] = 1
+            #subs = [np.array_split(sub, self.num_blocks_y, axis=1) for sub in np.array_split(self._coarse_num, self.num_blocks_x, axis=0)]           
+            #self._coarse_num = np.zeros((self.num_blocks_x, self.num_blocks_y))
+            #for i in range(self.num_blocks_x):
+            #    for j in range(self.num_blocks_y):
+            #        self._coarse_num[i,j]        = subs[i][j].sum()
+            nx, ny  = (np.ceil(np.array(self.full_res) / np.array([self.num_blocks_x, self.num_blocks_y])) \
+                                  *  np.array([self.num_blocks_x, self.num_blocks_y])).astype(int)
+            x_size, y_size = int(nx / self.num_blocks_x), int(ny / self.num_blocks_y)
+     
+            self._coarse_num  = np.zeros((nx, ny))
+            self._coarse_num [self.Hx, self.Hy] = 1
+     
+            self._coarse_num  = self._coarse_num.reshape(self.num_blocks_x, x_size, self.num_blocks_y, y_size).sum(axis=(1,3))
             #if ii < 0:
             #    self._coarse_mask = 1. * self._coarse_num / self._coarse_num.max() > 0.7
             #    pre_mask = self._coarse_mask
             #else:
-            self._coarse_mask = self._coarse_num > 0
+            self._coarse_mask = self._coarse_num > 1
+     
+            #self.priors[0, ~self._coarse_mask] = self.control_variables[0, 3, self._coarse_mask].mean()
+            #self.priors[1, ~self._coarse_mask] = self.control_variables[0, 3, self._coarse_mask].mean()
+     
+            self.priors = self.priors.reshape(2, -1)
             self.b_m_pixs     = 4. #self._coarse_num.max()#(self.aero_res / 500.)**2
-                #self._coarse_mask = self._coarse_mask & self._grid_conversion(pre_mask, shape).astype(bool)
+            #self._coarse_mask = self._coarse_mask & self._grid_conversion(pre_mask, shape).astype(bool)
             #subs = [np.array_split(sub, self.num_blocks_y, axis=1) for sub in np.array_split(self.mask, self.num_blocks_x, axis=0)]           
             #self._coarse_mask = np.zeros((self.num_blocks_x, self.num_blocks_y))
             #for i in range(self.num_blocks_x):
@@ -262,7 +289,7 @@ class solving_atmo_paras(object):
             handler.close()
             self.logger.removeHandler(handler)
         return [post_solved, post_unc]
-
+    '''
     def _helper(self, inp):
         H, _, dH = inp[0].predict(inp[1][:, self._coarse_mask.ravel()].T, do_unc=True)
         tmp1     = np.zeros((self.num_blocks_x, self.num_blocks_y))
@@ -272,6 +299,17 @@ class solving_atmo_paras(object):
         tmp1 = self._base_grid_resample(tmp1)[..., None]
         tmp2 = np.array([self._base_grid_resample(tmp2[:,:,i]) for i in range(2)]).transpose(1,0)
         return np.hstack([tmp1, tmp2])
+    '''
+
+    def _helper(self, inp):                                                             
+        H, dH = inp[0].predict(inp[1][:, self._coarse_mask.ravel()].T, cal_jac=True)[0] 
+        tmp1  = np.zeros((self.num_blocks_x, self.num_blocks_y))                        
+        tmp2  = np.zeros((self.num_blocks_x, self.num_blocks_y, 2))                     
+        tmp1[self._coarse_mask] = H.ravel()                                             
+        tmp2[self._coarse_mask, :] = np.array(dH)[:,3:5]                                
+        tmp1 = self._base_grid_resample(tmp1)[..., None]                                
+        tmp2 = np.array([self._base_grid_resample(tmp2[:,:,i]) for i in range(2)]).transpose(1,0)
+        return np.hstack([tmp1, tmp2]) 
 
     def _obs_cost_test(self, p, is_full = True, do_unc=False):
         p = np.array(p).reshape(2, -1)
@@ -343,16 +381,23 @@ class solving_atmo_paras(object):
             J [   ~self._coarse_mask] = 0
             J_ = J_.reshape(2, -1)
             if do_unc:
+                #comb_unc              = np.nansum([self.band_weights[...,None] * (dH[:, :, i] ** 2) * (self.boa_unc ** -2)  for i in range(2)], axis = 1)
+                #comb_unc[comb_unc==0] = np.nan
+                #self.obs_unc          = np.zeros((2,) + self.full_res)
+                #self.obs_unc[:]       = np.nan
+                #self.obs_unc[:, self.Hx, self.Hy] = comb_unc
                 comb_unc              = np.nansum([self.band_weights[...,None] * (dH[:, :, i] ** 2) * (self.boa_unc ** -2)  for i in range(2)], axis = 1)
                 comb_unc[comb_unc==0] = np.nan
-                self.obs_unc          = np.zeros((2,) + self.full_res)
-                self.obs_unc[:]       = np.nan
+                self.obs_unc = np.zeros((2, nx, ny))
+                self.obs_unc[:] = np.nan
                 self.obs_unc[:, self.Hx, self.Hy] = comb_unc
-                subs = [np.array_split(sub, self.num_blocks_y, axis=2) for sub in np.array_split(self.obs_unc, self.num_blocks_x, axis=1)]
-                self.obs_unc = np.zeros((2, self.num_blocks_x, self.num_blocks_y))
-                for i in range(self.num_blocks_x):                                                                               
-                    for j in range(self.num_blocks_y):                                                                           
-                        self.obs_unc[:, i,j] = np.nanmean(subs[i][j], axis=(1,2))     
+                self.obs_unc = self.obs_unc.reshape(2, self.num_blocks_x, x_size, self.num_blocks_y, y_size)
+                self.obs_unc = np.nanmean(self.obs_unc, axis=(2,4)) 
+                #subs = [np.array_split(sub, self.num_blocks_y, axis=2) for sub in np.array_split(self.obs_unc, self.num_blocks_x, axis=1)]
+                #self.obs_unc = np.zeros((2, self.num_blocks_x, self.num_blocks_y))
+                #for i in range(self.num_blocks_x):                                                                               
+                #    for j in range(self.num_blocks_y):                                                                           
+                #        self.obs_unc[:, i,j] = np.nanmean(subs[i][j], axis=(1,2))     
                 self.obs_unc[:,~self._coarse_mask] = np.nan
                 return self.obs_unc
         else:

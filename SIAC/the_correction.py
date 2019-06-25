@@ -12,6 +12,7 @@ try:
     import cPickle as pkl
 except:
     import pickle as pkl
+from Two_NN import Two_NN
 from osgeo import gdal, ogr
 from numpy import clip, uint8
 from SIAC.multi_process import parmap
@@ -177,7 +178,7 @@ class atmospheric_correction(object):
         self.mask = self.mask.astype(bool)
         self.mg    = gdal.Warp('', band, format = 'MEM', srcNodata = None, xRes = self.block_size, yRes = \
                                self.block_size, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)        
-  
+    '''
     def _load_xa_xb_xc_emus(self,):
         xap_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xap_%s.pkl'%(self.sensor, self.satellite))[0]
         xbp_emu = glob(self.emus_dir + '/isotropic_%s_emulators_correction_xbp_%s.pkl'%(self.sensor, self.satellite))[0]
@@ -188,6 +189,24 @@ class atmospheric_correction(object):
             f = lambda em: pkl.load(open(str(em), 'rb'))
         #print([xap_emu, xbp_emu, xcp_emu])
         self.xap_emus, self.xbp_emus, self.xcp_emus = parmap(f, [xap_emu, xbp_emu, xcp_emu])
+    '''
+    def _load_xa_xb_xc_emus(self,):
+        xaps = []    
+        xbps = []    
+        xcps = []    
+        for band in self.toa_bands:
+            band_name = 'B' + band.upper().split('/')[-1].split('B')[-1].split('.')[0]
+            xap_emu = glob(self.emus_dir + '/isotropic_%s_%s_%s_xap.npz'%(self.sensor, self.satellite, band_name))[0]
+            xbp_emu = glob(self.emus_dir + '/isotropic_%s_%s_%s_xbp.npz'%(self.sensor, self.satellite, band_name))[0]
+            xcp_emu = glob(self.emus_dir + '/isotropic_%s_%s_%s_xcp.npz'%(self.sensor, self.satellite, band_name))[0]
+            xap = Two_NN(np_model_file=xap_emu)
+            xbp = Two_NN(np_model_file=xbp_emu)
+            xcp = Two_NN(np_model_file=xcp_emu)
+            xaps.append(xap)
+            xbps.append(xbp)
+            xcps.append(xcp)
+        self.xap_emus, self.xbp_emus, self.xcp_emus = xaps, xbps, xcps
+
     
     def _var_parser(self, var):
         if os.path.exists(str(var)):    
@@ -344,7 +363,7 @@ class atmospheric_correction(object):
 
     def _get_xps(self,):
         p   = [np.cos(self._sza), None, None, self._aot, self._tcwv, self._tco3, self._ele]   
-        raa = np.cos(self._saa - self._vaa)
+        raa = np.cos(self._vaa - self._saa)
         vza = np.cos(self._vza)
         xap, xap_dH = [], []               
         xbp, xbp_dH = [], []               
@@ -357,10 +376,11 @@ class atmospheric_correction(object):
             X[1:3] = vza[i], raa[i]
             X = np.array(X).reshape(7, -1)[:, self._cmask.ravel()]
             for ei, emu in enumerate([self.xap_emus, self.xbp_emus, self.xcp_emus]):
-                H, _, dH = emu[emus_index].predict(X.T, do_unc=True)
+                #H, _, dH = emu[emus_index].predict(X.T, do_unc=True)
+                H, dH = emu[emus_index].predict(X.T, cal_jac=True)[0]
 
                 temp = np.zeros_like(self._sza)
-                temp[self._cmask] = H
+                temp[self._cmask] = H.ravel()
                 xps[ei].append(array_to_raster(temp, self.example_file))
 
                 temp = np.zeros(self._sza.shape + (3,))

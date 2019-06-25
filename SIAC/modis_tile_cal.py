@@ -15,7 +15,10 @@ file and get_vector_hv form a raster file
 
 x_step = -463.31271653   
 y_step = 463.31271653    
-m_y0, m_x0 = -20015109.354, 10007554.677
+#m_y0, m_x0 = -20015109.354, 10007554.677
+
+tile_width = 1111950.5196666666
+m_x0, m_y0 = -20015109.354, -10007554.677
 
 def get_raster_hv(example_file):
     try:
@@ -82,8 +85,8 @@ def mtile_cal(lat, lon):
     modis_sinu.ImportFromProj4 (sinu)
     tx = osr.CoordinateTransformation( wgs84, modis_sinu)# from wgs84 to modis 
     ho,vo,z = tx.TransformPoint(lon, lat)# still use the function instead of using the equation....
-    h = int((ho-m_y0)/(2400*y_step))
-    v = int((vo-m_x0)/(2400*x_step))
+    h =      int((ho-m_x0)/tile_width)
+    v = 17 - int((vo-m_y0)/tile_width)
     return h,v
 
 if __name__ == '__main__':
