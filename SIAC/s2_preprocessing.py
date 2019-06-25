@@ -4,6 +4,7 @@ import gc
 import sys
 import gdal
 import logging
+import lightgbm
 import numpy as np
 from glob import glob
 import multiprocessing
