@@ -22,6 +22,7 @@ file_path = os.path.dirname(os.path.realpath(__file__))
 def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
              global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt', \
              cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
+    '''
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
     if len(glob(file_path + '/emus/' + 'isotropic_MSI_emulators_*_x?p_S2?.pkl')) < 12:
@@ -35,6 +36,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
                     to_down.append([fname, url])
         f = lambda fname_url: downloader(fname_url[0], fname_url[1], file_path + '/emus/')
         parmap(f, to_down)
+    '''
     rets = s2_pre_processing(s2_t)
     aero_atmos = []
     for ret in rets:

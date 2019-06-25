@@ -17,6 +17,7 @@ file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None):
     file_path = os.path.dirname(os.path.realpath(__file__))
+    '''
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
     #print(file_path)
@@ -31,7 +32,7 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
                     to_down.append([fname, url])
         f = lambda fname_url: downloader(fname_url[0], fname_url[1], file_path + '/emus/')
         parmap(f, to_down)
-
+    '''
     rets = l8_pre_processing(l8_dir)
     aero_atmos = []
     for ret in rets:
