@@ -5,9 +5,9 @@ import requests
 import numpy as np
 from glob import glob
 from datetime import datetime
-from SIAC.the_aerosol import solve_aerosol
 from SIAC.the_correction import atmospheric_correction
 from SIAC.l8_preprocessing import l8_pre_processing
+from SIAC.the_aerosol import solve_aerosol
 from SIAC.get_MCD43 import get_mcd43
 from SIAC.downloaders import downloader
 from SIAC.multi_process import parmap
