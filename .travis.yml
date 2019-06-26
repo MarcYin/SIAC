@@ -23,11 +23,11 @@ install:
   - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pytest pyyaml scipy numpy psutil six requests scikit-learn scikit-image 'gdal==3.0' pytest-cov coverage pip numba 'lightgbm>=2.1.0'
   - source activate test-environment
   - conda info -a
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-      pip install https://github.com/MarcYin/gp_emulator/archive/master.zip;
-    else
-      pip install gp_emulator==1.6.1;
-    fi
+  #- if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
+  #    pip install https://github.com/MarcYin/gp_emulator/archive/master.zip;
+  #  else
+  #    pip install gp_emulator==1.6.1;
+  #  fi
   - pip install coveralls codecov
   - conda list
 script:
