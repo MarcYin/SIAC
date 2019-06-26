@@ -263,12 +263,14 @@ def resample_s2_angles(metafile):
     example_file = toa_refs[1]
     vaa, vza = parse_xml(metafile, example_file, sun_ang_name)
     # some gmls may lost....
-    view_ang_name_gmls = zip(np.array(toa_refs)[inds], np.array(view_ang_names)[inds], np.array(gmls)[inds])
+    view_ang_name_gmls = list(zip(np.array(toa_refs)[inds], np.array(view_ang_names)[inds], np.array(gmls)[inds]))
     band_dict = dict(zip(bands, range(13)))
     par = partial(get_angle, vaa=vaa, vza=vza, band_dict=band_dict)
     p = Pool(procs)
+    print(view_ang_name_gmls)
     ret = p.map(par,  view_ang_name_gmls)
     #ret  =list( map(par,  view_ang_name_gmls))
+    print(ret)
     p.close()
     p.join()
     ret = np.array(ret)
