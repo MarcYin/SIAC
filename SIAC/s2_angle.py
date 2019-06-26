@@ -107,118 +107,118 @@ def get_angle(view_ang_name_gml, vaa, vza, band_dict):
     vz1   = None         
     va2   = None                                                     
     vz2   = None     
-    try:
-        dets = []
-        for i in range(layer.GetFeatureCount()): 
-            dets.append(layer.GetFeature(i).items()['gml_id'])
-        dets = sorted(dets, key = lambda i: int(i.split('-')[2]))
-        for i in range(len(dets)):
-            det = dets[i]
-            foot1 = gdal.Rasterize("", gml, format="MEM", xRes=xRes, yRes=yRes, \
-                                   where="gml_id='%s'"%det, outputBounds=[ x_min, y_min, x_max, y_max], \
-                                   noData=0, burnValues=1, outputType=gdal.GDT_Byte).ReadAsArray()
-            foot1 = binary_dilation(foot1)
-            key =  band_dict[det.split('-')[-3]], int(det.split('-')[-2])
-            va1 = vaa[key]       
-            vz1 = vza[key]                                                
-            if i>0:
-                overlap = foot1 * foot2
-                if overlap.sum() < 10:
-                    foot1 = foot2
+    #try:
+    dets = []
+    for i in range(layer.GetFeatureCount()): 
+        dets.append(layer.GetFeature(i).items()['gml_id'])
+    dets = sorted(dets, key = lambda i: int(i.split('-')[2]))
+    for i in range(len(dets)):
+        det = dets[i]
+        foot1 = gdal.Rasterize("", gml, format="MEM", xRes=xRes, yRes=yRes, \
+                               where="gml_id='%s'"%det, outputBounds=[ x_min, y_min, x_max, y_max], \
+                               noData=0, burnValues=1, outputType=gdal.GDT_Byte).ReadAsArray()
+        foot1 = binary_dilation(foot1)
+        key =  band_dict[det.split('-')[-3]], int(det.split('-')[-2])
+        va1 = vaa[key]       
+        vz1 = vza[key]                                                
+        if i>0:
+            overlap = foot1 * foot2
+            if overlap.sum() < 10:
+                foot1 = foot2
+            else:
+                x,y = np.where(overlap)
+                xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(),y.max()
+                ll = x[x==xmax][-1], y[x==xmax][-1]
+                lr = x[y==ymax][-1], y[y==ymax][-1]
+                ul = x[y==ymin][0], y[y==ymin][0]
+                ur = x[x==xmin][0], y[x==xmin][0]
+                p1 = np.mean([lr, ur], axis=0)
+                p2 = np.mean([ll, ul], axis=0)
+                x1,y1 = np.where(foot2)
+                vamax, vamin  = np.nanmax(va2), np.nanmin(va2)
+                vzmax, vzmin  = np.nanmax(vz2), np.nanmin(vz2)
+                if not (p1==p2).all():
+                    p = np.poly1d(np.polyfit([p1[1], p2[1]],[p1[0], p2[0]],1))
+                    foot2[x[x > p(y)], y[x > p(y)]] = False
+                    minx, miny = np.where(va2 == vamin)
+                    maxx, maxy = np.where(va2 == vamax)
+                    min_dst = abs(p(miny*y_scale)-minx*x_scale)/(np.sqrt(1+p.c[0]**2))
+                    max_dst = abs(p(maxy*y_scale)-maxx*x_scale)/(np.sqrt(1+p.c[0]**2))
+                    if  (max_dst < min_dst).any():
+                        tmp1 = vamin.copy()
+                        vamin = vamax 
+                        vamax = tmp1
+                    minx, miny = np.where(vz2 == vzmin)
+                    maxx, maxy = np.where(vz2 == vzmax)
+                    min_dst = abs(p(miny*y_scale)-minx*x_scale)/(np.sqrt(1+p.c[0]**2))
+                    max_dst = abs(p(maxy*y_scale)-maxx*x_scale)/(np.sqrt(1+p.c[0]**2))
+                    if (max_dst < min_dst).any():
+                        tmp2 = vzmin.copy()
+                        vzmin = vzmax
+                        vzmax = tmp2 
+                    dist = abs(p(y1)-x1)/(np.sqrt(1+p.c[0]**2))
+                    vas[x1,y1] = vamin + dist/(dist.max()-dist.min()) * (vamax-vamin)
+                    vzs[x1,y1] = vzmin + dist/(dist.max()-dist.min()) * (vzmax-vzmin)
                 else:
-                    x,y = np.where(overlap)
-                    xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(),y.max()
-                    ll = x[x==xmax][-1], y[x==xmax][-1]
-                    lr = x[y==ymax][-1], y[y==ymax][-1]
-                    ul = x[y==ymin][0], y[y==ymin][0]
-                    ur = x[x==xmin][0], y[x==xmin][0]
-                    p1 = np.mean([lr, ur], axis=0)
-                    p2 = np.mean([ll, ul], axis=0)
-                    x1,y1 = np.where(foot2)
-                    vamax, vamin  = np.nanmax(va2), np.nanmin(va2)
-                    vzmax, vzmin  = np.nanmax(vz2), np.nanmin(vz2)
+                    vas[x1,y1] = vamin
+                    vzs[x1,y1] = vzmin
+                x1,y1 = np.where(foot1)
+                if i == layer.GetFeatureCount()-1:
+                    vamax, vamin  = np.nanmax(va1), np.nanmin(va1)
+                    vzmax, vzmin  = np.nanmax(vz1), np.nanmin(vz1) 
                     if not (p1==p2).all():
-                        p = np.poly1d(np.polyfit([p1[1], p2[1]],[p1[0], p2[0]],1))
-                        foot2[x[x > p(y)], y[x > p(y)]] = False
-                        minx, miny = np.where(va2 == vamin)
-                        maxx, maxy = np.where(va2 == vamax)
+                        foot1[x[x <= p(y)], y[x <= p(y)]] = False
+                        minx, miny = np.where(va1 == vamin)         
+                        maxx, maxy = np.where(va1 == vamax)
                         min_dst = abs(p(miny*y_scale)-minx*x_scale)/(np.sqrt(1+p.c[0]**2))
                         max_dst = abs(p(maxy*y_scale)-maxx*x_scale)/(np.sqrt(1+p.c[0]**2))
-                        if  (max_dst < min_dst).any():
-                            tmp1 = vamin.copy()
-                            vamin = vamax 
-                            vamax = tmp1
-                        minx, miny = np.where(vz2 == vzmin)
-                        maxx, maxy = np.where(vz2 == vzmax)
+                        if  (max_dst < min_dst).any():                      
+                            tmp1 = vamin.copy()                     
+                            vamin = vamax                           
+                            vamax = tmp1                            
+                        minx, miny = np.where(vz1 == vzmin)         
+                        maxx, maxy = np.where(vz1 == vzmax)         
                         min_dst = abs(p(miny*y_scale)-minx*x_scale)/(np.sqrt(1+p.c[0]**2))
                         max_dst = abs(p(maxy*y_scale)-maxx*x_scale)/(np.sqrt(1+p.c[0]**2))
-                        if (max_dst < min_dst).any():
-                            tmp2 = vzmin.copy()
-                            vzmin = vzmax
-                            vzmax = tmp2 
+                        if (max_dst < min_dst).any():                       
+                            tmp2 = vzmin.copy()                     
+                            vzmin = vzmax                           
+                            vzmax = tmp2
                         dist = abs(p(y1)-x1)/(np.sqrt(1+p.c[0]**2))
                         vas[x1,y1] = vamin + dist/(dist.max()-dist.min()) * (vamax-vamin)
                         vzs[x1,y1] = vzmin + dist/(dist.max()-dist.min()) * (vzmax-vzmin)
                     else:
-                        vas[x1,y1] = vamin
-                        vzs[x1,y1] = vzmin
-                    x1,y1 = np.where(foot1)
-                    if i == layer.GetFeatureCount()-1:
-                        vamax, vamin  = np.nanmax(va1), np.nanmin(va1)
-                        vzmax, vzmin  = np.nanmax(vz1), np.nanmin(vz1) 
-                        if not (p1==p2).all():
-                            foot1[x[x <= p(y)], y[x <= p(y)]] = False
-                            minx, miny = np.where(va1 == vamin)         
-                            maxx, maxy = np.where(va1 == vamax)
-                            min_dst = abs(p(miny*y_scale)-minx*x_scale)/(np.sqrt(1+p.c[0]**2))
-                            max_dst = abs(p(maxy*y_scale)-maxx*x_scale)/(np.sqrt(1+p.c[0]**2))
-                            if  (max_dst < min_dst).any():                      
-                                tmp1 = vamin.copy()                     
-                                vamin = vamax                           
-                                vamax = tmp1                            
-                            minx, miny = np.where(vz1 == vzmin)         
-                            maxx, maxy = np.where(vz1 == vzmax)         
-                            min_dst = abs(p(miny*y_scale)-minx*x_scale)/(np.sqrt(1+p.c[0]**2))
-                            max_dst = abs(p(maxy*y_scale)-maxx*x_scale)/(np.sqrt(1+p.c[0]**2))
-                            if (max_dst < min_dst).any():                       
-                                tmp2 = vzmin.copy()                     
-                                vzmin = vzmax                           
-                                vzmax = tmp2
-                            dist = abs(p(y1)-x1)/(np.sqrt(1+p.c[0]**2))
-                            vas[x1,y1] = vamin + dist/(dist.max()-dist.min()) * (vamax-vamin)
-                            vzs[x1,y1] = vzmin + dist/(dist.max()-dist.min()) * (vzmax-vzmin)
-                        else:
-                            vas[x1,y1] = vamin 
-                            vas[x1,y1] = vamin 
-            foot2 = foot1
-            va2   = va1
-            vz2   = vz1
-        #    vas[:] = np.nanmean(vaa.values())
-        #    vzs[:] = np.nanmean(vza.values())
-        if os.path.exists(view_ang_name):                   
-            os.remove(view_ang_name)                        
-        dst_ds = gdal.GetDriverByName('GTiff').Create(view_ang_name, x_size, y_size, 2, gdal.GDT_Int16, options=["TILED=YES", "COMPRESS=DEFLATE"])
-        dst_ds.SetGeoTransform(g1.GetGeoTransform())         
-        dst_ds.SetProjection(g1.GetProjection())             
-        mask      = vas < -180
-        if (~mask).sum()<1:
-            vas[:] = np.nanmean(va1)
-            #vas = fill_bad(vas, ~mask)
-        mask      = vzs < 0                              
-        if (~mask).sum()<1:
-            vzs[:] = np.nanmean(vz1)
-            #vzs = fill_bad(vzs, ~mask)
-        vas[vas>180] = vas[vas>180] - 360         
-        dst_ds.GetRasterBand(1).WriteArray((vas * 100).astype(int))            
-        dst_ds.GetRasterBand(2).WriteArray((vzs * 100).astype(int))            
-        dst_ds.GetRasterBand(1).SetNoDataValue(-32767)       
-        dst_ds.GetRasterBand(2).SetNoDataValue(-32767)       
-        dst_ds.FlushCache()                                  
-        dst_ds = None  
-        g1 = None   
-        return True  
-    except:
-        return False
+                        vas[x1,y1] = vamin 
+                        vas[x1,y1] = vamin 
+        foot2 = foot1
+        va2   = va1
+        vz2   = vz1
+    #    vas[:] = np.nanmean(vaa.values())
+    #    vzs[:] = np.nanmean(vza.values())
+    if os.path.exists(view_ang_name):                   
+        os.remove(view_ang_name)                        
+    dst_ds = gdal.GetDriverByName('GTiff').Create(view_ang_name, x_size, y_size, 2, gdal.GDT_Int16, options=["TILED=YES", "COMPRESS=DEFLATE"])
+    dst_ds.SetGeoTransform(g1.GetGeoTransform())         
+    dst_ds.SetProjection(g1.GetProjection())             
+    mask      = vas < -180
+    if (~mask).sum()<1:
+        vas[:] = np.nanmean(va1)
+        #vas = fill_bad(vas, ~mask)
+    mask      = vzs < 0                              
+    if (~mask).sum()<1:
+        vzs[:] = np.nanmean(vz1)
+        #vzs = fill_bad(vzs, ~mask)
+    vas[vas>180] = vas[vas>180] - 360         
+    dst_ds.GetRasterBand(1).WriteArray((vas * 100).astype(int))            
+    dst_ds.GetRasterBand(2).WriteArray((vzs * 100).astype(int))            
+    dst_ds.GetRasterBand(1).SetNoDataValue(-32767)       
+    dst_ds.GetRasterBand(2).SetNoDataValue(-32767)       
+    dst_ds.FlushCache()                                  
+    dst_ds = None  
+    g1 = None   
+    return True  
+#except:
+#    return False
 
 '''
 def fill_bad(array, mask):                        
@@ -268,8 +268,8 @@ def resample_s2_angles(metafile):
     par = partial(get_angle, vaa=vaa, vza=vza, band_dict=band_dict)
     p = Pool(procs)
     print(view_ang_name_gmls)
-    ret = p.map(par,  view_ang_name_gmls)
-    #ret  =list( map(par,  view_ang_name_gmls))
+    #ret = p.map(par,  view_ang_name_gmls)
+    ret  =list( map(par,  view_ang_name_gmls))
     print(ret)
     p.close()
     p.join()
