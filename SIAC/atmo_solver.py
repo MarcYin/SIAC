@@ -410,7 +410,7 @@ class solving_atmo_paras(object):
         aot, tcwv = np.array(p).reshape(2, self.num_blocks_x, self.num_blocks_y)
         J_aot,  J_aot_  = self._fit_smoothness(aot,  1. / self.gamma)
         J_tcwv, J_tcwv_ = self._fit_smoothness(tcwv, 1. / self.gamma)
-        J, full_dJ      = J_aot + J_tcwv, np.array([J_aot_, J_tcwv])
+        J, full_dJ      = J_aot + J_tcwv, np.array([J_aot_, J_tcwv_])
         if is_full:
             J_ = np.array(full_dJ).reshape(2, -1)
         else:
