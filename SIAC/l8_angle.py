@@ -17,19 +17,19 @@ def post_view_angle(view_angle, out_name, delete_origin = False):
     g = gdal.Open(view_angle)
     vaa, vza = g.ReadAsArray()/100.
     vaa[vaa==-327.67] = np.nan
-    vza[vza==-327.67] = np.nan
+    vza[vza<    0.01] = np.nan
     x, y = np.where(vza==np.nanmin(vza))
     p = np.poly1d(np.polyfit(y,x,1))
     x1, y1 = np.where(~np.isnan(vza))
     dist = abs(p(y1)-x1)/(np.sqrt(1+p.c[0]**2))
     vza[x1, y1] = np.nanmin(vza) + dist/(dist.max()-dist.min()) * (np.nanmax(vza)-np.nanmin(vza))
     hist, bin_edges = np.histogram(vaa[vaa<0], bins=1000)
-    rvaa = bin_edges[np.argmax(hist)] + 180
+    rvaa = bin_edges[np.argmax(hist)] 
     hist, bin_edges = np.histogram(vaa[vaa>0], bins=1000)
     lvaa = bin_edges[np.argmax(hist)]
     mvaa = np.mean([rvaa, lvaa])
-    vaa[vaa<0] = mvaa - 360
-    vaa[vaa>0] = mvaa
+    vaa[vaa<0] = np.nanmean(vaa[vaa<0])
+    vaa[vaa>0] = np.nanmean(vaa[vaa>0])
     vaa[np.isnan(vaa)] = -327.67
     vza[np.isnan(vza)] = -327.67
     if os.path.exists(out_name):                   

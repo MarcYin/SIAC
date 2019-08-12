@@ -208,7 +208,8 @@ def get_angle(view_ang_name_gml, vaa, vza, band_dict):
         if (~mask).sum()<1:
             vzs[:] = np.nanmean(vz1)
             #vzs = fill_bad(vzs, ~mask)
-        vas[vas>180] = vas[vas>180] - 360         
+        #vas[(vas>180) & (vas<=360)] = vas[(vas>180) & (vas<=360)].mean() - 360
+        #vas[(vas>=0)  & (vas<=180)] = vas[(vas>=0)  & (vas<=180)].mean()
         dst_ds.GetRasterBand(1).WriteArray((vas * 100).astype(int))            
         dst_ds.GetRasterBand(2).WriteArray((vzs * 100).astype(int))            
         dst_ds.GetRasterBand(1).SetNoDataValue(-32767)       

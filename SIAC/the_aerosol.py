@@ -36,7 +36,7 @@ from scipy.ndimage import binary_dilation, binary_erosion
 
 procs =  psutil.cpu_count()
 def warp_data(fname, aoi,  xRes, yRes):
-    g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, \
+    g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, outputType = gdal.GDT_Float32,\
 		  cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
     return g.ReadAsArray()                                                                          # no reason you have to specify the srcNodata to use dstNodata
 

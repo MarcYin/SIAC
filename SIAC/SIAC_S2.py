@@ -37,7 +37,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
         f = lambda fname_url: downloader(fname_url[0], fname_url[1], file_path + '/emus/')
         parmap(f, to_down)
     '''
-    rets = s2_pre_processing(s2_t)
+    rets = s2_pre_processing(s2_t, cams_dir, global_dem)
     aero_atmos = []
     for ret in rets:
         ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin)
@@ -48,7 +48,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
         return aero_atmos
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
-                  cloud_mask, metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi=None, \
+                  cloud_mask, aot, tcwv, metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi=None, \
                   global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt', \
                   cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
     if jasmin:
@@ -93,11 +93,13 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     toa_bands   = (np.array(toa_refs)[band_index,]).tolist()
     view_angles = (np.array(view_ang_names)[band_index,]).tolist()
     sun_angles  = sun_ang_name
+    logger.info('First pass AOT and TCWV: %.02f, %.02f'%(aot.mean(), tcwv.mean()))
     #logger.info('Running SIAC for tile: %s on %s'%(tile, obs_time.strftime('%Y-%M-%d')))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
                          sun_angles,obs_time,cloud_mask, gamma=10., spec_m_dir= \
-                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', \
-                         mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir)
+                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/',aot_prior=aot, aot_unc=0.4, wv_prior=tcwv, wv_unc=0.5,\
+                         mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
+                         prior_scale = [1., 1, 46.698, 1., 1., 1.])
     aero._solving()
     toa_bands  = toa_refs
     view_angles = view_ang_names

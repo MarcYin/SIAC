@@ -186,7 +186,7 @@ int main
         num_lines = (frame.num_lines - 1) / sub_sample + 1;
         num_samps = (frame.num_samps - 1) / sub_sample + 1;
         IAS_LOG_INFO("Processing band number %d with %d lines and %d samples "
-            "using %d as sub-sampling factor", band_number, num_lines,
+            "using %d as sub-sampling factor", band_number, num_lines, 
             num_samps, sub_sample);
 
         /* Calculate the angle sizes */
@@ -264,6 +264,11 @@ int main
         {
             double sun_angles[2];   /* Solar angles */
             double sat_angles[2];   /* Viewing angles */
+
+            if (!(line / sub_sample % 500)) 
+            {
+                IAS_LOG_INFO("Line %d", line/sub_sample);
+            }
 
             for (samp = 0; samp < frame.num_samps; samp += sub_sample, index++)
             {

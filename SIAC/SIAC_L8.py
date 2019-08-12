@@ -5,6 +5,7 @@ import requests
 import numpy as np
 from glob import glob
 from datetime import datetime
+from SIAC.create_logger import create_logger
 from SIAC.l8_preprocessing import l8_pre_processing
 from SIAC.the_aerosol import solve_aerosol
 from SIAC.the_correction import atmospheric_correction
@@ -15,7 +16,9 @@ from os.path import expanduser
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
-def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None):
+def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
+            global_dem ='/work/scratch/marcyin/DEM/global_dem.vrt', 
+            cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
     file_path = os.path.dirname(os.path.realpath(__file__))
     '''
     if not os.path.exists(file_path + '/emus/'):
@@ -36,7 +39,7 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
     rets = l8_pre_processing(l8_dir)
     aero_atmos = []
     for ret in rets:
-        ret += (mcd43, vrt_dir, aoi)
+        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin)
         #sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile = ret
         aero_atmo = do_correction(*ret)
         if send_back:
@@ -45,7 +48,13 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
         return aero_atmos
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
-                  metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None):
+                  metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None,\
+                  global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt', \
+                  cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
+    if jasmin:
+        global_dem  = '/work/scratch/marcyin/DEM/global_dem.vrt'
+        cams_dir    = '/work/scratch/marcyin/CAMS/'
+        os.environ['jasmin_memory_limit'] = '6.4e+10'
 
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
@@ -66,10 +75,22 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
                 date = line.split()[-1]
             elif 'SCENE_CENTER_TIME' in line:
                 time = line.split()[-1]
-
+    log_file = os.path.dirname(metafile) + '/SIAC_L8.log'
+    logger = create_logger(log_file)
+    logger.info('Starting atmospheric corretion for %s'%base)
     datetime_str= date + time
     obs_time    = datetime.strptime(datetime_str.split('.')[0], '%Y-%m-%d"%H:%M:%S')
-    get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir)
+    if not np.all(cloud_mask):
+        handlers = logger.handlers[:]
+        for handler in handlers:
+            handler.close()
+            logger.removeHandler(handler)
+        #if not jasmin:
+        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
+        #logger = create_logger(log_file)
+    else:
+        logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
+    #get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir)
     sensor_sat  = 'OLI', 'L8'
     band_index  = [1,2,3,4,5,6]
     band_wv     = [469, 555, 645, 859, 1640, 2130]
