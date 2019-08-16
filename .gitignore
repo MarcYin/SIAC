@@ -4,6 +4,7 @@
 *.hdf
 *.pkl
 !*/sen2cloud_detector.pkl
+!*/lgb.pkl
 *S2?_MSIL1C*.SAFE
 .coverage*
 SIAC.egg-info
