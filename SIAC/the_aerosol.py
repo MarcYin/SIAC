@@ -718,20 +718,25 @@ class solve_aerosol(object):
         #self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
         self.boa     = np.array(self.spec_map.predict(self.boa[:, _mask].T)).squeeze()
         self.boa_unc = self.boa_unc[:, _mask]
-        mask = True                                 
-        if self.boa.shape[1] > 3: 
-            for i in range(len(self.toa)):           
-                pmin = np.poly1d(pmins[i])
-                pmax = np.poly1d(pmaxs[i])
-                diff = self.toa[i] - self.boa[i]
-                mas  = (diff >= pmin(self.boa[i])) & (diff <= pmax(self.boa[i]))
-                mmin, mmax = np.percentile(self.toa[i][mas] - self.boa[i][mas], [5, 95])
-                mas  = mas & (diff >= mmin) & (diff <= mmax)
-                mask = mask & mas
-            self.mask = mask #& boa_mask & toa_mask
-        else:        
+        mask = True
+        if self.boa.size > 0:                    
+            if self.boa.shape[1] > 3: 
+                for i in range(len(self.toa)):           
+                    pmin = np.poly1d(pmins[i])
+                    pmax = np.poly1d(pmaxs[i])
+                    diff = self.toa[i] - self.boa[i]
+                    mas  = (diff >= pmin(self.boa[i])) & (diff <= pmax(self.boa[i]))
+                    if mas.sum() == 0:
+                        mmin, mmax = np.nan, np.nan
+                    else:
+                        mmin, mmax = np.percentile(self.toa[i][mas] - self.boa[i][mas], [5, 95])
+                    mas  = mas & (diff >= mmin) & (diff <= mmax)
+                    mask = mask & mas
+                self.mask = mask #& boa_mask & toa_mask
+            else:        
+                self.mask = False
+        else:     
             self.mask = False
-    
     def _fill_nan(self,):
         def fill_nan(array):                        
             x_shp, y_shp = array.shape                     

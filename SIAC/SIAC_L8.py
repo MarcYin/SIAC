@@ -101,8 +101,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     scale       = scale / np.cos(np.deg2rad(sza))
     off         = off / np.cos(np.deg2rad(sza))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,sun_angles,\
-                         obs_time,cloud_mask, gamma=10., ref_scale = scale, ref_off = off, \
-                         spec_m_dir=file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir)
+                         obs_time,cloud_mask, gamma=10., ref_scale = scale, ref_off = off, global_dem  = global_dem, cams_dir = cams_dir,\
+                         spec_m_dir=file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir, )
     aero._solving()
     toa_bands   = toa_refs
     view_angles = view_ang_names
@@ -117,7 +117,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     band_index = [0,1,2,3,4,5,6]
     atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,sun_angles, \
                                   aot = aot, cloud_mask = cloud_mask,tcwv = tcwv, tco3 = tco3, \
-                                  aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, \
+                                  aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, global_dem  = global_dem, cams_dir = cams_dir,\
                                   rgb = rgb, ref_scale = scale, ref_off = off, emus_dir=file_path+'/emus/', aoi=aoi)
     atmo._doing_correction()
     return aero, atmo

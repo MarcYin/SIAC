@@ -97,7 +97,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     #logger.info('Running SIAC for tile: %s on %s'%(tile, obs_time.strftime('%Y-%M-%d')))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
                          sun_angles,obs_time,cloud_mask, gamma=10., spec_m_dir= \
-                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/',aot_prior=aot, aot_unc=0.4, wv_prior=tcwv, wv_unc=0.5,\
+                         file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', wv_prior=tcwv, wv_unc=0.1,\
                          mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
                          prior_scale = [1., 1, 46.698, 1., 1., 1.])
     aero._solving()

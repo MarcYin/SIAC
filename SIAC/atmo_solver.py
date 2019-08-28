@@ -428,19 +428,35 @@ class solving_atmo_paras(object):
         #dif[~mask] = 0
         #J = 0.5 * x * dif
         #return 2*J, 2*dif
-        # Build up the 8-neighbours
-        hood = np.array ( [  x[:-2, :-2], x[:-2, 1:-1], x[ :-2, 2: ], \
-                         x[ 1:-1,:-2], x[1:-1, 2:], \
-                         x[ 2:,:-2], x[ 2:, 1:-1], x[ 2:, 2:] ] )
-        j_model = np.zeros_like(x) 
-        der_j_model = np.zeros_like(x)
-        for i in [1,3,4,6]:
-            dif        = hood[i,:,:] - x[1:-1,1:-1] 
-            #dif[~mask[1:-1,1:-1]] = 0
-            j_model[1:-1,1:-1] = j_model[1:-1,1:-1] + 0.5 * dif **2/sigma_model**2
-            der_j_model[1:-1,1:-1] = der_j_model[1:-1,1:-1] - dif/sigma_model**2
-        
-        return j_model, 2 * der_j_model
+        # # Build up the 8-neighbours
+        # hood = np.array ( [  x[:-2, :-2], x[:-2, 1:-1], x[ :-2, 2: ], \
+        #                  x[ 1:-1,:-2], x[1:-1, 2:], \
+        #                  x[ 2:,:-2], x[ 2:, 1:-1], x[ 2:, 2:] ] )
+        # j_model = np.zeros_like(x) 
+        # der_j_model = np.zeros_like(x)
+        # for i in [1,3,4,6]:
+        #     dif        = hood[i,:,:] - x[1:-1,1:-1] 
+        #     #dif[~mask[1:-1,1:-1]] = 0
+        #     j_model[1:-1,1:-1] = j_model[1:-1,1:-1] + 0.5 * dif **2/sigma_model**2
+        #     der_j_model[1:-1,1:-1] = der_j_model[1:-1,1:-1] - dif/sigma_model**2
+
+        J  = np.zeros_like(x) 
+        dJ = np.zeros_like(x)
+        sigma_model_2 = sigma_model ** 2
+        up    = slice(0, -2), slice(1, -1)
+        down  = slice(1, -1), slice(0, -2)
+        left  = slice(1, -1), slice(2, None)
+        right = slice(2, None), slice(1, -1)
+        center = slice(1,-1), slice(1,-1)
+        #for sub in [x[up], x[down], x[left], x[right]]:
+        for slic in [up, down, left, right]:
+            diff       = x[slic] - x[center]
+            J [slic]   = J [slic] + 0.5 * diff ** 2 / sigma_model_2
+            dJ[slic]   = dJ[slic] + diff            / sigma_model_2 # this is essential..        
+            dJ[center] = dJ[center] - diff / sigma_model_2 # this is essential as well..
+
+        return J, dJ
+    
     
     def _prior_cost(self, p, is_full=True):
         self.prior_uncs   = self.prior_uncs.reshape(2, -1)
