@@ -719,7 +719,7 @@ class solve_aerosol(object):
         self.boa     = np.array(self.spec_map.predict(self.boa[:, _mask].T)).squeeze()
         self.boa_unc = self.boa_unc[:, _mask]
         mask = True
-        if self.boa.size > 0:                    
+        if len(self.boa.shape) > 1:                    
             if self.boa.shape[1] > 3: 
                 for i in range(len(self.toa)):           
                     pmin = np.poly1d(pmins[i])

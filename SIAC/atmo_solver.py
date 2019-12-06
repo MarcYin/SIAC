@@ -154,7 +154,7 @@ class solving_atmo_paras(object):
         self.xap_emus    = self.emus[0]#[self.band_indexs]
         self.xbp_emus    = self.emus[1]#[self.band_indexs]
         self.xcp_emus    = self.emus[2]#[self.band_indexs]
-        self.up_bounds  = np.array([2.,    5 ])                                         
+        self.up_bounds  = np.array([2.5,   7 ])                                         
         self.bot_bounds = np.array([0.001, 0.]) 
         #self.up_bounds   = self.xap_emus[0].inputs[:,3:5].max(axis=0)
         #self.bot_bounds  = self.xap_emus[0].inputs[:,3:5].min(axis=0) 
@@ -164,8 +164,8 @@ class solving_atmo_paras(object):
         #for ii, shape in enumerate(shapes):
         for _, ii in enumerate(order):
             shape = shape_dict[ii]
-            print('+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
-            self.logger.info(bcolors.BLUE + 'Optimizing at grid level %d' % (ii+1) + bcolors.ENDC)
+            self.logger.info(bcolors.BLUE + '++++++++++++++++++++++++++++++++++++++++++++++++++++++++++'+bcolors.ENDC)
+            self.logger.info(bcolors.RED + 'Optimizing at grid level %d' % (ii+1) + bcolors.ENDC)
             self.num_blocks_x, self.num_blocks_y = shape
             self.control_variables = np.zeros((self.boa.shape[0], 7, shape[0], shape[1]))
             if _ ==0:
@@ -229,7 +229,9 @@ class solving_atmo_paras(object):
             #        self._coarse_mask[i,j] = subs[i][j].sum()
             #self._coarse_mask = self._coarse_mask > 0.    
             self.priors  = self.control_variables[0, [3, 4], :, :].reshape(2, -1)
-            p0  = self.priors
+            p0  = self.priors.copy()
+            self.logger.info('Starting mean AOT : %.02f'%p0[0].mean())
+            self.logger.info('Starting mean TCWV: %.02f'%p0[1].mean())
             bot = np.zeros_like(p0)
             up  = np.zeros_like(p0)
             bot = np.ones(p0.shape) * self.bot_bounds[...,None] 
@@ -255,7 +257,7 @@ class solving_atmo_paras(object):
             #res4 = optimize.minimize(self._cost, p0, jac=, method='COBYLA', options={'disp': True})
             #print res1, res2 #res3
             #psolve = res2
-            self.logger.info(bcolors.GREEN + str(psolve['message']) + bcolors.ENDC)
+            self.logger.info(bcolors.GREEN + str(psolve['message'].decode()) + bcolors.ENDC)
             self.logger.info(bcolors.GREEN + 'Iterations: %d'%int(psolve['nit']) + bcolors.ENDC)
             self.logger.info(bcolors.GREEN + 'Function calls: %d'%int(psolve['nfev']) +bcolors.ENDC)  
             self.aot_prior, self.tcwv_prior = psolve['x'].reshape(2, self.num_blocks_x, self.num_blocks_y)

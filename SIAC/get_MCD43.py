@@ -125,10 +125,13 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16,jasmin = False):
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
         if jasmin:
-            mcd43_dir = '/neodc/modis/data/MCD43A1/collection6/'
-            jasmin_date = datetime.strptime(the_date, '%Y.%m.%d').strftime('/%Y/%m/%d/')
             potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
-            the_files = [f for f in glob(mcd43_dir + "/" +  jasmin_date + potential_fname)]
+            the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
+            if len(the_files) == 0 :
+                mcd43_dir = '/neodc/modis/data/MCD43A1/collection6/'
+                jasmin_date = datetime.strptime(the_date, '%Y.%m.%d').strftime('/%Y/%m/%d/')
+                potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
+                the_files += [f for f in glob(mcd43_dir + "/" +  jasmin_date + potential_fname)]
         else:
             potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
             the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
@@ -136,12 +139,15 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16,jasmin = False):
             ret.append(the_files[0])
         else:
             need_grab.append((tile, the_date))
-    if len(need_grab) > 0:
-        p = Pool(8)
-        ret_get = p.map(get_one_tile, need_grab)
-        p.close()
-        p.join()
+    if len(need_grab) > 1:
+        #p = Pool(min(len(need_grab), 8))
+        ret_get = list(map(get_one_tile, need_grab))
+        #p.close()
+        #p.join()
         ret.extend(ret_get)
+    elif len(need_grab) == 1:
+        ret_get = get_one_tile(need_grab[0])
+        ret.extend([ret_get])
     return ret
 
 def get_one_tile(tile_date):
