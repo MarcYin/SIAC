@@ -8,3 +8,4 @@ numpy>=1.13
 scipy>=1.0.0
 gdal>=2.1
 numba
+pyproj
