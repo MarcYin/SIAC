@@ -178,11 +178,13 @@ def s2_pre_processing(s2_dir, cams_dir, dem):
         logger.info('Clean pixel percentage: %.02f'%(clean_pixel))
         cloud_mask = binary_dilation(binary_erosion (cloud_mask, disk(2)), disk(3)) | (cloud < 0)
         
-        logger.info('Getting first guess AOT and TCWV.')
-        tcwv_bands = np.array(toa_refs)[[9,8]]
-        aot_bands = np.array(toa_refs)
-        view_ang_name = view_ang_names[8]
-        aot, tcwv     = do_aot_tcwv(aot_bands, tcwv_bands, cams_dir, obs_time, sun_ang_name, view_ang_name, dem, tcwv_name = None, aot_name = None)
+        #logger.info('Getting first guess AOT and TCWV.')
+        #tcwv_bands = np.array(toa_refs)[[9,8]]
+        #aot_bands = np.array(toa_refs)
+        #view_ang_name = view_ang_names[8]
+        #aot, tcwv     = do_aot_tcwv(aot_bands, tcwv_bands, cams_dir, obs_time, sun_ang_name, view_ang_name, dem, tcwv_name = None, aot_name = None)
+        aot = None
+        tcwv = None
         s2_tiles.append([sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, aot, tcwv, metafile])
         handlers = logger.handlers[:]
         for handler in handlers:

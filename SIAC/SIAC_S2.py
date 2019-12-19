@@ -93,7 +93,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     toa_bands   = (np.array(toa_refs)[band_index,]).tolist()
     view_angles = (np.array(view_ang_names)[band_index,]).tolist()
     sun_angles  = sun_ang_name
-    logger.info('First pass AOT and TCWV: %.02f, %.02f'%(aot.mean(), tcwv.mean()))
+    #logger.info('First pass AOT and TCWV: %.02f, %.02f'%(aot.mean(), tcwv.mean()))
     #logger.info('Running SIAC for tile: %s on %s'%(tile, obs_time.strftime('%Y-%M-%d')))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
                          sun_angles,obs_time,cloud_mask, gamma=10., spec_m_dir= \
