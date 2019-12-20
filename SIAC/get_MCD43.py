@@ -6,6 +6,7 @@ import logging
 import requests
 import tempfile 
 import numpy as np
+from osgeo import osr
 from glob import glob
 from six.moves import input
 from functools import partial
@@ -197,6 +198,9 @@ def daily_vrt_jasmin(fnames_date, vrt_dir = None):
     temp1 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Band_Mandatory_Quality_%s'
     temp2 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Parameters_%s'
 
+    spatialRef = osr.SpatialReference()
+    spatialRef.ImportFromProj4('+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs')
+
     fnames, date = fnames_date
     fnames = list(map(os.path.abspath, fnames))
     all_files = fnames
@@ -218,11 +222,14 @@ def daily_vrt_jasmin(fnames_date, vrt_dir = None):
             bs = []                                                                  
             for fname in all_files:                                                     
                 bs.append(temp%(fname, band))                                        
-            gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs).FlushCache()
+            gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs, outputSRS = spatialRef).FlushCache()
 
 def daily_vrt(fnames_date, vrt_dir = None):
     temp1 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Band_Mandatory_Quality_%s'
     temp2 = 'HDF4_EOS:EOS_GRID:"%s":MOD_Grid_BRDF:BRDF_Albedo_Parameters_%s'
+
+    spatialRef = osr.SpatialReference()
+    spatialRef.ImportFromProj4('+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs')
 
     fnames, date = fnames_date
     fnames = list(map(os.path.abspath, fnames))
@@ -242,7 +249,7 @@ def daily_vrt(fnames_date, vrt_dir = None):
             bs = []
             for fname in all_files:
                 bs.append(temp%(fname, band))
-            gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs).FlushCache()
+            gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs, outputSRS = spatialRef).FlushCache()
 
 def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', log_file = None, jasmin = False):
     mcd43_dir = os.path.expanduser(mcd43_dir) # incase ~ used

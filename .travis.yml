@@ -28,7 +28,7 @@ install:
   #  else
   #    pip install gp_emulator==1.6.1;
   #  fi
-  - pip install coveralls codecov
+  - pip install coveralls codecov gsutil
   - conda list
 script:
   # Output something every 10 minutes or Travis kills the job
