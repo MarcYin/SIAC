@@ -34,9 +34,11 @@ from SIAC.atmo_solver import solving_atmo_paras
 from sklearn.linear_model import HuberRegressor 
 from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
-multiprocessing.set_start_method('spawn', force=True)
-procs =  psutil.cpu_count()
 
+if (sys.version_info[0] == 3) & (sys.version_info[1] >= 4):
+    multiprocessing.set_start_method('spawn', force=True)
+
+procs =  psutil.cpu_count()
 
 def fill_nan(array):                        
     x_shp, y_shp = array.shape                     
