@@ -3,4 +3,4 @@ name: test-environment
 channels:
   - conda-forge
 dependencies:
-  - gdal>=2.3.3
+  - gdal==2.4.1
