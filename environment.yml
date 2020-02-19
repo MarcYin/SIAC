@@ -4,3 +4,4 @@ channels:
   - conda-forge
 dependencies:
   - gdal==2.4.1
+  - python=3.6
