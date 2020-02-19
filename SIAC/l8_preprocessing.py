@@ -10,7 +10,7 @@ def l8_pre_processing(l8_dir):
             temp = [dirpath + '/' + i for i in filenames]
             for j in temp:
                 if 'mtl.' in j.lower():
-                    metafiles.append(j)
+                    metafiles.append(os.path.realpath(j))
     l8_tiles = []
     for metafile in metafiles:
         ret = do_l8_angle(metafile)

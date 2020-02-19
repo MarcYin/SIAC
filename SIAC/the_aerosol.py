@@ -9,6 +9,7 @@ import SIAC.kernels as kernels
 import logging
 import platform
 import warnings
+import multiprocessing
 warnings.filterwarnings("ignore") 
 import subprocess
 import numpy as np
@@ -33,8 +34,37 @@ from SIAC.atmo_solver import solving_atmo_paras
 from sklearn.linear_model import HuberRegressor 
 from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
-
+multiprocessing.set_start_method('spawn', force=True)
 procs =  psutil.cpu_count()
+
+
+def fill_nan(array):                        
+    x_shp, y_shp = array.shape                     
+    mask  = ~np.isnan(array)                       
+    valid = np.array(np.where(mask)).T             
+    value = array[mask]                            
+    mesh  = np.repeat(range(x_shp), y_shp).reshape(x_shp, y_shp), \
+	    np.tile  (range(y_shp), x_shp).reshape(x_shp, y_shp)
+    array = griddata(valid, value, mesh, method='nearest')
+    return array
+def convolve(img, gaus_2d, hx, hy):
+    x_size, y_size = img.shape
+    if x_size % 2 != 0:
+        img = np.insert(img, -1, img[-1, :], axis=0)
+    if y_size % 2 != 0:
+        img = np.insert(img, -1, img[:, -1], axis=1)
+    dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
+	  norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
+    return dat
+
+def smooth(da_w):
+	da, w = da_w
+	mid = int(da.shape[0]/2)
+	if (da.shape[-1]==0) | (w.shape[-1]==0):
+		return da[mid], w[mid]
+	data  = np.array(smoothn(da, s=10., smoothOrder=1., axis=0, TolZ=0.001, verbose=False, isrobust=True, W = w))[[0, 3],]
+	return data[0][mid], data[1][mid]
+
 def warp_data(fname, aoi,  xRes, yRes):
     g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, outputType = gdal.GDT_Float32,\
 		  cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
@@ -487,13 +517,6 @@ class solve_aerosol(object):
             surs.append((das[i::No_band][:,:,mask][:,:,hmask][:,:,rmask] * kers[:,i] * 0.001).sum(axis=1))
         if temporal_filling:
             
-            def smooth(da_w):
-                da, w = da_w
-                mid = int(da.shape[0]/2)
-                if (da.shape[-1]==0) | (w.shape[-1]==0):
-                    return da[mid], w[mid]
-                data  = np.array(smoothn(da, s=10., smoothOrder=1., axis=0, TolZ=0.001, verbose=False, isrobust=True, W = w))[[0, 3],]
-                return data[0][mid], data[1][mid]
             boa = []
             w = []
             for i in range(No_band):
@@ -640,15 +663,6 @@ class solve_aerosol(object):
         else:
             ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
         gaus_2d = np.outer(xgaus, ygaus) 
-        def convolve(img, gaus_2d, hx, hy):
-            x_size, y_size = img.shape
-            if x_size % 2 != 0:
-                img = np.insert(img, -1, img[-1, :], axis=0)
-            if y_size % 2 != 0:
-                img = np.insert(img, -1, img[:, -1], axis=1)
-            dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
-                  norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
-            return dat
         par = partial(convolve, gaus_2d = gaus_2d, hx = self.hx, hy = self.hy)
         if np.array(self.ref_scale).ndim ==2:
             self.ref_scale = self.ref_scale[self.hx, self.hy]
@@ -738,15 +752,6 @@ class solve_aerosol(object):
         else:     
             self.mask = False
     def _fill_nan(self,):
-        def fill_nan(array):                        
-            x_shp, y_shp = array.shape                     
-            mask  = ~np.isnan(array)                       
-            valid = np.array(np.where(mask)).T             
-            value = array[mask]                            
-            mesh  = np.repeat(range(x_shp), y_shp).reshape(x_shp, y_shp), \
-                    np.tile  (range(y_shp), x_shp).reshape(x_shp, y_shp)
-            array = griddata(valid, value, mesh, method='nearest')
-            return array
         self._vza = np.array(parmap(fill_nan, list(self._vza)))
         self._vaa = np.array(parmap(fill_nan, list(self._vaa)))
         self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3 = \
@@ -843,7 +848,7 @@ class solve_aerosol(object):
         toa_dir    = self.toa_dir + '/' +'B'.join(self.toa_bands[0].split('/')[-1].split('B')[:-1])
         name_arrays     = zip(para_names, list(solved ) + list(unc))
         par = partial(save_posterior, g = self.example_file, aero_res = self.aero_res, toa_dir = toa_dir)
-        parmap(par, name_arrays)
+        list(map(par, name_arrays))
         self.post_aot,     self.post_tcwv,     self.post_tco3,    = solved
         self.post_aot_unc, self.post_tcwv_unc, self.post_tco3_unc = unc
         handlers = self.logger.handlers[:]

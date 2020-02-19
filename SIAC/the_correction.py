@@ -24,6 +24,17 @@ from SIAC.reproject import reproject_data, array_to_raster
 
 warnings.filterwarnings("ignore")
 
+
+def fill_nan(array):                        
+    x_shp, y_shp = array.shape                     
+    mask  = ~np.isnan(array)                       
+    valid = np.array(np.where(mask)).T             
+    value = array[mask]                            
+    mesh  = np.repeat(range(x_shp), y_shp).reshape(x_shp, y_shp), \
+	    np.tile  (range(y_shp), x_shp).reshape(x_shp, y_shp)
+    array = griddata(valid, value, mesh, method='nearest')
+    return array
+
 class atmospheric_correction(object):
     ''' 
     A class doing the atmospheric coprrection with the input of TOA reflectance
@@ -344,15 +355,6 @@ class atmospheric_correction(object):
         #self._cmask  = self._cmask.astype(bool)
 
     def _fill_nan(self,):
-        def fill_nan(array):                        
-            x_shp, y_shp = array.shape                     
-            mask  = ~np.isnan(array)                       
-            valid = np.array(np.where(mask)).T             
-            value = array[mask]                            
-            mesh  = np.repeat(range(x_shp), y_shp).reshape(x_shp, y_shp), \
-                    np.tile  (range(y_shp), x_shp).reshape(x_shp, y_shp)
-            array = griddata(valid, value, mesh, method='nearest')
-            return array
         self._vza = np.array(parmap(fill_nan, list(self._vza)))
         self._vaa = np.array(parmap(fill_nan, list(self._vaa)))
         self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3, self._aot_unc, self._tcwv_unc, self._tco3_unc = \
@@ -417,7 +419,8 @@ class atmospheric_correction(object):
         if av_ram > sum(needed):
             #ret = parmap(self._do_band, range(len(self.toa_bands)))
             self._chunks = 1
-            ret = parmap(self._do_chunk, range(len(self.toa_bands)))
+            #ret = parmap(self._do_chunk, range(len(self.toa_bands)))
+            ret = list(map(self._do_chunk, range(len(self.toa_bands))))
         else:
             ret = []
             index = []
@@ -425,7 +428,8 @@ class atmospheric_correction(object):
                 bands_to_do = np.arange(len(self.toa_bands))[needed==u_need[i]]
                 if int(proc) >= 1:
                     self._chunks = 1
-                    re = parmap(self._do_chunk, bands_to_do, min(int(proc), len(bands_to_do)))
+                    #re = parmap(self._do_chunk, bands_to_do, min(int(proc), len(bands_to_do)))
+                    re = list(map(self._do_chunk, bands_to_do))
                 else:
                     self._chunks = int(np.ceil(1. / proc))
                     re = list(map(self._do_chunk, bands_to_do))

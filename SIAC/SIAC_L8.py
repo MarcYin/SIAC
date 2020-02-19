@@ -17,7 +17,7 @@ home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
-            global_dem ='/work/scratch/marcyin/DEM/global_dem.vrt', 
+            global_dem ='/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt', 
             cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
     file_path = os.path.dirname(os.path.realpath(__file__))
     '''

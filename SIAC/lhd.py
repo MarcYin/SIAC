@@ -8,6 +8,26 @@ from copy import copy
 import numpy as np
 import scipy.stats as ss
 
+def euclid_distance(arr):
+    n = arr.shape[0]
+    ans = 0.0
+    for i in range(n-1):
+        for j in range(i+1,n):
+            d = np.sqrt(np.sum([(arr[i,k]-arr[j,k])**2 for k in range(arr.shape[1])]))
+            ans += 1.0/d**2
+    return ans
+
+def fill_space(data):
+    best = 1e8
+    for it in range(iterations):
+        d = euclid_distance(data)
+        if d<best:
+            d_opt = d
+            data_opt = data.copy()
+        data = _mix(data)
+    print('Optimized Distance:',d_opt)
+    return data_opt
+
 def lhd(dist=None,size=None,dims=1,form='randomized',iterations=100,
         showcorrelations=False):
     """
@@ -199,27 +219,6 @@ def lhd(dist=None,size=None,dims=1,form='randomized',iterations=100,
                 dist_data[:,i] = dist.ppf(unif_data[:,i])
         
     elif form is 'spacefilling':
-        def euclid_distance(arr):
-            n = arr.shape[0]
-            ans = 0.0
-            for i in range(n-1):
-                for j in range(i+1,n):
-                    d = np.sqrt(np.sum([(arr[i,k]-arr[j,k])**2 for k in range(arr.shape[1])]))
-                    ans += 1.0/d**2
-            return ans
-        
-        def fill_space(data):
-            best = 1e8
-            for it in range(iterations):
-                d = euclid_distance(data)
-                if d<best:
-                    d_opt = d
-                    data_opt = data.copy()
-                
-                data = _mix(data)
-            
-            print('Optimized Distance:',d_opt)
-            return data_opt
 
         if hasattr(dist,'__getitem__'): # if multiple distributions were input
             nvars = len(dist)
