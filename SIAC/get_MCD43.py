@@ -8,6 +8,7 @@ import tempfile
 import numpy as np
 from osgeo import osr
 from glob import glob
+from shutil import copy2
 from six.moves import input
 from functools import partial
 from os.path import expanduser
@@ -125,18 +126,18 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16,jasmin = False):
     
     for (tile, the_date) in fls:
         the_jday = datetime.strptime(the_date, '%Y.%m.%d').strftime("%Y%j")
+        potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
+        the_files = glob(mcd43_dir + "/" + potential_fname)
         if jasmin:
-            potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
-            the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
             if len(the_files) == 0 :
-                mcd43_dir = '/neodc/modis/data/MCD43A1/collection6/'
+                jasmin_mcd43_dir = '/neodc/modis/data/MCD43A1/collection6/'
                 jasmin_date = datetime.strptime(the_date, '%Y.%m.%d').strftime('/%Y/%m/%d/')
                 potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
-                the_files += [f for f in glob(mcd43_dir + "/" +  jasmin_date + potential_fname)]
-        else:
-            potential_fname = "MCD43A1.A{:s}.{:s}.*.hdf".format(the_jday, tile)
-            the_files = [f for f in glob(mcd43_dir + "/" + potential_fname)]
-        if len(the_files) == 1:
+                jasminfs = glob(jasmin_mcd43_dir + "/" +  jasmin_date + potential_fname)
+                for ii in jasminfs:
+                    copy2(ii, mcd43_dir)
+                the_files += glob(mcd43_dir + "/" + potential_fname)
+        if len(the_files) > 0:
             ret.append(the_files[0])
         else:
             need_grab.append((tile, the_date))
@@ -149,6 +150,7 @@ def find_files(aoi, obs_time, mcd43_dir, temporal_window = 16,jasmin = False):
     elif len(need_grab) == 1:
         ret_get = get_one_tile(need_grab[0])
         ret.extend([ret_get])
+        
     return ret
 
 def get_one_tile(tile_date):
@@ -281,16 +283,23 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     logger.info('Creating daily VRT...')
     if jasmin:
         vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
-        if not os.path.exists(vrt_dir):
-            os.mkdir(vrt_dir)
+        while os.path.exists(vrt_dir):
+            vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
+        os.mkdir(vrt_dir)
         par = partial(daily_vrt_jasmin, vrt_dir = vrt_dir)
-        p = Pool(len(fnames_dates)) 
+        njobs = min(len(fnames_dates), 4)
+        p = Pool(njobs) 
         p.map(par, fnames_dates)
         p.close()                           
         p.join()
     else:
+        vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
+        while os.path.exists(vrt_dir):
+            vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
+        os.mkdir(vrt_dir)
         par = partial(daily_vrt, vrt_dir = vrt_dir)
-        p = Pool(len(fnames_dates))
+        njobs = min(len(fnames_dates), 4)
+        p = Pool(njobs)
         p.map(par, fnames_dates)
         p.close()                           
         p.join()

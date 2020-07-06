@@ -412,8 +412,8 @@ class atmospheric_correction(object):
             jasmin_memory_limit = float(os.environ['jasmin_memory_limit']) - 10000
         else:
             jasmin_memory_limit = psutil.virtual_memory().available + 10000
-        av_ram = min(psutil.virtual_memory().available - 10000, jasmin_memory_limit)
-        needed = np.array([i.RasterXSize * i.RasterYSize * pix_mem for i in self._toa_bands])
+        av_ram = min(psutil.virtual_memory().available * 0.95, jasmin_memory_limit)
+        needed = np.array([i.RasterXSize * i.RasterYSize * pix_mem * 3 for i in self._toa_bands])
         u_need = np.unique(needed)
         procs  = av_ram / u_need
         if av_ram > sum(needed):

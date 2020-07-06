@@ -20,8 +20,7 @@ home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
-             global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt', \
-             cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
+             global_dem  = None, cams_dir = None, jasmin = False):
     '''
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -48,14 +47,21 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
         return aero_atmos
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
-                  cloud_mask, aot, tcwv, metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi=None, \
-                  global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt', \
-                  cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/', jasmin = False):
+                  cloud_mask, aot, tcwv, metafile, mcd43 = home + '/MCD43/', \
+                  vrt_dir = home + '/MCD43_VRT/', aoi=None, \
+                  global_dem  = None, cams_dir = None, jasmin = False):
     if jasmin:
-        global_dem  = '/work/scratch/marcyin/DEM/global_dem.vrt'
-        cams_dir    = '/work/scratch/marcyin/CAMS/'
+        if global_dem is None:
+            global_dem  = '/work/scratch-pw/marcyin/DEM/global_dem.vrt'
+        if cams_dir is None:
+            cams_dir    = '/work/scratch-pw/marcyin/CAMS/'     
         os.environ['jasmin_memory_limit'] = '6.4e+10'
-        #vrt_dir     = '/work/scratch/marcyin/MCD43_VRT/'
+    else:
+        if global_dem is None:
+            global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt'
+        if cams_dir is None:
+            cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/'
+            
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
             os.mkdir(home + '/MCD43/')
@@ -117,7 +123,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                                   tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = \
                                   rgb, emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir)
     atmo._doing_correction()
-    if jasmin:
+    if not np.all(cloud_mask):
+#         if jasmin:
         shutil.rmtree(vrt_dir)
     return aero, atmo
 

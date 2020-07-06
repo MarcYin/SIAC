@@ -289,7 +289,7 @@ def resample_s2_angles(metafile):
     bands    = ['B01', 'B02', 'B03','B04','B05' ,'B06', 'B07', 'B08','B8A', 'B09', 'B10', 'B11', 'B12'] #all bands
     band_ram = 5e9
     av_ram = psutil.virtual_memory().available
-    procs = np.min([int(av_ram / band_ram), psutil.cpu_count(), len(bands)])
+    procs = np.min([int(av_ram / band_ram), psutil.cpu_count(), 4])
     if procs < 1:
         raise MemoryError('At least 500MB ram is needed.')
     s2_file_dir = os.path.dirname(metafile)
@@ -319,13 +319,13 @@ def resample_s2_angles(metafile):
     view_ang_name_gmls = list(zip(np.array(toa_refs)[inds], np.array(view_ang_names)[inds], np.array(gmls)[inds]))
     band_dict = dict(zip(bands, range(13)))
     par = partial(get_angle, vaa=vaa, vza=vza, band_dict=band_dict)
-    p = Pool(procs)
+#     p = Pool(procs)
     #print(view_ang_name_gmls)
-    ret = p.map(par,  view_ang_name_gmls)
-    #ret  =list( map(par,  view_ang_name_gmls))
+#     ret = p.map(par,  view_ang_name_gmls)
+    ret  =list(map(par,  view_ang_name_gmls))
     #print(ret)
-    p.close()
-    p.join()
+#     p.close()
+#     p.join()
     ret = np.array(ret)
     view_ang_names = np.array(view_ang_names)
  

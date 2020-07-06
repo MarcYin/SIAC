@@ -101,7 +101,8 @@ class psf_optimize(object):
 
 
     def shift_optimize(self, p0):
-        return optimize.fmin(self.shift_cost, p0, full_output=1, maxiter=100, maxfun=150, disp=0)
+        invR = self.shift_cost(p0)
+        return [p0, invR]#optimize.fmin(self.shift_cost, p0, full_output=1, maxiter=100, maxfun=150, disp=0)
 
 
     def gaus_cost(self, para):
@@ -152,7 +153,7 @@ class psf_optimize(object):
         min_val = [-50,-50]
         max_val = [50,50]
         ps, distributions = create_training_set([ 'xs', 'ys'], min_val, max_val, n_train=50)
-        self.shift_solved = parmap(self.shift_optimize, ps)    
+        self.shift_solved = list(map(self.shift_optimize, ps))   
         self.paras, self.costs = np.array([i[0] for i in self.shift_solved]), \
                                            np.array([i[1] for i in self.shift_solved])
 

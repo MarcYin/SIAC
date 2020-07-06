@@ -9,6 +9,7 @@ import SIAC.kernels as kernels
 import logging
 import platform
 import warnings
+from numba import jit
 import multiprocessing
 warnings.filterwarnings("ignore") 
 import subprocess
@@ -23,6 +24,7 @@ from SIAC.Two_NN import Two_NN
 from multiprocessing import Pool
 from osgeo import ogr, osr, gdal
 from SIAC.smoothn import smoothn
+from scipy import ndimage, signal
 from scipy.fftpack import dct, idct
 from SIAC.multi_process import parmap
 from scipy.interpolate import griddata
@@ -49,15 +51,58 @@ def fill_nan(array):
 	    np.tile  (range(y_shp), x_shp).reshape(x_shp, y_shp)
     array = griddata(valid, value, mesh, method='nearest')
     return array
-def convolve(img, gaus_2d, hx, hy):
-    x_size, y_size = img.shape
-    if x_size % 2 != 0:
-        img = np.insert(img, -1, img[-1, :], axis=0)
-    if y_size % 2 != 0:
-        img = np.insert(img, -1, img[:, -1], axis=1)
-    dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
-	  norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
-    return dat
+
+# def convolve(img, gaus_2d, hx, hy):
+#     x_size, y_size = img.shape
+#     if x_size % 2 != 0:
+#         img = np.insert(img, -1, img[-1, :], axis=0)
+#     if y_size % 2 != 0:
+#         img = np.insert(img, -1, img[:, -1], axis=1)
+#     dat = idct(idct(dct(dct(img, axis=0, norm = 'ortho'), axis=1, \
+# 	  norm='ortho') * gaus_2d, axis=1, norm='ortho'), axis=0, norm='ortho')[hx, hy]
+#     return dat
+
+def gaussian(xstd, ystd, norm = True):
+    winx = 2*int(np.ceil(1.96*xstd))
+    winy = 2*int(np.ceil(1.96*ystd))
+    xgaus = signal.gaussian(winx, xstd)
+    ygaus = signal.gaussian(winy, ystd)
+    gaus  = np.outer(xgaus, ygaus)
+    if norm:
+        return gaus/gaus.sum()
+    else:
+        return gaus 
+    
+@jit(nopython=True)
+def convolve(data, kernel, points): 
+    kx   = int(np.ceil(kernel.shape[0]/2.))
+    ky   = int(np.ceil(kernel.shape[1]/2.))
+    rets = np.zeros(len(points)) 
+    # padx = int(np.ceil(kernel.shape[0]/2.))
+    # pady = int(np.ceil(kernel.shape[1]/2.)) 
+    for _ in range(len(points)): 
+        x, y    = points[_]
+        batch   = data[x: x + 2*kx, y: y + 2*ky][:kernel.shape[0],:kernel.shape[1]]
+        if batch.size == 0:
+            rets[_] = np.nan
+        else:
+            counts  = np.sum(np.isfinite(batch)*kernel)
+            if counts == 0:
+                rets[_] = np.nan
+            else:
+                rets[_] = np.nansum(batch*kernel) / counts
+    return rets
+
+@jit(nopython=True)
+def points_convolve(im, kernel, points): 
+    rows, cols     = im.shape
+    k_rows, k_cols = kernel.shape
+    # padx = int(k_rows/2.)
+    # pady = int(k_cols/2.)
+    data = np.zeros((rows + 2*k_rows, cols + 2*k_cols))
+    #data = np.pad(im, (2*padx, 2*pady), mode='reflect') 
+    data[:rows, :cols] = im
+    return convolve(data, kernel, points) 
 
 def smooth(da_w):
 	da, w = da_w
@@ -654,23 +699,37 @@ class solve_aerosol(object):
 
     def _get_convolved_toa(self,):       
                                          
-        imgs = [band_g.ReadAsArray() for band_g in self._toa_bands]                       
-        self.bad_pixs = self.bad_pix[self.hx, self.hy]
-        if self.full_res[0] %2 != 0:
-            xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0] + 1) /(self.full_res[0] + 1))**2))
-        else:
-            xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0]) /self.full_res[0])**2))
-        if self.full_res[1] %2 != 0:
-            ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1] + 1) /(self.full_res[1] + 1))**2))
-        else:
-            ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
-        gaus_2d = np.outer(xgaus, ygaus) 
-        par = partial(convolve, gaus_2d = gaus_2d, hx = self.hx, hy = self.hy)
+#         imgs = [band_g.ReadAsArray() for band_g in self._toa_bands]                       
+#         self.bad_pixs = self.bad_pix[self.hx, self.hy]
+#         if self.full_res[0] %2 != 0:
+#             xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0] + 1) /(self.full_res[0] + 1))**2))
+#         else:
+#             xgaus  = np.exp(-2.*(np.pi**2)*(self.psf_xstd**2)*((0.5 * np.arange(self.full_res[0]) /self.full_res[0])**2))
+#         if self.full_res[1] %2 != 0:
+#             ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1] + 1) /(self.full_res[1] + 1))**2))
+#         else:
+#             ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
+#         gaus_2d = np.outer(xgaus, ygaus) 
+#         par = partial(convolve, gaus_2d = gaus_2d, hx = self.hx, hy = self.hy)
         if np.array(self.ref_scale).ndim ==2:
             self.ref_scale = self.ref_scale[self.hx, self.hy]
         if np.array(self.ref_off).ndim == 2:
             self.ref_off = self.ref_off[self.hx, self.hy]
-        self.toa  = np.array(parmap(par,imgs)) * self.ref_scale+self.ref_off
+        #self.toa  = np.array(parmap(par,imgs)) * self.ref_scale+self.ref_off
+
+        gaus_2d = gaussian(self.psf_xstd, self.psf_ystd, norm = True)
+        points  = np.array([self.hx, self.hy]).T
+        toas = []
+        for band_g in self._toa_bands:
+            data = band_g.ReadAsArray() * self.ref_scale + self.ref_off
+            data[self.bad_pix] = np.nan
+            toa = points_convolve(data, gaus_2d, points)
+            toas.append(toa)
+        self.toa  = np.array(toas)
+        
+#             self.toa  = np.array(list(map(par,imgs))) * self.ref_scale+self.ref_off
+#         conv_toa = points_convolve(toa, gaus, points)
+        
     """
     def _re_mask(self,):
         boa_mask = np.all(self.boa >= 0.001, axis = 0) &\
@@ -972,3 +1031,4 @@ if __name__ == '__main__':
     #l8_aero = test_l8()
     s2_aero = test_s2()
     #m_aero = test_modis()
+
