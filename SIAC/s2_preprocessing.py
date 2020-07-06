@@ -11,7 +11,7 @@ from glob import glob
 import multiprocessing
 from SIAC.Two_NN import Two_NN
 from SIAC.smoothn import smoothn
-from sklearn.externals import joblib 
+#from sklearn.externals import joblib 
 from SIAC.reproject import reproject_data
 from SIAC.s2_angle import resample_s2_angles
 from SIAC.create_logger import create_logger
