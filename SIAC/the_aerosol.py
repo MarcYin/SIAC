@@ -722,7 +722,7 @@ class solve_aerosol(object):
         points  = np.array([self.hx, self.hy]).T
         toas = []
         for band_g in self._toa_bands:
-            data = band_g.ReadAsArray() 
+            data = band_g.ReadAsArray() * 1.
             data[self.bad_pix] = np.nan
             toa = points_convolve(data, gaus_2d, points)
             toas.append(toa)
