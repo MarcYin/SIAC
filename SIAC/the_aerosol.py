@@ -114,7 +114,7 @@ def smooth(da_w):
 
 def warp_data(fname, aoi,  xRes, yRes):
     g = gdal.Warp('',fname, format = 'MEM', srcNodata = 32767, dstNodata=0, outputType = gdal.GDT_Float32,\
-		  cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
+		  cutlineDSName=aoi, xRes = xRes, yRes = yRes, cropToCutline=True, resampleAlg = 0, warpOptions = ['NUM_THREADS=ALL_CPUS']) # weird adaptation for gdal 2.3, this should be a bug in gdal 2.3
     return g.ReadAsArray()                                                                          # no reason you have to specify the srcNodata to use dstNodata
 
 class solve_aerosol(object):
@@ -506,12 +506,13 @@ class solve_aerosol(object):
     
     def _read_MCD43(self,fnames):
         par = partial(warp_data, aoi = self.aoi, xRes = self.aero_res*0.5, yRes = self.aero_res*0.5) 
-        p = Pool()
-        p = Pool(procs)
-        ret = p.map(par,  fnames)
+        ret = list(map(par,  fnames))
+#         p = Pool()
+#         p = Pool(procs)
+#         ret = p.map(par,  fnames)
         #ret  =list( map(par,  view_ang_name_gmls))
-        p.close()
-        p.join()
+#         p.close()
+#         p.join()
         n_files = int(len(fnames)/2)
         #ret = parmap(par, fnames) 
         das = np.array(ret[:n_files])     
