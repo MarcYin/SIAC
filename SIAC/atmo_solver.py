@@ -146,7 +146,7 @@ class solving_atmo_paras(object):
         level_y = math.log(by, 2)
         level   = int(min(level_x, level_y))
         scale_factors = 1. / 2**np.arange(level)[::-1]
-        shapes        = (np.array([bx, by])[..., None] * scale_factors).astype(int).T#[-5:]
+        shapes        = (np.array([bx, by])[..., None] * scale_factors).astype(int).T[:6]
         #shapes[0]     = np.array([3,3])
         shape_dict    = dict(zip(range(len(shapes)), shapes))
         #order        = [0, 1, 2, 1, 0, 1, 2, 3, 4, 3, 2, 3, 4] + range(5, len(shapes))
