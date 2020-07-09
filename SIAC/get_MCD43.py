@@ -288,10 +288,11 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
         os.mkdir(vrt_dir)
         par = partial(daily_vrt_jasmin, vrt_dir = vrt_dir)
         njobs = min(len(fnames_dates), 4)
-        p = Pool(njobs) 
-        p.map(par, fnames_dates)
-        p.close()                           
-        p.join()
+        #p = Pool(njobs) 
+        #p.map(par, fnames_dates)
+        #p.close()                           
+        #p.join()
+        list(map(par, fnames_dates))
     else:
 #         vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
 #         while os.path.exists(vrt_dir):

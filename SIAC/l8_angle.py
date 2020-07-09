@@ -80,7 +80,8 @@ def do_l8_angle(metafile):
 #     rets = p.map(par, band_angTypes) 
 #     p.close()
 #     p.join()  
-    rets = list(map(par, band_angTypes))
+#    rets = list(map(par, band_angTypes))
+    rets = [par(i) for i in band_angTypes]
     sun_angle  = header  + '_solar_B01.img'
     nsun_angle = header  + '_SAA_SZA.TIF'
     gdal.Translate(nsun_angle, sun_angle, creationOptions = ['COMPRESS=DEFLATE', 'TILED=YES'], noData='-32767').FlushCache()
