@@ -61,7 +61,7 @@ def usgs_angle(band_angType, ang_file):
 
 
 def do_l8_angle(metafile):
-    l8_file_dir = os.path.dirname(metafile)
+    l8_file_dir = os.path.realpath(os.path.dirname(metafile))
     if not os.path.exists(l8_file_dir + '/angles'):
         os.mkdir(l8_file_dir + '/angles')
     header    = '_'.join(metafile.split('/')[-1].split('_')[:-1])
