@@ -84,12 +84,12 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     logger = create_logger(log_file)
     logger.info('Starting atmospheric corretion for %s'%tile)
     if not np.all(cloud_mask):
-        handlers = logger.handlers[:]
-        for handler in handlers:
-            handler.close()
-            logger.removeHandler(handler)
+#         handlers = logger.handlers[:]
+#         for handler in handlers:
+#             handler.close()
+#             logger.removeHandler(handler)
         #if not jasmin:
-        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
+        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
         #logger = create_logger(log_file)
     else:
         logger.info('No clean pixel in this scene and no MCD43 is downloaded.')

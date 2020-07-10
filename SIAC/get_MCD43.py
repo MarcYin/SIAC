@@ -253,11 +253,11 @@ def daily_vrt(fnames_date, vrt_dir = None):
                 bs.append(temp%(fname, band))
             gdal.BuildVRT(date_dir + '_'.join(['MCD43', date, bs[0].split(':')[-1]])+'.vrt', bs, outputSRS = spatialRef).FlushCache()
 
-def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', log_file = None, jasmin = False):
+def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', logger = None, jasmin = False):
     mcd43_dir = os.path.expanduser(mcd43_dir) # incase ~ used
     vrt_dir   = os.path.expanduser(vrt_dir)
-    logger = create_logger(log_file)
-    logger.propagate = False
+    if logger is None:
+        logger = create_logger()
     logger.info('Querying MCD43 files...')
     ret = find_files(aoi, obs_time, mcd43_dir, temporal_window = 16, jasmin=jasmin)
     urls = [granule for granule in ret if granule.find("http") >= 0]
@@ -266,26 +266,31 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     logger.info("Will need to download {:d} files, ".format(len(urls)) +
                 "{:d} are already present".format(len(url_fnames)))
     if len(urls) > 0:
-        logger.info('Start downloading MCD43 for the AOI, this may take some time.')
-        url_fnames_to_get = [[i, mcd43_dir + '/' + i.split('/')[-1]] for i in urls]
-        p = Pool(5)
-        logger.info('Start downloading...')
         auth = get_auth(logger)
         par = partial(downloader, auth = auth)
-        ret = p.map(par, url_fnames_to_get)
-        p.close()
-        p.join()
+        logger.info('Start downloading MCD43 for the AOI, this may take some time.')
+        url_fnames_to_get = [[i, mcd43_dir + '/' + i.split('/')[-1]] for i in urls]
+        if jasmin:
+            ret = list(map(par, url_fnames_to_get))
+        else:
+            p = Pool(5)
+            logger.info('Start downloading...')
+            ret = p.map(par, url_fnames_to_get)
+            p.close()
+            p.join()
         flist.extend([x[1] for x in url_fnames_to_get])
     flist = np.array(flist)
     all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in flist])          
     udates = np.unique(all_dates)  
     fnames_dates =  [[flist[all_dates==date].tolist(),date] for date in udates]
-    logger.info('Creating daily VRT...')
+    
     if jasmin:
-        vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
-        while os.path.exists(vrt_dir):
-            vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
-        os.mkdir(vrt_dir)
+#         vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
+#         while os.path.exists(vrt_dir):
+#             vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
+#         os.mkdir(vrt_dir)
+        vrt_dir = tempfile.mkdtemp(suffix="", prefix="tmp", dir  =  vrt_dir) + '/'
+        logger.info('Creating daily VRT...')
         par = partial(daily_vrt_jasmin, vrt_dir = vrt_dir)
         njobs = min(len(fnames_dates), 4)
         #p = Pool(njobs) 
@@ -293,11 +298,13 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
         #p.close()                           
         #p.join()
         list(map(par, fnames_dates))
+        logger.info('Finished creating vrt...')
     else:
 #         vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
 #         while os.path.exists(vrt_dir):
 #             vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
 #         os.mkdir(vrt_dir)
+        logger.info('Creating daily VRT...')
         vrt_dir = tempfile.mkdtemp(suffix="", prefix="tmp", dir  =  vrt_dir) + '/'
         par = partial(daily_vrt, vrt_dir = vrt_dir)
         njobs = min(len(fnames_dates), 4)
@@ -305,6 +312,7 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
         p.map(par, fnames_dates)
         p.close()                           
         p.join()
+        logger.info('Finished creating vrt...')
     #par(fnames_dates[0])
     handlers = logger.handlers[:]
     for handler in handlers:

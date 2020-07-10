@@ -506,7 +506,13 @@ class solve_aerosol(object):
     
     def _read_MCD43(self,fnames):
         par = partial(warp_data, aoi = self.aoi, xRes = self.aero_res*0.5, yRes = self.aero_res*0.5) 
-        ret = list(map(par,  fnames))
+        ret = []
+        for _, fname in enumerate(fnames):
+            if _ % 20 == 0:
+                self.logger.info('Reading %.01f'%(_/len(fnames) * 100) + ' %...')
+            ret.append(par(fname))
+            
+#         ret = list(map(par,  fnames))
 #         p = Pool()
 #         p = Pool(procs)
 #         ret = p.map(par,  fnames)
@@ -544,10 +550,12 @@ class solve_aerosol(object):
                 for band in self.boa_bands:
                     fname = self.MCD43_dir + '/'.join([datetime.strftime(self.obs_time, '%Y-%m-%d'), temp%(doy, band)])
                     fnames.append(fname)
+        self.logger.info('Reading MCD43 files.')
         das, ws = self._read_MCD43(fnames)   
         mg = gdal.Warp('',fnames[0], format = 'MEM', dstNodata= None, xRes = self.aero_res*0.5, yRes = \
                        self.aero_res*0.5, cutlineDSName=self.aoi, cropToCutline=True, resampleAlg = 0)
         hg = self.example_file
+        self.logger.info('Getting indexes.')
         self.hx, self.hy, hmask, rmask = self._get_index(mg, hg)
 
         No_band = len(self.toa_bands)
@@ -567,11 +575,13 @@ class solve_aerosol(object):
             
             boa = []
             w = []
+            self.logger.info('Filling MCD43 gaps by temporal interpolation.')
             for i in range(No_band):
                 das = surs[i]
                 Ws  = ws[i::No_band][:,mask][:, hmask][:, rmask]
                 chunks = zip(np.array_split(das, 18, axis=1), np.array_split(Ws, 18,  axis=1))
-                ret = parmap(smooth, chunks)
+#                 ret = parmap(smooth, chunks)
+                ret = list(map(smooth, chunks))
                 _b  = np.hstack([i[0] for i in ret])                   
                 _w  = np.hstack([i[1] for i in ret]) 
                 boa.append(_b)
@@ -823,30 +833,39 @@ class solve_aerosol(object):
 
     def _solving(self,):
         self.logger.propagate = False
+#         self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
         self.logger.info('Set AOI.')
         self._create_base_map()
         self.logger.info('Get corresponding bands.')
         self._find_boa_bands()
         self.logger.info('Slice TOA bands based on AOI.')
+#         self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
         self._create_band_gs()
         self._resamplers()
         self.logger.info('Parsing angles.')
+#         self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
         self._parse_angles()
         self.logger.info('Mask bad pixeles.')
         self._mask_bad_pix()
         if np.sum(~self.bad_pix) > 10:
             self.logger.info('Get simulated BOA.')
+#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._get_boa()
             self.logger.info('Get PSF.')
+#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._get_psf()
             self.logger.info('Get simulated TOA reflectance.')
+#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._get_convolved_toa()
             self.logger.info('Filtering data.')
+#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._re_mask()
             if self.mask is not False:
                 self.logger.info('Loading emulators.')
+#                 self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
                 self._load_xa_xb_xc_emus()
                 self.logger.info('Reading priors and elevation.')
+#                 self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
                 self._read_aux()
                 self._fill_nan()
                 self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))

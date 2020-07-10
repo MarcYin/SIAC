@@ -86,12 +86,12 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     datetime_str= date + time
     obs_time    = datetime.strptime(datetime_str.split('.')[0], '%Y-%m-%d"%H:%M:%S')
     if not np.all(cloud_mask):
-        handlers = logger.handlers[:]
-        for handler in handlers:
-            handler.close()
-            logger.removeHandler(handler)
+#         handlers = logger.handlers[:]
+#         for handler in handlers:
+#             handler.close()
+#             logger.removeHandler(handler)
         #if not jasmin:
-        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, log_file = log_file, jasmin = jasmin)
+        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
         #logger = create_logger(log_file)
     else:
         logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
@@ -107,7 +107,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     off         = off / np.cos(np.deg2rad(sza))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,sun_angles,\
                          obs_time,cloud_mask, gamma=10., ref_scale = scale, ref_off = off, global_dem  = global_dem, cams_dir = cams_dir,\
-                         spec_m_dir=file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir, )
+                         spec_m_dir=file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file)
+    
     aero._solving()
     toa_bands   = toa_refs
     view_angles = view_ang_names
@@ -123,7 +124,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,sun_angles, \
                                   aot = aot, cloud_mask = cloud_mask,tcwv = tcwv, tco3 = tco3, \
                                   aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, global_dem  = global_dem, cams_dir = cams_dir,\
-                                  rgb = rgb, ref_scale = scale, ref_off = off, emus_dir=file_path+'/emus/', aoi=aoi)
+                                  rgb = rgb, ref_scale = scale, ref_off = off, emus_dir=file_path+'/emus/', aoi=aoi, log_file = log_file)
     atmo._doing_correction()
     return aero, atmo
 
