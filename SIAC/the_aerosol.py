@@ -824,49 +824,46 @@ class solve_aerosol(object):
         else:     
             self.mask = False
     def _fill_nan(self,):
-        self._vza = np.array(parmap(fill_nan, list(self._vza)))
-        self._vaa = np.array(parmap(fill_nan, list(self._vaa)))
+#         self._vza = np.array(parmap(fill_nan, list(self._vza)))
+#         self._vaa = np.array(parmap(fill_nan, list(self._vaa)))
+        
+        self._vza = np.array(list(map(fill_nan, list(self._vza))))
+        self._vaa = np.array(list(map(fill_nan, list(self._vaa))))
+#         self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3 = \
+#         parmap(fill_nan, [self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3])
         self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3 = \
-        parmap(fill_nan, [self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3])
+        list(map(fill_nan, [self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3]))
         self._aot = self._aot
         self._aot = np.maximum(self._aot, 0.01)
 
     def _solving(self,):
         self.logger.propagate = False
-#         self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
         self.logger.info('Set AOI.')
         self._create_base_map()
         self.logger.info('Get corresponding bands.')
         self._find_boa_bands()
         self.logger.info('Slice TOA bands based on AOI.')
-#         self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
         self._create_band_gs()
         self._resamplers()
         self.logger.info('Parsing angles.')
-#         self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
         self._parse_angles()
         self.logger.info('Mask bad pixeles.')
         self._mask_bad_pix()
         if np.sum(~self.bad_pix) > 10:
             self.logger.info('Get simulated BOA.')
-#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._get_boa()
             self.logger.info('Get PSF.')
-#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._get_psf()
             self.logger.info('Get simulated TOA reflectance.')
-#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._get_convolved_toa()
             self.logger.info('Filtering data.')
-#             self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
             self._re_mask()
             if self.mask is not False:
                 self.logger.info('Loading emulators.')
-#                 self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
                 self._load_xa_xb_xc_emus()
                 self.logger.info('Reading priors and elevation.')
-#                 self.logger.info('%.02f'%(psutil.virtual_memory().used*1e-9))
                 self._read_aux()
+                self.logger.info('Filling Nans in the prior.')
                 self._fill_nan()
                 self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
                 if self.mask.sum() ==0:

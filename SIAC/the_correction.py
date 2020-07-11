@@ -355,10 +355,10 @@ class atmospheric_correction(object):
         #self._cmask  = self._cmask.astype(bool)
 
     def _fill_nan(self,):
-        self._vza = np.array(parmap(fill_nan, list(self._vza)))
-        self._vaa = np.array(parmap(fill_nan, list(self._vaa)))
+        self._vza = np.array(list(map(fill_nan, list(self._vza))))
+        self._vaa = np.array(list(map(fill_nan, list(self._vaa))))
         self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3, self._aot_unc, self._tcwv_unc, self._tco3_unc = \
-        parmap(fill_nan, [self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3, self._aot_unc, self._tcwv_unc, self._tco3_unc])
+        list(map(fill_nan, [self._saa, self._sza, self._ele, self._aot, self._tcwv, self._tco3, self._aot_unc, self._tcwv_unc, self._tco3_unc]))
         self._aot_unc = array_to_raster(self._aot_unc, self.example_file)
         self._tcwv_unc = array_to_raster(self._tcwv_unc, self.example_file)
         self._tco3_unc = array_to_raster(self._tco3_unc, self.example_file)

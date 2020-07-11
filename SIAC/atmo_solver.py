@@ -146,7 +146,7 @@ class solving_atmo_paras(object):
         level_y = math.log(by, 2)
         level   = int(min(level_x, level_y))
         scale_factors = 1. / 2**np.arange(level)[::-1]
-        shapes        = (np.array([bx, by])[..., None] * scale_factors).astype(int).T[:6]
+        shapes        = (np.array([bx, by])[..., None] * scale_factors).astype(int).T
         #shapes[0]     = np.array([3,3])
         shape_dict    = dict(zip(range(len(shapes)), shapes))
         #order        = [0, 1, 2, 1, 0, 1, 2, 3, 4, 3, 2, 3, 4] + range(5, len(shapes))
@@ -328,10 +328,10 @@ class solving_atmo_paras(object):
         emus = list(self.xap_emus) + list(self.xbp_emus) + list(self.xcp_emus)
         Xs   = list(X)             + list(X)             + list(X)
         inps = list(zip(emus, Xs))
-        if self._coarse_mask.sum() > 1000:
-            ret = np.array(parmap(self._helper, inps))
-        else:
-            ret = np.array(list(map(self._helper, inps)))
+#         if self._coarse_mask.sum() > 1000:
+#             ret = np.array(parmap(self._helper, inps))
+#         else:
+        ret = np.array(list(map(self._helper, inps)))
         xap_H,  xbp_H,  xcp_H  = ret[:, :, 0] .reshape(3, self.boa.shape[0], len(self.Hx))
         xap_dH, xbp_dH, xcp_dH = ret[:, :, 1:].reshape(3, self.boa.shape[0], len(self.Hx), 2)
         y        = xap_H * self.toa - xbp_H

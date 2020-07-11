@@ -102,7 +102,12 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     toa_bands   = (np.array(toa_refs)[band_index,]).tolist()
     view_angles = (np.array(view_ang_names)[band_index,]).tolist()
     sun_angles  = sun_ang_name
-    sza         = gdal.Open(sun_angles).ReadAsArray()[1] * 0.01
+
+    #     sza         = gdal.Open(sun_angles).ReadAsArray()[1] * 0.01
+    g = gdal.Warp('', str(sun_angles), format = 'MEM', xRes = 30, yRes = 30, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+                      srcNodata = 0, dstNodata=0, cutlineDSName= aoi, cropToCutline=True, resampleAlg = 0)
+    sza = g.ReadAsArray()[1] * 0.01
+
     scale       = scale / np.cos(np.deg2rad(sza))
     off         = off / np.cos(np.deg2rad(sza))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,sun_angles,\
