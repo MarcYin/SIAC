@@ -178,14 +178,27 @@ class atmospheric_correction(object):
         '''
         self._toa_bands = []
         for band in self.toa_bands:
-            g = gdal.Warp('', band, format = 'MEM', srcNodata = 0, dstNodata=0, warpOptions = \
+            pixel_res = abs(gdal.Open(band).GetGeoTransform()[1])
+            g = gdal.Warp('', band, format = 'MEM', xRes = pixel_res, yRes = pixel_res, srcNodata = 0, dstNodata=0, warpOptions = \
                           ['NUM_THREADS=ALL_CPUS'], cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)
             self._toa_bands.append(g)
+        
         self.example_file = self._toa_bands[0]
         if self.cloud_mask is None:
             self.cloud_mask = False
         self.mask = self.example_file.ReadAsArray() >0# & (~self.cloud_mask)
         self.mask_g = array_to_raster(self.mask.astype(float), self.example_file)
+        
+        if isinstance(self.ref_scale, np.ndarray):
+            assert(self.ref_scale.shape == self.mask.shape), \
+            'Reflectance scale should have the same shape as reflectance, but got ' + str(self.ref_scale.shape) + ' and ' + str(self.mask.shape) 
+            self.ref_scale_g = array_to_raster(self.ref_scale, self.example_file)
+            
+        if isinstance(self.ref_off, np.ndarray):
+            assert(self.ref_off.shape == self.mask.shape), \
+            'Reflectance offset should have the same shape as reflectance, but got ' + str(self.ref_off.shape) + ' and ' + str(self.mask.shape) 
+            self.ref_off_g   = array_to_raster(self.ref_off, self.example_file)
+            
         self.mask = self.mask.astype(bool)
         self.mg    = gdal.Warp('', band, format = 'MEM', srcNodata = None, xRes = self.block_size, yRes = \
                                self.block_size, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)        
@@ -457,6 +470,17 @@ class atmospheric_correction(object):
 
             x_off = x_end - x_start
             toa = toa_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+            
+            if isinstance(self.ref_scale, np.ndarray):
+                chunk_ref_scale = self.ref_scale_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+            else:
+                chunk_ref_scale = self.ref_scale
+            
+            if isinstance(self.ref_off, np.ndarray):
+                chunk_ref_off   = self.ref_off_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+            else:
+                chunk_ref_off   = self.ref_off
+
             _g = gdal.Warp('', toa_g, format = 'MEM',  outputBounds = [xmin, geo[3] + y_size * geo[5], xmax, geo[3]], resampleAlg = 0)
             xRes = yRes = int(geo[1])
             xps  = [self.xap_H[ind], self.xbp_H[ind], self.xcp_H[ind]] 
@@ -465,7 +489,7 @@ class atmospheric_correction(object):
                                          ySize=y_size, resample = 0, outputType= gdal.GDT_Float32).data
              
             xap_H, xbp_H, xcp_H = xps
-            toa = toa * self.ref_scale + self.ref_off                             
+            toa = toa * chunk_ref_scale + chunk_ref_off                      
             y   = xap_H * toa - xbp_H
             boa = y / (1 + xcp_H * y)
              

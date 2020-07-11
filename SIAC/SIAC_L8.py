@@ -104,7 +104,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     sun_angles  = sun_ang_name
 
     #     sza         = gdal.Open(sun_angles).ReadAsArray()[1] * 0.01
-    g = gdal.Warp('', str(sun_angles), format = 'MEM', xRes = 30, yRes = 30, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+    pixel_res = abs(gdal.Open(str(sun_angles)).GetGeoTransform()[1])
+    g = gdal.Warp('', str(sun_angles), format = 'MEM', xRes = pixel_res, yRes = pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
                       srcNodata = 0, dstNodata=0, cutlineDSName= aoi, cropToCutline=True, resampleAlg = 0)
     sza = g.ReadAsArray()[1] * 0.01
 
