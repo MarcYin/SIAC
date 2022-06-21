@@ -54,10 +54,15 @@ conda install -c conda-forge gdal>2.1
 
 
 The typical usage for Sentinel 2 and Landsat 8:
+
 ```python
 from SIAC import SIAC_S2
-SIAC_S2('/directory/where/you/store/S2/data/') # this can be either from AWS or Senitinel offical package
+global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+SIAC_S2('/directory/where/you/store/S2/data/', global_dem = global_dem, cams_dir=cams_dir)
 ```
+
+
 ```python
 from SIAC import SIAC_L8                                                                           
 SIAC_L8('/directory/where/you/store/L8/data/') 
