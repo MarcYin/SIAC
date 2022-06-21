@@ -57,9 +57,9 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
         os.environ['jasmin_memory_limit'] = '6.4e+10'
     else:
         if global_dem is None:
-            global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt'
+            global_dem  = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
         if cams_dir is None:
-            cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/'
+            cams_dir    = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
 
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
