@@ -64,8 +64,10 @@ SIAC_S2('/directory/where/you/store/S2/data/', global_dem = global_dem, cams_dir
 
 
 ```python
-from SIAC import SIAC_L8                                                                           
-SIAC_L8('/directory/where/you/store/L8/data/') 
+from SIAC import SIAC_L8
+global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+SIAC_L8('/directory/where/you/store/L8/data/', global_dem = global_dem, cams_dir=cams_dir) 
 ``` 
 
 An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
