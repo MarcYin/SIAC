@@ -1,8 +1,6 @@
 #!/usr/bin/env python  
 import os
-import osr
-import ogr
-import gdal
+from osgeo import osr, ogr, gdal
 import numpy as np
 from pyproj import Proj, transform
 

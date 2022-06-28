@@ -1,12 +1,11 @@
 import os
 import time
-import gdal
 import getpass
 import logging
 import requests
 import tempfile 
 import numpy as np
-from osgeo import osr
+from osgeo import osr, gdal
 from glob import glob
 from shutil import copy2
 from six.moves import input

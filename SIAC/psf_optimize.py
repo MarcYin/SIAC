@@ -1,13 +1,72 @@
 #/usr/bin/env python 
-import numpy as np
+import os
 import sys
-sys.path.insert(0, 'util')
+import scipy
+from osgeo import osr
+import numpy as np
+myPath = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, myPath)
 from scipy import ndimage, signal, optimize
 from scipy.fftpack import dct, idct
-from SIAC.multi_process import parmap
-from SIAC.create_training_set import create_training_set
-import scipy
+from multi_process import parmap
+from create_training_set import create_training_set
+# from skimage.morphology import disk
 
+
+def get_index(mg, hg, bad_pix):
+    '''
+    Pixel indexes between high resolution image and MCD43.
+    '''
+    geotransform = hg.GetGeoTransform()
+    h_res = geotransform[1]
+    geotransform = mg.GetGeoTransform() 
+    m_res = geotransform[1]
+    temp_data = ~(mg.ReadAsArray()[0]==0)
+    if not mg.GetProjection() == hg.GetProjection():
+        geotransform = mg.GetGeoTransform() 
+        xgeo = geotransform[0] + np.arange(0., mg.RasterXSize+0., 1) * geotransform[1]
+        ygeo = geotransform[3] + np.arange(0., mg.RasterYSize+0., 1) * geotransform[5]
+        xgeo = np.repeat(xgeo[None,...], mg.RasterYSize, axis=0)
+        ygeo = np.repeat(ygeo[...,None], mg.RasterXSize, axis=1)
+        m_proj = osr.SpatialReference()
+        # m_proj.ImportFromProj4("+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +a=6371007.181 +b=6371007.181 +units=m +no_defs")
+        m_proj.ImportFromWkt(mg.GetProjection())
+        h_proj = osr.SpatialReference() 
+        h_proj.ImportFromWkt(hg.GetProjection())
+        h_xgeo, h_ygeo, _ = np.array(osr.CoordinateTransformation(m_proj, \
+                            h_proj).TransformPoints(list(zip(xgeo[temp_data], ygeo[temp_data])))).T
+        geotransform = hg.GetGeoTransform()
+        hy = ((h_xgeo - geotransform[0])/geotransform[1]).astype(int)
+        hx = ((h_ygeo - geotransform[3])/geotransform[5]).astype(int)
+        hmask = (hx>=0) & (hx<hg.RasterYSize) & (hy>=0) & (hy<hg.RasterXSize)
+        hy = hy[hmask]
+        hx = hx[hmask]
+        rmask = ~bad_pix[hx, hy]
+        hy = hy[rmask]
+        hx = hx[rmask]
+    else:    
+        hx, hy = cal_psf_points(h_res, m_res, mg.RasterYSize, mg.RasterXSize)
+        hx = hx.reshape( mg.RasterYSize, mg.RasterXSize)[temp_data]
+        hy = hy.reshape( mg.RasterYSize, mg.RasterXSize)[temp_data]
+        hmask = (hx>=0) & (hx<hg.RasterYSize) & (hy>=0) & (hy<hg.RasterXSize)
+        hy = hy[hmask]
+        hx = hx[hmask]
+        rmask = ~bad_pix[hx, hy]
+        hy = hy[rmask]
+        hx = hx[rmask]
+
+    return hx, hy, hmask, rmask
+
+
+def cal_psf_points(h_res, m_res, sur_x, sur_y):
+    pointXs         = ((np.arange(sur_x) * m_res) // h_res ) 
+    pointYs         = ((np.arange(sur_y) * m_res) // h_res ) 
+    pointXs,pointYs = np.repeat(pointXs, len(pointYs)), np.tile(  pointYs, len(pointXs))
+    # coming from the solving of a lot of tiles to reach smaller range
+    # possible_x_y = [(np.arange(-25,-5), np.arange(-25,-5) +i) for i in range(-10, 10)]
+    # possible_x_y = np.array(possible_x_y).transpose(1,0,2).reshape(2, -1).T
+    # struct       = disk(5) 
+    return pointXs.astype(int), pointYs.astype(int)
 
 
 def cloud_dilation(cloud_mask, iteration=1):
@@ -22,16 +81,16 @@ def cloud_dilation(cloud_mask, iteration=1):
 
 class psf_optimize(object):
     def __init__(self, 
-		 high_img,
-		 high_indexs,
-		 low_img,
-                 qa,
-                 cloud,
-                 qa_thresh,
-                 xstd = 29.75,
-                 ystd = 39,
-                 scale=0.95607605898444503,
-                 offset=0.0086119174434039214):
+            high_img,
+            high_indexs,
+            low_img,
+            qa,
+            cloud,
+            qa_thresh,
+            xstd = 29.75,
+            ystd = 39,
+            scale=0.95607605898444503,
+            offset=0.0086119174434039214):
        self.high_img    = high_img
        self.Hx, self.Hy = high_indexs
        self.low_img     = low_img
@@ -48,7 +107,8 @@ class psf_optimize(object):
      
         size = 2*int(round(1.96*self.ystd))# set the largest possible PSF size
         #self.high_img[0,:]=self.high_img[-1,:]=self.high_img[:,0]=self.high_img[:,-1]= -9999
-        self.bad_pixs = cloud_dilation( (self.high_img < 0.0001) | self.cloud  | (self.high_img >= 1), iteration=int(size/2))
+        self.bad_pixs = cloud_dilation( (self.high_img < 0.0001) | (self.high_img >= 1), iteration=int(size/2))
+        self.bad_pixs = self.bad_pixs | self.cloud
         #xstd, ystd = 29.75, 39
         #ker = self.gaussian(self.xstd, self.ystd, 0)
         if (self.xstd < 1.) or (self.ystd < 1.):
@@ -150,13 +210,17 @@ class psf_optimize(object):
         if self.lh_mask.sum() ==0:
             self.costs = np.array([100000000000.,])
             return 0,0
-        min_val = [-50,-50]
-        max_val = [50,50]
-        ps, distributions = create_training_set([ 'xs', 'ys'], min_val, max_val, n_train=50)
+        # min_val = [-50,-50]
+        # max_val = [50,50]
+        # ps, distributions = create_training_set([ 'xs', 'ys'], min_val, max_val, n_train=50)
+        shifts = np.arange(-50, 50)
+        shiftsx = np.repeat(shifts, len(shifts))
+        shiftsy = np.tile(shifts, len(shifts))
+        ps = list(zip(shiftsx, shiftsy))
         self.shift_solved = list(map(self.shift_optimize, ps))   
         self.paras, self.costs = np.array([i[0] for i in self.shift_solved]), \
                                            np.array([i[1] for i in self.shift_solved])
-
+       
         if (1 - self.costs.min()) >= 0.6:
             xs, ys = self.paras[self.costs==np.nanmin(self.costs)][0].astype(int)
         else:

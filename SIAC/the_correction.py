@@ -190,14 +190,22 @@ class atmospheric_correction(object):
         self.mask_g = array_to_raster(self.mask.astype(float), self.example_file)
         
         if isinstance(self.ref_scale, np.ndarray):
-            assert(self.ref_scale.shape == self.mask.shape), \
-            'Reflectance scale should have the same shape as reflectance, but got ' + str(self.ref_scale.shape) + ' and ' + str(self.mask.shape) 
-            self.ref_scale_g = array_to_raster(self.ref_scale, self.example_file)
-            
+            if self.ref_scale.ndim == 2:
+                assert(self.ref_scale.shape == self.mask.shape), \
+                'Reflectance scale should have the same shape as reflectance, but got ' + str(self.ref_scale.shape) + ' and ' + str(self.mask.shape) 
+                self.ref_scale_g = array_to_raster(self.ref_scale, self.example_file)
+            elif self.ref_scale.ndim == 3:
+                assert(self.ref_scale.shape[0] == len(self.toa_bands)), \
+                'Reflectance scale should have the same shape as reflectance, but got ' + str(self.ref_scale.shape) + ' and ' + str(self.mask.shape) 
+
         if isinstance(self.ref_off, np.ndarray):
-            assert(self.ref_off.shape == self.mask.shape), \
-            'Reflectance offset should have the same shape as reflectance, but got ' + str(self.ref_off.shape) + ' and ' + str(self.mask.shape) 
-            self.ref_off_g   = array_to_raster(self.ref_off, self.example_file)
+            if self.ref_off.ndim == 2:
+                assert(self.ref_off.shape == self.mask.shape), \
+                'Reflectance offset should have the same shape as reflectance, but got ' + str(self.ref_off.shape) + ' and ' + str(self.mask.shape) 
+                self.ref_off_g   = array_to_raster(self.ref_off, self.example_file)
+            elif self.ref_off.ndim == 3:
+                assert(self.ref_off.shape[0] == len(self.toa_bands)), \
+                'Reflectance offset should have the same shape as reflectance, but got ' + str(self.ref_off.shape) + ' and ' + str(self.mask.shape)
             
         self.mask = self.mask.astype(bool)
         self.mg    = gdal.Warp('', band, format = 'MEM', srcNodata = None, xRes = self.block_size, yRes = \
@@ -419,7 +427,7 @@ class atmospheric_correction(object):
         return bounds, x_size, y_size #, raster_wkt
     
     def _get_boa(self,):
-
+                
         pix_mem = 180.
         if 'jasmin_memory_limit' in os.environ:
             jasmin_memory_limit = float(os.environ['jasmin_memory_limit']) - 10000
@@ -472,12 +480,26 @@ class atmospheric_correction(object):
             toa = toa_g.ReadAsArray(x_start, 0, x_off, int(y_size))
             
             if isinstance(self.ref_scale, np.ndarray):
-                chunk_ref_scale = self.ref_scale_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+                if self.ref_scale.ndim == 1:
+                    chunk_ref_scale = self.ref_scale
+                elif self.ref_scale.ndim == 2:
+                    chunk_ref_scale = self.ref_scale_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+                elif self.ref_scale.ndim == 3:
+                    chunk_ref_scale = self.ref_scale[ind]
+                # chunk_ref_scale = self.ref_scale_g.ReadAsArray(x_start, 0, x_off, int(y_size))
             else:
                 chunk_ref_scale = self.ref_scale
             
             if isinstance(self.ref_off, np.ndarray):
-                chunk_ref_off   = self.ref_off_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+                if self.ref_off.ndim == 1:
+                    chunk_ref_off   = self.ref_off
+                elif self.ref_off.ndim == 2:
+                    chunk_ref_off   = self.ref_off_g.ReadAsArray(x_start, 0, x_off, int(y_size))
+                elif self.ref_off.ndim == 3:
+                    chunk_ref_off   = self.ref_off[ind]
+                else:
+                    raise ValueError('ref_off has wrong shape')
+                # chunk_ref_off   = self.ref_off_g.ReadAsArray(x_start, 0, x_off, int(y_size))
             else:
                 chunk_ref_off   = self.ref_off
 

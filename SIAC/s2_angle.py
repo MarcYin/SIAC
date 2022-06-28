@@ -1,8 +1,7 @@
 #!/usr/bin/env python 
 import os
 import sys
-import ogr
-import gdal
+from osgeo import ogr, gdal
 import psutil
 import errno 
 import numpy as np
@@ -80,7 +79,7 @@ def parse_xml(meta_file, example_file, sun_ang_name):
     dst_ds.GetRasterBand(1).WriteArray((saa * 100).astype(int))
     dst_ds.GetRasterBand(2).WriteArray((sza * 100).astype(int))
     dst_ds, g = None, None
-    return vaa, vza
+    return vaa, vza, mvz, mva
 
 def get_mean_angle(meta_file):
     tree = ET.parse(meta_file)
@@ -100,9 +99,12 @@ def get_mean_angle(meta_file):
                     msa = float(ms.find('AZIMUTH_ANGLE').text)
     return msz, msa, mvz, mva
 
-def get_angle(view_ang_name_gml, vaa, vza, band_dict):
+def _get_angle(view_ang_name_gml, vaa, vza, band_dict):
     band_name, view_ang_name, gml = view_ang_name_gml
-    band_ind = band_dict[gml[-7:-4]]
+    if gml[-7:-4] != 'L1C':
+        band_ind = band_dict[gml[-7:-4]]
+    else:
+        band_ind = band_dict[gml[-14:-11]]
     _va = np.nanmean([vaa[i] for i in vaa.keys() if i[0] == band_ind])
     _vz = np.nanmean([vza[i] for i in vza.keys() if i[0] == band_ind])
     if np.isnan(_va) or np.isnan(_vz):
@@ -249,7 +251,7 @@ def get_angle(view_ang_name_gml, vaa, vza, band_dict):
     
     if os.path.exists(view_ang_name):                   
         os.remove(view_ang_name)                        
-    dst_ds = gdal.GetDriverByName('GTiff').Create(view_ang_name, x_size, y_size, 2, gdal.GDT_Int16, options=["TILED=YES", "COMPRESS=DEFLATE"])
+    dst_ds = gdal.GetDriverByName('GTiff').Create(view_ang_name, x_size, y_size, 2, gdal.GDT_UInt16, options=["TILED=YES", "COMPRESS=DEFLATE"])
     dst_ds.SetGeoTransform(g1.GetGeoTransform())         
     dst_ds.SetProjection(g1.GetProjection())             
     
@@ -265,13 +267,79 @@ def get_angle(view_ang_name_gml, vaa, vza, band_dict):
     #vas[(vas>=0)  & (vas<=180)] = vas[(vas>=0)  & (vas<=180)].mean()
     dst_ds.GetRasterBand(1).WriteArray((vas * 100).astype(int))            
     dst_ds.GetRasterBand(2).WriteArray((vzs * 100).astype(int))            
-    dst_ds.GetRasterBand(1).SetNoDataValue(-32767)       
-    dst_ds.GetRasterBand(2).SetNoDataValue(-32767)       
+    # dst_ds.GetRasterBand(1).SetNoDataValue(-32767)       
+    # dst_ds.GetRasterBand(2).SetNoDataValue(-32767)       
     dst_ds.FlushCache()                                  
     dst_ds = None  
     g1 = None  
     return True
 
+
+def get_angle(view_ang_name_gml, mva, mvz, band_dict):
+    band_name, view_ang_name, gml = view_ang_name_gml
+    if gml[-7:-4] != 'L1C':
+        band_ind = band_dict[gml[-7:-4]]
+    else:
+        band_ind = band_dict[gml[-14:-11]]
+    try:
+        _va = mva[band_ind]
+        _vz = mvz[band_ind]
+    except:
+        return False
+    if np.isnan(_va) or np.isnan(_vz):
+        return False   
+    g1     = gdal.Open(band_name)
+    x_size, y_size = g1.RasterXSize, g1.RasterYSize
+    vaa = np.zeros((y_size, x_size), dtype=np.float32)
+    vaa[:] = _va
+    vza = np.zeros((y_size, x_size), dtype=np.float32)
+    vza[:] = _vz
+    
+    vaa[vaa < 0] = vaa[vaa < 0] + 360
+    vza[vza < 0] = vza[vza < 0] + 360
+    
+    if os.path.exists(view_ang_name):                   
+        os.remove(view_ang_name)                        
+    dst_ds = gdal.GetDriverByName('GTiff').Create(view_ang_name, x_size, y_size, 2, gdal.GDT_UInt16, options=["TILED=YES", "COMPRESS=DEFLATE"])
+    dst_ds.SetGeoTransform(g1.GetGeoTransform())         
+    dst_ds.SetProjection(g1.GetProjection())             
+    
+    #vzs = fill_bad(vzs, ~mask)
+    #vas[(vas>180) & (vas<=360)] = vas[(vas>180) & (vas<=360)].mean() - 360
+    #vas[(vas>=0)  & (vas<=180)] = vas[(vas>=0)  & (vas<=180)].mean()
+    dst_ds.GetRasterBand(1).WriteArray((vaa * 100).astype(int))            
+    dst_ds.GetRasterBand(2).WriteArray((vza * 100).astype(int))            
+    # dst_ds.GetRasterBand(1).SetNoDataValue(65535)
+    # dst_ds.GetRasterBand(2).SetNoDataValue(65535)
+    dst_ds.FlushCache()                                  
+    dst_ds = None  
+    g1 = None  
+    return True
+
+def save_mean_view_angs(mean_vza, mean_vaa, example_file, mean_view_angle_name):
+    
+    g1     = gdal.Open(example_file)
+    x_size, y_size = g1.RasterXSize, g1.RasterYSize
+    vaa = np.zeros((y_size, x_size), dtype=np.float32)
+    vaa[:] = mean_vaa
+    vza = np.zeros((y_size, x_size), dtype=np.float32)
+    vza[:] = mean_vza
+    
+    vaa[vaa < 0] = vaa[vaa < 0] + 360
+    vza[vza < 0] = vza[vza < 0] + 360
+
+    if os.path.exists(mean_view_angle_name):                   
+        os.remove(mean_view_angle_name)                        
+    dst_ds = gdal.GetDriverByName('GTiff').Create(mean_view_angle_name, x_size, y_size, 2, gdal.GDT_UInt16, options=["TILED=YES", "COMPRESS=DEFLATE"])
+    dst_ds.SetGeoTransform(g1.GetGeoTransform())         
+    dst_ds.SetProjection(g1.GetProjection())             
+    dst_ds.GetRasterBand(1).WriteArray((vaa * 100).astype(int))            
+    dst_ds.GetRasterBand(2).WriteArray((vza * 100).astype(int))            
+    # dst_ds.GetRasterBand(1).SetNoDataValue(-32767)       
+    # dst_ds.GetRasterBand(2).SetNoDataValue(-32767)       
+    dst_ds.FlushCache()                                  
+    dst_ds = None  
+    g1 = None  
 
 '''
 def fill_bad(array, mask):                        
@@ -300,6 +368,7 @@ def resample_s2_angles(metafile):
         sun_ang_name = s2_file_dir + '/ANG_DATA/' + 'SAA_SZA.tif'
         view_ang_names = [s2_file_dir + '/ANG_DATA/' + 'VAA_VZA_%s.tif'%band for band in bands]
         toa_refs = glob(s2_file_dir + '/IMG_DATA/*B??.jp2')
+        mean_view_angle_name = s2_file_dir + '/ANG_DATA/' + 'Mean_VAA_VZA.tif'
     elif 'metadata.xml' in metafile:
         if not os.path.exists(s2_file_dir + '/angles/'):
             os.mkdir(s2_file_dir + '/angles/')
@@ -307,6 +376,7 @@ def resample_s2_angles(metafile):
         sun_ang_name = s2_file_dir + '/angles/' + 'SAA_SZA.tif'
         view_ang_names = [s2_file_dir + '/angles/' + 'VAA_VZA_%s.tif'%band for band in bands]
         toa_refs = glob(s2_file_dir + '/*B??.jp2')
+        mean_view_angle_name = s2_file_dir + '/angles/' + 'Mean_VAA_VZA.tif'
     else:
         raise IOError('Invalid metafile please use the default AWS or SCIHUB format.')
     gmls = sorted(gmls, key = lambda gml: bands.index('B' + gml.split('B')[-1][:2]))
@@ -314,11 +384,17 @@ def resample_s2_angles(metafile):
     toa_refs = sorted(toa_refs, key = lambda toa_ref: bands.index('B' + toa_ref.split('B')[-1][:2]))
     cloud_name = s2_file_dir+'/cloud.tif'
     example_file = toa_refs[1]
-    vaa, vza = parse_xml(metafile, example_file, sun_ang_name)
+    vaa, vza, mvz, mva = parse_xml(metafile, example_file, sun_ang_name)
+    
+    mean_vza = np.mean(list(mvz.values()))
+    mean_vaa = np.mean(list(mva.values()))
+    
+    save_mean_view_angs(mean_vza, mean_vaa, example_file, mean_view_angle_name)
+    
     # some gmls may lost....
     view_ang_name_gmls = list(zip(np.array(toa_refs)[inds], np.array(view_ang_names)[inds], np.array(gmls)[inds]))
     band_dict = dict(zip(bands, range(13)))
-    par = partial(get_angle, vaa=vaa, vza=vza, band_dict=band_dict)
+    par = partial(get_angle, mva=mva, mvz=mvz, band_dict=band_dict)
 #     p = Pool(procs)
     #print(view_ang_name_gmls)
 #     ret = p.map(par,  view_ang_name_gmls)
@@ -337,17 +413,17 @@ def resample_s2_angles(metafile):
     if ret.sum()>0:
         ret = ret.astype(bool)
         bad_angs       = view_ang_names[~ret]
-        src_files      = view_ang_names[ret][abs(np.arange(13)[~ret][...,None] - np.arange(13)[ret]).argmin(axis=1)]
+        # src_files      = view_ang_names[ret][abs(np.arange(13)[~ret][...,None] - np.arange(13)[ret]).argmin(axis=1)]
         for i in range(len(bad_angs)):
-            copyfile(src_files[i], bad_angs[i])
-
+            copyfile(mean_view_angle_name, bad_angs[i])
     else:
         raise LookupError('failed to reconstract angles...')
-    return sun_ang_name, view_ang_names, toa_refs, cloud_name
+    return sun_ang_name, view_ang_names, mean_view_angle_name, toa_refs, cloud_name
 
 
 
 def minimum_bounding_rectangle(points):
+    # from https://stackoverflow.com/questions/13542855/algorithm-to-find-the-minimum-area-rectangle-for-given-points-in-order-to-comput
     import numpy as np
     from scipy.spatial import ConvexHull
     """
@@ -415,3 +491,7 @@ def minimum_bounding_rectangle(points):
     rval[4] = np.dot([x1, y2], r)
 
     return rval
+if __name__ == "__main__":
+    metafile = '/home/users/marcyin/devSIAC/devSIAC/SIAC/SIAC/tests/S2B_MSIL1C_20171123T111349_N0206_R137_T31UCU_20171123T130706.SAFE/GRANULE/L1C_T31UCU_A003738_20171123T111347/MTD_TL.xml'
+    resample_s2_angles(metafile)
+

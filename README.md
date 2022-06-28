@@ -17,10 +17,16 @@
 This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneouse surface is used without considering the BRDF effects.
 
 ## Data needed:
-* MCD43 : 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date
-* ECMWF CAMS Near Real Time prediction: a time step of 3 hours with the start time of 00:00:00 over the date, and data from 01/04/2015 are mirrored in UCL server at: http://www2.geog.ucl.ac.uk/~ucfafyi/cams/
-* Global DEM: Global DEM VRT file built from ASTGTM2 DEM, and most of the DEM over land are mirrored in UCL server at: http://www2.geog.ucl.ac.uk/~ucfafyi/eles/
-* Emulators: emulators for atmospheric path reflectance, total transmitance and single scattering Albedo, and the emulators for Sentinel 2, Landsat 8 and MODIS trained with 6S.V2 can be found at: http://www2.geog.ucl.ac.uk/~ucfafyi/emus/
+* MCD43 : 
+  - 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date. 
+  - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the preivous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
+  - Or you can still use the previous way to download the data by adding the `Gee = False` in the `SIAC_S2` or `SIAC_L8` class, i.e. `SIAC_S2(**kwargs, gee=False)` or `SIAC_L8(**kwargs, gee=False)`.
+* ECMWF CAMS Near Real Time prediction: 
+  - Time step of 3 hours or 1 hour with the start time of 00:00:00 over the date, and data from 01/04/2015 are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/
+* Global DEM: 
+  - Global DEM VRT file built from ASTGTM2 DEM, and most of the DEM over land are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt
+* Emulators: 
+  - Emulators for atmospheric path reflectance, total transmittance and single scattering Albedo, and the emulators for Sentinel 2 and Landsat 8 trained with 6S.V2 are packed in the current repository.
 
 ## Installation:
 
@@ -48,12 +54,11 @@ conda install -c f0xy -c conda-forge siac
 To save your time for installing GDAL:
 
 ```bash
-conda install -c conda-forge gdal>2.1
+conda install -c conda-forge gdal>3
 ```
 
 
-
-The typical usage for Sentinel 2 and Landsat 8:
+The typical usage for Sentinel 2 and Landsat 8&9:
 
 ```python
 from SIAC import SIAC_S2
@@ -70,6 +75,13 @@ cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
 SIAC_L8('/directory/where/you/store/L8/data/', global_dem = global_dem, cams_dir=cams_dir) 
 ``` 
 
+```python
+from SIAC import SIAC_L8
+global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+SIAC_L8('/directory/where/you/store/L9/data/', global_dem = global_dem, cams_dir=cams_dir)
+```
+
 An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
 ## Examples and Map:
@@ -80,7 +92,7 @@ A [map](http://www2.geog.ucl.ac.uk/~ucfafyi/map) for comparison between TOA and 
 
 ## Citation:
 
-Yin, F., Lewis, P. E., Gomez-Dans, J., & Wu, Q. (2019, February 21). A sensor-invariant atmospheric correction method: application to Sentinel-2/MSI and Landsat 8/OLI. https://doi.org/10.31223/osf.io/ps957
+Yin, F., Lewis, P. E., & Gómez-Dans, J. L. (2022). Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI. _EGUsphere_, _2022_, 1–62. doi:10.5194/egusphere-2022-170
 
 ### LICENSE
 GNU GENERAL PUBLIC LICENSE V3

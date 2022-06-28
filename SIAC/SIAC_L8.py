@@ -1,6 +1,7 @@
 import os
 import sys
-import gdal
+from osgeo import gdal
+import json
 import requests
 import numpy as np
 from glob import glob
@@ -13,12 +14,15 @@ from SIAC.get_MCD43 import get_mcd43
 from SIAC.downloaders import downloader
 from SIAC.multi_process import parmap
 from os.path import expanduser
+from SIAC.raster_boundary import get_boundary
+from SIAC.MCD43_GEE import get_MCD43_GEE
+
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
-            global_dem =None, cams_dir    = None, jasmin = False):
-    file_path = os.path.dirname(os.path.realpath(__file__))
+            global_dem =None, cams_dir    = None, jasmin = False, Gee = True):
+    # file_path = os.path.dirname(os.path.realpath(__file__))
     '''
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -38,7 +42,7 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
     rets = l8_pre_processing(l8_dir)
     aero_atmos = []
     for ret in rets:
-        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin)
+        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee)
         #sun_ang_name, view_ang_names, toa_refs, cloud_name, cloud_mask, metafile = ret
         aero_atmo = do_correction(*ret)
         if send_back:
@@ -48,7 +52,7 @@ def SIAC_L8(l8_dir, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home 
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
                   metafile, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None,\
-                  global_dem  = None, cams_dir    = None, jasmin = False):
+                  global_dem  = None, cams_dir    = None, jasmin = False, Gee = True):
     if jasmin:
         if global_dem is None:
             global_dem  = '/work/scratch-pw/marcyin/DEM/global_dem.vrt'
@@ -70,6 +74,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
             os.mkdir(home + '/MCD43_VRT/')
 
     base = os.path.dirname(toa_refs[0])
+
+    collection = int(base.split('_')[-2])
     with open(metafile) as f:
         for line in f:
             if 'REFLECTANCE_MULT_BAND' in line:
@@ -91,8 +97,23 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
 #             handler.close()
 #             logger.removeHandler(handler)
         #if not jasmin:
-        vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
+        # vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
+        # pass
         #logger = create_logger(log_file)
+
+        if not Gee:
+            vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
+            mcd43_gee_folder = None
+        else:
+            logger.info('Getting MCD43 from GEE')
+            geojson = get_boundary(toa_refs[0], to_wgs84 = True)[0]
+            coords = json.loads(geojson)['features'][0]['geometry']['coordinates']
+            mcd43_gee_folder = os.path.dirname(toa_refs[0]) + '/MCD43/'
+            if not os.path.exists(mcd43_gee_folder):
+                os.mkdir(mcd43_gee_folder)
+            temporal_window = 16
+            get_MCD43_GEE(obs_time, coords, temporal_window, mcd43_gee_folder)
+            
     else:
         logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
     #get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir)
@@ -100,24 +121,36 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     band_index  = [1,2,3,4,5,6]
     band_wv     = [469, 555, 645, 859, 1640, 2130]
     toa_bands   = (np.array(toa_refs)[band_index,]).tolist()
-    view_angles = (np.array(view_ang_names)[band_index,]).tolist()
-    sun_angles  = sun_ang_name
-
-    #     sza         = gdal.Open(sun_angles).ReadAsArray()[1] * 0.01
-    pixel_res = abs(gdal.Open(str(sun_angles)).GetGeoTransform()[1])
-    g = gdal.Warp('', str(sun_angles), format = 'MEM', xRes = pixel_res, yRes = pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
-                      srcNodata = 0, dstNodata=0, cutlineDSName= aoi, cropToCutline=True, resampleAlg = 0)
-    sza = g.ReadAsArray()[1] * 0.01
+    
+    if collection == 1:
+        view_angles = (np.array(view_ang_names)[band_index,]).tolist()
+        sun_angles  = sun_ang_name
+        #     sza         = gdal.Open(sun_angles).ReadAsArray()[1] * 0.01
+        pixel_res = abs(gdal.Open(str(sun_angles)).GetGeoTransform()[1])
+        g = gdal.Warp('', str(sun_angles), format = 'MEM', xRes = pixel_res, yRes = pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+                        srcNodata = 0, dstNodata=0, cutlineDSName= aoi, cropToCutline=True, resampleAlg = 0)
+        sza = g.ReadAsArray()[1] * 0.01
+        
+    elif collection == 2:
+        sun_angles  = sun_ang_name
+        view_angles = [view_ang_names[0], ] * len(band_index) + [view_ang_names[1], ] * len(band_index) 
+    
+        pixel_res = abs(gdal.Open(str(sun_angles[1])).GetGeoTransform()[1])
+        g = gdal.Warp('', str(sun_angles[1]), format = 'MEM', xRes = pixel_res, yRes = pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+                        srcNodata = 0, dstNodata=0, cutlineDSName= aoi, cropToCutline=True, resampleAlg = 0)
+        sza = g.ReadAsArray() * 0.01
+    else:
+        raise IOError('Only collection <= 2 is supported')
 
     scale       = scale / np.cos(np.deg2rad(sza))
     off         = off / np.cos(np.deg2rad(sza))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,sun_angles,\
-                         obs_time,cloud_mask, gamma=10., ref_scale = scale, ref_off = off, global_dem  = global_dem, cams_dir = cams_dir,\
-                         spec_m_dir=file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file)
-    
+                        obs_time,cloud_mask, gamma=10., ref_scale = scale, ref_off = off, global_dem  = global_dem, cams_dir = cams_dir,\
+                        spec_m_dir=file_path+'/spectral_mapping/', emus_dir=file_path+'/emus/', mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, mcd43_gee_folder = mcd43_gee_folder)
+
     aero._solving()
+
     toa_bands   = toa_refs
-    view_angles = view_ang_names
     base        = base + '/' +'B'.join(toa_bands[0].split('/')[-1].split('B')[:-1])
     aot         = base + 'aot.tif'
     tcwv        = base + 'tcwv.tif'
@@ -127,6 +160,14 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
     tco3_unc    = base + 'tco3_unc.tif'
     rgb = [toa_bands[3], toa_bands[2], toa_bands[1]]
     band_index = [0,1,2,3,4,5,6]
+
+    if collection == 1:
+        view_angles = (np.array(view_ang_names)[band_index,]).tolist()
+    elif collection == 2:
+        view_angles = [view_ang_names[0], ] * len(band_index) + [view_ang_names[1], ] * len(band_index) 
+    else:
+        raise IOError('Only collection <= 2 is supported')
+
     atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,sun_angles, \
                                   aot = aot, cloud_mask = cloud_mask,tcwv = tcwv, tco3 = tco3, \
                                   aot_unc = aot_unc, tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, global_dem  = global_dem, cams_dir = cams_dir,\

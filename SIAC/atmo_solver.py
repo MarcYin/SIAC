@@ -24,6 +24,23 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+# def compose_dtd(nx, ny):
+#     ns = nx*ny                                                              
+#     n = int(np.sqrt(ns))
+#     d1 = 2 * np.ones(ns)
+#     d1[ny-1::ny] = 1
+#     d1[0::ny] = 1
+#     d2 = np.ones(ns) * -1
+#     d2[ny-1::ny] = 0
+#     d3 = 2 * np.ones(ns)
+#     d3[:ny] = 1
+#     d3[ns-ny:] = 1
+#     d4 = np.ones(ns) * -1
+#     dtdx = sparse.spdiags([d1, d2[::-1], d2], [0, 1, -1], ns, ns)                                                                                                                      
+#     dtdy = sparse.spdiags([d3, d4, d4], [0, ny, -ny], ns, ns)
+#     dtd = dtdx + dtdy
+#     return dtd, dtdx, dtdy
+
 def compose_dtd(nx, ny):
     ns = nx*ny                                                              
     n = int(np.sqrt(ns))
@@ -36,8 +53,8 @@ def compose_dtd(nx, ny):
     d3[:ny] = 1
     d3[ns-ny:] = 1
     d4 = np.ones(ns) * -1
-    dtdx = sparse.spdiags([d1, d2[::-1], d2], [0, 1, -1], ns, ns)                                                                                                                      
-    dtdy = sparse.spdiags([d3, d4, d4], [0, ny, -ny], ns, ns)
+    dtdx = sparse.spdiags([d1, d2[::-1], d2], [0, 1, -1], ns, ns, format='csc') 
+    dtdy = sparse.spdiags([d3, d4, d4], [0, ny, -ny], ns, ns, format='csc')
     dtd = dtdx + dtdy
     return dtd, dtdx, dtdy
 
@@ -257,7 +274,7 @@ class solving_atmo_paras(object):
             #res4 = optimize.minimize(self._cost, p0, jac=, method='COBYLA', options={'disp': True})
             #print res1, res2 #res3
             #psolve = res2
-            self.logger.info(bcolors.GREEN + str(psolve['message'].decode()) + bcolors.ENDC)
+            self.logger.info(bcolors.GREEN + str(psolve['message']) + bcolors.ENDC)
             self.logger.info(bcolors.GREEN + 'Iterations: %d'%int(psolve['nit']) + bcolors.ENDC)
             self.logger.info(bcolors.GREEN + 'Function calls: %d'%int(psolve['nfev']) +bcolors.ENDC)  
             self.aot_prior, self.tcwv_prior = psolve['x'].reshape(2, self.num_blocks_x, self.num_blocks_y)

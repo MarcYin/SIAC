@@ -2,7 +2,7 @@
 import os
 import gc
 import sys
-import gdal
+from osgeo import gdal
 import logging
 import lightgbm
 import datetime
@@ -14,33 +14,41 @@ from SIAC.smoothn import smoothn
 #from sklearn.externals import joblib 
 from SIAC.reproject import reproject_data
 from SIAC.s2_angle import resample_s2_angles
+from SIAC.s2_angle_N0400 import resample_s2_angles_N0400
 from SIAC.create_logger import create_logger
 from scipy.interpolate import NearestNDInterpolator
 from skimage.morphology import disk, binary_dilation, binary_erosion
 
+from lightgbm import Booster
 
 import warnings
 warnings.filterwarnings("ignore")
 
-try:
-    import cPickle as pkl
-except:
-    import pickle as pkl
+# try:
+#     import cPickle as pkl
+# except:
+#     import pickle as pkl
+# file_path = os.path.dirname(os.path.realpath(__file__))
+# gc.disable()
+# cl = pkl.load(open(file_path + '/data/sen2cloud_detector.pkl', 'rb'))
+# gc.enable()
+# cl.n_jobs = multiprocessing.cpu_count()
+
 file_path = os.path.dirname(os.path.realpath(__file__))
-gc.disable()
-cl = pkl.load(open(file_path + '/data/sen2cloud_detector.pkl', 'rb'))
-gc.enable()
-cl.n_jobs = multiprocessing.cpu_count()
+model_filename = file_path + '/data/pixel_s2_cloud_detector_lightGBM_v0.1.txt'
 
+def do_cloud(cloud_bands, cloud_name = None, ref_scale = 1/10000., ref_offset = 0.):
 
-def do_cloud(cloud_bands, cloud_name = None):
+    cl = Booster(model_file=model_filename)
+
     toas = [reproject_data(str(band), cloud_bands[0], dstNodata=0, resample=5).data for band in cloud_bands]
-    toas = np.array(toas)/10000.
+    # print(ref_scale, ref_offset)
+    toas = np.array(toas) * ref_scale + ref_offset
     mask = np.all(toas >= 0.0001, axis=0)
     valid_pixel = mask.sum()
-    cloud_proba = cl.predict_proba(toas[:, mask].T)
+    cloud_proba = cl.predict(toas[:, mask].T)
     cloud_mask = np.zeros_like(toas[0])
-    cloud_mask[mask] = cloud_proba[:,1]
+    cloud_mask[mask] = cloud_proba#[:,1]
     cloud_mask[~mask] = -256
     if cloud_name is None:
         return cloud_mask
@@ -165,12 +173,57 @@ def s2_pre_processing(s2_dir, cams_dir, dem):
             os.remove(log_file)
         logger = create_logger(log_file)
         logger.propagate = False
-        logger.info('Preprocessing for %s'%tile)
+
+        s2_file_dir = os.path.dirname(metafile)
+        PRODUCT_ID = s2_file_dir.split('/')[-3]
+        processing_baseline = PRODUCT_ID.split('_')[3][1:]
+        
+        logger.info('Preprocessing for %s'%PRODUCT_ID)
         logger.info('Doing per pixel angle resampling.')
-        sun_ang_name, view_ang_names, toa_refs, cloud_name = resample_s2_angles(metafile)
+        if int(processing_baseline) >= 400:
+            sun_ang_name, view_ang_names, mean_view_angle_name, toa_refs, cloud_name = resample_s2_angles_N0400(metafile)
+        else:
+            sun_ang_name, view_ang_names, mean_view_angle_name, toa_refs, cloud_name = resample_s2_angles(metafile)
+
+        # getting offset for new processing baseline
+        if int(processing_baseline) >= 400:
+            
+            tile_dir = '/'.join(s2_file_dir.split('/')[:-2])
+            
+            product_meta = tile_dir + '/MTD_MSIL1C.xml'
+            offsets = []
+            with open(product_meta) as f:
+                for i in f.readlines():
+                    if 'RADIO_ADD_OFFSET' in i:
+                        offset = i.replace('<RADIO_ADD_OFFSET band_id=', '').replace('</RADIO_ADD_OFFSET>', '').replace('"', '').split('>')
+                        offset = i.replace('<RADIO_ADD_OFFSET band_id=', '').replace('</RADIO_ADD_OFFSET>', '').replace(' ', '').replace('\n', '').replace('"', '').split('>')
+                        offsets.append(offset)
+                    if 'QUANTIFICATION_VALUE' in i:
+                        QUANTIFICATION_VALUE = i.replace('<QUANTIFICATION_VALUE unit="none">', '').replace('</QUANTIFICATION_VALUE>', '').replace(' ', '').replace('\n', '')
+                        QUANTIFICATION_VALUE = float(QUANTIFICATION_VALUE)
+                        # print(QUANTIFICATION_VALUE)
+            offsets = np.array(offsets).astype(int)
+            inds = np.argsort(offsets[:,0])
+            offsets = offsets[inds]
+            offsets = offsets[:, 1]
+            QUANTIFICATION_VALUE = np.array([QUANTIFICATION_VALUE] * len(toa_refs))
+        else:
+            offsets = np.array([0] * len(toa_refs))
+            QUANTIFICATION_VALUE = np.array([10000.] * len(toa_refs))
+        # L1C_TOAi = (L1C_DNi + RADIO_ADD_OFFSETi) / QUANTIFICATION_VALUEi
+        #          = L1C_DNi / QUANTIFICATION_VALUEi  + RADIO_ADD_OFFSETi / QUANTIFICATION_VALUEi
+        scale       = 1 / QUANTIFICATION_VALUE
+        off         = offsets / QUANTIFICATION_VALUE
+
+        
+
         cloud_bands = np.array(toa_refs)[[0,1,3,4,7,8,9,10,11,12]]
+    
+        scale = scale[[0,1,3,4,7,8,9,10,11,12], None, None]# (band, nx, ny)
+        off = off[[0,1,3,4,7,8,9,10,11,12], None, None]# (band, nx, ny)
+    
         logger.info('Getting cloud mask.')
-        cloud = do_cloud(cloud_bands, cloud_name)
+        cloud = do_cloud(cloud_bands, cloud_name, ref_scale=scale, ref_offset=off)
         cloud_mask = cloud > 0.6# 0.4 is the sentinel hub default
         clean_pixel = ((cloud>=0).sum() - cloud_mask.sum()) / 3348900. * 100.
         valid_pixel = (cloud>=0).sum() / 3348900. * 100.

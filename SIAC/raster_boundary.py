@@ -1,6 +1,4 @@
-import osr
-import ogr
-import gdal
+from osgeo import osr, ogr, gdal
 import json
 import numpy  as np
 
@@ -50,13 +48,18 @@ def get_boundary(raster, to_wgs84 = True):
     geojson = json.dumps(geojson)
 
     if to_wgs84:
-        targetprj = osr.SpatialReference()
-        targetprj.ImportFromEPSG(4326)
-        transform = osr.CoordinateTransformation(sourceprj, targetprj)
-        geometry.Transform(transform)
+        sourceprj = osr.SpatialReference()
+        sourceprj.ImportFromWkt(g.GetProjection())
 
-        stgeometry = geometry.SimplifyPreserveTopology(abs(geom[1]) / 10. * 0.000001) 
-        stpolygon = json.loads(stgeometry.ExportToJson())
+        targetprj = osr.SpatialReference()
+        targetprj.ImportFromProj4('+proj=longlat +datum=WGS84 +no_defs ')
+        if int(gdal.VersionInfo()) > 2500000:
+          targetprj.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        transform = osr.CoordinateTransformation(sourceprj, targetprj)
+        sgeometry.Transform(transform)
+
+        # stgeometry = geometry.SimplifyPreserveTopology(abs(geom[1]) / 10. * 0.000001) 
+        stpolygon = json.loads(sgeometry.ExportToJson())
         
         tgeojson = {                       
           "type": "FeatureCollection",                               

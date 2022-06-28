@@ -1,6 +1,6 @@
 #/usr/bin/env python 
 import os
-import gdal
+from osgeo import gdal
 import warnings
 import subprocess
 import numpy as np
@@ -109,3 +109,39 @@ def do_l8_angle(metafile):
     cloud_mask = ~((cloud_mask  >= 2720) & ( cloud_mask <= 2732))
 
     return sun_ang_name, view_ang_names, toa_bands, qa_band, cloud_mask, metafile
+
+def do_l8_angle_collection2(metafile):
+    l8_file_dir = os.path.realpath(os.path.dirname(metafile))
+    header    = '_'.join(metafile.split('/')[-1].split('_')[:-1])
+    bs        = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'QA_PIXEL']
+    bands = [l8_file_dir + '/' + header + '_%s.TIF'%i for i in bs]
+    toa_bands = bands[:-1]
+    qa_band  = bands[-1]
+
+    bands    = np.arange(1, 8)
+
+    sza = metafile.replace('MTL.txt', 'SZA.TIF')
+    saa = metafile.replace('MTL.txt', 'SAA.TIF')
+    vza = metafile.replace('MTL.txt', 'VZA.TIF')
+    vaa = metafile.replace('MTL.txt', 'VAA.TIF')
+    
+    sun_angles = [saa, sza]
+    view_angles = [vaa, vza]
+
+    # cloud_mask = gdal.Open(qa_band).ReadAsArray()
+    # cloud_mask = ~((cloud_mask  >= 2720) & ( cloud_mask <= 2732))
+    
+    cloud_bit = 1
+    cirrus_bit = 2
+    shadow_bit = 4
+    water_bit = 7
+    
+    qa = gdal.Open(qa_band).ReadAsArray()
+    clear = True
+    for qa_bin_mask in [cloud_bit, cirrus_bit, shadow_bit, water_bit]:
+        mask = ((1<<qa_bin_mask) & qa) >> (qa_bin_mask-1) == 0
+        clear = clear & mask
+    fill_mask = (qa & 1) == 1
+    cloud_mask = (~clear) | fill_mask
+    return sun_angles, view_angles, toa_bands, qa_band, cloud_mask, metafile
+

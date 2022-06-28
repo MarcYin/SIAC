@@ -1,5 +1,4 @@
-import gdal
-from osgeo import osr 
+from osgeo import osr, gdal
 import numpy as np
 import numpy.ma as ma
 #gdalwarp -of VRT -t_srs "+proj=sinu" -te xmin ymin xmax ymax -ts 2400 2400 global_dem.vrt modis_cutoff.vrt
