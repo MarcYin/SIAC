@@ -22,7 +22,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
   - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the preivous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
   - Or you can still use the previous way to download the data by adding the `Gee = False` in the `SIAC_S2` or `SIAC_L8` class, i.e. `SIAC_S2(**kwargs, gee=False)` or `SIAC_L8(**kwargs, gee=False)`.
 * ECMWF CAMS Near Real Time prediction: 
-  - Time step of 3 hours or 1 hour with the start time of 00:00:00 over the date, and data from 01/04/2015 are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/
+  - Time step of 3 hours or 1 hour with the start time of 00:00:00 over the date, and data from 01/01/2015 are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/
 * Global DEM: 
   - Global DEM VRT file built from ASTGTM2 DEM, and most of the DEM over land are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt
 * Emulators: 
