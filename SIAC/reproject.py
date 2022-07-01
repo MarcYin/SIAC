@@ -89,13 +89,48 @@ class reproject_data(object):
         elif self.verbose:
             print('There are %d bands in this file, use g.GetRasterBand(<band>) to avoid reading the whole file.'%self.g.RasterCount)
 
-def array_to_raster(array, example_file):                                                                                                               
+# def array_to_raster(array, example_file):                                                                                                               
+#     if array.ndim == 2:                  
+#         bands = 1                        
+#     elif array.ndim ==3:                 
+#         bands = min(array.shape)     
+#         t = np.argsort(array.shape)
+#         array = array.transpose(t)
+#     else:                                
+#         raise IOError('Only 2 or 3 D array is supported.')
+#     try:                                 
+#         g = gdal.Open(example_file)      
+#     except:                              
+#         g = example_file                 
+#     driver = gdal.GetDriverByName('MEM') 
+#     ds = driver.Create('', array.shape[-1], array.shape[-2], bands, gdal.GDT_Float32)
+#     ds.SetProjection(g.GetProjection())  
+#     geotransform    = list(g.GetGeoTransform())
+#     geotransform[1] = geotransform[1] * g.RasterXSize / (1. * array.shape[-1])
+#     geotransform[5] = geotransform[5] * g.RasterYSize / (1. * array.shape[-2])
+#     ds.SetGeoTransform(geotransform)     
+#     if array.ndim == 3:                  
+#         for i in range(bands):           
+#             ds.GetRasterBand(i+1).WriteArray(array[i])
+#     else:                                
+#          ds.GetRasterBand(1).WriteArray(array)                                                                                                           
+#     return ds
+
+
+def array_to_raster(array, example_file, band_axis = None):                                                                                                               
     if array.ndim == 2:                  
         bands = 1                        
-    elif array.ndim ==3:                 
-        bands = min(array.shape)     
-        t = np.argsort(array.shape)
-        array = array.transpose(t)
+    elif array.ndim ==3:
+        if band_axis is None: 
+            print('No band axis specified, the first band is used as band aixs')               
+            bands = array.shape[0]
+        else:
+            shape = array.shape
+            bands = shape[band_axis]
+            t = [0, 1, 2]
+            t.remove(band_axis) 
+            t = [band_axis, ] + t
+            array = array.transpose(t)
     else:                                
         raise IOError('Only 2 or 3 D array is supported.')
     try:                                 
@@ -115,7 +150,6 @@ def array_to_raster(array, example_file):
     else:                                
          ds.GetRasterBand(1).WriteArray(array)                                                                                                           
     return ds
-
 
 if __name__=='__main__':
     ele = reproject_data('~/DATA/Multiply/eles/global_dem.vrt','/data/nemesis/S2_data/32/U/PU/2017/12/15/0/B02.jp2', outputType= gdal.GDT_Float32, ) 

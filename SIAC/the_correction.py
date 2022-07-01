@@ -408,7 +408,7 @@ class atmospheric_correction(object):
 
                 temp = np.zeros(self._sza.shape + (3,))
                 temp[self._cmask] = dH[:, 3:6]
-                xhs[ei].append(array_to_raster(temp, self.example_file))
+                xhs[ei].append(array_to_raster(temp, self.example_file, band_axis=2))
             
         self._saa; del self._sza; del self._ele; del self._aot; del self._tcwv; del self._tco3#; del self._aot_unc; del self._tcwv_unc; del self._tco3_unc
         self.xap_H, self.xbp_H, self.xcp_H    = np.array(xps)
@@ -457,6 +457,7 @@ class atmospheric_correction(object):
                 ret   += re
                 index += (np.where(needed==u_need[i])[0]).tolist()
             ret = list(zip(*sorted(zip(index, ret))))[1]
+        
         self.boa_rgb = ret[self.ri], ret[self.gi],ret[self.bi]
         #return ret
 
@@ -510,6 +511,7 @@ class atmospheric_correction(object):
                 xps[j]  = reproject_data(xps[j], _g,xRes=xRes, yRes = yRes,xSize=x_off, \
                                          ySize=y_size, resample = 0, outputType= gdal.GDT_Float32).data
              
+            bad_pixel = toa <= 0
             xap_H, xbp_H, xcp_H = xps
             toa = toa * chunk_ref_scale + chunk_ref_off                      
             y   = xap_H * toa - xbp_H
@@ -543,8 +545,12 @@ class atmospheric_correction(object):
                 unc = reproject_data(unc_g, _g, xSize=x_off, ySize=y_size, resample = 0, outputType= gdal.GDT_Float32).data
                 tmp.append(unc)
             aot_unc, tcwv_unc, tco3_unc = tmp; del tmp
-            unc  = np.sqrt(aot_dH ** 2 * aot_unc**2 + tcwv_dH ** 2 * tcwv_unc**2 + tco3_dH ** 2 * tco3_unc**2 + toa_dH**2 * 0.015**2)
+            # unc  = np.sqrt(aot_dH ** 2 * aot_unc**2 + tcwv_dH ** 2 * tcwv_unc**2 + tco3_dH ** 2 * tco3_unc**2 + toa_dH**2 * 0.015**2)
+            toa_unc = toa * 0.05
+            unc  = np.sqrt(aot_dH ** 2 * aot_unc**2 + tcwv_dH ** 2 * tcwv_unc**2 + tco3_dH ** 2 * tco3_unc**2 * 0 + toa_dH**2 * toa_unc**2)
             del aot_unc; del tcwv_unc; del tco3_unc
+            boa[bad_pixel] = np.nan
+            unc[bad_pixel] = np.nan
             boas.append(boa)
             uncs.append(unc)
         boas, uncs = np.hstack(boas), np.hstack(uncs)
@@ -583,20 +589,27 @@ class atmospheric_correction(object):
         dst_ds.SetGeoTransform(geotransform)
         dst_ds.SetProjection(projection)
         dst_ds.GetRasterBand(1).WriteArray(rgba_array[0])
-        dst_ds.GetRasterBand(1).SetScale(self.rgb_scale)
+        # dst_ds.GetRasterBand(1).SetScale(self.rgb_scale)
         dst_ds.GetRasterBand(2).WriteArray(rgba_array[1])
-        dst_ds.GetRasterBand(2).SetScale(self.rgb_scale)
+        # dst_ds.GetRasterBand(2).SetScale(self.rgb_scale)
         dst_ds.GetRasterBand(3).WriteArray(rgba_array[2])
-        dst_ds.GetRasterBand(4).SetScale(self.rgb_scale)
+        # dst_ds.GetRasterBand(4).SetScale(self.rgb_scale)
         dst_ds.GetRasterBand(4).WriteArray(rgba_array[3])
         dst_ds.FlushCache()
         dst_ds = None 
      
     def _compose_rgb(self,):
         self.rgb_scale = 4
-        r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale + self.ref_off, \
-                  self._toa_bands[self.gi].ReadAsArray() * self.ref_scale + self.ref_off, \
-                  self._toa_bands[self.bi].ReadAsArray() * self.ref_scale + self.ref_off
+
+        if self.ref_scale.ndim >= 3:
+            r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale[self.ri] + self.ref_off[self.ri], \
+                    self._toa_bands[self.gi].ReadAsArray() * self.ref_scale[self.gi] + self.ref_off[self.gi], \
+                    self._toa_bands[self.bi].ReadAsArray() * self.ref_scale[self.bi] + self.ref_off[self.bi]
+        else:
+            r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale + self.ref_off, \
+                    self._toa_bands[self.gi].ReadAsArray() * self.ref_scale + self.ref_off, \
+                    self._toa_bands[self.bi].ReadAsArray() * self.ref_scale + self.ref_off
+            
         alpha   = (r>0) & (g>0) & (b>0)
         rgba_array = np.clip([r * self.rgb_scale * 255, g * self.rgb_scale * 255, \
                               b * self.rgb_scale * 255, alpha * self.rgb_scale * 255], 0, 255).astype(np.uint8)
@@ -636,6 +649,7 @@ class atmospheric_correction(object):
         self._load_xa_xb_xc_emus()
         self.logger.info('Get correction coefficients.')
         self._get_xps()
+        # import pdb; pdb.set_trace()
         self.logger.info('Doing corrections.')
         ret = self._get_boa()
         if self._do_rgb:

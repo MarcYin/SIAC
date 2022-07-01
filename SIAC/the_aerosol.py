@@ -922,10 +922,10 @@ class solve_aerosol(object):
         #     ygaus  = np.exp(-2.*(np.pi**2)*(self.psf_ystd**2)*((0.5 * np.arange(self.full_res[1]) /self.full_res[1])**2))
         # gaus_2d = np.outer(xgaus, ygaus) 
         # par = partial(convolve, gaus_2d = gaus_2d, hx = self.hx, hy = self.hy)
-        if np.array(self.ref_scale).ndim ==2:
-            self.ref_scale = self.ref_scale[self.hx, self.hy]
-        if np.array(self.ref_off).ndim == 2:
-            self.ref_off = self.ref_off[self.hx, self.hy]
+        # if np.array(self.ref_scale).ndim ==2:
+        #     self.ref_scale = self.ref_scale[self.hx, self.hy]
+        # if np.array(self.ref_off).ndim == 2:
+        #     self.ref_off = self.ref_off[self.hx, self.hy]
         #self.toa  = np.array(parmap(par,imgs)) * self.ref_scale+self.ref_off
 
         gaus_2d = gaussian(self.psf_xstd, self.psf_ystd, norm = True)
