@@ -16,7 +16,12 @@
 
 This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneouse surface is used without considering the BRDF effects.
 
-## Data needed:
+## Citation:
+
+Yin, F., Lewis, P. E., & Gómez-Dans, J. L. (2022). Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI. _EGUsphere_, _2022_, 1–62. doi:10.5194/egusphere-2022-170
+
+
+## Auxillary data needed:
 * MCD43 : 
   - 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date. 
   - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the preivous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
@@ -28,16 +33,30 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 * Emulators: 
   - Emulators for atmospheric path reflectance, total transmittance and single scattering Albedo, and the emulators for Sentinel 2 and Landsat 8 trained with 6S.V2 are packed in the current repository.
 
+
 ## Installation:
 
-1. Directly from github 
+You will need to have Gdal and Lightgbm installed and it is suggested to install them with:
 
-```bash
-pip install https://github.com/MarcYin/SIAC/archive/master.zip
-```
+- conda:
+  ```bash
+  conda install -c conda-forge gdal>3 lightgbm
+  ```
+- mamba:
+  ```bash
+  mamba install -c conda-forge gdal>3 lightgbm
+  ```
 
+Then you can install SIAC:
 
-2. Using PyPI
+- Directly from github 
+
+  ```bash
+  pip install https://github.com/MarcYin/SIAC/archive/master.zip
+  ```
+
+<!-- 
+1. Using PyPI
 
 ```bash
 pip install SIAC
@@ -48,41 +67,52 @@ pip install SIAC
 
 ```bash
 conda install -c f0xy -c conda-forge siac
-```
+``` -->
+
+## Usage:
+If you have not used GEE python API before, you will need to authenticate to GEE first after you installed SIAC:
+
+- In terminal:
+  ```bash
+  earthengine authenticate
+  ```
+
+- Or in python:
+  ```python
+  import ee
+  ee.Authenticate()
+  ```
 
 
-To save your time for installing GDAL:
+The typical usage of SIAC for and Landsat 8&9:
 
-```bash
-conda install -c conda-forge gdal>3
-```
+- Sentinel 2 
+  ```python
+  from SIAC import SIAC_S2
+  global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+  cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+  SIAC_S2('/directory/where/you/store/S2/data/', global_dem = global_dem, cams_dir=cams_dir)
+  ```
 
+- Landsat 8
 
-The typical usage for Sentinel 2 and Landsat 8&9:
+  ```python
+  from SIAC import SIAC_L8
+  global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+  cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+  SIAC_L8('/directory/where/you/store/L8/data/', global_dem = global_dem, cams_dir=cams_dir) 
+  ``` 
+- Landsat 9
 
-```python
-from SIAC import SIAC_S2
-global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
-cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
-SIAC_S2('/directory/where/you/store/S2/data/', global_dem = global_dem, cams_dir=cams_dir)
-```
+  ```python
+  from SIAC import SIAC_L8
+  global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+  cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+  SIAC_L8('/directory/where/you/store/L9/data/', global_dem = global_dem, cams_dir=cams_dir)
+  ```
 
+- An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
-```python
-from SIAC import SIAC_L8
-global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
-cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
-SIAC_L8('/directory/where/you/store/L8/data/', global_dem = global_dem, cams_dir=cams_dir) 
-``` 
-
-```python
-from SIAC import SIAC_L8
-global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
-cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
-SIAC_L8('/directory/where/you/store/L9/data/', global_dem = global_dem, cams_dir=cams_dir)
-```
-
-An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
 ## Examples and Map:
 
@@ -90,9 +120,5 @@ A [page](http://www2.geog.ucl.ac.uk/~ucfafyi/Atmo_Cor/index.html) shows some cor
 
 A [map](http://www2.geog.ucl.ac.uk/~ucfafyi/map) for comparison between TOA and BOA.
 
-## Citation:
-
-Yin, F., Lewis, P. E., & Gómez-Dans, J. L. (2022). Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI. _EGUsphere_, _2022_, 1–62. doi:10.5194/egusphere-2022-170
-
-### LICENSE
+## LICENSE
 GNU GENERAL PUBLIC LICENSE V3
