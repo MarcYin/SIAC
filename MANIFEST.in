@@ -4,6 +4,7 @@ include SIAC/util/*
 include SIAC/util/ias_lib/*
 include SIAC/data/sen2cloud_detector.pkl
 include SIAC/data/.earthdata_auth
+include SIAC/data/pixel_s2_cloud_detector_lightGBM_v0.1.txt
 include SIAC/spectral_mapping/*
 include SIAC/tests/*.py
 include SIAC/tests/aoi.geojson
