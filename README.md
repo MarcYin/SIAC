@@ -21,7 +21,7 @@ This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse
 Yin, F., Lewis, P. E., & Gómez-Dans, J. L. (2022). Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI. _EGUsphere_, _2022_, 1–62. doi:10.5194/egusphere-2022-170
 
 
-## Auxillary data needed:
+## Auxillary data needed (Automatically downloaded by SIAC):
 * MCD43 : 
   - 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date. 
   - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the preivous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
@@ -69,8 +69,12 @@ pip install SIAC
 conda install -c f0xy -c conda-forge siac
 ``` -->
 
-## Usage:
+
+## GEE authenticate:
 If you have not used GEE python API before, you will need to authenticate to GEE first after you installed SIAC:
+
+![](https://gist.githubusercontent.com/MarcYin/880d289816b2e8d698f2b6b8d8c514ac/raw/6ef799a4df077598757fe9f7c0fc2cd83e60d372/once.svg)
+
 
 - In terminal:
   ```bash
@@ -84,6 +88,7 @@ If you have not used GEE python API before, you will need to authenticate to GEE
   ```
 
 
+## Usage:
 The typical usage of SIAC for and Landsat 8&9:
 
 - Sentinel 2 
@@ -111,6 +116,38 @@ The typical usage of SIAC for and Landsat 8&9:
   SIAC_L8('/directory/where/you/store/L9/data/', global_dem = global_dem, cams_dir=cams_dir)
   ```
 
+## Outputs from SIAC_S2
+
+All the outputs from SIAC are specified in the `siac_output.json` within the original S2 L1C folder.
+
+The following is a list of the outputs from SIAC and their corresponding meanings:
+
+| Abbreviation      | Description | Scale     |  Comments |
+| :---           |    :----           |          :--- | :--- |
+| `siacLog`        | Siac log file       | N/A  | |
+| `toaOvrs`        |  Toa reflectance RGB overviews        | N/A      | |
+| `boaOvrs`        |  Surface reflectance RGB overviews        | N/A      | |
+| `toaOvrFull`     |  Toa reflectance RGB overview full resolution        | N/A      | |
+| `boaOvrFull`    |  Surface reflectance RGB overviews        | N/A      | |
+| `viewAngles`     |  View angles for each band       | 0.01    | 2 bands GeoTiff: B1 view azimuth, B2 view zenith  |
+| `sunAngles`      |  Sun angles for each band       | 0.01    | 2 bands GeoTiff: B1 sun azimuth, B2 sun zenith  |
+| `SurfaceReflectance`        |  Surface reflectance for each band        | 0.0001  | |
+| `SurfaceReflectanceUncertainty`        |  Surface reflectance uncertainty for each band   | 0.0001  | |
+| `atmoParas`        |  Atmospheric parameters | N/A  | aerosol optical depth[-], total column of water vapour [ $g/cm^2$ ] and total column of ozone [ $cm-atm$ ] |
+| `atmoParasUncs`        | Atmospheric parameter uncertainties | N/A  | |
+| `Cloud probability`       | Cloud | 0.01  | |
+| `Version` | Version of the SIAC software | N/A  | |
+| `CleanPixelPercentage` | Clean pixel percentage | N/A  | |
+| `ValidPixelPercentage` | Valid pixel percentage | N/A  | |
+
+
+An example of the [siac_output.json](https://gws-access.jasmin.ac.uk/public/nceo_ard/S2/30/U/UD/S2A_MSIL1C_20170312T114341_N0204_R123_T30UUD_20170312T114341.SAFE/siac_output.json)
+
+## Outputs from SIAC_L8
+
+All the outputs from SIAC are within the original L8/L9 L1C folder.
+
+
 - An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
 
@@ -122,3 +159,4 @@ A [map](http://www2.geog.ucl.ac.uk/~ucfafyi/map) for comparison between TOA and 
 
 ## LICENSE
 GNU GENERAL PUBLIC LICENSE V3
+
