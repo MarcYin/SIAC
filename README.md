@@ -118,9 +118,11 @@ The typical usage of SIAC for and Landsat 8&9:
 
 ## Outputs from SIAC_S2
 
-All the outputs from SIAC are specified in the `siac_output.json` within the original S2 L1C folder.
+All the outputs from SIAC are specified in the `siac_output.json` within the original S2 L1C folder:
 
-The following is a list of the outputs from SIAC and their corresponding meanings:
+  An example of the [siac_output.json](https://gws-access.jasmin.ac.uk/public/nceo_ard/S2/30/U/UD/S2A_MSIL1C_20170312T114341_N0204_R123_T30UUD_20170312T114341.SAFE/siac_output.json)
+
+The following table specify a list of the outputs from SIAC and their corresponding meanings:
 
 | Abbreviation      | Description | Scale     |  Comments |
 | :---           |    :----           |          :--- | :--- |
@@ -139,9 +141,6 @@ The following is a list of the outputs from SIAC and their corresponding meaning
 | `Version` | Version of the SIAC software | N/A  | |
 | `CleanPixelPercentage` | Clean pixel percentage | N/A  | |
 | `ValidPixelPercentage` | Valid pixel percentage | N/A  | |
-
-
-An example of the [siac_output.json](https://gws-access.jasmin.ac.uk/public/nceo_ard/S2/30/U/UD/S2A_MSIL1C_20170312T114341_N0204_R123_T30UUD_20170312T114341.SAFE/siac_output.json)
 
 ## Outputs from SIAC_L8
 
