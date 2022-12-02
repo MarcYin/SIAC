@@ -50,9 +50,6 @@ requirements:
     - scipy >=1.0
     - six
 
-test:
-  imports:
-    - SIAC
 
 about:
   home: "https://github.com/MarcYin/SIAC"
