@@ -599,20 +599,69 @@ class atmospheric_correction(object):
         dst_ds = None 
      
     def _compose_rgb(self,):
-        self.rgb_scale = 4
+        # self.rgb_scale = 4
+
+        # if self.ref_scale.ndim >= 3:
+        #     r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale[self.ri] + self.ref_off[self.ri], \
+        #             self._toa_bands[self.gi].ReadAsArray() * self.ref_scale[self.gi] + self.ref_off[self.gi], \
+        #             self._toa_bands[self.bi].ReadAsArray() * self.ref_scale[self.bi] + self.ref_off[self.bi]
+        # else:
+        #     r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale + self.ref_off, \
+        #             self._toa_bands[self.gi].ReadAsArray() * self.ref_scale + self.ref_off, \
+        #             self._toa_bands[self.bi].ReadAsArray() * self.ref_scale + self.ref_off
+            
+        # alpha   = (r>0) & (g>0) & (b>0)
+        # rgba_array = np.clip([r * self.rgb_scale * 255, g * self.rgb_scale * 255, \
+        #                       b * self.rgb_scale * 255, alpha * self.rgb_scale * 255], 0, 255).astype(np.uint8)
+        
+        
+        self.rgb_scale = 2.5
+        # r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale + self.ref_off, \
+        #           self._toa_bands[self.gi].ReadAsArray() * self.ref_scale + self.ref_off, \
+        #           self._toa_bands[self.bi].ReadAsArray() * self.ref_scale + self.ref_off
 
         if self.ref_scale.ndim >= 3:
-            r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale[self.ri] + self.ref_off[self.ri], \
-                    self._toa_bands[self.gi].ReadAsArray() * self.ref_scale[self.gi] + self.ref_off[self.gi], \
-                    self._toa_bands[self.bi].ReadAsArray() * self.ref_scale[self.bi] + self.ref_off[self.bi]
-        else:
-            r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale + self.ref_off, \
-                    self._toa_bands[self.gi].ReadAsArray() * self.ref_scale + self.ref_off, \
-                    self._toa_bands[self.bi].ReadAsArray() * self.ref_scale + self.ref_off
             
-        alpha   = (r>0) & (g>0) & (b>0)
-        rgba_array = np.clip([r * self.rgb_scale * 255, g * self.rgb_scale * 255, \
-                              b * self.rgb_scale * 255, alpha * self.rgb_scale * 255], 0, 255).astype(np.uint8)
+            rgb_inds = [self.ri, self.gi, self.bi]
+            rgba_array = []
+            valid_mask = True
+            for ind in rgb_inds:
+                data = self._toa_bands[ind].ReadAsArray() * self.ref_scale[ind] + self.ref_off[ind]
+                valid_mask = valid_mask & (data > 0)
+                data = np.clip((data * self.rgb_scale * 255), 0, 255).astype(np.uint8)
+                rgba_array.append(data)
+
+            # r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale[self.ri] + self.ref_off[self.ri], \
+            #         self._toa_bands[self.gi].ReadAsArray() * self.ref_scale[self.gi] + self.ref_off[self.gi], \
+            #         self._toa_bands[self.bi].ReadAsArray() * self.ref_scale[self.bi] + self.ref_off[self.bi]
+        else:
+            rgb_inds = [self.ri, self.gi, self.bi]
+            rgba_array = []
+            valid_mask = True
+            for ind in rgb_inds:
+                data = self._toa_bands[ind].ReadAsArray() * self.ref_scale + self.ref_off
+                valid_mask = valid_mask & (data > 0)
+                data = np.clip((data * self.rgb_scale * 255), 0, 255).astype(np.uint8)
+                rgba_array.append(data)
+        
+
+        #     r, g, b = self._toa_bands[self.ri].ReadAsArray() * self.ref_scale + self.ref_off, \
+        #             self._toa_bands[self.gi].ReadAsArray() * self.ref_scale + self.ref_off, \
+        #             self._toa_bands[self.bi].ReadAsArray() * self.ref_scale + self.ref_off
+
+        # alpha   = (r>0) & (g>0) & (b>0)
+        
+        # r = np.clip((r * self.rgb_scale * 255), 0, 255).astype(np.uint8)
+        # g = np.clip((g * self.rgb_scale * 255), 0, 255).astype(np.uint8)
+        # b = np.clip((b * self.rgb_scale * 255), 0, 255).astype(np.uint8)
+        # alpha = np.clip((alpha * 255), 0, 255).astype(np.uint8)
+
+
+        alpha = np.clip((valid_mask * 255), 0, 255).astype(np.uint8)
+        rgba_array.append(alpha)
+        rgba_array = np.array(rgba_array).astype(np.uint8)
+
+        
         name = self.toa_dir + '/TOA_RGB.tif'
         projection   = self._toa_bands[self.ri].GetProjectionRef()
         geotransform = self._toa_bands[self.ri].GetGeoTransform() 
