@@ -40,11 +40,11 @@ You will need to have Gdal and Lightgbm installed and it is suggested to install
 
 - conda:
   ```bash
-  conda install -c conda-forge gdal>3 lightgbm
+  conda install -c conda-forge gdal lightgbm
   ```
 - mamba:
   ```bash
-  mamba install -c conda-forge gdal>3 lightgbm
+  mamba install -c conda-forge gdal lightgbm
   ```
 
 Then you can install SIAC:
