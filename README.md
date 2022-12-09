@@ -78,7 +78,7 @@ If you have not used GEE python API before, you will need to authenticate to GEE
 
 - In terminal:
   ```bash
-  earthengine authenticate
+  earthengine authenticate --auth_mode=notebook
   ```
 
 - Or in python:
