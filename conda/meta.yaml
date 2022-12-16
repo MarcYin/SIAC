@@ -26,13 +26,14 @@ requirements:
     - pip
     - psutil
     - pyproj
-    - python
+    - python>=3.10
     - requests
     - retry
     - scikit-image
-    - scikit-learn
+    - scikit-learn <=0.23.1
     - scipy >=1.0
     - six
+    - s2cloudless
   run:
     - earthengine-api
     - gdal >=3.1
@@ -42,13 +43,14 @@ requirements:
     - numpy >=1.13
     - psutil
     - pyproj
-    - python
+    - python>=3.10
     - requests
     - retry
     - scikit-image
-    - scikit-learn
+    - scikit-learn <=0.23.1
     - scipy >=1.0
     - six
+    - s2cloudless
 
 
 about:
