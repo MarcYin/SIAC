@@ -29,7 +29,8 @@ docker pull marcyin/siac
 ```bash
 docker run --rm --name SIAC marcyin/siac
 ```
-* The `--name` flag allows you to specify a custom name for the Docker container. In this case, we've named it `SIAC`. This can be useful if you need to reference the container by name later on, for example when you want to stop or delete it.
+* The `--rm` flag specified in the `docker run` command will automatically delete the container when it's stopped, so you don't have to worry about cleaning up after yourself.
+* The `--name` flag allows you to specify a custom name for the Docker container. In this case, we've named it `SIAC`. This can be useful if you need to reference the container by name later on, for example when you want to stop or delete it. 
 
 Alternatively, you can enter the container with a shell by adding the `bash` flag at the end of the `docker run` command:
 
@@ -37,7 +38,7 @@ Alternatively, you can enter the container with a shell by adding the `bash` fla
 docker run --rm --name SIAC -it marcyin/siac bash
 ```
 
-* This will start the SIAC Docker container and drop you into a shell inside the container. Once you're inside the SIAC Docker container, you can run the SIAC commands as you would normally do. When you're done using the container, you can simply exit the shell to stop the container. The `--rm` flag specified in the `docker run` command will automatically delete the container when it's stopped, so you don't have to worry about cleaning up after yourself.
+* This will start the SIAC Docker container and drop you into a shell inside the container. Once you're inside the SIAC Docker container, you can run the SIAC commands as you would normally do. When you're done using the container, you can simply exit the shell to stop the container. 
 
 
 5. To mount external drive folders to the container, you can use the `-v` flag to bind mount the host directories to the container. For example, to mount the `MCD43`, `DEM`, `water_mask`, `S2_L1C`, and `S2_L2A` directories, you can use the following command:
