@@ -1,0 +1,63 @@
+{% set data = load_setup_py_data() %}
+
+package:
+  name: siac
+  version: {{ data.get('version') }}
+
+about:
+  home: {{ data['url'] }}
+  license: GNU Affero General Public v3.0
+  license_family: AGPL
+  summary: {{ data.get('description') }}
+
+source:
+  path: ..
+
+build:
+  script: python setup.py install
+  preserve_egg_dir: True
+requirements:
+  host:
+    - gdal >=3.1
+    - libgdal >=3.1
+    - lightgbm >=2.1.0
+    - numba
+    - numpy >=1.13
+    - pip
+    - psutil
+    - pyproj
+    - python
+    - requests
+    - retry
+    - scikit-image
+    - scikit-learn
+    - scipy >=1.0
+    - six
+  run:
+    - earthengine-api
+    - gdal >=3.1
+    - libgdal >=3.1
+    - lightgbm >=2.1.0
+    - numba
+    - numpy >=1.13
+    - psutil
+    - pyproj
+    - python
+    - requests
+    - retry
+    - scikit-image
+    - scikit-learn
+    - scipy >=1.0
+    - six
+
+test:
+  imports:
+    - SIAC
+
+about:
+  home: "https://github.com/MarcYin/SIAC"
+  license_file: 
+  summary: "A sensor invariant Atmospheric Correction (SIAC)"
+  doc_url: 
+  dev_url: 
+
