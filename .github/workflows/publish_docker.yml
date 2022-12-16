@@ -5,14 +5,10 @@ on:
     types: [published]
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
-
     - uses: whoan/docker-build-with-cache-action@master
       with:
         username: "${{ secrets.DOCKERHUB_USERNAME }}"  
@@ -27,17 +23,17 @@ jobs:
         docker run --rm -d --name test_container -p 8888:8888 "${{ secrets.DOCKERHUB_USERNAME }}"/siac
         docker run --link test_container:test_container waisbrot/wait
         curl --fail http://localhost:8888
-   - name: Login to DockerHub Registry
-        run: echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-   - name: Get the version
-        id: vars
-        run: echo ::set-output name=tag::$(echo ${GITHUB_REF:10})
-   - name: Build the tagged Docker image
-        run: docker build . --file Dockerfile --tag ${{ secrets.DOCKERHUB_USERNAME }}/siac:${{steps.vars.outputs.tag}}
-   - name: Push the tagged Docker image
-        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/siac:${{steps.vars.outputs.tag}}
-   - name: Build the latest Docker image
-        run: docker build . --file Dockerfile --tag ${{ secrets.DOCKERHUB_USERNAME }}/siac:latest
-   - name: Push the latest Docker image
-        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/siac:latest
+  #   - name: Login to DockerHub Registry
+  #       run: echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+  #   - name: Get the version
+  #       id: vars
+  #       run: echo ::set-output name=tag::$(echo ${GITHUB_REF:10})
+  #   - name: Build the tagged Docker image
+  #       run: docker build . --file Dockerfile --tag ${{ secrets.DOCKERHUB_USERNAME }}/siac:${{steps.vars.outputs.tag}}
+  #  - name: Push the tagged Docker image
+  #       run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/siac:${{steps.vars.outputs.tag}}
+  #  - name: Build the latest Docker image
+  #       run: docker build . --file Dockerfile --tag ${{ secrets.DOCKERHUB_USERNAME }}/siac:latest
+  #  - name: Push the latest Docker image
+  #       run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/siac:latest
       
