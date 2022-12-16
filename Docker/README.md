@@ -29,7 +29,12 @@ docker run --rm -it marcyin/siac bash
 
 4. To mount external drive folders to the container, you can use the `-v` flag to bind mount the host directories to the container. For example, to mount the `MCD43`, `DEM`, `water_mask`, `S2_L1C`, and `S2_L2A` directories, you can use the following command:
 ```bash
-docker run --rm --name SIAC -it -v /path/to/MCD43:/MCD43 -v /path/to/DEM:/DEM -v /path/to/water_mask:/water_mask -v /path/to/S2_L1C:/S2_L1C -v /path/to/S2_L2A:/S2_L2A marcyin/siac
+docker run --rm --name SIAC -it \
+        -v /path/to/MCD43:/MCD43 \
+        -v /path/to/DEM:/DEM \
+        -v /path/to/water_mask:/water_mask \
+        -v /path/to/S2_L1C:/S2_L1C \
+        -v /path/to/S2_L2A:/S2_L2A marcyin/siac
 ```
 
    * Replace `/path/to/MCD43`, `/path/to/DEM`, `/path/to/water_mask`, `/path/to/S2_L1C`, and `/path/to/S2_L2A` with the actual paths to the directories on your host system.
