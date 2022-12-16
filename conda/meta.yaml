@@ -26,14 +26,13 @@ requirements:
     - pip
     - psutil
     - pyproj
-    - python>=3.10
+    - python
     - requests
     - retry
     - scikit-image
-    - scikit-learn <=0.23.1
+    - scikit-learn
     - scipy >=1.0
     - six
-    - s2cloudless
   run:
     - earthengine-api
     - gdal >=3.1
@@ -43,15 +42,17 @@ requirements:
     - numpy >=1.13
     - psutil
     - pyproj
-    - python>=3.10
+    - python
     - requests
     - retry
     - scikit-image
-    - scikit-learn <=0.23.1
+    - scikit-learn
     - scipy >=1.0
     - six
-    - s2cloudless
 
+test:
+  imports:
+    - SIAC
 
 about:
   home: "https://github.com/MarcYin/SIAC"
