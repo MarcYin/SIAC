@@ -1,8 +1,6 @@
 name: Push release to dockerhub
 
-on:
-  release:
-    types: [published]
+on: push
 
 jobs:
   build:
