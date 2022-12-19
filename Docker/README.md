@@ -42,7 +42,7 @@ Alternatively, you can enter the container with a shell by adding the `bash` fla
 docker run --rm --name SIAC -it marcyin/siac bash
 ```
 
-* This will start the SIAC Docker container and drop you into a shell inside the container. Once you're inside the SIAC Docker container, you can run the SIAC commands as you would normally do and please refer to the [SIAC usage instruction](https://github.com/MarcYin/SIAC#gee-authenticate). When you're done using the container, you can simply exit the shell to stop the container. 
+* This will start the SIAC Docker container and drop you into a shell inside the container. Once you're inside the SIAC Docker container, you can run the SIAC commands as you would normally do, and please refer to the [SIAC usage instruction](https://github.com/MarcYin/SIAC#gee-authenticate). When you're done using the container, you can simply exit the shell to stop the container. 
 
 
 5. To access the auxiliary data required by SIAC from your host machine, you can use the `-v` flag to bind mount the host directories to the container. For example, to mount the `MCD43`, `DEM`, `water_mask`, `S2_L1C`, and `S2_L2A` directories, you can use the following command:
