@@ -12,17 +12,16 @@
 [![Lisence](https://img.shields.io/pypi/l/siac.svg?longCache=true&style=flat)](https://pypi.org/project/SIAC/)
 [![DOI](https://zenodo.org/badge/117815245.svg)](https://zenodo.org/badge/latestdoi/117815245)
 
-This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneouse surface is used without considering the BRDF effects.
+This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneous surface is used without considering the BRDF effects.
 
 ## Citation:
 
-Yin, F., Lewis, P. E., & Gómez-Dans, J. L. (2022). Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI. _EGUsphere_, _2022_, 1–62. doi:10.5194/egusphere-2022-170
+Yin, F., Lewis, P. E., and Gómez-Dans, J. L.: Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI, Geosci. Model Dev., 15, 7933–7976, https://doi.org/10.5194/gmd-15-7933-2022, 2022.
 
-
-## Auxillary data needed (Automatically downloaded by SIAC):
+## Auxiliary data needed (Automatically downloaded by SIAC):
 * MCD43 : 
   - 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date. 
-  - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the preivous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
+  - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the previous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
   - Or you can still use the previous way to download the data by adding the `Gee = False` in the `SIAC_S2` or `SIAC_L8` class, i.e. `SIAC_S2(**kwargs, gee=False)` or `SIAC_L8(**kwargs, gee=False)`.
 * ECMWF CAMS Near Real Time prediction: 
   - Time step of 3 hours or 1 hour with the start time of 00:00:00 over the date, and data from 01/01/2015 are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/
@@ -34,7 +33,7 @@ Yin, F., Lewis, P. E., & Gómez-Dans, J. L. (2022). Bayesian atmospheric correct
 
 ## Installation:
 
-You will need to have Gdal and Lightgbm installed and it is suggested to install them with:
+You will need to have gdal and Lightgbm installed, and it is suggested to install them with:
 
 - conda:
   ```bash
@@ -47,7 +46,7 @@ You will need to have Gdal and Lightgbm installed and it is suggested to install
 
 Then you can install SIAC:
 
-- Directly from github 
+- Directly from GitHub 
 
   ```bash
   pip install https://github.com/MarcYin/SIAC/archive/master.zip
@@ -120,7 +119,7 @@ All the outputs from SIAC are specified in the `siac_output.json` within the ori
 
   An example of the [siac_output.json](https://gws-access.jasmin.ac.uk/public/nceo_ard/S2/30/U/UD/S2A_MSIL1C_20170312T114341_N0204_R123_T30UUD_20170312T114341.SAFE/siac_output.json)
 
-The following table specify a list of the outputs from SIAC and their corresponding meanings:
+The following table specifies a list of the outputs from SIAC and their corresponding meanings:
 
 | Abbreviation      | Description | Scale     |  Comments |
 | :---           |    :----           |          :--- | :--- |
@@ -145,7 +144,7 @@ The following table specify a list of the outputs from SIAC and their correspond
 All the outputs from SIAC are within the original L8/L9 L1C folder.
 
 
-- An example of correction for Landsat 5 for a more detailed demostration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
+- An example of correction for Landsat 5 for a more detailed demonstration of the usage is shown [here](https://github.com/MarcYin/Global-analysis-ready-dataset)
 
 
 ## Examples and Map:
