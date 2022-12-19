@@ -30,7 +30,7 @@ docker pull marcyin/siac
 docker run --rm --name SIAC marcyin/siac
 ```
 
-* :warning: :warning: :warning: If you encounter an error message when running the command for the first time, it is likely due to a lack of Google Earth Engine authentication. Please refer to the next section for instructions to [set up Google Earth Engine authentication for Docker](<#Google-Earth-Engine-authentication-for-docker>). :warning: :warning: :warning:
+* :warning: :warning: :warning: If you encounter an error message when running the command for the first time, it is likely due to a lack of Google Earth Engine authentication. Please refer to the next section for instructions to [set up Google Earth Engine authentication for Docker](<#Google-Earth-Engine-authentication-for-docker>).
 
 * The `--rm` flag specified in the `docker run` command will automatically delete the container when it's stopped, so you don't have to worry about cleaning up after yourself.
 * The `--name` flag allows you to specify a custom name for the Docker container. In this case, we've named it `SIAC`. This can be useful if you need to reference the container by name later on, for example when you want to stop or delete it. 
