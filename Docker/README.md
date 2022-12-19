@@ -48,7 +48,7 @@ docker run --rm --name SIAC -it marcyin/siac bash
 5. To access the auxiliary data required by SIAC from your host machine, you can use the `-v` flag to bind mount the host directories to the container. For example, to mount the `MCD43`, `DEM`, `water_mask`, `S2_L1C`, and `S2_L2A` directories, you can use the following command:
 
 ```bash
-docker run --rm --name SIAC -it \
+docker run --rm --name SIAC \
         -v /path/to/MCD43:/MCD43 \
         -v /path/to/DEM:/DEM \
         -v /path/to/water_mask:/water_mask \
@@ -96,5 +96,5 @@ Successfully saved authorization token.
 This will save the `credentials` under `/path/to/earthengine_api_key` into host machine, which can be reused when starting a new Docker container. To mount the key from the host machine to the container, you can run the SIAC Docker container with the `-v /path/to/earthengine_api_key:/root/.config/earthengine` flag. An example:
 
 ```bash
-docker run --rm --name SIAC -it -v /path/to/earthengine_api_key:/root/.config/earthengine marcyin/siac
+docker run --rm --name SIAC -v /path/to/earthengine_api_key:/root/.config/earthengine marcyin/siac
 ```
