@@ -67,7 +67,7 @@ docker run --rm --name SIAC -it \
 2. Start the SIAC Docker container with the following command:
 
 ```bash
-docker run --rm --name SIAC -it -v /path/to/earthengine_api_key:/root/.config/earthengine/credentials marcyin/siac bash
+docker run --rm --name SIAC -it -v /path/to/earthengine_api_key:/root/.config/earthengine marcyin/siac bash
 ```
 
 * :warning: Replace `/path/to/earthengine_api_key` with the actual path to the directory on your host system where you want to store the Google Earth Engine authentication key.
@@ -93,8 +93,8 @@ Successfully saved authorization token.
 5. You can now exit the shell and stop the container by typing `exit` in the terminal. 
 
 
-This will save the key into host machine, which can be reused when starting a new Docker container. To mount the key from the host machine to the container, you can run the SIAC Docker container with the `-v /path/to/earthengine_api_key:/root/.config/earthengine/credentials` flag. An example:
+This will save the `credentials` under `/path/to/earthengine_api_key` into host machine, which can be reused when starting a new Docker container. To mount the key from the host machine to the container, you can run the SIAC Docker container with the `-v /path/to/earthengine_api_key:/root/.config/earthengine` flag. An example:
 
 ```bash
-docker run --rm --name SIAC -it -v /path/to/earthengine_api_key:/root/.config/earthengine/credentials marcyin/siac
+docker run --rm --name SIAC -it -v /path/to/earthengine_api_key:/root/.config/earthengine marcyin/siac
 ```
