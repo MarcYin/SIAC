@@ -14,6 +14,12 @@
 
 This atmospheric correction method uses MODIS MCD43 BRDF product to get a coarse resolution simulation of earth surface. A model based on MODIS PSF is built to deal with the scale differences between MODIS and Sentinel 2 / Landsat 8. We uses the ECMWF CAMS prediction as a prior for the atmospheric states, coupling with 6S model to solve for the atmospheric parameters. We do not have topography correction and homogeneous surface is used without considering the BRDF effects.
 
+## :whale: Docker:
+
+Please refer to the [SIAC Docker usage instruction](https://github.com/MarcYin/SIAC/tree/master/Docker) inside `Docker` folder.
+
+
+
 ## Citation:
 
 Yin, F., Lewis, P. E., and Gómez-Dans, J. L.: Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI, Geosci. Model Dev., 15, 7933–7976, https://doi.org/10.5194/gmd-15-7933-2022, 2022.
