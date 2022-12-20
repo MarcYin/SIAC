@@ -9,3 +9,4 @@
 .coverage*
 SIAC.egg-info
 .ipynb_checkpoints
+.DS_Store
