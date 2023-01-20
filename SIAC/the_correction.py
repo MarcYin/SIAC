@@ -67,8 +67,8 @@ class atmospheric_correction(object):
                  emus_dir    = 'SIAC/emus/',
                  cams_scale  = [1., 0.1, 46.698, 1., 1., 1.],
                  block_size  = 600,
-                 rgb         = [None, None, None]
-                
+                 rgb         = [None, None, None],
+                 do_rgb      = True
                  ):      
     
 
@@ -101,11 +101,11 @@ class atmospheric_correction(object):
         self.toa_dir     =  os.path.abspath('/'.join(toa_bands[0].split('/')[:-1]))
         self.rgb         = rgb
         r, g, b          = self.rgb
-        self._do_rgb = False
+        self._do_rgb     = do_rgb
         self.ri, self.gi, self.bi = None, None, None
-        if (r is not None) & (g is not None) & (b is not None):
+        if self._do_rgb & (r is not None) & (g is not None) & (b is not None):
             self.ri, self.gi, self.bi = self.toa_bands.index(r), self.toa_bands.index(g), self.toa_bands.index(b)
-            self._do_rgb = True
+            #self._do_rgb = False
 
         self.logger = create_logger(log_file)
          
@@ -548,11 +548,13 @@ class atmospheric_correction(object):
             # unc  = np.sqrt(aot_dH ** 2 * aot_unc**2 + tcwv_dH ** 2 * tcwv_unc**2 + tco3_dH ** 2 * tco3_unc**2 + toa_dH**2 * 0.015**2)
             toa_unc = toa * 0.05
             unc  = np.sqrt(aot_dH ** 2 * aot_unc**2 + tcwv_dH ** 2 * tcwv_unc**2 + tco3_dH ** 2 * tco3_unc**2 * 0 + toa_dH**2 * toa_unc**2)
-            del aot_unc; del tcwv_unc; del tco3_unc
+            del aot_unc; del tcwv_unc; del tco3_unc; del toa_dH; del aot_dH; del tcwv_dH; del tco3_dH
             boa[bad_pixel] = np.nan
             unc[bad_pixel] = np.nan
             boas.append(boa)
             uncs.append(unc)
+            del boa; del unc
+
         boas, uncs = np.hstack(boas), np.hstack(uncs)
         boa_name = self.toa_dir + '/' + '.'.join(self.toa_bands[ind].split('/')[-1].split('.')[0:-1]) + '_sur.tif'
         unc_name  = boa_name.replace('_sur.tif', '_sur_unc.tif')
@@ -560,9 +562,10 @@ class atmospheric_correction(object):
         geotransform  = toa_g.GetGeoTransform()
         self._save_band(boas, boa_name, projectionRef, geotransform)
         self._save_band(uncs, unc_name, projectionRef, geotransform)
-        if ind in [self.ri, self.gi, self.bi]:
+        if self._do_rgb & (ind in [self.ri, self.gi, self.bi]):
             return boas
         else:
+            del boas; del uncs
             return None
             
     def _save_band(self, array, outputFileName, projectionRef, geotransform):

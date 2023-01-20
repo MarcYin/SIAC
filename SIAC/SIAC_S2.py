@@ -25,7 +25,7 @@ home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
-             global_dem  = None, cams_dir = None, jasmin = False, Gee = True):
+             global_dem  = None, cams_dir = None, jasmin = False, Gee = True, do_rgb = True):
     '''
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -44,7 +44,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
     rets = s2_pre_processing(s2_t, cams_dir, global_dem)
     aero_atmos = []
     for ret in rets:
-        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee)
+        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee, do_rgb)
         aero_atmo = do_correction(*ret)
         if send_back:
             aero_atmos.append(aero_atmo)
@@ -54,7 +54,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                   cloud_mask, aot, tcwv, metafile, mcd43 = home + '/MCD43/', \
                   vrt_dir = home + '/MCD43_VRT/', aoi=None, \
-                  global_dem  = None, cams_dir = None, jasmin = False, Gee = True):
+                  global_dem  = None, cams_dir = None, jasmin = False, Gee = True, do_rgb = True):
     if jasmin:
         if global_dem is None:
             global_dem  = '/work/scratch-pw/marcyin/DEM/global_dem.vrt'
@@ -184,7 +184,8 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                                   sun_angles, aot = aot, cloud_mask = cloud_mask, \
                                   tcwv = tcwv, tco3 = tco3, aot_unc = aot_unc, \
                                   tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = rgb,  ref_scale = ref_scale, ref_off = ref_off,\
-                                  emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir)
+                                  emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir,
+                                  do_rgb = do_rgb)
     atmo._doing_correction()
     
     logger.info('Generating summery Json.')
