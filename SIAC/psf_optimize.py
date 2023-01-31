@@ -105,23 +105,24 @@ class psf_optimize(object):
        self.off         = offset
     def _preprocess(self,):
      
-        size = 2*int(round(1.96*self.ystd))# set the largest possible PSF size
+        #size = 2*int(round(1.96*self.ystd)) # set the largest possible PSF size
         #self.high_img[0,:]=self.high_img[-1,:]=self.high_img[:,0]=self.high_img[:,-1]= -9999
-        self.bad_pixs = cloud_dilation( (self.high_img < 0.0001) | (self.high_img >= 1), iteration=int(size/2))
-        self.bad_pixs = self.bad_pixs | self.cloud
+        #self.bad_pixs = cloud_dilation( (self.high_img < 0.0001) | (self.high_img >= 1), iteration=int(size/2))
+        #self.bad_pixs = cloud_dilation( (self.high_img < 0.0001) | (self.high_img >= 1), iteration=int(size/2)) | self.cloud
         #xstd, ystd = 29.75, 39
         #ker = self.gaussian(self.xstd, self.ystd, 0)
-        if (self.xstd < 1.) or (self.ystd < 1.):
-            self.conved = self.high_img
-        else:
-            data = self._pad_even_shape(self.high_img)
-            gaus_2d = self.dct_gaussian(self.xstd, self.ystd, data.shape)
-            self.conved = idct(idct(dct(dct(data, axis=0, norm = 'ortho'), axis=1, norm='ortho') * gaus_2d, \
-                                                  axis=1, norm = 'ortho'), axis=0, norm='ortho')
+        #if (self.xstd < 1.) or (self.ystd < 1.):
+        #    self.conved = self.high_img
+        if not (self.xstd < 1.) or (self.ystd < 1.):
+            #data = self._pad_even_shape(self.high_img)
+            #gaus_2d = self.dct_gaussian(self.xstd, self.ystd, data.shape)
+            self.high_img = idct(idct(dct(dct(self._pad_even_shape(self.high_img), axis=0, norm = 'ortho'), axis=1, norm='ortho')
+                                    * self.dct_gaussian(self.xstd, self.ystd, self._pad_even_shape(self.high_img).shape), axis=1, norm = 'ortho'), axis=0, norm='ortho')
         #self.conved = signal.fftconvolve(self.high_img, ker, mode='same')
-        l_mask = (~self.low_img.mask) & (self.qa<self.qa_thresh) & (~np.isnan(self.low_img)) & (~np.isnan(self.qa))
-        h_mask =  ~self.bad_pixs[self.Hx, self.Hy]
-        self.lh_mask = l_mask & h_mask
+        #l_mask = (~self.low_img.mask) & (self.qa < self.qa_thresh) & (~np.isnan(self.low_img)) & (~np.isnan(self.qa))
+        #h_mask =  ~(cloud_dilation( (self.high_img < 0.0001) | (self.high_img >= 1), iteration=int(size/2)) | self.cloud)[self.Hx, self.Hy]
+        self.lh_mask = (~self.low_img.mask) & (self.qa < self.qa_thresh) & (~np.isnan(self.low_img)) & (~np.isnan(self.qa)) \
+                       & ~(cloud_dilation( (self.high_img < 0.0001) | (self.high_img >= 1), iteration=int(2*int(round(1.96*self.ystd))/2)) | self.cloud)[self.Hx, self.Hy]
 
     def _pad_even_shape(self, array):
         x_size, y_size = array.shape
@@ -161,8 +162,8 @@ class psf_optimize(object):
 
 
     def shift_optimize(self, p0):
-        invR = self.shift_cost(p0)
-        return [p0, invR]#optimize.fmin(self.shift_cost, p0, full_output=1, maxiter=100, maxfun=150, disp=0)
+        #invR = self.shift_cost(p0)
+        return [p0, self.shift_cost(p0)]#optimize.fmin(self.shift_cost, p0, full_output=1, maxiter=100, maxfun=150, disp=0)
 
 
     def gaus_cost(self, para):
@@ -181,24 +182,37 @@ class psf_optimize(object):
 
     def shift_cost(self, shifts):
         # cost with different shits
-        xs, ys = shifts
-        cos = self.cost(xs=xs, ys=ys, conved=self.conved)
-        return cos
+        #xs, ys = shifts
+        #cos = self.cost(xs=xs, ys=ys, conved=self.high_img)
+        return self.cost(xs=shifts[0], ys=shifts[1], conved=self.high_img)
 
 
     def cost(self, xs=None, ys=None, conved = None):
         # a common cost function can be reused
-        shifted_mask = np.logical_and.reduce(((self.Hx+int(xs)>=0),
-                                              (self.Hx+int(xs)<self.shape[0]), 
-                                              (self.Hy+int(ys)>=0),
-                                              (self.Hy+int(ys)<self.shape[1])))
-        mask = self.lh_mask & shifted_mask
+        #shifted_mask = np.logical_and.reduce(((self.Hx+int(xs)>=0),
+        #                                      (self.Hx+int(xs)<self.shape[0]),
+        #                                      (self.Hy+int(ys)>=0),
+        #                                      (self.Hy+int(ys)<self.shape[1])))
+        #mask = self.lh_mask & np.logical_and.reduce(((self.Hx+int(xs)>=0), (self.Hx+int(xs)<self.shape[0]),
+        #                                             (self.Hy+int(ys)>=0), (self.Hy+int(ys)<self.shape[1])))
         x_ind, y_ind = self.Hx + int(xs), self.Hy + int(ys)
-        High_resolution_band, Low_resolution_band = conved[x_ind[mask], y_ind[mask]], self.low_img[mask]
-        m_fed, s_fed = self.slop*Low_resolution_band+self.off, High_resolution_band
+        #High_resolution_band = conved[x_ind[self.lh_mask & np.logical_and.reduce(((self.Hx+int(xs)>=0), (self.Hx+int(xs)<self.shape[0]),
+        #                                                                          (self.Hy+int(ys)>=0), (self.Hy+int(ys)<self.shape[1])))],
+        #                              y_ind[self.lh_mask & np.logical_and.reduce(((self.Hx+int(xs)>=0), (self.Hx+int(xs)<self.shape[0]),
+        #                                                                          (self.Hy+int(ys)>=0), (self.Hy+int(ys)<self.shape[1])))]]
+        #Low_resolution_band = self.low_img[self.lh_mask & np.logical_and.reduce(((self.Hx+int(xs)>=0), (self.Hx+int(xs)<self.shape[0]),
+        #                                                                         (self.Hy+int(ys)>=0), (self.Hy+int(ys)<self.shape[1])))]
+        #m_fed, s_fed = self.slop*Low_resolution_band+self.off, High_resolution_band
         try:
-            r = scipy.stats.linregress(m_fed, s_fed)
-            cost = abs(1-r.rvalue)
+            r = scipy.stats.linregress(self.slop
+                                       * self.low_img[self.lh_mask & np.logical_and.reduce(((self.Hx+int(xs)>=0), (self.Hx+int(xs)<self.shape[0]),
+                                                                                            (self.Hy+int(ys)>=0), (self.Hy+int(ys)<self.shape[1])))]
+                                       + self.off,
+                                       conved[x_ind[self.lh_mask & np.logical_and.reduce(((self.Hx + int(xs) >= 0), (self.Hx + int(xs) < self.shape[0]),
+                                                                                          (self.Hy + int(ys) >= 0), (self.Hy + int(ys) < self.shape[1])))],
+                                              y_ind[self.lh_mask & np.logical_and.reduce(((self.Hx + int(xs) >= 0), (self.Hx + int(xs) < self.shape[0]),
+                                                                                          (self.Hy + int(ys) >= 0), (self.Hy + int(ys) < self.shape[1])))]]).rvalue
+            cost = abs(1-r)
         except:
             cost = 100000000000.
         return cost
@@ -214,19 +228,19 @@ class psf_optimize(object):
         # max_val = [50,50]
         # ps, distributions = create_training_set([ 'xs', 'ys'], min_val, max_val, n_train=50)
         shifts = np.arange(-50, 50)
-        shiftsx = np.repeat(shifts, len(shifts))
-        shiftsy = np.tile(shifts, len(shifts))
-        ps = list(zip(shiftsx, shiftsy))
-        self.shift_solved = list(map(self.shift_optimize, ps))   
-        self.paras, self.costs = np.array([i[0] for i in self.shift_solved]), \
-                                           np.array([i[1] for i in self.shift_solved])
+        #shiftsx = np.repeat(shifts, len(shifts))
+        #shiftsy = np.tile(shifts, len(shifts))
+        #ps = list(zip(shiftsx, shiftsy))
+        #self.shift_solved = list(map(self.shift_optimize, list(zip(np.repeat(shifts, len(shifts)), np.tile(shifts, len(shifts))))))
+        self.paras = np.array([i[0] for i in list(map(self.shift_optimize, list(zip(np.repeat(shifts, len(shifts)), np.tile(shifts, len(shifts))))))])
+        self.costs = np.array([i[1] for i in list(map(self.shift_optimize, list(zip(np.repeat(shifts, len(shifts)), np.tile(shifts, len(shifts))))))])
        
         if (1 - self.costs.min()) >= 0.6:
-            xs, ys = self.paras[self.costs==np.nanmin(self.costs)][0].astype(int)
+            return self.paras[self.costs == np.nanmin(self.costs)][0].astype(int)
         else:
-            xs, ys = 0, 0
+            return 0, 0
         #print 'Best shift is ', xs, ys, 'with the correlation of', 1-self.costs.min()
-        return xs, ys
+        #return xs, ys
 
 
     def fire_gaus_optimize(self,):

@@ -75,7 +75,7 @@ class solving_atmo_paras(object):
                  tco3_unc,
                  boa_unc,
                  Hx, Hy,
-                 mask,
+                 #mask,
                  full_res,
                  aero_res,
                  emulators, 
@@ -107,7 +107,7 @@ class solving_atmo_paras(object):
         self.tco3_unc        = tco3_unc
         self.boa_unc         = boa_unc
         self.Hx, self.Hy     = Hx, Hy
-        self.mask            = mask
+        #self.mask            = mask
         self.full_res        = full_res
         self.aero_res        = aero_res
         self.emus            = np.array(emulators)
@@ -288,32 +288,27 @@ class solving_atmo_paras(object):
             else:
                 self._obs_cost_test(psolve['x'], do_unc = True)     
                 nx, ny = self.prior_uncs.shape
-                dtd = compose_dtd(1, ny)[0]
-                #self.obs_unc[np.isnan(self.obs_unc)] = 0
                 self.obs_unc[np.isnan(self.obs_unc)] = 0
                 self.prior_uncs[np.isnan(self.prior_uncs)] = 0
-                #self.prior_uncs[np.isnan(self.prior_uncs)] =  np.mean(self.prior_uncs[~np.isnan(self.prior_uncs)])
-                #to_inv = np.nansum([sparse.diags((self.obs_unc[0]).ravel()), sparse.diags((self.prior_uncs[0]**-2).ravel()), self.gamma**2 * dtd], axis = 0)
-                #to_inv = np.nansum([sparse.diags((self.obs_unc[0]).ravel()).toarray(), sparse.diags((self.prior_uncs[0]**-2).ravel()).toarray(), self.gamma**2 * dtd.toarray()], axis = 0).astype(np.float32)
-                to_inv = sparse.diags((self.obs_unc[0]).ravel()) + sparse.diags((self.prior_uncs[0]**-2).ravel()) + self.gamma**2 * dtd
-                aot_unc  = (linalg.inv(to_inv).diagonal())** 0.5
 
-                #to_inv = np.nansum([sparse.diags((self.obs_unc[1]).ravel()), sparse.diags((self.prior_uncs[1]**-2).ravel()), self.gamma**2 * dtd], axis = 0)
-                #to_inv = np.nansum([sparse.diags((self.obs_unc[1]).ravel()).toarray(), sparse.diags((self.prior_uncs[1]**-2).ravel()).toarray(), self.gamma**2 * dtd.toarray()], axis = 0).astype(np.float32)
-                to_inv = sparse.diags((self.obs_unc[1]).ravel()) + sparse.diags((self.prior_uncs[1]**-2).ravel()) + self.gamma**2 * dtd
-                tcwv_unc = (linalg.inv(to_inv).diagonal())** 0.5
+                self.aot_unc, self.tcwv_unc = np.array([(linalg.inv(sparse.diags((self.obs_unc[0]).ravel())
+                                                                    + sparse.diags((self.prior_uncs[0]**-2).ravel())
+                                                                    + self.gamma**2 * compose_dtd(1, ny)[0]).diagonal())**0.5,
+                                                        (linalg.inv(sparse.diags((self.obs_unc[1]).ravel())
+                                                                    + sparse.diags((self.prior_uncs[1]**-2).ravel())
+                                                                    + self.gamma**2 * compose_dtd(1, ny)[0]).diagonal())**0.5]).reshape(nx,
+                                                                                                                                        self.num_blocks_x,
+                                                                                                                                        self.num_blocks_y)
 
-                unc = np.array([aot_unc, tcwv_unc])
-                #unc = (np.nansum([self.obs_unc.reshape(nx, -1), self.prior_uncs**-2 ,  self.gamma**2], axis = 0)) ** -0.5
-                self.aot_unc,   self.tcwv_unc   = unc.reshape(nx, self.num_blocks_x, self.num_blocks_y)
-        self.tco3_prior, self.tco3_unc  = self._grid_conversion(self.tco3_prior, shape), self._grid_conversion(self.tco3_unc, shape)
-        post_solved = np.array([self.aot_prior, self.tcwv_prior, self.tco3_prior]) 
-        post_unc    = np.array([self.aot_unc,   self.tcwv_unc,   self.tco3_unc]) 
+        self.tco3_prior = self._grid_conversion(self.tco3_prior, shape)
+        self.tco3_unc   = self._grid_conversion(self.tco3_unc, shape)
+
         handlers = self.logger.handlers[:]
         for handler in handlers:
             handler.close()
             self.logger.removeHandler(handler)
-        return [post_solved, post_unc]
+        return [np.array([self.aot_prior, self.tcwv_prior, self.tco3_prior]),
+                np.array([self.aot_unc,   self.tcwv_unc,   self.tco3_unc])]
     '''
     def _helper(self, inp):
         H, _, dH = inp[0].predict(inp[1][:, self._coarse_mask.ravel()].T, do_unc=True)
@@ -406,24 +401,26 @@ class solving_atmo_paras(object):
             J [   ~self._coarse_mask] = 0
             J_ = J_.reshape(2, -1)
             if do_unc:
-                #comb_unc              = np.nansum([self.band_weights[...,None] * (dH[:, :, i] ** 2) * (self.boa_unc ** -2)  for i in range(2)], axis = 1)
-                #comb_unc[comb_unc==0] = np.nan
-                #self.obs_unc          = np.zeros((2,) + self.full_res)
-                #self.obs_unc[:]       = np.nan
+                comb_unc              = np.nansum([self.band_weights[...,None] * (dH[:, :, i] ** 2) * (self.boa_unc ** -2) for i in range(2)], axis=1)
+                comb_unc[comb_unc == 0] = np.nan
+
+                self.obs_unc = np.zeros((2, self.num_blocks_x, self.num_blocks_y))*np.nan
+                xgrid = np.linspace(0, nx-x_size, self.num_blocks_x).astype(int)
+                ygrid = np.linspace(0, nx-y_size, self.num_blocks_x).astype(int)
+                for x, xstart in enumerate(xgrid):
+                    for y, ystart in enumerate(ygrid):
+                        self.obs_unc[0, x, y] = np.nanmean(comb_unc[0, (self.Hx >= xstart) & (self.Hx < xstart+x_size) &
+                                                                       (self.Hy >= ystart) & (self.Hy < ystart+y_size)])
+                        self.obs_unc[1, x, y] = np.nanmean(comb_unc[1, (self.Hx >= xstart) & (self.Hx < xstart+x_size) &
+                                                                       (self.Hy >= ystart) & (self.Hy < ystart+y_size)])
+
+                #self.obs_unc = np.zeros((2, nx, ny))
+                #self.obs_unc[:] = np.nan
                 #self.obs_unc[:, self.Hx, self.Hy] = comb_unc
-                comb_unc              = np.nansum([self.band_weights[...,None] * (dH[:, :, i] ** 2) * (self.boa_unc ** -2)  for i in range(2)], axis = 1)
-                comb_unc[comb_unc==0] = np.nan
-                self.obs_unc = np.zeros((2, nx, ny))
-                self.obs_unc[:] = np.nan
-                self.obs_unc[:, self.Hx, self.Hy] = comb_unc
-                self.obs_unc = self.obs_unc.reshape(2, self.num_blocks_x, x_size, self.num_blocks_y, y_size)
-                self.obs_unc = np.nanmean(self.obs_unc, axis=(2,4)) 
-                #subs = [np.array_split(sub, self.num_blocks_y, axis=2) for sub in np.array_split(self.obs_unc, self.num_blocks_x, axis=1)]
-                #self.obs_unc = np.zeros((2, self.num_blocks_x, self.num_blocks_y))
-                #for i in range(self.num_blocks_x):                                                                               
-                #    for j in range(self.num_blocks_y):                                                                           
-                #        self.obs_unc[:, i,j] = np.nanmean(subs[i][j], axis=(1,2))     
-                self.obs_unc[:,~self._coarse_mask] = np.nan
+                #self.obs_unc = self.obs_unc.reshape(2, self.num_blocks_x, x_size, self.num_blocks_y, y_size)
+                #self.obs_unc = np.nanmean(self.obs_unc, axis=(2, 4))
+
+                self.obs_unc[:, ~self._coarse_mask] = np.nan
                 return self.obs_unc
         else:
             J  = np.nansum(np.array(full_J))

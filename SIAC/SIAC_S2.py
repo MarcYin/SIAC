@@ -45,7 +45,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
     aero_atmos = []
     for ret in rets:
         ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee, do_rgb)
-        aero_atmo = do_correction(*ret)
+        do_correction(*ret)
         if send_back:
             aero_atmos.append(aero_atmo)
     if send_back:
@@ -75,7 +75,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
         if not os.path.exists(home + '/MCD43_VRT/'):
             os.mkdir(home + '/MCD43_VRT/')
 
-    base = os.path.dirname(toa_refs[0])
+    #base = os.path.dirname(toa_refs[0])
     base = toa_refs[0].replace('B01.jp2', '')
     with open(metafile) as f:
         for i in f.readlines():
@@ -161,11 +161,12 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     #logger.info('First pass AOT and TCWV: %.02f, %.02f'%(aot.mean(), tcwv.mean()))
     #logger.info('Running SIAC for tile: %s on %s'%(tile, obs_time.strftime('%Y-%M-%d')))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
-                         sun_angles,obs_time,cloud_mask, gamma=10., spec_m_dir= file_path+'/spectral_mapping/', 
+                         sun_angles,obs_time, gamma=10., spec_m_dir= file_path+'/spectral_mapping/',
                          ref_scale = ref_scale, ref_off = ref_off, emus_dir=file_path+'/emus/',\
                          mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
                          prior_scale = [1., 0.1, 46.698, 1., 1., 1.], mcd43_gee_folder = mcd43_gee_folder)
-    aero._solving()
+    example_file = aero._solving(cloud_mask)
+
     toa_bands  = toa_refs
     aot = base + 'aot.tif'
     tcwv = base + 'tcwv.tif'
@@ -180,14 +181,14 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     ref_off = off[band_index, None, None]
     
 
-    atmo = atmospheric_correction(sensor_sat,toa_bands, band_index,view_angles,\
-                                  sun_angles, aot = aot, cloud_mask = cloud_mask, \
+    atmospheric_correction(sensor_sat, toa_bands, band_index, view_angles,\
+                                  sun_angles, example_file, aot = aot, \
                                   tcwv = tcwv, tco3 = tco3, aot_unc = aot_unc, \
                                   tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = rgb,  ref_scale = ref_scale, ref_off = ref_off,\
                                   emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir,
                                   do_rgb = do_rgb)
-    atmo._doing_correction()
-    
+    #atmo._doing_correction()
+
     logger.info('Generating summery Json.')
     print(os.path.dirname(base))
     summeryJson(os.path.dirname(base))
@@ -195,7 +196,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     if not np.all(cloud_mask):
 #         if jasmin:
         shutil.rmtree(vrt_dir)
-    return aero, atmo
+    #return aero, atmo
 
 def summeryJson(dest):
 

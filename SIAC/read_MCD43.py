@@ -273,8 +273,8 @@ def getKernelWeights(das, ws, mask, sur):
     wsur = np.concatenate(wsur, axis=2)
     # less than 5% change is classified as stable starget
     mid = int(f0.shape[0]/2)
-    stable_target  = np.std(sur[mid - 10: mid + 10], axis=0) / np.mean(sur[mid - 10: mid + 10], axis=0)
-    stable_target_back_up = np.std(sur[mid - 4: mid + 4], axis=0) / np.mean(sur[mid - 4: mid + 4], axis=0)
+    #stable_target  = np.std(sur[mid - 10: mid + 10], axis=0) / np.mean(sur[mid - 10: mid + 10], axis=0)
+    #stable_target_back_up = np.std(sur[mid - 4: mid + 4], axis=0) / np.mean(sur[mid - 4: mid + 4], axis=0)
     # cv  = np.std(sur[mid - 10: mid + 10], axis=0) / np.mean(sur[mid - 10: mid + 10], axis=0)
     # stable_target = np.all((cv < 0.05) & (cv>0), axis=0)
 
@@ -339,7 +339,7 @@ def getKernelWeights(das, ws, mask, sur):
     w2[bad_ones] = 0.00001
     wsur[bad_ones] = 0.00001
 
-    return f0, f1, f2, w0, w1, w2, sur, wsur, stable_target, stable_target_back_up
+    return f0, f1, f2, w0, w1, w2, sur, wsur#, stable_target, stable_target_back_up
 
 
 

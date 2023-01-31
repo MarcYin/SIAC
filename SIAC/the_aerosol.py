@@ -132,7 +132,7 @@ class solve_aerosol(object):
                  view_angles, 
                  sun_angles,
                  obs_time,
-                 cloud_mask,
+                 #cloud_mask,
                  gamma       = 10.,
                  a_z_order   = 1,
                  pixel_res   = None,
@@ -164,7 +164,7 @@ class solve_aerosol(object):
         self.view_angles = view_angles
         self.sun_angles  = sun_angles 
         self.obs_time    = obs_time
-        self.cloud_mask  = cloud_mask
+        #self.cloud_mask  = cloud_mask
         self.gamma       = gamma
         self.a_z_order   = a_z_order 
         self.pixel_res   = pixel_res
@@ -292,49 +292,55 @@ class solve_aerosol(object):
         # self.boa         = self.boa    [:, shifted_mask]
         # self.boa_unc     = self.boa_unc[:, shifted_mask]
 
-    def _get_psf(self,):
+    def _get_psf(self, bad_pix, boa, boa_unc, hx, hy):
         '''
         Get the PSF parameters
         '''
-        if self.ref_scale.ndim == 3:
-            band_ind = np.where(self.boa_bands==7)[0][0]
-            toa  = self._toa_bands[np.where(self.boa_bands==7)[0][0]].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
-        else:
-            toa  = self._toa_bands[np.where(self.boa_bands==7)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
-            
+        band_ind = np.where(self.boa_bands==7)[0][0]
+        #toa  = _toa_bands[band_ind].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
+
         # toa     = self._toa_bands[-1].ReadAsArray()*self.ref_scale+self.ref_off
-        index   = [self.hx, self.hy]
-        boa     = np.ma.array(self.boa[-1])
-        boa_unc = self.boa_unc[-1]
-        mask    = self.bad_pix
+        #index   = [self.hx, self.hy]
+        #boa     = np.ma.array(boa[-1])
+        #boa_unc = boa_unc[-1]
+        #mask    = self.bad_pix
         thresh   = 0.1
         # ang     = 0
-        psf     = psf_optimize(toa, index, boa, boa_unc, mask, thresh, xstd=self.psf_xstd, ystd= self.psf_ystd)
+        psf     = psf_optimize(gdal.Warp('', str(self.toa_bands[band_ind]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res,
+                                         warpOptions = ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi,
+                                         cropToCutline=True, resampleAlg = 0).ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind],
+                               [hx, hy], boa, boa_unc, bad_pix, thresh, xstd=self.psf_xstd, ystd= self.psf_ystd)
         xs, ys  = psf.fire_shift_optimize()
         self.logger.info('Solved PSF: %.02f, %.02f, %d, %d, %d, and R value is: %.03f.' \
                               %(self.psf_xstd, self.psf_ystd, 0, xs, ys, 1-psf.costs.min()))  
-        shifted_mask = (self.hx+int(xs)>=0) & (self.hx+int(xs)<self.full_res[0]) & \
-                       (self.hy+int(ys)>=0) & (self.hy+int(ys)<self.full_res[1])
-        self.mask[self.mx, self.my] = shifted_mask & self.mask[self.mx, self.my]
-        self.hx, self.hy = self.hx[shifted_mask]+int(xs), self.hy[shifted_mask]+int(ys)
+        #shifted_mask = (hx+int(xs)>=0) & (hx+int(xs)<self.full_res[0]) & \
+        #               (hy+int(ys)>=0) & (hy+int(ys)<self.full_res[1])
+        #mask[mx, my] = (hx+int(xs)>=0) & (hx+int(xs)<self.full_res[0]) & \
+        #               (hy+int(ys)>=0) & (hy+int(ys)<self.full_res[1]) & mask[mx, my]
+
+        #hmask = (hx+int(xs)>=0) & (hx+int(xs)<self.full_res[0]) & (hy+int(ys)>=0) & (hy+int(ys)<self.full_res[1])
+        #hx = hx[hmask]+int(xs)
+        #hy = hy[hmask]+int(ys)
         # self.boa         = self.boa    [:, shifted_mask]
         # self.boa_unc     = self.boa_unc[:, shifted_mask]
         # self.mx, self.my = self.mx[shifted_mask], self.my[shifted_mask]
         # self.fs          = self.fs[:, :, shifted_mask]
         # self.f_uncs      = self.f_uncs[:, :, shifted_mask]
-        self.xs = xs
-        self.ys = ys
+        #self.xs = xs
+        #self.ys = ys
+        return hx[(hx+int(xs)>=0) & (hx+int(xs)<self.full_res[0]) & (hy+int(ys)>=0) & (hy+int(ys)<self.full_res[1])]+int(xs), \
+            hy[(hx+int(xs)>=0) & (hx+int(xs)<self.full_res[0]) & (hy+int(ys)>=0) & (hy+int(ys)<self.full_res[1])]+int(ys)
 
-
-
-    def _mask_bad_pix(self):
+    def _mask_bad_pix(self, mask, example_file):
         #snow_mask = blue > 0.6
-        if os.path.exists(str(self.cloud_mask)):  
-            cloud_g = gdal.Open(str(self.cloud_mask)) 
-        elif type(self.cloud_mask).__module__== 'numpy':
-            cloud_g = array_to_raster(self.cloud_mask, self.example_file)
-        cloud = reproject_data(cloud_g, \
-                                self.example_file, \
+        if os.path.exists(str(mask)):
+            mask = gdal.Open(str(mask))
+        elif type(mask).__module__ == 'numpy':
+        #    cloud_g = array_to_raster(cloud_mask, self.example_file)
+            mask = array_to_raster(mask, example_file)
+        mask = reproject_data(mask, \
+                                #self.example_file, \
+                                example_file, \
                                 xRes=self.pixel_res, \
                                 yRes=self.pixel_res, \
                                 xSize=self.full_res[1], \
@@ -342,107 +348,90 @@ class solve_aerosol(object):
                                 srcNodata = np.nan,\
                                 outputType= gdal.GDT_Float32,\
                                 resample = 0).data
-        cloud  = cloud.astype(bool)
+        mask  = mask.astype(bool)
         RED    = None
-        BLUE   = None
+        #BLUE   = None
         SWIR_1 = None
         NIR    = None
         GREEN  = None
 
-        if 3 in self.boa_bands:
-            if self.ref_scale.ndim == 3:
-                band_ind = np.where(self.boa_bands==3)[0][0]
-                BLUE   = self._toa_bands[np.where(self.boa_bands==3)[0][0]].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
-            else:
-                BLUE   = self._toa_bands[np.where(self.boa_bands==3)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
-        if BLUE is not None:
-            water_mask = BLUE < 0.05
-            snow_mask  = BLUE > 0.6
-            #del BLUE
-        else:
-            self.logger.error('Blue band is needed for the retirval of aerosol.')
-        
-        if 2 in self.boa_bands:
-            if self.ref_off.ndim == 3:
-                band_ind = np.where(self.boa_bands==2)[0][0]
-                NIR    = self._toa_bands[np.where(self.boa_bands==2)[0][0]].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
-            else:
-                NIR    = self._toa_bands[np.where(self.boa_bands==2)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
-            # NIR    = self._toa_bands[np.where(self.boa_bands==2)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
         if 1 in self.boa_bands:
-            if self.ref_scale.ndim == 3:
-                
-                band_ind = np.where(self.boa_bands==1)[0][0]
+            band_ind = np.where(self.boa_bands == 1)[0][0]
+            RED = gdal.Warp('', str(self.toa_bands[band_ind]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res,
+                            warpOptions = ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi,
+                            cropToCutline=True, resampleAlg = 0).ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
 
-                RED    = self._toa_bands[np.where(self.boa_bands==1)[0][0]].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
-            else:
-                RED    = self._toa_bands[np.where(self.boa_bands==1)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
+        if 2 in self.boa_bands:
+            band_ind = np.where(self.boa_bands == 2)[0][0]
+            NIR = gdal.Warp('', str(self.toa_bands[band_ind]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res,
+                            warpOptions = ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi,
+                            cropToCutline=True, resampleAlg = 0).ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
 
-            # RED    = self._toa_bands[np.where(self.boa_bands==1)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
-        
-        
         if (RED is not None) & (NIR is not None):
-            NDVI = (NIR - RED) / (NIR + RED)
-            water_mask = ((NDVI < 0.01) & (NIR < 0.11)) | ((NDVI < 0.1) & (NIR < 0.05)) \
+            mask = mask | ((((NIR - RED) / (NIR + RED)) < 0.01) & (NIR < 0.11)) | ((((NIR - RED) / (NIR + RED)) < 0.1) & (NIR < 0.05)) \
                         | (NIR <= 0.0001) | (RED <= 0.0001) | np.isnan(NIR) | np.isnan(RED)
-            del NIR; del RED; del NDVI
-        elif NIR is not None:
-            water_mask = NIR < 0.05
             del NIR
-        elif RED is not None:
-            water_mask = RED < 0.05
             del RED
 
-        if 6 in self.boa_bands:
-            if self.ref_scale.ndim == 3:
-                band_ind = np.where(self.boa_bands==6)[0][0]
-                SWIR_1 = self._toa_bands[np.where(self.boa_bands==6)[0][0]].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
-            else:
-                SWIR_1 = self._toa_bands[np.where(self.boa_bands==6)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
-            # SWIR_1 = self._toa_bands[np.where(self.boa_bands==6)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
         if 4 in self.boa_bands:
-            if self.ref_scale.ndim == 3:
-                band_ind = np.where(self.boa_bands==4)[0][0]
-                GREEN  = self._toa_bands[np.where(self.boa_bands==4)[0][0]].ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
-            else:
-                GREEN  = self._toa_bands[np.where(self.boa_bands==4)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
-            # GREEN  = self._toa_bands[np.where(self.boa_bands==4)[0][0]].ReadAsArray()*self.ref_scale+self.ref_off
+            band_ind = np.where(self.boa_bands == 4)[0][0]
+            GREEN = gdal.Warp('', str(self.toa_bands[band_ind]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res,
+                            warpOptions = ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi,
+                            cropToCutline=True, resampleAlg = 0).ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
+
+        if 6 in self.boa_bands:
+            band_ind = np.where(self.boa_bands == 6)[0][0]
+            SWIR_1 = gdal.Warp('', str(self.toa_bands[band_ind]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res,
+                            warpOptions = ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi,
+                            cropToCutline=True, resampleAlg = 0).ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]
 
         if (SWIR_1 is not None) & (GREEN is not None):
-            NDSI      = (GREEN - SWIR_1) / (SWIR_1 + GREEN)
-            snow_mask = (NDSI > 0.42) | (SWIR_1 <= 0.0001) | (GREEN <= 0.0001) | np.isnan(SWIR_1) | np.isnan(GREEN) 
-            del SWIR_1; del GREEN; del NDSI
-        mask     = water_mask | snow_mask | cloud | (BLUE > 1)
+            mask = mask | (((GREEN - SWIR_1) / (GREEN + SWIR_1)) > 0.42) | (SWIR_1 <= 0.0001) | (GREEN <= 0.0001) | np.isnan(SWIR_1) | np.isnan(GREEN)
+            del SWIR_1
+            del GREEN
+
+        if 3 in self.boa_bands: # BLUE
+            band_ind = np.where(self.boa_bands == 3)[0][0]
+            mask = mask | ((gdal.Warp('', str(self.toa_bands[band_ind]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res,
+                            warpOptions = ['NUM_THREADS=ALL_CPUS'],srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi,
+                            cropToCutline=True, resampleAlg = 0).ReadAsArray()*self.ref_scale[band_ind]+self.ref_off[band_ind]) > 1)
+
         ker_size = int(2 * 1.96 * self.psf_ystd)
-        mask     = binary_erosion (mask, structure = np.ones((3,3)).astype(bool), iterations=5).astype(bool)
-        #mask     = binary_dilation(mask, structure = np.ones((3,3)).astype(bool), iterations=30).astype(bool)
+        mask     = binary_erosion(mask, structure = np.ones((3,3)).astype(bool), iterations=5).astype(bool)
         mask = binary_dilation(mask, structure = np.ones((3,3)).astype(bool), iterations=30+ker_size).astype(bool)
-        mask[:30,:]  = mask[:,:30] = mask[:,-30:] = mask[-30:,:] =  True
-        self.bad_pix = mask
+        mask[:30,:]  = mask[:,:30] = mask[:,-30:] = mask[-30:,:] = True
+        return mask
 
     def _create_band_gs(self,):
         '''
         Create a lost of boa gs and cut them with AOI.
         '''
-        self._toa_bands = []
-        for band in self.toa_bands:
-            g = gdal.Warp('', str(band), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
-                          srcNodata = 0, dstNodata=0, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)
-            self._toa_bands.append(g)
-        self.example_file = self._toa_bands[0]
-        x_max_pix         = self.example_file.RasterXSize * self.pixel_res
-        y_max_pix         = self.example_file.RasterYSize * self.pixel_res
-        self.xSize = int(np.ceil(x_max_pix/ (1. * self.aero_res))) 
+        #self._toa_bands = []
+        #for band in self.toa_bands:
+            #g = gdal.Warp('', str(band), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+            #              srcNodata = 0, dstNodata=0, cutlineDSName= self.aoi, cropToCutline=True, resampleAlg = 0)
+            #self._toa_bands.append(g)
+        example_file = gdal.Warp('', str(self.toa_bands[0]), format = 'MEM', xRes = self.pixel_res, yRes = self.pixel_res, warpOptions = ['NUM_THREADS=ALL_CPUS'],\
+                                    srcNodata = 0, dstNodata=0, cutlineDSName = self.aoi, cropToCutline=True, resampleAlg = 0)
+        #self.example_file = self._toa_bands[0]
+        #x_max_pix         = self.example_file.RasterXSize * self.pixel_res
+        #y_max_pix         = self.example_file.RasterYSize * self.pixel_res
+        x_max_pix         = example_file.RasterXSize * self.pixel_res
+        y_max_pix         = example_file.RasterYSize * self.pixel_res
+        self.xSize = int(np.ceil(x_max_pix/ (1. * self.aero_res)))
         self.ySize = int(np.ceil(y_max_pix/ (1. * self.aero_res)))
-        self.full_res   = self.example_file.RasterYSize, self.example_file.RasterXSize
+        #self.full_res   = self.example_file.RasterYSize, self.example_file.RasterXSize
+        self.full_res   = example_file.RasterYSize, example_file.RasterXSize
+        return example_file
 
 
-    def _resamplers(self,):
+    def _resamplers(self, example_file):
         '''
         Define the sresamplers used for resampling different gdal files or objects to required resolution and size.
         '''
         self.nearest_resampler = lambda fname: reproject_data(fname, \
-                                                                self.example_file, \
+                                                                #self.example_file, \
+                                                                example_file, \
                                                                 xRes=self.aero_res*0.5, \
                                                                 yRes=self.aero_res*0.5, \
                                                                 srcNodata = None,\
@@ -450,50 +439,53 @@ class solve_aerosol(object):
                                                                 resample = 0 ).g # GRIORA_NearestNeighbour due to version changes...
 
         self.bilinear_resampler = lambda fname: reproject_data(fname, \
-                                                                self.example_file, \
+                                                                #self.example_file, \
+                                                                example_file, \
                                                                 xRes=self.aero_res*0.5, \
                                                                 yRes=self.aero_res*0.5, \
                                                                 srcNodata = 0,\
                                                                 outputType= gdal.GDT_Float32,\
                                                                 resample = 1 ).g # GRIORA_Bilinear
 
-    def _var_parser(self, var):
+    def _var_parser(self, var, example_file):
         if os.path.exists(str(var)):    
             var_g = gdal.Open(str(var)) 
         elif type(var).__module__== 'numpy':
-            var_g = array_to_raster(var, self.example_file) 
-        elif ('/vsicurl/' in str(var)) or ('/vsizip/') in str(var):                                                    
+            #var_g = array_to_raster(var, self.example_file)
+            var_g = array_to_raster(var, example_file)
+        elif ('/vsicurl/' in str(var)) or ('/vsizip/') in str(var):
             var_g = gdal.Open(str(var))
         else:              
             var = float(var) 
             var_array = np.zeros((10,10))      
             var_array[:] = var
-            var_g = array_to_raster(var_array, self.example_file)
+            #var_g = array_to_raster(var_array, self.example_file)
+            var_g = array_to_raster(var_array, example_file)
         return var_g
 
-    def _parse_angles(self,):
+    def _parse_angles(self, example_file):
         '''
         Parsing angles
         '''
         self._view_angles = []
         if len(self.view_angles)==1:
-            ang_g = self._var_parser(self.view_angles[0])
+            ang_g = self._var_parser(self.view_angles[0], example_file)
             self.view_angles = [ang_g,]
         for i in self.view_angles:
-            ang_g = self._var_parser(i)
+            ang_g = self._var_parser(i, example_file)
             self._view_angles.append(ang_g)
 
         self._sun_angles = []            
         if os.path.exists(str(self.sun_angles)):
-            ang_g = self._var_parser(self.sun_angles)
+            ang_g = self._var_parser(self.sun_angles, example_file)
             self._sun_angles = [ang_g,]#self.nearest_resampler(ang_g).ReadAsArray()
         else:
             for i in self.sun_angles:        
-                ang_g = self._var_parser(i)
+                ang_g = self._var_parser(i, example_file)
                 self._sun_angles.append(ang_g)#self.nearest_resampler(ang_g).ReadAsArray())
 
       
-    def _read_aux(self,):
+    def _read_aux(self, example_file):
         '''
         Create a list of AUX gdal objects, like priors and DEM, and cutted with AOI.
         '''
@@ -538,7 +530,8 @@ class solve_aerosol(object):
 
         temp = []
         for _, i in enumerate(priors):
-            var_g = self._var_parser(i) 
+            #var_g = self._var_parser(i)
+            var_g = self._var_parser(i, example_file)
             prior_g = self.bilinear_resampler(var_g)
             if use_cams[_]:
                 g      = var_g.GetRasterBand(int(time_ind+1))
@@ -586,10 +579,13 @@ class solve_aerosol(object):
             self.view_angles = self.view_angles[order,]
         
         
-    def _get_bounds(self,):
-        geo_t = self.example_file.GetGeoTransform()
-        raster_wkt =  self.example_file.GetProjection()
-        x_size, y_size = self.example_file.RasterXSize, self.example_file.RasterYSize
+    def _get_bounds(self, example_file):
+        #geo_t = self.example_file.GetGeoTransform()
+        #raster_wkt =  self.example_file.GetProjection()
+        #x_size, y_size = self.example_file.RasterXSize, self.example_file.RasterYSize
+        geo_t = example_file.GetGeoTransform()
+        raster_wkt =  example_file.GetProjection()
+        x_size, y_size = example_file.RasterXSize, example_file.RasterYSize
         xmin, xmax = min(geo_t[0], geo_t[0] + x_size * geo_t[1]), \
                      max(geo_t[0], geo_t[0] + x_size * geo_t[1])  
         ymin, ymax = min(geo_t[3], geo_t[3] + y_size * geo_t[5]), \
@@ -697,10 +693,11 @@ class solve_aerosol(object):
         # self.boa     = boa
         # self.boa_unc = np.minimum(unc, 0.5)
 
-    def _get_boa(self, temporal_filling = 16):
+    def _get_boa(self, example_file, mask, temporal_filling = 16):
         self.logger.info('Reading MCD43 files.')
-        dstSRS = self.example_file.GetProjectionRef()
-        dstSRS, outputBounds = get_bounds(self.aoi, self.example_file, self.pixel_res)
+        #dstSRS = self.example_file.GetProjectionRef()
+        #dstSRS, outputBounds = get_bounds(self.aoi, self.example_file, self.pixel_res)
+        dstSRS, outputBounds = get_bounds(self.aoi, example_file, self.pixel_res)
         if self.mcd43_gee_folder is None:
             das, ws, mg = get_kernel_weights(self.mcd43_dir, 
                                             self.boa_bands, 
@@ -715,33 +712,33 @@ class solve_aerosol(object):
                                             cache_name = self.toa_dir + '/mcd43_cache.npz')
         else:
             das, ws, mg = read_MCD3_GEE(self.mcd43_gee_folder, self.boa_bands, outputBounds,  self.aero_res*0.5,  self.aero_res*0.5, dstSRS)
-        self.mg = mg
-        hg = self.example_file
+        #self.mg = mg
+        #hg = self.example_file
         
-        geotransform = hg.GetGeoTransform()
+        geotransform = example_file.GetGeoTransform()
         h_res = geotransform[1]
         geotransform = mg.GetGeoTransform() 
         m_res = geotransform[1]
 
-        toa_mask = array_to_raster(self.bad_pix * 1., self.example_file)
-        toa_mask = reproject_data(toa_mask, mg, resample=0).data.astype(bool)
+        mask = array_to_raster(mask * 1., example_file)
+        mask = reproject_data(mask, mg, resample=0).data.astype(bool)
 
         hx, hy = cal_psf_points(h_res, m_res, mg.RasterYSize, mg.RasterXSize)
-        hmask = (hx>=0) & (hx<hg.RasterYSize) & (hy>=0) & (hy<hg.RasterXSize)
-        hmask = hmask.reshape(toa_mask.shape)
+        #hmask = (hx>=0) & (hx<example_file.RasterYSize) & (hy>=0) & (hy<example_file.RasterXSize)
+        #hmask = hmask.reshape(toa_mask.shape)
 
-        mask = ~np.all(mg.ReadAsArray() == 0, axis=0) & (~toa_mask) & hmask
+        mask = ~np.all(mg.ReadAsArray() == 0, axis=0) & (~mask) & ((hx>=0) & (hx<example_file.RasterYSize) & (hy>=0) & (hy<example_file.RasterXSize)).reshape(mask.shape)
         self.logger.info('Filling MCD43 gaps by temporal interpolation.')
-        all_mask = np.ones_like(mask).astype(bool)
+        #mask = np.ones_like(mask).astype(bool)
 
         self._annoying_angles(mg)
         sza = np.repeat(self._sza[None, ...], len(self._vza), axis = 0)
         saa = np.repeat(self._saa[None, ...], len(self._vza), axis = 0)
-        angles = self._vza, sza ,self._vaa - saa
+        angles = self._vza, sza, self._vaa - saa
         kk     = get_kk(angles)   
-        k_vol  = kk.Ross          
-        k_geo  = kk.Li  
-        kers = np.array([np.ones(k_vol.shape), k_vol, k_geo]).transpose(1,0,2,3)
+        #k_vol  = kk.Ross
+        #k_geo  = kk.Li
+        kers = np.array([np.ones(kk.Ross.shape), kk.Ross, kk.Li]).transpose(1,0,2,3)
         if self.mcd43_gee_folder is None:
             n_days = int(das.shape[0] / 6)
             das = das.reshape((n_days, 6) + das.shape[1:]) * 0.001
@@ -754,45 +751,54 @@ class solve_aerosol(object):
         
         # import pdb;pdb.set_trace()
 
-        f0, f1, f2, w0, w1, w2, boa, wsur, stable_target, stable_target_back_up = getKernelWeights(das, ws, all_mask, sur)
+        f0, f1, f2, w0, w1, w2, boa, wsur = getKernelWeights(das, ws, np.ones_like(mask).astype(bool), sur)
 
-        fs = np.array([f0, f1, f2])
+        #fs = np.array([f0, f1, f2])
         # boa = (kers * fs).sum(axis=0)
-        wsur = np.maximum(wsur, 0.0001)
-        w0 = np.maximum(w0, 0.0001)
-        w1 = np.maximum(w1, 0.0001)
-        w2 = np.maximum(w2, 0.0001)
+        #wsur = np.maximum(wsur, 0.0001)
+        #w0 = np.maximum(w0, 0.0001)
+        #w1 = np.maximum(w1, 0.0001)
+        #w2 = np.maximum(w2, 0.0001)
         
-        f0_unc = 0.015 / w0
-        f1_unc = 0.015 / w1
-        f2_unc = 0.015 / w2
+        #f0_unc = 0.015 / w0
+        #f1_unc = 0.015 / w1
+        #f2_unc = 0.015 / w2
 
-        uncs = np.array([f0_unc, f1_unc, f2_unc])
+        #uncs = np.array([0.015 / np.maximum(w0, 0.0001),
+        #                 0.015 / np.maximum(w1, 0.0001),
+        #                 0.015 / np.maximum(w2, 0.0001)])
         # boa_unc = np.sqrt(np.sum((uncs ** 2) * (kers ** 2), axis=0))
         # # boa_unc = np.minimum(boa_unc, 0.5)
         
-        boa_unc = 0.015 / wsur
+        #boa_unc = 0.015 / wsur
 
-        self.boa = boa[:, mask]
-        self.boa_unc = boa_unc[:, mask]
+        #self.boa = boa[:, mask]
+        #self.boa_unc = (0.015 / np.maximum(wsur, 0.0001))[:, mask]
         
-        self.hx = hx[mask.ravel()]
-        self.hy = hy[mask.ravel()]
+        #self.hx = hx[mask.ravel()]
+        #self.hy = hy[mask.ravel()]
 
-        self.mx, self.my = np.indices(mask.shape)
-        self.mx = self.mx[mask]
-        self.my = self.my[mask]
-        self.mask = mask
+        #self.mx, self.my = np.indices(mask.shape)
+        #self.mx = self.mx[mask]
+        #self.my = self.my[mask]
+        #self.mask = mask
         
-        self.fs_full = fs
-        self.f_uncs_full = uncs
+        #self.fs_full = np.array([f0, f1, f2])
+        #self.f_uncs_full = np.array([0.015 / np.maximum(w0, 0.0001),
+        #                             0.015 / np.maximum(w1, 0.0001),
+        #                             0.015 / np.maximum(w2, 0.0001)])
 
-        np.savez(self.toa_dir + '/kernel_weights.npz', fs = fs, uncs = uncs)
+        np.savez(self.toa_dir + '/kernel_weights.npz', fs = np.array([f0, f1, f2]),
+                 uncs = np.array([0.015 / np.maximum(w0, 0.0001), 0.015 / np.maximum(w1, 0.0001), 0.015 / np.maximum(w2, 0.0001)]))
 
-        self.fs = fs[:, :, mask]
-        self.f_uncs = uncs[:, :, mask]
-        self.stable_target = stable_target
-        self.stable_target_back_up = stable_target_back_up
+        #self.fs = np.array([f0, f1, f2])[:, :, mask]
+        #self.f_uncs = np.array([0.015 / np.maximum(w0, 0.0001),
+        #                        0.015 / np.maximum(w1, 0.0001),
+        #                        0.015 / np.maximum(w2, 0.0001)])[:, :, mask]
+        #self.stable_target = stable_target
+        #self.stable_target_back_up = stable_target_back_up
+
+        return boa[:, mask], (0.015 / np.maximum(wsur, 0.0001))[:, mask], hx[mask.ravel()], hy[mask.ravel()]
 
     def _annoying_angles(self, destination):
         mg = destination
@@ -908,7 +914,7 @@ class solve_aerosol(object):
         return array
 
 
-    def _get_convolved_toa(self,):       
+    def _get_convolved_toa(self, bad_pix, hx, hy):
                                          
         # imgs = [band_g.ReadAsArray() for band_g in self._toa_bands]                       
         # self.bad_pixs = self.bad_pix[self.hx, self.hy]
@@ -929,17 +935,21 @@ class solve_aerosol(object):
         #self.toa  = np.array(parmap(par,imgs)) * self.ref_scale+self.ref_off
 
         gaus_2d = gaussian(self.psf_xstd, self.psf_ystd, norm = True)
-        points  = np.array([self.hx, self.hy]).T
+        #points  = np.array([hx, hy]).T
         toas = []
-        for (ii, band_g) in enumerate(self._toa_bands):
+        for (ii, band_g) in enumerate(self.toa_bands):
             if self.ref_scale.ndim == 3:
-                data = band_g.ReadAsArray() * self.ref_scale[ii] + self.ref_off[ii]
+                data = gdal.Warp('', str(band_g), format='MEM', xRes=self.pixel_res, yRes=self.pixel_res,
+                          warpOptions=['NUM_THREADS=ALL_CPUS'], srcNodata=0, dstNodata=0, cutlineDSName=self.aoi,
+                          cropToCutline=True, resampleAlg=0).ReadAsArray() * self.ref_scale[ii] + self.ref_off[ii]
+                #data = band_g.ReadAsArray() * self.ref_scale[ii] + self.ref_off[ii]
             else:
                 data = band_g.ReadAsArray() * self.ref_scale + self.ref_off
-            data[self.bad_pix] = np.nan
-            toa = points_convolve(data, gaus_2d, points)
-            toas.append(toa)
-        self.toa  = np.array(toas) 
+            data[bad_pix] = np.nan
+            #toa = points_convolve(data, gaus_2d, points)
+            toas.append(points_convolve(data, gaus_2d, np.array([hx, hy]).T))
+
+        return np.array(toas)
         
 #             self.toa  = np.array(list(map(par,imgs))) * self.ref_scale+self.ref_off
 #         conv_toa = points_convolve(toa, gaus, points)
@@ -1082,7 +1092,7 @@ class solve_aerosol(object):
     #     self.mask = self.mask[self.mask]
 
 
-    def _re_mask(self,):
+    def _re_mask(self, bad_pix, boa, boa_unc, hx, hy, toa):
         pmins = [[ 0.81793009, -1.55666629,  0.03879234,  0.02664923],
                  [ 0.50218134, -0.94398654, -0.36284911,  0.02876391],
                  [ 0.61609484, -1.12717424, -0.24037129,  0.0239488 ],
@@ -1095,35 +1105,36 @@ class solve_aerosol(object):
                  [-0.87389258,  1.89261443, -1.30929285,  0.28807412],
                  [-0.71647392,  1.34657557, -0.79536697,  0.13551599],
                  [-0.34076349,  0.60544841, -0.34178543,  0.09669959]]
-        boa_mask = np.all(self.boa >= 0.001, axis = 0) &\
-                   np.all(self.boa < 1,      axis = 0)
-        toa_mask = ~self.bad_pix[self.hx, self.hy]
-        _mask    = boa_mask & toa_mask
-        self.hx      = self.hx       [_mask]
-        self.hy      = self.hy       [_mask]
-        self.toa     = self.toa    [:, _mask] 
+        #boa_mask = np.all(boa >= 0.001, axis = 0) &\
+        #           np.all(boa < 1,      axis = 0)
+        #toa_mask = ~bad_pix[hx, hy]
+        hmask   = np.all(boa >= 0.001, axis = 0) & np.all(boa < 1, axis = 0) & ~bad_pix[hx, hy]
+        toa     = toa[:, hmask]
+        hx      = hx[hmask]
+        hy      = hy[hmask]
         #self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
-        self.boa     = np.array(self.spec_map.predict(self.boa[:, _mask].T)).squeeze()
-        self.boa_unc = self.boa_unc[:, _mask]
-        mask = True
-        if len(self.boa.shape) > 1:                    
-            if self.boa.shape[1] > 3: 
-                for i in range(len(self.toa)):           
-                    pmin = np.poly1d(pmins[i])
-                    pmax = np.poly1d(pmaxs[i])
-                    diff = self.toa[i] - self.boa[i]
-                    mas  = (diff >= pmin(self.boa[i])) & (diff <= pmax(self.boa[i]))
-                    if mas.sum() == 0:
-                        mmin, mmax = np.nan, np.nan
-                    else:
-                        mmin, mmax = np.percentile(self.toa[i][mas] - self.boa[i][mas], [5, 95])
-                    mas  = mas & (diff >= mmin) & (diff <= mmax)
-                    mask = mask & mas
-                self.mask = mask #& boa_mask & toa_mask
-            else:        
-                self.mask = False
-        else:     
-            self.mask = False
+        boa_unc = boa_unc[:, hmask]
+        boa     = np.array(self.spec_map.predict(boa[:, hmask].T)).squeeze()
+        #mask = True
+        #if len(boa.shape) > 1:
+        #    if boa.shape[1] > 3:
+        #        for i in range(len(toa)):
+        #            pmin = np.poly1d(pmins[i])
+        #            pmax = np.poly1d(pmaxs[i])
+        #            diff = toa[i] - boa[i]
+        #            mas  = (diff >= pmin(boa[i])) & (diff <= pmax(boa[i]))
+        #            if mas.sum() == 0:
+        #                mmin, mmax = np.nan, np.nan
+        #            else:
+        #                mmin, mmax = np.percentile(toa[i][mas] - boa[i][mas], [5, 95])
+        #            mas  = mas & (diff >= mmin) & (diff <= mmax)
+        #            mask = mask & mas
+        #        mask = mask #& boa_mask & toa_mask
+        #    else:
+        #        mask = False
+        #else:
+        #    mask = False
+        return boa, boa_unc, hx, hy, toa
 
 
 
@@ -1140,37 +1151,37 @@ class solve_aerosol(object):
         self._aot = self._aot
         self._aot = np.maximum(self._aot, 0.01)
 
-    def _solving(self,):
+    def _solving(self, cloud_mask):
         self.logger.propagate = False
         self.logger.info('Set AOI.')
         self._create_base_map()
         self.logger.info('Get corresponding bands.')
         self._find_boa_bands()
         self.logger.info('Slice TOA bands based on AOI.')
-        self._create_band_gs()
-        self._resamplers()
+        example_file = self._create_band_gs()
+        self._resamplers(example_file)
         self.logger.info('Parsing angles.')
-        self._parse_angles()
+        self._parse_angles(example_file)
         self.logger.info('Mask bad pixeles.')
-        self._mask_bad_pix()
-        if np.sum(~self.bad_pix) > 10:
+        bad_pix = self._mask_bad_pix(cloud_mask, example_file)
+        if np.sum(~bad_pix) > 10:
             self.logger.info('Get simulated BOA.')
-            self._get_boa()
+            boa, boa_unc, hx, hy = self._get_boa(example_file, bad_pix)
             self.logger.info('Get PSF.')
-            self._get_psf()
+            hx, hy = self._get_psf(bad_pix, np.ma.array(boa[-1]), boa_unc[-1], hx, hy)
             self.logger.info('Get simulated TOA reflectance.')
-            self._get_convolved_toa()
+            toa = self._get_convolved_toa(bad_pix, hx, hy)
             self.logger.info('Filtering data.')
-            self._re_mask()
-            if self.mask is not False:
+            boa, boa_unc, hx, hy, toa = self._re_mask(bad_pix, boa, boa_unc, hx, hy, toa)
+            if bad_pix is not False:
                 self.logger.info('Loading emulators.')
                 self._load_xa_xb_xc_emus()
                 self.logger.info('Reading priors and elevation.')
-                self._read_aux()
+                self._read_aux(example_file)
                 self.logger.info('Filling Nans in the prior.')
                 self._fill_nan()
                 self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
-                if self.mask.sum() ==0:
+                if bad_pix.sum() == 0:
                     self.logger.info('No valid value is found for retrieval of atmospheric parameters and priors are stored.')
                     ret = np.array([[self._aot, self._tcwv, self._tco3], [self._aot_unc, self._tcwv_unc, self._tco3_unc]])
                     self.aero_res /=2
@@ -1178,8 +1189,8 @@ class solve_aerosol(object):
                     #self.xSize *=2
                     self.ySize, self.xSize = self._aot.shape
                 else:
-                    self.aero = solving_atmo_paras(self.boa, 
-                                                   self.toa,
+                    self.aero = solving_atmo_paras(boa,
+                                                   toa,
                                                    self._sza, 
                                                    self._vza,
                                                    self._saa, 
@@ -1191,9 +1202,9 @@ class solve_aerosol(object):
                                                    self._aot_unc,
                                                    self._tcwv_unc,
                                                    self._tco3_unc,
-                                                   self.boa_unc,
-                                                   self.hx, self.hy,
-                                                   self.mask,
+                                                   boa_unc,
+                                                   hx, hy,
+                                                   #bad_pix,
                                                    self.full_res,
                                                    self.aero_res,
                                                    self.emus,
@@ -1206,7 +1217,7 @@ class solve_aerosol(object):
                     ret = self.aero._multi_grid_solver()
             else:
                 self.logger.info('No valid value is found for retrieval of atmospheric parameters and priors are stored.')
-                self._read_aux()       
+                self._read_aux(example_file)
                 self._fill_nan()
                 self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
                 ret = np.array([[self._aot, self._tcwv, self._tco3], [self._aot_unc, self._tcwv_unc, self._tco3_unc]])
@@ -1216,7 +1227,7 @@ class solve_aerosol(object):
                 self.ySize, self.xSize = self._aot.shape
         else:
             self.logger.info('No valid value is found for retrieval of atmospheric parameters and priors are stored.')
-            self._read_aux()       
+            self._read_aux(example_file)
             self._fill_nan()
             self.logger.info('Mean values for prior AOT: %.02f and TCWV: %.02f'%(self._aot.mean(), self._tcwv.mean()))
             ret = np.array([[self._aot, self._tcwv, self._tco3], [self._aot_unc, self._tcwv_unc, self._tco3_unc]])
@@ -1229,15 +1240,17 @@ class solve_aerosol(object):
         para_names = 'aot', 'tcwv', 'tco3', 'aot_unc', 'tcwv_unc', 'tco3_unc'
         toa_dir    = self.toa_dir + '/' +'B'.join(self.toa_bands[0].split('/')[-1].split('B')[:-1])
         name_arrays     = zip(para_names, list(solved ) + list(unc))
-        par = partial(save_posterior, g = self.example_file, aero_res = self.aero_res, toa_dir = toa_dir)
+        #par = partial(save_posterior, g = self.example_file, aero_res = self.aero_res, toa_dir = toa_dir)
+        par = partial(save_posterior, g = example_file, aero_res = self.aero_res, toa_dir = toa_dir)
         list(map(par, name_arrays))
-        self.post_aot,     self.post_tcwv,     self.post_tco3,    = solved
-        self.post_aot_unc, self.post_tcwv_unc, self.post_tco3_unc = unc
+        #self.post_aot,     self.post_tcwv,     self.post_tco3,    = solved
+        #self.post_aot_unc, self.post_tcwv_unc, self.post_tco3_unc = unc
         handlers = self.logger.handlers[:]
         for handler in handlers:
             handler.close()
             self.logger.removeHandler(handler)
-    
+        return example_file
+
 def get_kk(angles):
     vza ,sza,raa = angles
     kk = kernels.Kernels(vza ,sza,raa,\

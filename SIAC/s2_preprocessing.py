@@ -59,6 +59,7 @@ def do_cloud(cloud_bands, cloud_name = None, ref_scale = 1/10000., ref_offset = 
         dst.SetProjection  (g.GetProjection())
         dst.GetRasterBand(1).WriteArray((cloud_mask * 100).astype(int))
         dst.GetRasterBand(1).SetNoDataValue(-256)
+        dst.FlushCache()
         dst=None; g=None
         return cloud_mask
 
