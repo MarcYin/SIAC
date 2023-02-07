@@ -38,6 +38,8 @@ from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
 from SIAC.read_MCD43 import get_kernel_weights, get_bounds, smooth, get_kk, getKernelWeights
 from SIAC.MCD43_GEE import read_MCD3_GEE
+from SIAC.read_mcd43GEE import read_MCD3_GEE
+from SIAC.read_VNP43MA1 import read_VNP43MA1
 
 if (sys.version_info[0] == 3) & (sys.version_info[1] >= 4):
     multiprocessing.set_start_method('spawn', force=True)
@@ -154,6 +156,7 @@ class solve_aerosol(object):
                  global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt',
                  cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/',
                  mcd43_gee_folder = None,
+                 VNP43_fnames_dates = None,
                  spec_m_dir  = 'SIAC/spectral_mapping',
                  aero_res    = 1000):                                 
         self.sensor      = sensor_sat[0]
@@ -186,6 +189,7 @@ class solve_aerosol(object):
         self.global_dem  = global_dem
         self.cams_dir    = cams_dir
         self.mcd43_gee_folder = mcd43_gee_folder
+        self.VNP43_fnames_dates = VNP43_fnames_dates
         self.boa_wv      = [645, 859, 469, 555, 1640, 2130]
         self.aero_res    = aero_res
         self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.006.*.hdf'
@@ -698,7 +702,16 @@ class solve_aerosol(object):
         #dstSRS = self.example_file.GetProjectionRef()
         #dstSRS, outputBounds = get_bounds(self.aoi, self.example_file, self.pixel_res)
         dstSRS, outputBounds = get_bounds(self.aoi, example_file, self.pixel_res)
-        if self.mcd43_gee_folder is None:
+
+        if self.mcd43_gee_folder is not None:
+            das, ws, mg = read_MCD3_GEE(self.mcd43_gee_folder, self.boa_bands, outputBounds,  self.aero_res*0.5,  self.aero_res*0.5, dstSRS)
+        elif self.VNP43_fnames_dates is not None:
+            viirs_bands = ['M3', 'M4', 'M5', 'M7', 'M10', 'M11']
+            modis_bands = [3, 4, 1, 2, 6, 7]
+            modis_to_viirs = dict(zip(modis_bands, viirs_bands))
+            bands = [modis_to_viirs[i] for i in self.boa_bands]
+            das, ws, mg = read_VNP43MA1(self.VNP43_fnames_dates, bands, outputBounds, self.aero_res*0.5, self.aero_res*0.5, dstSRS)
+        else:
             das, ws, mg = get_kernel_weights(self.mcd43_dir, 
                                             self.boa_bands, 
                                             self.obs_time, 
@@ -710,10 +723,10 @@ class solve_aerosol(object):
                                             temporal_filling = 16,
                                             cache_mcd43 = True,
                                             cache_name = self.toa_dir + '/mcd43_cache.npz')
-        else:
-            das, ws, mg = read_MCD3_GEE(self.mcd43_gee_folder, self.boa_bands, outputBounds,  self.aero_res*0.5,  self.aero_res*0.5, dstSRS)
-        #self.mg = mg
-        #hg = self.example_file
+
+    
+        self.mg = mg
+        hg = example_file
         
         geotransform = example_file.GetGeoTransform()
         h_res = geotransform[1]
@@ -727,7 +740,7 @@ class solve_aerosol(object):
         #hmask = (hx>=0) & (hx<example_file.RasterYSize) & (hy>=0) & (hy<example_file.RasterXSize)
         #hmask = hmask.reshape(toa_mask.shape)
 
-        mask = ~np.all(mg.ReadAsArray() == 0, axis=0) & (~mask) & ((hx>=0) & (hx<example_file.RasterYSize) & (hy>=0) & (hy<example_file.RasterXSize)).reshape(mask.shape)
+        mask = ~np.all(das == 0, axis=(0, 1, 2)) & (~mask) & ((hx>=0) & (hx<example_file.RasterYSize) & (hy>=0) & (hy<example_file.RasterXSize)).reshape(mask.shape)
         self.logger.info('Filling MCD43 gaps by temporal interpolation.')
         #mask = np.ones_like(mask).astype(bool)
 
@@ -739,12 +752,16 @@ class solve_aerosol(object):
         #k_vol  = kk.Ross
         #k_geo  = kk.Li
         kers = np.array([np.ones(kk.Ross.shape), kk.Ross, kk.Li]).transpose(1,0,2,3)
-        if self.mcd43_gee_folder is None:
+
+        if self.mcd43_gee_folder is not None:
+            das = das * 0.001
+        elif self.VNP43_fnames_dates is not None:
+            das = das * 0.001
+        else:
             n_days = int(das.shape[0] / 6)
             das = das.reshape((n_days, 6) + das.shape[1:]) * 0.001
             ws = ws.reshape((n_days, 6) + ws.shape[1:])
-        else:
-            das = das * 0.001
+        
         sur = np.sum(das * kers[None, ...], axis=2)
         
         # np.savez('test_sur.npz', das = das, ws = ws, all_mask = all_mask, sur = sur, kers = kers)

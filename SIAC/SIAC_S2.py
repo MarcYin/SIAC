@@ -19,13 +19,13 @@ from SIAC.multi_process import parmap
 from os.path import expanduser
 from SIAC.raster_boundary import get_boundary
 from SIAC.MCD43_GEE import get_MCD43_GEE
-
+from SIAC.get_VNP43MA1 import download_VNP43MA1
 
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 
 def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
-             global_dem  = None, cams_dir = None, jasmin = False, Gee = True, do_rgb = True):
+             global_dem  = None, cams_dir = None, jasmin = False, Gee = True, use_VIIRS = False, do_rgb = True):
     '''
     if not os.path.exists(file_path + '/emus/'):
         os.mkdir(file_path + '/emus/')
@@ -54,7 +54,7 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                   cloud_mask, aot, tcwv, metafile, mcd43 = home + '/MCD43/', \
                   vrt_dir = home + '/MCD43_VRT/', aoi=None, \
-                  global_dem  = None, cams_dir = None, jasmin = False, Gee = True, do_rgb = True):
+                  global_dem  = None, cams_dir = None, jasmin = False, Gee = True, use_VIIRS = False, do_rgb = True):
     if jasmin:
         if global_dem is None:
             global_dem  = '/work/scratch-pw/marcyin/DEM/global_dem.vrt'
@@ -63,9 +63,11 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
         os.environ['jasmin_memory_limit'] = '6.4e+10'
     else:
         if global_dem is None:
-            global_dem  = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
+            global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt'
+            global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
         if cams_dir is None:
-            cams_dir    = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+            cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/'
+            cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
             
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
@@ -125,31 +127,42 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     log_file = os.path.dirname(metafile) + '/SIAC_S2.log'
     logger = create_logger(log_file)
     logger.info('Starting atmospheric corretion for %s'%PRODUCT_ID)
+
+
     if not np.all(cloud_mask):
 #         handlers = logger.handlers[:]
 #         for handler in handlers:
 #             handler.close()
 #             logger.removeHandler(handler)
-        #if not jasmin:
-        # vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
-        # pass
-        #logger = create_logger(log_file)
-
-        if not Gee:
-            vrt_dir = get_mcd43(toa_refs[0], obs_time, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
-            mcd43_gee_folder = None
-        else:
+        mcd43_date = datetime(obs_time.year, obs_time.month, obs_time.day)
+        VNP43_fnames_dates = None
+        if Gee:
+            from SIAC.MCD43_GEE import get_MCD43_GEE
             logger.info('Getting MCD43 from GEE')
             geojson = get_boundary(toa_refs[0], to_wgs84 = True)[0]
             coords = json.loads(geojson)['features'][0]['geometry']['coordinates']
-            mcd43_gee_folder = os.path.dirname(toa_refs[0]) + '/MCD43/'
+            mcd43_gee_folder = os.path.dirname(os.path.dirname(toa_refs[0])) + '/MCD43/'
             if not os.path.exists(mcd43_gee_folder):
                 os.mkdir(mcd43_gee_folder)
             temporal_window = 16
-            get_MCD43_GEE(obs_time, coords, temporal_window, mcd43_gee_folder)
-            
+            get_MCD43_GEE(mcd43_date, coords, temporal_window, mcd43_gee_folder)
+        elif use_VIIRS:
+
+            filenames = download_VNP43MA1(toa_refs[0], mcd43_date, mcd43, temporal_window = 16)
+            filenames = np.array(filenames)
+            all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in filenames])          
+            udates = np.unique(all_dates)  
+            VNP43_fnames_dates =  [[filenames[all_dates==date].tolist(),date] for date in udates]
+            mcd43_gee_folder = None
+        else:
+            vrt_dir = get_mcd43(toa_refs[0], mcd43_date, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
+            mcd43_gee_folder = None
+        
+        #logger = create_logger(log_file)
     else:
         logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
+        mcd43_gee_folder = None
+
     sensor_sat = 'MSI', sat
     band_index  = [1,2,3,7,11,12]
     band_wv    = [469, 555, 645, 859, 1640, 2130]
@@ -164,7 +177,9 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                          sun_angles,obs_time, gamma=10., spec_m_dir= file_path+'/spectral_mapping/',
                          ref_scale = ref_scale, ref_off = ref_off, emus_dir=file_path+'/emus/',\
                          mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
-                         prior_scale = [1., 0.1, 46.698, 1., 1., 1.], mcd43_gee_folder = mcd43_gee_folder)
+                         prior_scale = [1., 0.1, 46.698, 1., 1., 1.], mcd43_gee_folder = mcd43_gee_folder,
+                         VNP43_fnames_dates = VNP43_fnames_dates
+                         )
     example_file = aero._solving(cloud_mask)
 
     toa_bands  = toa_refs
