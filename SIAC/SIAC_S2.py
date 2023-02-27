@@ -18,7 +18,6 @@ from SIAC.downloaders import downloader
 from SIAC.multi_process import parmap
 from os.path import expanduser
 from SIAC.raster_boundary import get_boundary
-from SIAC.MCD43_GEE import get_MCD43_GEE
 from SIAC.get_VNP43MA1 import download_VNP43MA1
 
 home = expanduser("~")

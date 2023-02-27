@@ -15,7 +15,7 @@ from SIAC.downloaders import downloader
 from SIAC.multi_process import parmap
 from os.path import expanduser
 from SIAC.raster_boundary import get_boundary
-from SIAC.MCD43_GEE import get_MCD43_GEE
+
 
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
@@ -112,6 +112,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, qa_name, cloud_mask, \
             if not os.path.exists(mcd43_gee_folder):
                 os.mkdir(mcd43_gee_folder)
             temporal_window = 16
+            from SIAC.MCD43_GEE import get_MCD43_GEE
             get_MCD43_GEE(obs_time, coords, temporal_window, mcd43_gee_folder)
             
     else:
