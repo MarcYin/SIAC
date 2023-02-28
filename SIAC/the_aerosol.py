@@ -503,7 +503,7 @@ class solve_aerosol(object):
         defalt_uncs = [0.4, 0.1, 0.05]
         for i in range(3):
             if priors[i] is None:
-                priors[i] = self.cams_dir + '/'.join([datetime.strftime(self.obs_time, '%Y_%m_%d'),\
+                priors[i] = self.cams_dir + '/' + '/'.join([datetime.strftime(self.obs_time, '%Y_%m_%d'),\
                                                        datetime.strftime(self.obs_time, '%Y_%m_%d')+'_%s.tif'%cams_names[i]])
                 use_cams[i] = True
                 if priors[i+3] is None:
