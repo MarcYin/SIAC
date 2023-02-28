@@ -43,10 +43,10 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
     rets = s2_pre_processing(s2_t, cams_dir, global_dem)
     aero_atmos = []
     for ret in rets:
-        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee, do_rgb)
+        ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee, use_VIIRS, do_rgb)
         do_correction(*ret)
         if send_back:
-            aero_atmos.append(aero_atmo)
+            aero_atmos.append(aero_atmos)
     if send_back:
         return aero_atmos
 
