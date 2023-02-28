@@ -429,10 +429,12 @@ class atmospheric_correction(object):
     
     def _get_boa(self,):
         bands = [f.split('_')[-1].split('.')[0] for f in self.toa_bands]
+        ret = []
         for i, band in enumerate(bands):
             self.logger.info('Creating BOA {}'.format(band))
             self._chunks = 10
-            ret = list(map(self._do_chunk, [i]))
+            re = list(map(self._do_chunk, [i]))
+            ret += re
 
         if self._do_rgb:
             self.boa_rgb = ret[self.ri], ret[self.gi], ret[self.bi]
