@@ -19,6 +19,7 @@ $$
 
 
 The uncertainty in the simulate surface reflectance ($\hat{r}^{BRDF}_{unc}$) is calculated as follows:
+
 $$
 \begin{align}
 \hat{r}^{BRDF}_{unc}(\theta_v, \theta_s) = \sqrt{(\frac{\partial \hat{r}^{BRDF}}{\partial f_{iso}} \times f_{iso_{unc}})^2 + (\frac{\partial \hat{r}^{BRDF}}{\partial f_{vol}} \times f_{vol_{unc}})^2 + (\frac{\partial \hat{r}^{BRDF}}{\partial f_{geo}} \times f_{geo_{unc}})^2}
@@ -28,6 +29,7 @@ $$
 where $\frac{\partial \hat{r}^{BRDF}}{\partial f_{iso}} = 1$, $\frac{\partial \hat{r}^{BRDF}}{\partial f_{vol}} = K_{vol}(\theta_v, \theta_s)$ and $\frac{\partial \hat{r}^{BRDF}}{\partial f_{geo}} = K_{geo}(\theta_v, \theta_s)$ are the partial derivatives of BRDF reflectance with respect to the weighting parameters of the BRDF kernel ($f_{iso}$, $f_{vol}$ and $f_{geo}$). The uncertainty in the BRDF kernel weighting parameters ($f_{iso_{unc}}$, $f_{vol_{unc}}$ and $f_{geo_{unc}}$) is calculated using the [SIAC](https://gmd.copernicus.org/articles/15/7933/2022/) smoothed BRDF kernel weighting parameters and their uncertainty. 
 
 So, the uncertainty in the BRDF reflectance ($\hat{r}^{BRDF}_{unc}$) is calculated as follows:
+
 $$
 \begin{align}
 \hat{r}^{BRDF}_{unc}(\theta_v, \theta_s) = \sqrt{(f_{iso_{unc}})^2 + (f_{vol_{unc}} \times K_{vol}(\theta_v, \theta_s))^2 + (f_{geo_{unc}} \times K_{geo}(\theta_v, \theta_s))^2}
@@ -123,6 +125,7 @@ $$
 \sigma_{app} = \sqrt{(\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2}) - r_{s2})^2}
 \end{align}
 $$
+
 where the $\sigma_{app}$ is the appropriateness uncertainty.
 
 ### Combined uncertainty
