@@ -93,7 +93,7 @@ c_{unc} = |c|\sqrt{(\frac{\sigma_{\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})}}{
 \end{align}
 $$
 
-where $\sigma_{\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})}$ is the uncertainty in the $\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})$ and the given SZA ($\theta_s^{nbar}$), $\sigma_{\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})}$ is the uncertainty in $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. The correlation coefficient ($r$) is the correlation coefficient between each pair of $\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})$ and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. However, it is inhibitive to calculate them for all the pixels; the correlation coefficient is calculated from $\sigma_{\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})}$ and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ over the whole image:
+where $\sigma_{\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})}$ is the uncertainty in the $\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})$, $\sigma_{\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})}$ is the uncertainty in $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. The correlation coefficient ($r$) is the correlation coefficient between each pair of $\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})$ and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. However, it is inhibitive to calculate them for all the pixels; the correlation coefficient is calculated from $\sigma_{\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})}$ and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ over the whole image:
 
 $$
 \begin{align}
