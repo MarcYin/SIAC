@@ -118,7 +118,7 @@ where $\sigma_{r_{s2}}$ is the uncertainty in the S2 reflectance ($r_{s2}$).
 
 ### MODIS BRDF uncertainty (appropriateness)
 
-Apart from the uncertainty in the c factor, there is also uncertainty of whether the MODIS BRDF kernel is appropriate for S2 pixels within the MODIS 500mx500m pixel. This is represented by the difference between S2 reflectance ($r_{s2}$) and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ ($\hat{R}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$). In this way, S2 pixel reflectance that are significantly different from  $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$  will have a higher uncertainty. This appropriateness uncertainty is calculated as follows:
+Apart from the uncertainty in the c factor, there is also uncertainty of whether the MODIS BRDF kernel is appropriate for S2 pixels within the MODIS 500mx500m pixel. This is represented by the difference between S2 reflectance ($r_{s2}$) and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. In this way, S2 pixel reflectance that are significantly different from  $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$  will have a higher uncertainty. This appropriateness uncertainty is calculated as follows:
 
 $$
 \begin{align}
