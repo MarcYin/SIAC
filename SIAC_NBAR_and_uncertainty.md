@@ -28,7 +28,7 @@ This is a description of the SIAC nadir BRDF-adjusted reflectance (NBAR) product
 
 # 1. Implementation
 
-The implementation of the NBAR algorithm is done in Python. The code is available on GitHub within the [SIAC](https://github.com/MarcYin/SIAC) repository. The NBAR algorithm is within the `get_bar.py` file. The main function is `create_nbar`:
+The implementation of the NBAR algorithm is done in Python. The code is available on GitHub within the [SIAC](https://github.com/MarcYin/SIAC) repository. The NBAR algorithm is within the [`get_bar.py`](https://github.com/MarcYin/SIAC/blob/S2GM/SIAC/get_nbar.py) file. The main function is `create_nbar`:
 
 ```python
 def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, 
