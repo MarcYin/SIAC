@@ -79,7 +79,7 @@ Table for different SZA options:
 | `{float}`              | Use any user defined sza (float number between 0-60 is suggested)                      | \_nbar\_sza_[%02d]     |
 |                        |                                                                                        |                        |
 
-Table for SZA calculation for misaic, this will only be used when `temporal_average_sza` is used`:
+Table for SZA calculation for mosaic, this will only be used when `temporal_average_sza` is used`:
 
 | Mosaic time variable | Description             | Note                                                                                  |
 | -------------------- | ----------------------- | ------------------------------------------------------------------------------------- |
