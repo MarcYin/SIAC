@@ -1,9 +1,32 @@
-# SIAC nadir BRDF-adjusted reflectance (NBAR) and uncertainty calculation
+SIAC nadir BRDF-adjusted reflectance (NBAR) and uncertainty calculation
+=============
+
+Feng Yin
+
+Department of Geography, University College London
+
+feng.yin.15@ucl.ac.uk
+
+
 
 This is a description of the SIAC nadir BRDF-adjusted reflectance (NBAR) product. It closely follows [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. The correction is down by normalising the viewing geometry and the solar geometry to the nadir geometry with a given solar zenith angle (SZA). For generating NBAR for time series of images, the SZA can be constant or variable (changing the SZA over the year). 
 
+- [SIAC nadir BRDF-adjusted reflectance (NBAR) and uncertainty calculation](#siac-nadir-brdf-adjusted-reflectance-nbar-and-uncertainty-calculation)
+- [1. Implementation](#1-implementation)
+- [2. Theoretical background](#2-theoretical-background)
+  - [2.1. MODIS/VIRRIS BRDF kernel](#21-modisvirris-brdf-kernel)
+  - [2.2. Interpolation from MODIS wavelength to Sentinel-2 wavelength](#22-interpolation-from-modis-wavelength-to-sentinel-2-wavelength)
+  - [2.3. Simulation of anglular reflectance for S2](#23-simulation-of-anglular-reflectance-for-s2)
+  - [2.4. NBAR calculation](#24-nbar-calculation)
+    - [2.4.1. Considerations on SZA](#241-considerations-on-sza)
+  - [2.5. NBAR uncertainty calculation](#25-nbar-uncertainty-calculation)
+    - [2.5.1. Uncerainty in $c$ factor](#251-uncerainty-in-c-factor)
+    - [2.5.2. Uncertainty in NBAR reflectance](#252-uncertainty-in-nbar-reflectance)
+    - [2.5.3. MODIS BRDF uncertainty (appropriateness)](#253-modis-brdf-uncertainty-appropriateness)
+    - [2.5.4. Combined uncertainty](#254-combined-uncertainty)
 
-# Implementation
+
+# 1. Implementation
 
 The implementation of the NBAR algorithm is done in Python. The code is available on GitHub within the [SIAC](https://github.com/MarcYin/SIAC) repository. The NBAR algorithm is within the `get_bar.py` file. The main function is `create_nbar`:
 
@@ -40,30 +63,28 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None,
 
 Table of sources of BRDF information:
 
-| Source | Description|
-| --- | --- |
-| use_VIIRS | VIIRS BRDF product from NASA |
-| Gee | MODIS BRDF products hosted by Google Earth Engine |
-|  |
+| Source    | Description                                       |
+| --------- | ------------------------------------------------- |
+| use_VIIRS | VIIRS BRDF product from NASA                      |
+| Gee       | MODIS BRDF products hosted by Google Earth Engine |
+|           |
 
 Table for different SZA options:
 
-| nbar_sza | Description | fname_postfix |
-| --- | --- | --- |
-| use_s2 | Use the mean of the SZA from S2 | _nbar_sza_s2 |
-| atan2 | Use the SZA at the subsolar point from https://doi.org/10.1016/j.renene.2021.03.047 | _nbar_sza_avg |
+| nbar_sza             | Description                                                                            | filename postfix       |
+| -------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
+| use_s2               | Use the mean of the SZA from S2                                                        | _nbar_sza_s2           |
+| atan2                | Use the SZA at the subsolar point from https://doi.org/10.1016/j.renene.2021.03.047    | _nbar_sza_avg          |
 | temporal_average_sza | Use the mean SZA for the whole period, calculated from the SZA with the subsolar point | _nbar_sza_temporal_avg |
-| {float} | Use any user defined sza (float number between 0-60 is suggested) | \_nbar\_sza_[%02d] |
-|  ||
+| {float}              | Use any user defined sza (float number between 0-60 is suggested)                      | \_nbar\_sza_[%02d]     |
+|                      |                                                                                        |                        |
 
 
 
+# 2. Theoretical background
 
 
-# Theoretical background
-
-
-## MODIS/VIRRIS BRDF kernel
+## 2.1. MODIS/VIRRIS BRDF kernel
 
 The MODIS/VIIRS BRDF information is derived with the RossThick-LiSparseReciprocal (RTLSR) kernels model from  atmospherically corrected multiangular reflectance observations, detail description is available [here](https://modis.gsfc.nasa.gov/data/atbd/atbd_mod09.pdf). The BRDF kernel is calculated at 7 MODIS bands [1, 2, 3, 4, 5, 6, 7], at wavelengths of 645, 858, 469, 555, 1240, 1640, 2130 nm, respectively. The officail product proivides three BRDF weighting parameters: isotropic ($f_{iso}$), volume ($f_{vol}$) and geometric ($f_{geo}$) for all the 7 MODIS bands. With the BRDF kernel parameters $K_{iso}$, $K_{vol}$ and $K_{geo}$, angular reflectance $\hat{r}^{BRDF}(\theta_v, \theta_s)$ can be calculated as follows:
 
@@ -77,7 +98,7 @@ where $\theta_v$ is the viewing geometry and $\theta_s$ is the solar geometry.
 
 
 
-## Interpolation from MODIS wavelength to Sentinel-2 wavelength
+## 2.2. Interpolation from MODIS wavelength to Sentinel-2 wavelength
 
 As there is no BRDF information available from Sentinel-2 (S2), the MODIS/VIIRS BRDF information is used. However, the S2 reflectance is calculated at 10 Sentinel-2 bands [2, 3, 4, 5, 6, 7, 8, 8A, 11, 12], at wavelengths of [492.4, 559.8, 664.6, 704.1, 740.5, 782.8, 832.8, 864.7, 1613.7, 2202.4], respectively. Therefore, the MODIS BRDF kernel needs to be interpolated to the S2 wavelengths. The interpolation is done by linear interpolating the kernel weighting parameters of two MODIS bands closest to each S2 bands:
 
@@ -111,7 +132,7 @@ where $\sigma_{f_{right_{[iso, vol, geo]}}^{MODIS}}$ and $\sigma_{f_{left_{[iso,
 For S2 bands that are outside the MODIS bands, the closest MODIS band is used and the uncertainty is set by normilal increasing the uncertainty of the closest MODIS band by 20% for each band outside the MODIS bands.
 
 
-## Simulation of anglular reflectance for S2
+## 2.3. Simulation of anglular reflectance for S2
 
 After the interpolation of the BRDF kernel weighting parameters, the angular reflectance $\hat{r}^{BRDF}(\theta_v, \theta_s)$ can be calculated for each S2 band. 
 
@@ -144,7 +165,7 @@ $$
 $$
 
 
-## NBAR calculation
+## 2.4. NBAR calculation
 
 Assuming that a SZA ($\theta_s^{nbar}$) is given, the NBAR for a given band of wavelength $\lambda$ is calculated as follows the [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. Since the azimuths angles will not affect the c factor if the view zenith angle is 0, so we can ignore the azimuths angles in the following calculation:
 
@@ -164,15 +185,15 @@ Here $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ is the BRDF reflectance at t
 
 
 
-### Considerations on SZA
+### 2.4.1. Considerations on SZA
 
 This would cause issues when the surface property is not homogeneous, as within the MODIS 500meterx500meter pixel the BRDF shape could be vastly different at the scale of S2 10metersx10meters pixel. Therefore, it is recommended to not extrapolate the NBAR SZA too far from the initial S2 SZA. If the application requires images from an individual date and can handle the variation in SZA, you may choose to normalise the SZA to the original S2 reported SZA or the SZA calculated from the image latitude and longitude. However, if the application requires mosaic from time series of images, it is recommended to use the mean SZA calculated over time series of images.
 
 
 
-## NBAR uncertainty calculation
+## 2.5. NBAR uncertainty calculation
 
-### Uncerainty in $c$ factor
+### 2.5.1. Uncerainty in $c$ factor
 The uncertainty calculation for NBAR is not given in the [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. To provide per-pixel uncertainty for NBAR, we use the SIAC calculated BRDF kernel weighting parameters and their uncertainty to calculate the uncertainty in the c factor ($\sigma_c$). There is a high correlation between the simulated surface reflectance at the nadir viewing geometry and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. It is important to use full uncertainty propagation to calculate the uncertainty in the c factor. The uncertainty in the c factor is calculated as follows:
 
 The standard equation for uncertainty propagation for $y = \frac{A}{B}$ is given as follows:
@@ -217,7 +238,7 @@ $$
 
 where $\hat{R}^{BRDF}(\theta_v=0, \theta_s^{nbar})$ is a vector of all $\sigma_{\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})}$ and  $\hat{R}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ is a vector of all $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$.
 
-### Uncertainty in NBAR reflectance
+### 2.5.2. Uncertainty in NBAR reflectance
 
 Since we have now have the uncertainty in the c factor, we can calculate the uncertainty in the NBAR reflectance ($r_{nbar}$) as follows:
 
@@ -230,7 +251,7 @@ $$
 where $\sigma_{r_{s2}}$ is the uncertainty in the S2 reflectance ($r_{s2}$).
 
 
-### MODIS BRDF uncertainty (appropriateness)
+### 2.5.3. MODIS BRDF uncertainty (appropriateness)
 
 Apart from the uncertainty in the c factor, there is also uncertainty of whether the MODIS BRDF kernel is appropriate for S2 pixels within the MODIS 500mx500m pixel. This is represented by the difference between S2 reflectance ($r_{s2}$) and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. In this way, S2 pixel reflectance that are significantly different from  $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$  will have a higher uncertainty. This appropriateness uncertainty is calculated as follows:
 
@@ -242,7 +263,7 @@ $$
 
 where the $\sigma_{app}$ is the appropriateness uncertainty.
 
-### Combined uncertainty
+### 2.5.4. Combined uncertainty
 
 Finally, the combined uncertainty in the NBAR reflectance ($\sigma_{r_{nbar}} $) is calculated as follows:
 
