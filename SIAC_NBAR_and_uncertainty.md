@@ -63,21 +63,36 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None,
 
 Table of sources of BRDF information:
 
-| Source    | Description                                       |
-| --------- | ------------------------------------------------- |
-| use_VIIRS | VIIRS BRDF product from NASA                      |
-| Gee       | MODIS BRDF products hosted by Google Earth Engine |
-|           |
+| Source      | Description                                       |
+| ----------- | ------------------------------------------------- |
+| `use_VIIRS` | VIIRS BRDF product from NASA                      |
+| `Gee`       | MODIS BRDF products hosted by Google Earth Engine |
+|             |
 
 Table for different SZA options:
 
-| nbar_sza             | Description                                                                            | filename postfix       |
-| -------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
-| use_s2               | Use the mean of the SZA from S2                                                        | _nbar_sza_s2           |
-| atan2                | Use the SZA at the subsolar point from https://doi.org/10.1016/j.renene.2021.03.047    | _nbar_sza_avg          |
-| temporal_average_sza | Use the mean SZA for the whole period, calculated from the SZA with the subsolar point | _nbar_sza_temporal_avg |
-| {float}              | Use any user defined sza (float number between 0-60 is suggested)                      | \_nbar\_sza_[%02d]     |
-|                      |                                                                                        |                        |
+| nbar_sza               | Description                                                                            | filename postfix       |
+| ---------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
+| `use_s2`               | Use the mean of the SZA from S2                                                        | _nbar_sza_s2           |
+| `atan2`                | Use the SZA at the subsolar point from https://doi.org/10.1016/j.renene.2021.03.047    | _nbar_sza_avg          |
+| `temporal_average_sza` | Use the mean SZA for the whole period, calculated from the SZA with the subsolar point | _nbar_sza_temporal_avg |
+| `{float}`              | Use any user defined sza (float number between 0-60 is suggested)                      | \_nbar\_sza_[%02d]     |
+|                        |                                                                                        |                        |
+
+Table for SZA calculation for misaic, this will only be used when `temporal_average_sza` is used`:
+
+| Mosaic time variable | Description             | Note                                                                                  |
+| -------------------- | ----------------------- | ------------------------------------------------------------------------------------- |
+| `mosaic_start_date`  | mosaic starting date    | -                                                                                     |
+| `mosaic_end_date`    | mosaic ending date      | -                                                                                     |
+| `mosaic_hour`        | float hour between 0-24 | If not defined, this will be calculated from the S2 Mean Local Solar Time (10:30 UTC) |
+
+The calculation from the S2 mean local solar time to the mosaic hour is done as follows:
+
+```python
+            S2_local_time = 10.5
+            mosaic_hour = S2_local_time - longitude / 180 * 12
+```
 
 
 
