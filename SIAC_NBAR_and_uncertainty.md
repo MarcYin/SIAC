@@ -202,7 +202,7 @@ Here $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ is the BRDF reflectance at t
 
 ### 2.4.1. Considerations on SZA
 
-This would cause issues when the surface property is not homogeneous, as within the MODIS 500meterx500meter pixel the BRDF shape could be vastly different at the scale of S2 10metersx10meters pixel. Therefore, it is recommended to not extrapolate the NBAR SZA too far from the initial S2 SZA. If the application requires images from an individual date and can handle the variation in SZA, you may choose to normalise the SZA to the original S2 reported SZA or the SZA calculated from the image latitude and longitude. However, if the application requires mosaic from time series of images, it is recommended to use the mean SZA calculated over time series of images.
+It would cause issues when the surface property is not homogeneous, as within the MODIS 500meterx500meter pixel the BRDF shape could be vastly different at the scale of S2 10metersx10meters pixel. Therefore, it is recommended to not extrapolate the NBAR SZA too far from the initial S2 SZA. If the application requires images from an individual date and can handle the variation in SZA, you may choose to normalise the SZA to the original S2 reported SZA or the SZA calculated from the image latitude and longitude. However, if the application requires mosaic from time series of images, it is recommended to use the mean SZA calculated over time series of images.
 
 
 
