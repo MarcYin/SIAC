@@ -510,34 +510,25 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
     """
     Create NBAR from Sentinel-2 data.
     
-    Solar zenith angle:
+    Solar zenith angle `nbar_sza`:
     
-    It can be either the mean of the SZA from S2 ('use_s2') or the SZA at the subsolar point ('atan2', default).
+    It can be either the mean of the SZA from S2 ('use_s2') 
+    Or the SZA at the subsolar point ('atan2', default) from https://doi.org/10.1016/j.renene.2021.03.047.
     If mosaic over a period of time, use the mean SZA for the whole period calculated
-    from the SZA at the center of the mosaic with the subsolar point ('temporal_average_sza').
+    from the SZA with the subsolar point ('temporal_average_sza').
     Or to any user defined sza (float number between 0-60 is suggested).
-
+    
     Args:
         s2_file_dir (str): path to the Sentinel-2 data.
-
         nbar_sza (str, optional): nbar sza. Defaults to 'atan2'.
-
         logger (logging, optional): logger for function. Defaults to None.
-
         mosaic_start_date (datetime, optional): mosaic starting date. Defaults to None.
-
         mosaic_end_date (datetime, optional): mosaic ending date. Defaults to None.
-
         mosaic_hour (float, optional): float hour between 0-24. Defaults to None.
-
         Gee (bool, optional): Whether to use GEE or not. Defaults to True.
-
         use_VIIRS (bool, optional): whether to use VIIRS. Defaults to False.
-
         vnp43_folder (str, optional): path for saving VIIRS data. Defaults to None.
-
         temporal_window (int, optional): days before and after the obervation date. Defaults to 16.
-
     return:
         None
     """    
