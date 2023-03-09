@@ -79,7 +79,7 @@ Table for different SZA options:
 | `{float}`              | Use any user defined sza (float number between 0-60 is suggested)                      | \_nbar\_sza_[%02d]     |
 |                        |                                                                                        |                        |
 
-Table for SZA calculation for mosaic, this will only be used when `temporal_average_sza` is used`:
+Table for SZA calculation for mosaic, this will only be used when `temporal_average_sza` is used:
 
 | Mosaic time variable | Description             | Note                                                                                  |
 | -------------------- | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -144,7 +144,7 @@ $$
 
 where $\sigma_{f_{right_{[iso, vol, geo]}}^{MODIS}}$ and $\sigma_{f_{left_{[iso, vol, geo]}}^{MODIS}}$ are the uncertainties in the kernel weighting parameters of the two MODIS bands closest to each S2 band. These uncertainties in the BRDF kernel weighting parameters are calculated using the [SIAC](https://gmd.copernicus.org/articles/15/7933/2022/) gap filled BRDF kernel weighting parameters and their uncertainty. 
 
-For S2 bands that are outside the MODIS bands, the closest MODIS band is used and the uncertainty is set by normilal increasing the uncertainty of the closest MODIS band by 20% for each band outside the MODIS bands.
+For S2 bands that are outside the MODIS bands, the closest MODIS band is used and the uncertainty is set by increasing the uncertainty of the closest MODIS band by 20% for each band outside the MODIS bands.
 
 
 ## 2.3. Simulation of anglular reflectance for S2
@@ -182,7 +182,7 @@ $$
 
 ## 2.4. NBAR calculation
 
-Assuming that a SZA ($\theta_s^{nbar}$) is given, the NBAR for a given band of wavelength $\lambda$ is calculated as follows the [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. Since the azimuths angles will not affect the c factor if the view zenith angle is 0, so we can ignore the azimuths angles in the following calculation:
+Assuming that a SZA ($\theta_s^{nbar}$) is given, the NBAR for a given band of wavelength $\lambda$ is calculated as follows the [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. Since the azimuths angles will not affect the c factor if the view zenith angle is 0, we can ignore the azimuths angles in the following calculation:
 
 $$
 \begin{align}
@@ -202,14 +202,14 @@ Here $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$ is the BRDF reflectance at t
 
 ### 2.4.1. Considerations on SZA
 
-It would cause issues when the surface property is not homogeneous, as within the MODIS 500meterx500meter pixel the BRDF shape could be vastly different at the scale of S2 10metersx10meters pixel. Therefore, it is recommended to not extrapolate the NBAR SZA too far from the initial S2 SZA. If the application requires images from an individual date and can handle the variation in SZA, you may choose to normalise the SZA to the original S2 reported SZA or the SZA calculated from the image latitude and longitude. However, if the application requires mosaic from time series of images, it is recommended to use the mean SZA calculated over time series of images.
+If the surface properties is not homogeneous within the MODIS 500meterx500meter pixel, it is likely that the BRDF shape at S2 10metersx10meters spatial resolution will be different from the BRDF shape of the MODIS pixel. So, it is recommended to not extrapolate the NBAR SZA too far from the initial S2 SZA to minimize the uncertanities brought by extrapolation. If the application requires images from an individual date and can handle the variation in SZA (smoothly changing over time), you may choose to normalise the SZA to the original S2 reported SZA or the SZA calculated from the image latitude and longitude. However, if the application requires mosaic from time series of images, it is recommended to use the mean SZA calculated over time series of images.
 
 
 
 ## 2.5. NBAR uncertainty calculation
 
 ### 2.5.1. Uncerainty in $c$ factor
-The uncertainty calculation for NBAR is not given in the [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. To provide per-pixel uncertainty for NBAR, we use the SIAC calculated BRDF kernel weighting parameters and their uncertainty to calculate the uncertainty in the c factor ($\sigma_c$). There is a high correlation between the simulated surface reflectance at the nadir viewing geometry and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. It is important to use full uncertainty propagation to calculate the uncertainty in the c factor. The uncertainty in the c factor is calculated as follows:
+The uncertainty calculation for NBAR is not given in the [Roy et al. 2016](https://doi.org/10.1016/j.rse.2016.01.023) paper. To provide per-pixel uncertainty for NBAR, we use the SIAC calculated BRDF kernel weighting parameters and their uncertainty to calculate the uncertainty in the c factor ($\sigma_c$). There is a high correlation between the simulated $\hat{r}^{BRDF}(\theta_v=0, \theta_s^{nbar})$ and $\hat{r}^{BRDF}(\theta_v^{s2}, \theta_s^{s2})$. It is important to use full uncertainty propagation to calculate the uncertainty in the c factor. 
 
 The standard equation for uncertainty propagation for $y = \frac{A}{B}$ is given as follows:
 
@@ -280,7 +280,7 @@ where the $\sigma_{app}$ is the appropriateness uncertainty.
 
 ### 2.5.4. Combined uncertainty
 
-Finally, the combined uncertainty in the NBAR reflectance ($\sigma_{r_{nbar}} $) is calculated as follows:
+Finally, the combined uncertainty in the NBAR reflectance ($\sigma_{r_{nbar}}$) is calculated as follows:
 
 $$
 \begin{align}
