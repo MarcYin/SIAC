@@ -697,7 +697,7 @@ class solve_aerosol(object):
         # self.boa_unc = np.minimum(unc, 0.5)
 
     def _get_boa(self, example_file, mask, temporal_filling = 16):
-        self.logger.info('Reading MCD43 files.')
+        self.logger.info('Reading BRDF weighting parameters files.')
         #dstSRS = self.example_file.GetProjectionRef()
         #dstSRS, outputBounds = get_bounds(self.aoi, self.example_file, self.pixel_res)
         dstSRS, outputBounds = get_bounds(self.aoi, example_file, self.pixel_res)
@@ -740,7 +740,7 @@ class solve_aerosol(object):
         #hmask = hmask.reshape(toa_mask.shape)
 
         mask = ~np.all(das == 0, axis=(0, 1, 2)) & (~mask) & ((hx>=0) & (hx<example_file.RasterYSize) & (hy>=0) & (hy<example_file.RasterXSize)).reshape(mask.shape)
-        self.logger.info('Filling MCD43 gaps by temporal interpolation.')
+        self.logger.info('Filling gaps in BRDF time series.')
         #mask = np.ones_like(mask).astype(bool)
 
         self._annoying_angles(mg)
