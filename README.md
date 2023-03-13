@@ -25,10 +25,14 @@ Please refer to the [SIAC Docker usage instruction](https://github.com/MarcYin/S
 Yin, F., Lewis, P. E., and Gómez-Dans, J. L.: Bayesian atmospheric correction over land: Sentinel-2/MSI and Landsat 8/OLI, Geosci. Model Dev., 15, 7933–7976, https://doi.org/10.5194/gmd-15-7933-2022, 2022.
 
 ## Auxiliary data needed (Automatically downloaded by SIAC):
-* MCD43 : 
+* MCD43: 
   - 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date. 
   - This has been updated to automatically download data from Google Earth Engine (GEE), which is much faster than the previous way. This means you will need to register to get access to GEE at [here](https://earthengine.google.com).
   - Or you can still use the previous way to download the data by adding the `Gee = False` in the `SIAC_S2` or `SIAC_L8` class, i.e. `SIAC_S2(**kwargs, gee=False)` or `SIAC_L8(**kwargs, gee=False)`.
+* VNP43MA1 (VIIRS BRDF product as continuation of MCD43):
+  - 16 days before and 16 days after the Sentinel 2 / Landsat 8 sensing date.
+  - If you choose to use VIIRS, the VNP43MA1 data will be downloaded automatically from NASA server.
+  - To use this, you need to add `use_VIIRS = True` and `Gee=False` in the `SIAC_S2` or `SIAC_L8` class, i.e. `SIAC_S2(**kwargs, Gee=False, use_VIIRS=True)` or `SIAC_L8(**kwargs, Gee=False, use_VIIRS=True)`.
 * ECMWF CAMS Near Real Time prediction: 
   - Time step of 3 hours or 1 hour with the start time of 00:00:00 over the date, and data from 01/01/2015 are mirrored in UK Jasmin server at: https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/
 * Global DEM: 
@@ -36,6 +40,9 @@ Yin, F., Lewis, P. E., and Gómez-Dans, J. L.: Bayesian atmospheric correction o
 * Emulators: 
   - Emulators for atmospheric path reflectance, total transmittance and single scattering Albedo, and the emulators for Sentinel 2 and Landsat 8 trained with 6S.V2 are packed in the current repository.
 
+## SIAC NBAR procedure:
+
+SIAC NBAR and uncertainty calculation procedure have been implemented, see [SIAC_NBAR_and_uncertainty.md](https://github.com/MarcYin/SIAC/blob/S2GM/SIAC_NBAR_and_uncertainty.md) for details.
 
 ## Installation:
 
@@ -55,7 +62,7 @@ Then you can install SIAC:
 - Directly from GitHub 
 
   ```bash
-  pip install https://github.com/MarcYin/SIAC/archive/master.zip
+  pip install https://github.com/MarcYin/SIAC/archive/refs/heads/S2GM.zip
   ```
 
 <!-- 
