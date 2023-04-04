@@ -43,13 +43,15 @@ def do_cloud(cloud_bands, cloud_name = None, ref_scale = 1/10000., ref_offset = 
 
     toas = [reproject_data(str(band), cloud_bands[0], dstNodata=0, resample=5).data for band in cloud_bands]
     # print(ref_scale, ref_offset)
-    toas = np.array(toas) * ref_scale + ref_offset
-    mask = np.all(toas >= 0.0001, axis=0)
+    toas = np.array(toas) 
+    mask = ~np.all(toas == 0, axis=0)
+    toas = toas * ref_scale + ref_offset
+    # mask = np.all(toas >= 0.0001, axis=0)
     valid_pixel = mask.sum()
     cloud_proba = cl.predict(toas[:, mask].T)
     cloud_mask = np.zeros_like(toas[0])
     cloud_mask[mask] = cloud_proba#[:,1]
-    cloud_mask[~mask] = -256
+    cloud_mask[~mask] = 255
     if cloud_name is None:
         return cloud_mask
     else:
@@ -58,7 +60,7 @@ def do_cloud(cloud_bands, cloud_name = None, ref_scale = 1/10000., ref_offset = 
         dst.SetGeoTransform(g.GetGeoTransform())
         dst.SetProjection  (g.GetProjection())
         dst.GetRasterBand(1).WriteArray((cloud_mask * 100).astype(int))
-        dst.GetRasterBand(1).SetNoDataValue(-256)
+        dst.GetRasterBand(1).SetNoDataValue(255)
         dst.FlushCache()
         dst=None; g=None
         return cloud_mask
