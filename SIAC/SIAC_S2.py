@@ -130,41 +130,41 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     VNP43_fnames_dates = None
     mcd43_gee_folder = None
 
-    if not np.all(cloud_mask):
-#         handlers = logger.handlers[:]
-#         for handler in handlers:
-#             handler.close()
-#             logger.removeHandler(handler)
-        mcd43_date = datetime(obs_time.year, obs_time.month, obs_time.day)
+    # if not np.all(cloud_mask):
+        # handlers = logger.handlers[:]
+        # for handler in handlers:
+        #     handler.close()
+        #     logger.removeHandler(handler)
+    mcd43_date = datetime(obs_time.year, obs_time.month, obs_time.day)
+    
+    if Gee:
+        from SIAC.MCD43_GEE import get_MCD43_GEE
+        logger.info('MODIS BRDF product is chosen')
+        logger.info('Getting MCD43 from GEE')
+        geojson = get_boundary(toa_refs[0], to_wgs84 = True)[0]
+        coords = json.loads(geojson)['features'][0]['geometry']['coordinates']
+        mcd43_gee_folder = os.path.dirname(os.path.dirname(toa_refs[0])) + '/MCD43/'
+        if not os.path.exists(mcd43_gee_folder):
+            os.mkdir(mcd43_gee_folder)
+        temporal_window = 16
+        get_MCD43_GEE(mcd43_date, coords, temporal_window, mcd43_gee_folder)
+    elif use_VIIRS:
+        logger.info('VIIRS BRDF product is chosen')
+        logger.info('Getting VNP43MA1 from NASA server')
+        filenames = download_VNP43MA1(toa_refs[0], mcd43_date, mcd43, temporal_window = 16)
+        filenames = np.array(filenames)
+        all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in filenames])          
+        udates = np.unique(all_dates)  
+        VNP43_fnames_dates =  [[filenames[all_dates==date].tolist(),date] for date in udates]
         
-        if Gee:
-            from SIAC.MCD43_GEE import get_MCD43_GEE
-            logger.info('MODIS BRDF product is chosen')
-            logger.info('Getting MCD43 from GEE')
-            geojson = get_boundary(toa_refs[0], to_wgs84 = True)[0]
-            coords = json.loads(geojson)['features'][0]['geometry']['coordinates']
-            mcd43_gee_folder = os.path.dirname(os.path.dirname(toa_refs[0])) + '/MCD43/'
-            if not os.path.exists(mcd43_gee_folder):
-                os.mkdir(mcd43_gee_folder)
-            temporal_window = 16
-            get_MCD43_GEE(mcd43_date, coords, temporal_window, mcd43_gee_folder)
-        elif use_VIIRS:
-            logger.info('VIIRS BRDF product is chosen')
-            logger.info('Getting VNP43MA1 from NASA server')
-            filenames = download_VNP43MA1(toa_refs[0], mcd43_date, mcd43, temporal_window = 16)
-            filenames = np.array(filenames)
-            all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in filenames])          
-            udates = np.unique(all_dates)  
-            VNP43_fnames_dates =  [[filenames[all_dates==date].tolist(),date] for date in udates]
-            
-        else:
-            logger.info('MODIS BRDF product is chosen')
-            logger.info('Getting MCD43 from NASA server')
-            vrt_dir = get_mcd43(toa_refs[0], mcd43_date, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
+    else:
+        logger.info('MODIS BRDF product is chosen')
+        logger.info('Getting MCD43 from NASA server')
+        vrt_dir = get_mcd43(toa_refs[0], mcd43_date, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
             
         #logger = create_logger(log_file)
-    else:
-        logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
+    # else:
+    #     logger.info('No clean pixel in this scene and no MCD43 is downloaded.')
         
 
     sensor_sat = 'MSI', sat

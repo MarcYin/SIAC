@@ -719,7 +719,7 @@ class solve_aerosol(object):
                                             yRes = self.aero_res*0.5, 
                                             dstSRS = dstSRS, 
                                             logger = self.logger,
-                                            temporal_filling = 16,
+                                            temporal_filling = temporal_filling,
                                             cache_mcd43 = True,
                                             cache_name = self.toa_dir + '/mcd43_cache.npz')
 
@@ -1180,9 +1180,9 @@ class solve_aerosol(object):
         self._parse_angles(example_file)
         self.logger.info('Mask bad pixeles.')
         bad_pix = self._mask_bad_pix(cloud_mask, example_file)
+        self.logger.info('Get simulated BOA.')
+        boa, boa_unc, hx, hy = self._get_boa(example_file, bad_pix)
         if np.sum(~bad_pix) > 10:
-            self.logger.info('Get simulated BOA.')
-            boa, boa_unc, hx, hy = self._get_boa(example_file, bad_pix)
             self.logger.info('Get PSF.')
             hx, hy = self._get_psf(bad_pix, np.ma.array(boa[-1]), boa_unc[-1], hx, hy)
             self.logger.info('Get simulated TOA reflectance.')
