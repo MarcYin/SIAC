@@ -435,10 +435,12 @@ class atmospheric_correction(object):
             self._chunks = 10
             re = list(map(self._do_chunk, [i]))
             if self._do_rgb:
-                re = re[0]
-                re_full = np.ones((re[0].shape[0], re[0].shape[0])) * np.nan
-                for row in range(self._chunks):
-                    re_full[:, row*re[row].shape[1]:(row+1)*re[row].shape[1]] = re[row]
+                re_full = np.hstack(re[0])
+
+                # re = re[0]
+                # re_full = np.ones((re[0].shape[0], re[0].shape[0])) * np.nan
+                # for row in range(self._chunks):
+                #     re_full[:, row*re[row].shape[1]:(row+1)*re[row].shape[1]] = re[row]
                 ret.append(re_full)
 
         if self._do_rgb:
