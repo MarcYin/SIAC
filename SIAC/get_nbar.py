@@ -720,9 +720,9 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         print('Mean c factor, vza, sza, raa, nbar_sza: %.03f, %.03f, %.03f, %.03f, %.03f'%(np.nanmean(c_factor), vza.mean(), sza.mean(), raa.mean(), sza_avg.mean()))
 
 
-        band_g = gdal.Open(band_file)
-        geom = band_g.GetGeoTransform()
-        projectionRef = band_g.GetProjectionRef()
+        # data = gdal.Open(band_file)
+        geom = gdal.Open(band_file).GetGeoTransform()
+        projectionRef = gdal.Open(band_file).GetProjectionRef()
 
         xRes = abs(geom[1])
         yRes = abs(geom[5])
@@ -740,40 +740,43 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         c_factor = reproject_data(c_factor, B2, xRes = xRes, yRes = yRes).data
         
 
-        mask = ~np.isfinite(c_factor)
-        c_factor[mask] = 1
+        # mask = ~np.isfinite(c_factor)
+        c_factor[~np.isfinite(c_factor)] = 1
         mask_fname = band_file.replace('_sur', '_cfactor_mask_%s'%(fname_postfix))
         # print(mask_fname)
-        save_band(mask.astype(int), mask_fname, projectionRef, geom)
+        save_band((~np.isfinite(c_factor)).astype(int), mask_fname, projectionRef, geom)
         
 
-        data = band_g.ReadAsArray() / 10000
-        mask = data<0
-        nbar = (data * c_factor * 10000).astype(int)
+        # data = gdal.Open(band_file).ReadAsArray() / 10000
+        # mask = data<0
+        ### NBAR
+        img = (gdal.Open(band_file).ReadAsArray() * c_factor).astype(int)
         nbar_fname = band_file.replace('_sur', '_nbar_%s'%(fname_postfix))
         # print(nbar_fname)
-        nbar[mask] = -9999
-        save_band(nbar, nbar_fname, projectionRef, geom)
+        # img[data<0] = -9999
+        save_band(img, nbar_fname, projectionRef, geom)
         
-        c_factor_unc = reproject_data(c_factor_unc, B2, xRes = xRes, yRes = yRes).data
+        # c_factor_unc = reproject_data(c_factor_unc, B2, xRes = xRes, yRes = yRes).data
         
         band_unc_file = B2.replace('B02_sur.tif', band + '_sur_unc.tif')
-        band_unc = gdal.Open(band_unc_file).ReadAsArray() / 10000.
+        # band_unc = gdal.Open(band_unc_file).ReadAsArray() / 10000.
 
-        nbar_unc = np.sqrt(c_factor**2 * band_unc**2 + c_factor_unc**2 * (data)**2)
+        ### NBAR_UNC
+        img = np.sqrt(c_factor**2 * (gdal.Open(band_unc_file).ReadAsArray() / 10000.)**2
+                      + reproject_data(c_factor_unc, B2, xRes = xRes, yRes = yRes).data**2 * (gdal.Open(band_file).ReadAsArray() / 10000)**2)
         
         rho_mod_s2_ang = array_to_raster(rho_mod_s2_ang, B2)
-        rho_mod_s2_ang = reproject_data(rho_mod_s2_ang, B2, xRes = xRes, yRes = yRes).data 
-        distance = (rho_mod_s2_ang - data)**2
+        # rho_mod_s2_ang = reproject_data(rho_mod_s2_ang, B2, xRes = xRes, yRes = yRes).data
+        # distance = (reproject_data(rho_mod_s2_ang, B2, xRes = xRes, yRes = yRes).data - (gdal.Open(band_file).ReadAsArray() / 10000))**2
        
-        nbar_unc = np.sqrt(distance + nbar_unc**2)
-        nbar_unc = np.minimum(nbar_unc, 32767 / 10000)
-        nbar_unc = (nbar_unc * 10000).astype(int)
+        img = np.sqrt((reproject_data(rho_mod_s2_ang, B2, xRes = xRes, yRes = yRes).data - (gdal.Open(band_file).ReadAsArray() / 10000))**2 + img**2)
+        img = np.minimum(img, 32767 / 10000)
+        img = (img * 10000).astype(int)
         nbar_unc_fname = band_file.replace('_sur', '_nbar_unc_%s'%(fname_postfix))
         # print(nbar_unc_fname)
-        nbar_unc[mask] = -9999
+        # img[data<0] = -9999
         print('Saving NBAR Uncertainty')
-        save_band(nbar_unc, nbar_unc_fname, projectionRef, geom)
+        save_band(img, nbar_unc_fname, projectionRef, geom)
 
     # savig nbar sza
     sza_avg = array_to_raster(sza_avg, B2)
