@@ -709,7 +709,7 @@ class solve_aerosol(object):
             modis_bands = [3, 4, 1, 2, 6, 7]
             modis_to_viirs = dict(zip(modis_bands, viirs_bands))
             bands = [modis_to_viirs[i] for i in self.boa_bands]
-            das, ws, mg = read_VNP43MA1(self.VNP43_fnames_dates, bands, outputBounds, self.aero_res*0.5, self.aero_res*0.5, dstSRS)
+            das, ws, mg = read_VNP43MA1(self.VNP43_fnames_dates, bands, outputBounds, self.aero_res*0.5, self.aero_res*0.5, dstSRS, self.logger)
         else:
             das, ws, mg = get_kernel_weights(self.mcd43_dir, 
                                             self.boa_bands, 

@@ -219,15 +219,21 @@ def clip_VNP43(fnames, bands, outputBounds, xRes, yRes, dstSRS, folder = None):
     return brdf_data, qa_data, geoTransoformation
 
 
-def read_VNP43MA1(fnames_dates, bands, outputBounds, xRes,  yRes, dstSRS):
+def read_VNP43MA1(fnames_dates, bands, outputBounds, xRes,  yRes, dstSRS, logger):
     
     par = partial(clip_VNP43, bands = bands, outputBounds = outputBounds, xRes = xRes,  yRes = yRes, dstSRS = dstSRS)
     
     all_fnames = [fname_date[0] for fname_date in fnames_dates]
 
-    with ThreadPoolExecutor(17) as executor:
-        ret = executor.map(par, all_fnames)
-    ret = list(ret)
+    #with ThreadPoolExecutor(17) as executor:
+    #    ret = executor.map(par, all_fnames)
+    #ret = list(ret)
+
+    ret = []
+    for _, fname in enumerate(all_fnames):
+        if _ % 4 == 0:
+            logger.info('Reading %.01f' % (_ / len(all_fnames) * 100) + ' %...')
+        ret.append(par(fname))
     
     brdf_dats = np.array([i[0] for i in ret])
     qa_dats   = np.array([i[1] for i in ret])
