@@ -288,9 +288,9 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
 #         while os.path.exists(vrt_dir):
 #             vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
 #         os.mkdir(vrt_dir)
-        vrt_dir = tempfile.mkdtemp(suffix="", prefix="tmp", dir  =  vrt_dir) + '/'
+        mcd43_vrt_dir = tempfile.mkdtemp(suffix="", prefix="tmp", dir  =  vrt_dir) + '/'
         logger.info('Creating daily VRT...')
-        par = partial(daily_vrt_jasmin, vrt_dir = vrt_dir)
+        par = partial(daily_vrt_jasmin, vrt_dir = mcd43_vrt_dir)
         njobs = min(len(fnames_dates), 4)
         #p = Pool(njobs) 
         #p.map(par, fnames_dates)
@@ -304,8 +304,8 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
 #             vrt_dir = tempfile.TemporaryDirectory(dir  =  vrt_dir).name + '/'
 #         os.mkdir(vrt_dir)
         logger.info('Creating daily VRT...')
-        vrt_dir = tempfile.mkdtemp(suffix="", prefix="tmp", dir  =  vrt_dir) + '/'
-        par = partial(daily_vrt, vrt_dir = vrt_dir)
+        mcd43_vrt_dir = tempfile.mkdtemp(suffix="", prefix="tmp", dir  =  vrt_dir) + '/'
+        par = partial(daily_vrt, vrt_dir = mcd43_vrt_dir)
         njobs = min(len(fnames_dates), 4)
         p = Pool(njobs)
         p.map(par, fnames_dates)
@@ -317,7 +317,7 @@ def get_mcd43(aoi, obs_time, mcd43_dir = './MCD43/', vrt_dir = './MCD43_VRT/', l
     for handler in handlers:
         handler.close()
         logger.removeHandler(handler)
-    return vrt_dir
+    return mcd43_vrt_dir
 
 if __name__ == '__main__':
     aoi = '~/DATA/S2_MODIS/l_data/LC08_L1TP_014034_20170831_20170915_01_T1/AOI.json'

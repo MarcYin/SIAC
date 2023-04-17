@@ -129,6 +129,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
 
     VNP43_fnames_dates = None
     mcd43_gee_folder = None
+    mcd43_vrt_dir = None
 
     # if not np.all(cloud_mask):
         # handlers = logger.handlers[:]
@@ -160,7 +161,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     else:
         logger.info('MODIS BRDF product is chosen')
         logger.info('Getting MCD43 from NASA server')
-        vrt_dir = get_mcd43(toa_refs[0], mcd43_date, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
+        mcd43_vrt_dir = get_mcd43(toa_refs[0], mcd43_date, mcd43_dir = mcd43, vrt_dir = vrt_dir, logger = logger, jasmin = jasmin)
             
         #logger = create_logger(log_file)
     # else:
@@ -180,7 +181,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
                          sun_angles,obs_time, gamma=10., spec_m_dir= file_path+'/spectral_mapping/',
                          ref_scale = ref_scale, ref_off = ref_off, emus_dir=file_path+'/emus/',\
-                         mcd43_dir=vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
+                         mcd43_dir=mcd43_vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
                          prior_scale = [1., 0.1, 46.698, 1., 1., 1.], mcd43_gee_folder = mcd43_gee_folder,
                          VNP43_fnames_dates = VNP43_fnames_dates
                          )
@@ -214,7 +215,10 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
 
     if not np.all(cloud_mask):
 #         if jasmin:
-        shutil.rmtree(vrt_dir)
+        try:
+            shutil.rmtree(mcd43_vrt_dir)
+        except:
+            pass
     #return aero, atmo
 
 def summeryJson(dest):
