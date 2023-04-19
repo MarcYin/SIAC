@@ -643,16 +643,22 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         # print(date.year, date.month, date.day, date.hour + date.minute/60 + date.second/3600 , lat.mean(), lon.mean())
         doy_gap = (mosaic_end_date - mosaic_start_date).days
 
-        sza_avg = 0
-        # saa_avg = 0
-        for doy in range(doy_gap):
-            mosaic_date = mosaic_start_date + datetime.timedelta(days=doy)
-            mosaic_sza, mosaic_saa = solar_geometry(mosaic_date.year, mosaic_date.month, mosaic_date.day, mosaic_hour, lat, lon)
-            mosaic_sza = mosaic_sza.reshape(sza.shape)
-            sza_avg += mosaic_sza
-                # mosaic_saa_avg += mosaic_saa
-        sza_avg /= doy_gap
-        # saa_avg /= doy_gap
+        # sza_avg = 0
+        # # saa_avg = 0
+        # for doy in range(doy_gap):
+        #     mosaic_date = mosaic_start_date + datetime.timedelta(days=doy)
+        #     mosaic_sza, mosaic_saa = solar_geometry(mosaic_date.year, mosaic_date.month, mosaic_date.day, mosaic_hour, lat, lon)
+        #     mosaic_sza = mosaic_sza.reshape(sza.shape)
+        #     sza_avg += mosaic_sza
+        #         # mosaic_saa_avg += mosaic_saa
+        # sza_avg /= doy_gap
+        # # saa_avg /= doy_gap
+        half_doy_gap = int(doy_gap/2)
+        mosaic_date = mosaic_start_date + datetime.timedelta(days=half_doy_gap)
+        mosaic_sza, mosaic_saa = solar_geometry(mosaic_date.year, mosaic_date.month, mosaic_date.day, mosaic_hour, lat, lon)
+        mosaic_sza = mosaic_sza.reshape(sza.shape)
+        sza_avg = mosaic_sza
+
 
         fname_postfix = 'sza_temporal_avg'
     elif nbar_sza == 'use_s2':
@@ -747,13 +753,13 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         save_band((~np.isfinite(c_factor)).astype(int), mask_fname, projectionRef, geom)
         
 
-        # data = gdal.Open(band_file).ReadAsArray() / 10000
-        # mask = data<0
+        data = gdal.Open(band_file).ReadAsArray() / 10000
+        mask = data<0
         ### NBAR
         img = (gdal.Open(band_file).ReadAsArray() * c_factor).astype(int)
         nbar_fname = band_file.replace('_sur', '_nbar_%s'%(fname_postfix))
         # print(nbar_fname)
-        # img[data<0] = -9999
+        img[mask] = -9999
         save_band(img, nbar_fname, projectionRef, geom)
         
         # c_factor_unc = reproject_data(c_factor_unc, B2, xRes = xRes, yRes = yRes).data
@@ -774,7 +780,7 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         img = (img * 10000).astype(int)
         nbar_unc_fname = band_file.replace('_sur', '_nbar_unc_%s'%(fname_postfix))
         # print(nbar_unc_fname)
-        # img[data<0] = -9999
+        img[mask] = -9999
         print('Saving NBAR Uncertainty')
         save_band(img, nbar_unc_fname, projectionRef, geom)
 
