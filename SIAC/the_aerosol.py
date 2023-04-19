@@ -806,6 +806,26 @@ class solve_aerosol(object):
 
         np.savez(self.toa_dir + '/kernel_weights.npz', fs = np.array([f0, f1, f2]),
                  uncs = np.array([0.015 / np.maximum(w0, 0.0001), 0.015 / np.maximum(w1, 0.0001), 0.015 / np.maximum(w2, 0.0001)]))
+        kernel_weight_array = np.concatenate([f0, f1, f2, 0.015 / np.maximum(w0, 0.0001), 0.015 / np.maximum(w1, 0.0001), 0.015 / np.maximum(w2, 0.0001)], axis=0)
+        band_names = ['w_iso_B%02d'%(i+1) for i in range(6)] + \
+                     ['w_vol_B%02d'%(i+1) for i in range(6)] + \
+                     ['w_geo_B%02d'%(i+1) for i in range(6)] + \
+                     ['w_iso_unc_B%02d'%(i+1) for i in range(6)] + \
+                     ['w_vol_unc_B%02d'%(i+1) for i in range(6)] + \
+                     ['w_geo_unc_B%02d'%(i+1) for i in range(6)]
+        
+        # save to geoTiff
+        ds = gdal.GetDriverByName('GTiff').Create(self.toa_dir + '/kernel_weights.tif', kernel_weight_array.shape[2], kernel_weight_array.shape[1], kernel_weight_array.shape[0], gdal.GDT_Float32)
+        ds.SetGeoTransform(mg.GetGeoTransform())
+        ds.SetProjection(mg.GetProjection())
+        for i in range(kernel_weight_array.shape[0]):
+            # write band
+            ds.GetRasterBand(i+1).WriteArray(kernel_weight_array[i, :, :])
+            # set band name
+            ds.GetRasterBand(i+1).SetDescription(band_names[i])
+        ds.FlushCache()
+        ds = None
+
 
         #self.fs = np.array([f0, f1, f2])[:, :, mask]
         #self.f_uncs = np.array([0.015 / np.maximum(w0, 0.0001),
