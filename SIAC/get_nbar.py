@@ -464,7 +464,7 @@ def get_BRDF_product(s2_file_dir, temporal_window = 16, Gee = True, use_VIIRS = 
 
         print('Reading MCD43A1 files.')
         boa_bands = [3, 4, 1, 2, 6, 7]
-        das, ws, mg = read_MCD3_GEE(mcd43_gee_folder, boa_bands, outputBounds,  500, 500, dstSRS)
+        das, ws, mg = read_MCD3_GEE(mcd43_gee_folder, boa_bands, outputBounds,  500, 500, dstSRS, logger)
         
     elif use_VIIRS:
         from SIAC.get_VNP43MA1 import download_VNP43MA1
@@ -488,7 +488,7 @@ def get_BRDF_product(s2_file_dir, temporal_window = 16, Gee = True, use_VIIRS = 
         bands = [modis_to_viirs[i] for i in modis_bands]
 
         print('Reading VNP43MA1 files.')
-        das, ws, mg = read_VNP43MA1(VNP43_fnames_dates, bands, outputBounds, 500, 500, dstSRS)
+        das, ws, mg = read_VNP43MA1(VNP43_fnames_dates, bands, outputBounds, 500, 500, dstSRS, logger)
         
 
     else:
@@ -798,3 +798,15 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
 # nbar_sza = 'average'
 # mosaic_start_date = datetime.datetime(2021, 1, 1)
 # mosaic_end_date = datetime.datetime(2021, 4, 1)
+
+if __name__ == '__main__':
+    s2_dir = "/mnt/d/Test_Data/JRC_testing_data/luxcarta_testing_data/SIAC/S2A_MSIL1C_20220825T155541_N0400_R011_T17QRG_20220825T205824.SAFE"
+    viirs_dir = ""
+    create_nbar(
+        s2_dir,
+        nbar_sza='temporal_average_sza',
+        mosaic_start_date=datetime.datetime.strptime('2022-08-25', '%Y-%m-%d'),
+        mosaic_end_date=datetime.datetime.strptime('2022-08-25', '%Y-%m-%d'),
+        Gee = False,
+        use_VIIRS = True
+        )
