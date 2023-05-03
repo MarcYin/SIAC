@@ -122,8 +122,8 @@ def clip_VNP43(fnames, bands, outputBounds, xRes, yRes, dstSRS, folder = None):
                 raster_band.WriteArray(data[:, :, j])
                 i += 1
 
-        dst_ds.FlushCache()
-        brdf_paras.append(dst_ds)
+        dst_ds = None
+        brdf_paras.append(dst_path)
         
         brdf_qa_band_num = len(bands)
         # driver = gdal.GetDriverByName("MEM")
@@ -156,8 +156,8 @@ def clip_VNP43(fnames, bands, outputBounds, xRes, yRes, dstSRS, folder = None):
             raster_band.WriteArray(data)
             i += 1
 
-        dst_ds.FlushCache()
-        brdf_qas.append(dst_ds)
+        dst_ds = None
+        brdf_qas.append(dst_path)
 
         input_file = None
         
