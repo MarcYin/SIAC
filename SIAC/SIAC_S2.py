@@ -8,6 +8,7 @@ import warnings
 warnings.filterwarnings("ignore") 
 import numpy as np
 from glob import glob
+from osgeo import gdal
 from SIAC.get_MCD43 import get_mcd43
 from datetime import datetime
 from SIAC.create_logger import create_logger
@@ -44,16 +45,22 @@ def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + 
     aero_atmos = []
     for ret in rets:
         ret += (mcd43, vrt_dir, aoi, global_dem, cams_dir, jasmin, Gee, use_VIIRS, do_rgb)
-        do_correction(*ret)
+        aero_atmo = do_correction(*ret)
         if send_back:
-            aero_atmos.append(aero_atmos)
+            aero_atmos.append(aero_atmo)
     if send_back:
         return aero_atmos
 
 def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                   cloud_mask, aot, tcwv, metafile, mcd43 = home + '/MCD43/', \
                   vrt_dir = home + '/MCD43_VRT/', aoi=None, \
-                  global_dem  = None, cams_dir = None, jasmin = False, Gee = True, use_VIIRS = False, do_rgb = True):
+                  global_dem  = None, cams_dir = None, jasmin = False, Gee = True, use_VIIRS = False, do_rgb = True
+                  ):
+    
+    log_file = os.path.dirname(metafile) + '/SIAC_S2.log'
+    logger = create_logger(log_file)
+
+    jasmin_cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
     if jasmin:
         if global_dem is None:
             global_dem  = '/work/scratch-pw/marcyin/DEM/global_dem.vrt'
@@ -62,11 +69,11 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
         os.environ['jasmin_memory_limit'] = '6.4e+10'
     else:
         if global_dem is None:
-            global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt'
+            # global_dem  = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/eles/global_dem.vrt'
             global_dem = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/DEM_V3/global_dem.vrt'
         if cams_dir is None:
-            cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/'
-            cams_dir = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/'
+            # cams_dir    = '/vsicurl/http://www2.geog.ucl.ac.uk/~ucfafyi/cams/'
+            cams_dir = jasmin_cams_dir
             
     if os.path.realpath(mcd43) in os.path.realpath(home + '/MCD43/'):
         if not os.path.exists(home + '/MCD43/'):
@@ -75,6 +82,11 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     if os.path.realpath(vrt_dir) in os.path.realpath(home + '/MCD43_VRT/'):
         if not os.path.exists(home + '/MCD43_VRT/'):
             os.mkdir(home + '/MCD43_VRT/')
+
+    logger.debug(f"Path to global dem: {global_dem}")
+    logger.debug(f"Path to CAMS directory: {cams_dir}")
+    logger.debug(f"Path to MCD43 directory: {mcd43}")
+    logger.debug(f"Path to MCD43_VRT directory: {vrt_dir}")
 
     #base = os.path.dirname(toa_refs[0])
     base = toa_refs[0].replace('B01.jp2', '')
@@ -86,6 +98,16 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
             if 'TILE_ID' in i:
                 sat  = i.split('</')[0].split('>')[-1].split('_')[0]
                 tile = i.split('</')[0].split('>')[-1]
+
+    # check if prior dir is readable
+    if cams_dir != jasmin_cams_dir:
+        prior_dir = os.path.realpath(cams_dir + '/' + datetime.strftime(obs_time, '%Y_%m_%d'))
+        dir = gdal.ReadDir(prior_dir)
+        if dir is None:
+            logger.debug(f"{prior_dir} does not exist.")
+            logger.debug(f"Set CAMS directory to {jasmin_cams_dir}")
+            cams_dir = jasmin_cams_dir
+        dir = None
 
     
     s2_file_dir = os.path.dirname(metafile)
@@ -123,8 +145,6 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     scale       = 1 / QUANTIFICATION_VALUE
     off         = offsets / QUANTIFICATION_VALUE
 
-    log_file = os.path.dirname(metafile) + '/SIAC_S2.log'
-    logger = create_logger(log_file)
     logger.info('Starting atmospheric corretion for %s'%PRODUCT_ID)
 
     VNP43_fnames_dates = None
