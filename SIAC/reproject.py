@@ -52,10 +52,19 @@ class reproject_data(object):
         if (self.target_img is None) & (self.dstSRS is None):
             raise IOError('Projection should be specified ether from a file or a projection code.')
         elif self.target_img is not None:
-            try:
-                g     = gdal.Open(self.target_img)
-            except:
-                g     = target_img
+            
+            # try:
+            #     g     = gdal.Open(self.target_img)
+            # except:
+            #     g     = target_img
+
+            if isinstance(self.target_img, str):
+                g = gdal.Open(self.target_img)
+            elif isinstance(self.target_img, gdal.Dataset):
+                g = target_img
+            else:
+                raise IOError('Only file path or gdal dataset is supported.')
+            
             geo_t = g.GetGeoTransform()
             x_size, y_size = g.RasterXSize, g.RasterYSize     
 
@@ -133,10 +142,14 @@ def array_to_raster(array, example_file, band_axis = None):
             array = array.transpose(t)
     else:                                
         raise IOError('Only 2 or 3 D array is supported.')
-    try:                                 
-        g = gdal.Open(example_file)      
-    except:                              
-        g = example_file                 
+    
+    if isinstance(example_file, str):
+        g = gdal.Open(example_file)
+    elif isinstance(example_file, gdal.Dataset):
+        g = example_file
+    else:
+        raise IOError('Only file path or gdal dataset is supported.')
+    
     driver = gdal.GetDriverByName('MEM') 
     ds = driver.Create('', array.shape[-1], array.shape[-2], bands, gdal.GDT_Float32)
     ds.SetProjection(g.GetProjection())  

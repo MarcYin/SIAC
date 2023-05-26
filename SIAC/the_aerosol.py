@@ -1151,6 +1151,8 @@ class solve_aerosol(object):
         #self.boa     = self.boa    [:, _mask] * self.spec_slope[...,None] + self.spec_off[...,None]
         boa_unc = boa_unc[:, hmask]
         boa     = np.array(self.spec_map.predict(boa[:, hmask].T)).squeeze()
+        if boa.ndim == 1:
+            boa = boa[:, None]
         #mask = True
         #if len(boa.shape) > 1:
         #    if boa.shape[1] > 3:
