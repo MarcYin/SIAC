@@ -9,8 +9,12 @@ from pyproj import Proj, transform, CRS
 from SIAC.read_MCD43 import robust_smooth
 from SIAC.reproject import array_to_raster, reproject_data
 
+from SIAC.smoothn import smoothn
+
 import os
 import logging
+
+from copy import deepcopy
 
 # import numba
 
@@ -705,23 +709,42 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         
         rho_mod_s2_nadir_unc = np.sqrt(np.sum(kers**2 * np.array([interped_f0_unc[ind], interped_f1_unc[ind], interped_f2_unc[ind]])**2, axis=0))
 
+        rho_mod_s2_nadir[rho_mod_s2_nadir<=0] = np.nan
+        rho_mod_s2_nadir_unc[rho_mod_s2_nadir<=0] = np.nan
+
+        rho_mod_s2_ang[rho_mod_s2_ang<=0] = np.nan
+        rho_mod_s2_ang_unc[rho_mod_s2_ang<=0] = np.nan
 
         c_factor = rho_mod_s2_nadir / rho_mod_s2_ang
+        
         # https://www.phenix.bnl.gov/WWW/publish/elke/EIC/Files-for-Wiki/lara.02-008.errors.pdf
         # rho_mod_s2_nadir and rho_mod_s2_ang are highly correlated (r>0.99), 
         # so we use the formula for correlated uncertainties from the above link
         # sigma_ab = np.cov(rho_mod_s2_nadir.ravel(), rho_mod_s2_ang.ravel())[0,1]
         # c_factor_unc = np.abs(c_factor) * np.sqrt((rho_mod_s2_nadir_unc / rho_mod_s2_nadir)**2 + (rho_mod_s2_ang_unc / rho_mod_s2_ang)**2  - 2 * sigma_ab / (rho_mod_s2_nadir * rho_mod_s2_ang))
-        
-        corrcoef = np.corrcoef(rho_mod_s2_nadir.ravel(), rho_mod_s2_ang.ravel())[0,1]
+        valid_mask = np.isfinite(rho_mod_s2_nadir) & np.isfinite(rho_mod_s2_ang)
+        corrcoef = np.corrcoef(rho_mod_s2_nadir[valid_mask], rho_mod_s2_ang[valid_mask])[0,1]
         # covariance not available, so using correlation coefficient of between rho_mod_s2_nadir and rho_mod_s2_ang
         # sigma_rho_mod_s2_nadir_rho_mod_s2_ang = corrcoef * rho_mod_s2_nadir_unc * rho_mod_s2_ang_unc
         c_factor_unc = np.abs(c_factor) * np.sqrt((rho_mod_s2_nadir_unc / rho_mod_s2_nadir)**2 + (rho_mod_s2_ang_unc / rho_mod_s2_ang)**2  - 2 * rho_mod_s2_nadir_unc * rho_mod_s2_ang_unc * corrcoef / (rho_mod_s2_nadir * rho_mod_s2_ang))
         
-        c_factor_unc[~np.isfinite(c_factor_unc)] = c_factor_unc[np.isfinite(c_factor_unc)].min()
-        # c_factor_unc = np.minimum(c_factor_unc, 1)
-        # c_factor_unc = np.max([rho_mod_s2_nadir_unc, rho_mod_s2_ang_unc], axis=0)
+        max_c_factor = 2
+        max_c_factor_unc = 2
+        good_pixels = (c_factor > 0) & (c_factor <= max_c_factor) & np.isfinite(c_factor_unc) & (c_factor_unc < max_c_factor_unc)
         
+        c_factor[~good_pixels] = 1
+        c_factor_unc[~good_pixels] = 2
+
+        # import pdb; pdb.set_trace()
+        w = 1 / c_factor_unc**2
+        w[~good_pixels] = 0
+        
+        
+        arr = deepcopy(c_factor)
+        ret = smoothn(arr, isrobust=True, s=0.1, W = w)
+        c_factor = ret[0]
+        c_factor_unc = 1 / np.sqrt(ret[3]) * c_factor_unc
+        c_factor_unc = c_factor_unc.clip(0, 2)
 
         print('Mean c factor, vza, sza, raa, nbar_sza: %.03f, %.03f, %.03f, %.03f, %.03f'%(np.nanmean(c_factor), vza.mean(), sza.mean(), raa.mean(), sza_avg.mean()))
 
@@ -735,24 +758,25 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
 
         c_factor = array_to_raster(c_factor, B2)
         c_factor_unc = array_to_raster(c_factor_unc, B2)
-
+        
         c_factor_fname = band_file.replace('_sur', '_cfactor_%s'%(fname_postfix))
         c_factor_unc_fname = band_file.replace('_sur', '_cfactor_unc_%s'%(fname_postfix))
         print('save band')
         # print(c_factor_fname)
         save_band(c_factor.ReadAsArray() * 10000, c_factor_fname, c_factor.GetProjectionRef(), c_factor.GetGeoTransform())
         save_band(c_factor_unc.ReadAsArray() * 10000, c_factor_unc_fname, c_factor.GetProjectionRef(), c_factor.GetGeoTransform())
-        
-        c_factor = reproject_data(c_factor, B2, xRes = xRes, yRes = yRes).data
-        
 
-        # mask = ~np.isfinite(c_factor)
-        c_factor[~np.isfinite(c_factor)] = 1
+        good_pixels_g = array_to_raster((good_pixels).astype(int), B2)
+        c_factor_mask = reproject_data(good_pixels_g, B2, xRes = xRes, yRes = yRes, resample= gdal.GRIORA_NearestNeighbour).data
         mask_fname = band_file.replace('_sur', '_cfactor_mask_%s'%(fname_postfix))
         # print(mask_fname)
-        save_band((~np.isfinite(c_factor)).astype(int), mask_fname, projectionRef, geom)
-        
+        save_band((c_factor_mask).astype(int), mask_fname, projectionRef, geom)
 
+
+        c_factor = reproject_data(c_factor, B2, xRes = xRes, yRes = yRes).data
+        # mask = ~np.isfinite(c_factor)
+        # c_factor[~np.isfinite(c_factor)] = 1
+        
         data = gdal.Open(band_file).ReadAsArray() / 10000
         mask = data<0
         ### NBAR
@@ -776,7 +800,8 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         # distance = (reproject_data(rho_mod_s2_ang, B2, xRes = xRes, yRes = yRes).data - (gdal.Open(band_file).ReadAsArray() / 10000))**2
        
         img = np.sqrt((reproject_data(rho_mod_s2_ang, B2, xRes = xRes, yRes = yRes).data - (gdal.Open(band_file).ReadAsArray() / 10000))**2 + img**2)
-        img = np.minimum(img, 32767 / 10000)
+        img[~np.isfinite(img)] = 1
+        img = np.minimum(img, 1)
         img = (img * 10000).astype(int)
         nbar_unc_fname = band_file.replace('_sur', '_nbar_unc_%s'%(fname_postfix))
         # print(nbar_unc_fname)
@@ -801,6 +826,7 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
 
 if __name__ == '__main__':
     s2_dir = "/mnt/d/Test_Data/JRC_testing_data/luxcarta_testing_data/SIAC/S2A_MSIL1C_20220825T155541_N0400_R011_T17QRG_20220825T205824.SAFE"
+    s2_dir = "S2A_MSIL1C_20220808T142721_N0400_R053_T20MRD_20220808T192835.SAFE"
     viirs_dir = ""
     create_nbar(
         s2_dir,
