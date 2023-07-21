@@ -493,7 +493,7 @@ class solve_aerosol(object):
         Create a list of AUX gdal objects, like priors and DEM, and cutted with AOI.
         '''
         self._ele   = self.bilinear_resampler(self.global_dem).ReadAsArray() * self.ele_scale
-        
+        self._ele[~np.isfinite(self._ele)] = 0
         time_ind    = np.abs((self.obs_time.hour  + self.obs_time.minute/60. + \
                               self.obs_time.second/3600.) - np.arange(0,25,3)).argmin()
 

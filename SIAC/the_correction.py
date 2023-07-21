@@ -371,7 +371,8 @@ class atmospheric_correction(object):
                                  0, dstNodata=np.nan, outputType= gdal.GDT_Float32).data
             auxs[i] = dat * scales[i]
         self._ele, self._cmask = auxs
-        self._ele[np.isnan(self._ele)] = 0
+        # self._ele[np.isnan(self._ele)] = 0
+        self._ele[~np.isfinite(self._ele)] = 0
         self._cmask[np.isnan(self._cmask)] = 0
         self._cmask = binary_dilation(self._cmask, structure = np.ones((3,3)).astype(bool)).astype(bool)
         #self._cmask  = self._cmask.astype(bool)
