@@ -326,8 +326,8 @@ def query_VNP43MA1_temporal_spatial(polygon_str_counterclockwise, temporal_start
                     )
 
     filename_urls = []
+    response_json = response.json()
     if response.ok:
-        response_json = response.json()
         for i in response_json['feed']['entry']:
             
             fname = i['producer_granule_id']
