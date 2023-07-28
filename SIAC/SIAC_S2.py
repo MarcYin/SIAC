@@ -20,9 +20,10 @@ from SIAC.multi_process import parmap
 from os.path import expanduser
 from SIAC.raster_boundary import get_boundary
 from SIAC.get_VNP43MA1 import download_VNP43MA1
-
+from SIAC.prepare_aux import subset_atmos, subset_dem
 home = expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
+from SIAC.prepare_aux import subset_atmos, subset_dem
 
 def SIAC_S2(s2_t, send_back = False, mcd43 = home + '/MCD43/', vrt_dir = home + '/MCD43_VRT/', aoi = None, 
              global_dem  = None, cams_dir = None, jasmin = False, Gee = True, use_VIIRS = False, do_rgb = True):
@@ -109,7 +110,18 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
             cams_dir = jasmin_cams_dir
         dir = None
 
+    # subset the cams files first
+    raster_file = toa_refs[1]
+    cams_names  = ['aod550', 'tcwv', 'gtco3'] 
+    for i in range(3):
+        cams_file = cams_dir + '/' + '/'.join([datetime.strftime(obs_time, '%Y_%m_%d'),\
+                                               datetime.strftime(obs_time, '%Y_%m_%d')+'_%s.tif'%cams_names[i]])
+        subset_file = subset_atmos(raster_file, cams_file)
     
+    tile_cams_dir = os.path.dirname(os.path.dirname(subset_file))
+    # global_dem = '/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/main/copernicus_GLO_30_dem.vrt'
+    tile_dem = subset_dem(raster_file, global_dem)
+
     s2_file_dir = os.path.dirname(metafile)
     PRODUCT_ID = s2_file_dir.split('/')[-3]
     processing_baseline = PRODUCT_ID.split('_')[3][1:]
@@ -196,12 +208,15 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     sun_angles  = sun_ang_name
     ref_scale = scale[band_index, None, None]
     ref_off = off[band_index, None, None]
+
+
+
     #logger.info('First pass AOT and TCWV: %.02f, %.02f'%(aot.mean(), tcwv.mean()))
     #logger.info('Running SIAC for tile: %s on %s'%(tile, obs_time.strftime('%Y-%M-%d')))
     aero = solve_aerosol(sensor_sat,toa_bands,band_wv, band_index,view_angles,\
                          sun_angles,obs_time, gamma=10., spec_m_dir= file_path+'/spectral_mapping/',
                          ref_scale = ref_scale, ref_off = ref_off, emus_dir=file_path+'/emus/',\
-                         mcd43_dir=mcd43_vrt_dir, aoi=aoi, log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir, \
+                         mcd43_dir=mcd43_vrt_dir, aoi=aoi, log_file = log_file, global_dem  = tile_dem, cams_dir = tile_cams_dir, \
                          prior_scale = [1., 0.1, 46.698, 1., 1., 1.], mcd43_gee_folder = mcd43_gee_folder,
                          VNP43_fnames_dates = VNP43_fnames_dates
                          )
@@ -225,7 +240,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
                                   sun_angles, example_file, aot = aot, \
                                   tcwv = tcwv, tco3 = tco3, aot_unc = aot_unc, \
                                   tcwv_unc = tcwv_unc, tco3_unc = tco3_unc, rgb = rgb,  ref_scale = ref_scale, ref_off = ref_off,\
-                                  emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = global_dem, cams_dir = cams_dir,
+                                  emus_dir=file_path+'/emus/', log_file = log_file, global_dem  = tile_dem, cams_dir = tile_cams_dir,
                                   do_rgb = do_rgb)
     #atmo._doing_correction()
 

@@ -8,7 +8,7 @@ from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from osgeo import gdal, ogr, osr
-
+from SIAC.split_polygon import split_polygon
 home = os.path.expanduser("~")
 file_path = os.path.dirname(os.path.realpath(__file__))
 test_url = 'https://e4ftl01.cr.usgs.gov/VIIRS/VNP43MA1.001/2022.11.08/VNP43MA1.A2022312.h19v08.001.2022321114550.h5'
@@ -201,7 +201,7 @@ def sort_coordinates(list_of_xy_coords):
     angles = np.arctan2(x-cx, y-cy)
     indices = np.argsort(-angles)
     return list_of_xy_coords[indices]
-
+ 
 def cal_modis_tile(input_file):
     '''
     Check MODIS tile names based on the geometries from a raster or vector file.
@@ -285,11 +285,15 @@ def get_polygon_strs(input_file):
             feat_geom.Transform(coordTrans)
             
             coords = np.array(json.loads(feat_geom.ConvexHull().ExportToJson())['coordinates'][0])[:-1]
-            coords = sort_coordinates(coords)
-            coords = np.append(coords, [coords[0]], axis=0)
-            polygon_str_counterclockwise = ','.join(coords.ravel().astype(str).tolist())
-            counterclockwise_polygon_strs.append(polygon_str_counterclockwise)
-
+            list_of_coords = split_polygon([coords])
+            list_of_coords = [coords for coords in list_of_coords]
+            
+            for coords in list_of_coords:
+                coords = np.unique(coords, axis=0)
+                coords = sort_coordinates(coords)
+                coords = np.append(coords, [coords[0]], axis=0)
+                polygon_str_counterclockwise = ','.join(coords.ravel().astype(str).tolist())
+                counterclockwise_polygon_strs.append(polygon_str_counterclockwise)
     else:
         for feat in layer:
             feat_geom = feat.geometry()
@@ -298,10 +302,15 @@ def get_polygon_strs(input_file):
             # but only convexhull outline is needed
             # to find modis files
             coords = np.array(json.loads(feat_geom.ConvexHull().ExportToJson())['coordinates'][0])[:-1]
-            coords = sort_coordinates(coords)
-            coords = np.append(coords, [coords[0]], axis=0)
-            polygon_str_counterclockwise = ','.join(coords.ravel().astype(str).tolist())
-            counterclockwise_polygon_strs.append(polygon_str_counterclockwise)
+            list_of_coords = split_polygon([coords])
+            list_of_coords = [coords for coords in list_of_coords]
+            
+            for coords in list_of_coords:
+                coords = np.unique(coords, axis=0)
+                coords = sort_coordinates(coords)
+                coords = np.append(coords, [coords[0]], axis=0)
+                polygon_str_counterclockwise = ','.join(coords.ravel().astype(str).tolist())
+                counterclockwise_polygon_strs.append(polygon_str_counterclockwise)
     return counterclockwise_polygon_strs
 
 @retry(tries=4, delay=1, backoff=2)
@@ -326,8 +335,8 @@ def query_VNP43MA1_temporal_spatial(polygon_str_counterclockwise, temporal_start
                     )
 
     filename_urls = []
-    response_json = response.json()
     if response.ok:
+        response_json = response.json()
         for i in response_json['feed']['entry']:
             
             fname = i['producer_granule_id']
@@ -369,13 +378,13 @@ def query_VNP43MA1_temporal_spatial(polygon_str_counterclockwise, temporal_start
                 else:
                     raise ValueError(response.reason, response_json)
     else:
-        raise ValueError(response.reason, response_json)
+        raise ValueError(response.reason, response.content)
 
     return filename_urls
 
 def find_files(aoi, obs_time, temporal_window = 16):
     counterclockwise_polygon_strs = get_polygon_strs(aoi)
-
+    
     temporal_start = (obs_time - timedelta(days = int(temporal_window)))#.strftime('%Y-%m-%dT%H:%M:%SZ')
     temporal_end   = (obs_time + timedelta(days = int(temporal_window)))#.strftime('%Y-%m-%dT%H:%M:%SZ')
 
@@ -436,3 +445,76 @@ def download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16):
             executor.map(par, url_fnames_to_get)
     filenames = [os.path.abspath(os.path.join(VNP43_dir, i[0])) for i in filename_urls]
     return filenames
+
+if __name__ == '__main__':
+    aoi = '/Users/fengyin/S2B_MSIL1C_20220801T233659_N0400_R030_T01WCM_20220801T235506.SAFE/GRANULE/L1C_T01WCM_A028227_20220801T233653/IMG_DATA/T01WCM_20220801T233659_B02.jp2' 
+    obs_time = datetime(2022, 8, 1, 23, 36, 59)
+    VNP43_dir = '/Users/fengyin/Downloads/'
+    download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16)
+
+
+    from osgeo import gdal, osr
+
+    def subset_raster(raster_file, aoi, out_raster_file, xRes = 30, yRes = 30):
+        
+        g = gdal.Open(aoi)
+        geo_t = g.GetGeoTransform()
+        x_size, y_size = g.RasterXSize, g.RasterYSize     
+
+        xmin, xmax = min(geo_t[0], geo_t[0] + x_size * geo_t[1]), \
+                        max(geo_t[0], geo_t[0] + x_size * geo_t[1])  
+        ymin, ymax = min(geo_t[3], geo_t[3] + y_size * geo_t[5]), \
+                    max(geo_t[3], geo_t[3] + y_size * geo_t[5])
+        raster_bounds = [xmin, ymin, xmax, ymax]
+
+        dstSRS     = osr.SpatialReference( )
+        raster_wkt = g.GetProjection()
+        dstSRS.ImportFromWkt(raster_wkt)
+
+        geojson = get_boundary(aoi)[0]    
+
+        coords = np.array(json.loads(geojson)['features'][0]['geometry']['coordinates'])
+        list_of_coords = split_polygon(coords)
+        
+        g = gdal.Open(raster_file)
+        no_data_value = g.GetRasterBand(1).GetNoDataValue()
+        if no_data_value is None:
+            no_data_value = -9999
+
+        dats = []
+        for coords in list_of_coords:
+            xmax, ymax = np.max(coords, axis=0)
+            xmin, ymin = np.min(coords, axis=0)
+            bounds = [xmin, ymin, xmax, ymax]
+            g  = gdal.Warp('', raster_file, format='MEM', outputBounds=bounds,  warpOptions = [ 'CUTLINE_ALL_TOUCHED=TRUE' ], dstNodata = no_data_value)
+            gg = gdal.Warp('', g, format='MEM', dstSRS = dstSRS, outputBounds = raster_bounds, xRes = xRes, yRes = yRes)
+            data = gg.ReadAsArray()
+            data = np.ma.array(data, mask = data == no_data_value)
+            dats.append(data)
+        
+        data = np.ma.mean(dats, axis=0)
+        data = np.array(data)
+
+        y_size, x_size = data.shape
+        # save the data to a raster file
+        driver = gdal.GetDriverByName('GTiff')
+        dst_ds = driver.Create(out_raster_file, x_size, y_size, 1, gdal.GDT_Float32)
+        dst_ds.SetGeoTransform(geo_t)
+        dst_ds.SetProjection(raster_wkt)
+        dst_ds.GetRasterBand(1).WriteArray(data)
+        dst_ds.GetRasterBand(1).SetNoDataValue(no_data_value)
+        dst_ds.FlushCache()
+        dst_ds = None
+
+        return out_raster_file
+        
+        #     gs.append(gg)
+        # gg = gdal.BuildVRT('', gs, hideNodata = True)
+        # g = gdal.Warp(out_raster_file, gg, format='GTiff')
+        # g = None
+    
+    out_raster_file = '/Users/fengyin/Downloads/2021_12_22_aod550.tif'
+    
+    raster_file = '/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/main/copernicus_GLO_30_dem.vrt'
+    # raster_file = '/vsicurl/https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2021_12_22/2021_12_22_aod550.tif'
+    dats = subset_raster(raster_file, aoi, out_raster_file)
