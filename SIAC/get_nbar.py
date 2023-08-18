@@ -633,7 +633,20 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
             # convert to GMT time based on lat lon of the image
             # Mean Local Solar Time (MLST)
             S2_local_time = 10.5
-            GMT_hour = S2_local_time - lon.mean() / 180 * 12
+
+            # longitude of the image could be negative over anti-meridian
+            # checking with the difference between longitudes of pixels
+            # if the absolute difference is larger than 358, then it means
+            # the image pixels having longititudes with values both close to 180
+            # and -180, which means the image is over anti-meridian
+            lon_diff_over_x = np.diff(lon.reshape(sza.shape), axis=0)
+            if np.any(abs(lon_diff_over_x) > 358):
+                # if the image is over anti-meridian, add 360 to the negative longitudes
+                lon[lon < 0] += 360
+
+            # the hour could be negative or larger than 24
+            # convert to 0-24
+            GMT_hour = (S2_local_time - lon.mean() / 180 * 12) % 24
 
             image_hour = date.hour + date.minute/60 + date.second/3600 
 
@@ -662,7 +675,6 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         mosaic_sza, mosaic_saa = solar_geometry(mosaic_date.year, mosaic_date.month, mosaic_date.day, mosaic_hour, lat, lon)
         mosaic_sza = mosaic_sza.reshape(sza.shape)
         sza_avg = mosaic_sza
-
 
         fname_postfix = 'sza_temporal_avg'
     elif nbar_sza == 'use_s2':
