@@ -157,7 +157,8 @@ def s2_pre_processing(s2_dir, cams_dir, dem):
         if len(filenames)>0:
             temp = [dirpath + '/' + i for i in filenames]
             for j in temp:
-                if ('MTD' in j) & ('TL' in j) & ('xml' in j):
+                file_name_exclude_dir = j.split('/')[-1]
+                if ('MTD' in file_name_exclude_dir) & ('TL' in file_name_exclude_dir) & ('xml' in file_name_exclude_dir):
                     scihub.append(j)
                 if 'metadata.xml' in j:
                     aws.append(j)
