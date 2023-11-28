@@ -747,7 +747,6 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         c_factor[~good_pixels] = 1
         c_factor_unc[~good_pixels] = 2
 
-        # import pdb; pdb.set_trace()
         w = 1 / c_factor_unc**2
         w[~good_pixels] = 0
         
@@ -755,8 +754,16 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         arr = deepcopy(c_factor)
         ret = smoothn(arr, isrobust=True, s=0.1, W = w)
         c_factor = ret[0]
+
+        invalid_mask = ~np.isfinite(c_factor)        
+        c_factor[invalid_mask] = 1
+        
+
         c_factor_unc = 1 / np.sqrt(ret[3]) * c_factor_unc
         c_factor_unc = c_factor_unc.clip(0, 2)
+
+        invalid_mask = ~np.isfinite(c_factor_unc)
+        c_factor_unc[invalid_mask] = 2
 
         print('Mean c factor, vza, sza, raa, nbar_sza: %.03f, %.03f, %.03f, %.03f, %.03f'%(np.nanmean(c_factor), vza.mean(), sza.mean(), raa.mean(), sza_avg.mean()))
 
@@ -771,6 +778,7 @@ def create_nbar(s2_file_dir, nbar_sza='atan2', logger=None, mosaic_start_date=No
         c_factor = array_to_raster(c_factor, B2)
         c_factor_unc = array_to_raster(c_factor_unc, B2)
         
+    
         c_factor_fname = band_file.replace('_sur', '_cfactor_%s'%(fname_postfix))
         c_factor_unc_fname = band_file.replace('_sur', '_cfactor_unc_%s'%(fname_postfix))
         print('save band')
