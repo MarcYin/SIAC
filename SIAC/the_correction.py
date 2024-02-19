@@ -455,6 +455,8 @@ class atmospheric_correction(object):
                   yRes=abs(gdal.Open(self.toa_bands[ind]).GetGeoTransform()[1]),
                   srcNodata=0, dstNodata=0, warpOptions=['NUM_THREADS=ALL_CPUS'],
                   cutlineDSName=self.aoi, cropToCutline=True, resampleAlg=0)
+        # get nodata mask
+        no_data_mask = toa_g.ReadAsArray() == 0
         geo = toa_g.GetGeoTransform()
         ref = toa_g.GetProjectionRef()
         x_size, y_size = toa_g.RasterXSize, toa_g.RasterYSize
@@ -490,7 +492,7 @@ class atmospheric_correction(object):
             del boa
 
         boa_name = self.toa_dir + '/' + '.'.join(self.toa_bands[ind].split('/')[-1].split('.')[0:-1]) + '_sur.tif'
-        self._save_band(np.hstack(boas), boa_name, ref, geo)
+        self._save_band(np.hstack(boas), boa_name, ref, geo, no_data_mask)
         if not self._do_rgb:
             del boas
 
@@ -552,13 +554,13 @@ class atmospheric_correction(object):
 
         del toa_g
         unc_name  = boa_name.replace('_sur.tif', '_sur_unc.tif')
-        self._save_band(np.hstack(uncs), unc_name, ref, geo)
+        self._save_band(np.hstack(uncs), unc_name, ref, geo, no_data_mask)
         del uncs
 
         if self._do_rgb:
             return boas
             
-    def _save_band(self, array, outputFileName, projectionRef, geotransform):
+    def _save_band(self, array, outputFileName, projectionRef, geotransform, no_data_mask=None):
         nx, ny = array.shape
         if os.path.exists(outputFileName):
             os.remove(outputFileName)
@@ -566,11 +568,14 @@ class atmospheric_correction(object):
         dst_ds.SetGeoTransform(geotransform)
         dst_ds.SetProjection(projectionRef)
         array = array * 10000
-        array[~(array>0)] = -9999
+        # array[~(array>0)] = -9999
+        array[~(array>0)] = 0
         #sur = array.astype(np.int16)
+        if no_data_mask is not None:
+            array[no_data_mask] = -9999
         dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
         dst_ds.GetRasterBand(1).WriteArray(array)
-        dst_ds.FlushCache()                  
+        dst_ds.FlushCache()           
         dst_ds = None
 
     def _save_rgb(self, rgba_array, outputFileName, projection, geotransform):
