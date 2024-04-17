@@ -68,8 +68,8 @@ def fill_nan(array):
 def gaussian(xstd, ystd, norm = True):
     winx = 2*int(np.ceil(1.96*xstd))
     winy = 2*int(np.ceil(1.96*ystd))
-    xgaus = signal.gaussian(winx, xstd)
-    ygaus = signal.gaussian(winy, ystd)
+    xgaus = signal.windows.gaussian(winx, xstd)
+    ygaus = signal.windows.gaussian(winy, ystd)
     gaus  = np.outer(xgaus, ygaus)
     if norm:
         return gaus/gaus.sum()

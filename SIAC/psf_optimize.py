@@ -144,8 +144,8 @@ class psf_optimize(object):
         win = 2*int(round(max(1.96*xstd, 1.96*ystd)))
         winx = int(round(win*(2**0.5)))
         winy = int(round(win*(2**0.5)))
-        xgaus = signal.gaussian(winx, xstd)
-        ygaus = signal.gaussian(winy, ystd)
+        xgaus = signal.windows.gaussian(winx, xstd)
+        ygaus = signal.windows.gaussian(winy, ystd)
         gaus  = np.outer(xgaus, ygaus)
         r_gaus = ndimage.interpolation.rotate(gaus, angle, reshape=True)
         center = np.array(r_gaus.shape)/2
