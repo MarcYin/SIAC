@@ -516,8 +516,15 @@ class solve_aerosol(object):
         forcast_times = []
         for i in range(nbands):
             band = g.GetRasterBand(i+1)
-            netcdf_time = int(band.GetMetadata()['NETCDF_DIM_time'])
-            forcast_time = netcdf_start_time + timedelta(hours=netcdf_time)
+            if band.GetMetadata()['_FillValue'] == 'nan':
+                netcdf_time = int(band.GetMetadata()['NETCDF_DIM_forecast_reference_time'])
+                netcdf_hour = int(band.GetMetadata()['NETCDF_DIM_forecast_period'])
+                forcast_time = datetime.utcfromtimestamp(netcdf_time) + timedelta(hours=netcdf_hour)
+                new_CAMS = True
+            else:
+                netcdf_time = int(band.GetMetadata()['NETCDF_DIM_time'])
+                forcast_time = netcdf_start_time + timedelta(hours=netcdf_time)
+                new_CAMS = False
             forcast_times.append(forcast_time)  
         time_diff = np.array(forcast_times) - self.obs_time
         time_ind = np.abs(time_diff).argmin()
@@ -538,9 +545,12 @@ class solve_aerosol(object):
             prior_g = self.bilinear_resampler(var_g)
             if use_cams[_]:
                 g      = var_g.GetRasterBand(int(time_ind+1))
-                offset = g.GetOffset()            
-                scale  = g.GetScale()             
-                data   = prior_g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
+                if new_CAMS:
+                    data = prior_g.GetRasterBand(int(time_ind + 1)).ReadAsArray()
+                else:
+                    offset = g.GetOffset()
+                    scale  = g.GetScale()
+                    data   = prior_g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
             else:
                 data   = prior_g.ReadAsArray()
             temp.append(data * self.prior_scale[_])
