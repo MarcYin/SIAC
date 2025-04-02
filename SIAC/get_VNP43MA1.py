@@ -1,4 +1,5 @@
 import os
+import glob
 import json
 import getpass
 import requests
@@ -435,15 +436,16 @@ def downloader(url_fname, auth):
             print(r.content)
 
 def download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16):
-    
     filename_urls = find_files(aoi, obs_time,  temporal_window = temporal_window)
-    url_fnames_to_get = [[i[1], os.path.abspath(os.path.join(VNP43_dir, i[0]))] for i in filename_urls if not os.path.exists(os.path.join(VNP43_dir, i[0]))]
+    url_fnames_to_get = [[i[1], os.path.abspath(os.path.join(VNP43_dir, i[0]))] for i in filename_urls if not len(glob.glob(os.path.join(VNP43_dir, '.'.join(i[0].split('.')[:3])+'*'))) > 0]
+    
     if len(url_fnames_to_get) > 0:
         auth = get_auth()
         par = partial(downloader, auth = auth)
         with ThreadPoolExecutor(2) as executor:
             executor.map(par, url_fnames_to_get)
-    filenames = [os.path.abspath(os.path.join(VNP43_dir, i[0])) for i in filename_urls]
+
+    filenames = [glob.glob(os.path.join(VNP43_dir, '.'.join(i[0].split('.')[:3])+'*'))[0] for i in filename_urls]
     return filenames
 
 if __name__ == '__main__':
