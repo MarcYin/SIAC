@@ -1,8 +1,8 @@
 import os
-import glob
 import json
 import getpass
 import requests
+import earthaccess
 import numpy as np
 from retry import retry
 from functools import partial
@@ -277,6 +277,7 @@ def get_polygon_strs(input_file):
     
     # tiles = []
     counterclockwise_polygon_strs = []
+    counterclockwise_polygons = []
     if input_epsg_code != output_epsg_code:
         for feat in layer:
             feat_geom = feat.geometry()
@@ -295,6 +296,7 @@ def get_polygon_strs(input_file):
                 coords = np.append(coords, [coords[0]], axis=0)
                 polygon_str_counterclockwise = ','.join(coords.ravel().astype(str).tolist())
                 counterclockwise_polygon_strs.append(polygon_str_counterclockwise)
+                counterclockwise_polygons.append(coords)
     else:
         for feat in layer:
             feat_geom = feat.geometry()
@@ -312,7 +314,8 @@ def get_polygon_strs(input_file):
                 coords = np.append(coords, [coords[0]], axis=0)
                 polygon_str_counterclockwise = ','.join(coords.ravel().astype(str).tolist())
                 counterclockwise_polygon_strs.append(polygon_str_counterclockwise)
-    return counterclockwise_polygon_strs
+                counterclockwise_polygons.append(coords)
+    return counterclockwise_polygon_strs, counterclockwise_polygons
 
 @retry(tries=4, delay=1, backoff=2)
 def query_VNP43MA1_temporal_spatial(polygon_str_counterclockwise, temporal_start, temporal_end):
@@ -384,7 +387,7 @@ def query_VNP43MA1_temporal_spatial(polygon_str_counterclockwise, temporal_start
     return filename_urls
 
 def find_files(aoi, obs_time, temporal_window = 16):
-    counterclockwise_polygon_strs = get_polygon_strs(aoi)
+    counterclockwise_polygon_strs, counterclockwise_polygons = get_polygon_strs(aoi)
     
     temporal_start = (obs_time - timedelta(days = int(temporal_window)))#.strftime('%Y-%m-%dT%H:%M:%SZ')
     temporal_end   = (obs_time + timedelta(days = int(temporal_window)))#.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -435,24 +438,74 @@ def downloader(url_fname, auth):
         else:
             print(r.content)
 
-def download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16):
-    filename_urls = find_files(aoi, obs_time,  temporal_window = temporal_window)
-    url_fnames_to_get = [[i[1], os.path.abspath(os.path.join(VNP43_dir, i[0]))] for i in filename_urls if not len(glob.glob(os.path.join(VNP43_dir, '.'.join(i[0].split('.')[:3])+'*'))) > 0]
+def download_VNP43MA_old(aoi, obs_time, VNP43_dir, temporal_window = 16):
     
+    filename_urls = find_files(aoi, obs_time,  temporal_window = temporal_window)
+    url_fnames_to_get = [[i[1], os.path.abspath(os.path.join(VNP43_dir, i[0]))] for i in filename_urls if not os.path.exists(os.path.join(VNP43_dir, i[0]))]
     if len(url_fnames_to_get) > 0:
         auth = get_auth()
         par = partial(downloader, auth = auth)
         with ThreadPoolExecutor(2) as executor:
             executor.map(par, url_fnames_to_get)
-
-    filenames = [glob.glob(os.path.join(VNP43_dir, '.'.join(i[0].split('.')[:3])+'*'))[0] for i in filename_urls]
+    filenames = [os.path.abspath(os.path.join(VNP43_dir, i[0])) for i in filename_urls]
     return filenames
+
+def download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16):
+    
+    '''
+    Download VNP43MA1 data from NASA Earthdata using earthaccess
+    Input:
+        aoi: path to the raster or vector file
+        obs_time: datetime object, the time of interest
+        VNP43_dir: directory to save the downloaded files
+        temporal_window: days before and after obs_time to search for VNP43MA1 files
+    Output:
+        filenames: list of downloaded VNP43MA1 files
+    '''
+
+    # Retrieve a username and password from $EARTHDATA_USERNAME and $EARTHDATA_PASSWORD
+    auth = earthaccess.login(strategy='environment')
+    
+    counterclockwise_polygon_strs, counterclockwise_polygons = get_polygon_strs(aoi)
+
+    temporal_start = (obs_time - timedelta(days = int(temporal_window)))#.strftime('%Y-%m-%dT%H:%M:%SZ')
+    temporal_end   = (obs_time + timedelta(days = int(temporal_window)))#.strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    temporal_filter = (temporal_start.strftime('%Y-%m-%dT%H:%M:%SZ'), temporal_end.strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+    for polygon_counterclockwise in counterclockwise_polygons:
+        results = earthaccess.search_data(short_name="VNP43MA1",
+                                    version="002",
+                                    cloud_hosted=True,
+                                    temporal = temporal_filter,
+                                    polygon = polygon_counterclockwise.tolist(),
+                    )
+        # print('Found %d files'%len(results))
+        if len(results) == 0:
+            print('No files found')
+            raise ValueError('No VNP43MA1 files found')
+        to_download = []
+        for result in results:
+            fname = result['umm']['GranuleUR']
+            sensing_date = datetime.strptime(fname.split('.')[1], 'A%Y%j')
+            
+            if (sensing_date > temporal_end) | (sensing_date < temporal_start):
+                results.remove(result)
+            else:
+                # print(sensing_date, temporal_start, temporal_end)
+                to_download.append(result)
+        # print('After filtering, %d files'%len(to_download))
+        filenames = earthaccess.download(to_download, VNP43_dir)
+        return filenames
 
 if __name__ == '__main__':
     aoi = '/Users/fengyin/S2B_MSIL1C_20220801T233659_N0400_R030_T01WCM_20220801T235506.SAFE/GRANULE/L1C_T01WCM_A028227_20220801T233653/IMG_DATA/T01WCM_20220801T233659_B02.jp2' 
-    obs_time = datetime(2022, 8, 1, 23, 36, 59)
+    aoi = '/Users/fengyin/S2B_MSIL1C_20250226T100909_N0511_R022_T32TNR_20250226T120532.SAFE/GRANULE/L1C_T32TNR_A041661_20250226T101230/IMG_DATA/T32TNR_20250226T100909_B01.jp2'
+
+    obs_time = datetime(2025, 2, 26, 10, 9, 9)
     VNP43_dir = '/Users/fengyin/Downloads/'
-    download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16)
+    filenames = download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16)
+
 
 
     from osgeo import gdal, osr
