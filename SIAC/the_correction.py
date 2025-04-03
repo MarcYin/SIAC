@@ -75,6 +75,7 @@ class atmospheric_correction(object):
 
         self.sensor      = sensor_sat[0]
         self.satellite   = sensor_sat[1]
+        if self.satellite == "S2C": self.satellite = "S2A"
         self.toa_bands   = toa_bands
         self.band_index  = band_index
         self.view_angles = view_angles
