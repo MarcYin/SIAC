@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import getpass
 import requests
 import earthaccess
@@ -450,7 +451,7 @@ def download_VNP43MA_old(aoi, obs_time, VNP43_dir, temporal_window = 16):
     filenames = [os.path.abspath(os.path.join(VNP43_dir, i[0])) for i in filename_urls]
     return filenames
 
-def download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16):
+def download_VNP43MA1(aoi, obs_time, VNP43_dir, logger, temporal_window = 16):
     
     '''
     Download VNP43MA1 data from NASA Earthdata using earthaccess
@@ -474,28 +475,51 @@ def download_VNP43MA1(aoi, obs_time, VNP43_dir, temporal_window = 16):
     temporal_filter = (temporal_start.strftime('%Y-%m-%dT%H:%M:%SZ'), temporal_end.strftime('%Y-%m-%dT%H:%M:%SZ'))
 
     for polygon_counterclockwise in counterclockwise_polygons:
-        results = earthaccess.search_data(short_name="VNP43MA1",
-                                    version="002",
-                                    cloud_hosted=True,
-                                    temporal = temporal_filter,
-                                    polygon = polygon_counterclockwise.tolist(),
-                    )
-        # print('Found %d files'%len(results))
-        if len(results) == 0:
-            print('No files found')
-            raise ValueError('No VNP43MA1 files found')
-        to_download = []
-        for result in results:
-            fname = result['umm']['GranuleUR']
-            sensing_date = datetime.strptime(fname.split('.')[1], 'A%Y%j')
-            
-            if (sensing_date > temporal_end) | (sensing_date < temporal_start):
-                results.remove(result)
+
+        Download_failed = True
+        Download_try = 0
+        while Download_failed:
+            results = earthaccess.search_data(short_name="VNP43MA1",
+                                        version="002",
+                                        cloud_hosted=True,
+                                        temporal = temporal_filter,
+                                        polygon = polygon_counterclockwise.tolist(),
+                        )
+            # print('Found %d files'%len(results))
+            if len(results) == 0:
+                print('No files found')
+                raise ValueError('No VNP43MA1 files found')
+            to_download, Expected_filenames = [], []
+            for result in results:
+                fname = result['umm']['GranuleUR']
+                fullname_file = os.path.join(VNP43_dir, fname+".h5")
+                sensing_date = datetime.strptime(fname.split('.')[1], 'A%Y%j')
+                
+                if (sensing_date > temporal_end) | (sensing_date < temporal_start):
+                    results.remove(result)
+                elif os.path.isfile(fullname_file):
+                    results.remove(result)
+                else:
+                    # print(sensing_date, temporal_start, temporal_end)
+                    to_download.append(result)
+                    Expected_filenames.append(fullname_file)
+            # print('After filtering, %d files'%len(to_download))
+
+            logger.info(f'{len(to_download)} VNP43MA1 files are needed')
+            filenames = earthaccess.download(to_download, VNP43_dir)
+
+            Downloaded_filenames = [f for f in Expected_filenames if os.path.isfile(f)]
+            if len(Downloaded_filenames) != len(Expected_filenames): 
+                Download_try += 1
+                logger.error(f'VNP43MA1 download failed at try {Download_try}')
+                if Download_try == 50:
+                    raise RuntimeError("Failed too download VNP43MA1 after too many attempts")
+                time.sleep(10)
             else:
-                # print(sensing_date, temporal_start, temporal_end)
-                to_download.append(result)
-        # print('After filtering, %d files'%len(to_download))
-        filenames = earthaccess.download(to_download, VNP43_dir)
+                Download_try += 1
+                logger.info(f'VNP43MA1 successfully downloaded at try {Download_try}')
+                Download_failed = False
+            
         return filenames
 
 if __name__ == '__main__':

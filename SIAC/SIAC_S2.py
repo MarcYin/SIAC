@@ -184,7 +184,7 @@ def do_correction(sun_ang_name, view_ang_names, toa_refs, cloud_name, \
     elif use_VIIRS:
         logger.info('VIIRS BRDF product is chosen')
         logger.info('Getting VNP43MA1 from NASA server')
-        filenames = download_VNP43MA1(toa_refs[0], mcd43_date, mcd43, temporal_window = 16)
+        filenames = download_VNP43MA1(toa_refs[0], mcd43_date, mcd43, logger, temporal_window = 16)
         filenames = np.array(filenames)
         all_dates = np.array([i.split('/')[-1] .split('.')[1][1:9] for i in filenames])          
         udates = np.unique(all_dates)  
