@@ -485,42 +485,46 @@ def download_VNP43MA1(aoi, obs_time, VNP43_dir, logger, temporal_window = 16):
                                         temporal = temporal_filter,
                                         polygon = polygon_counterclockwise.tolist(),
                         )
-            # print('Found %d files'%len(results))
             if len(results) == 0:
                 print('No files found')
-                raise ValueError('No VNP43MA1 files found')
-            to_download, Expected_filenames = [], []
+                raise ValueError('No VNP43MA1 files found.')
+        
+            to_download = results.copy()
+            Expected_filenames, All_filenames = [], []
             for result in results:
                 fname = result['umm']['GranuleUR']
                 fullname_file = os.path.join(VNP43_dir, fname+".h5")
+                All_filenames.append(fullname_file)
                 sensing_date = datetime.strptime(fname.split('.')[1], 'A%Y%j')
                 
                 if (sensing_date > temporal_end) | (sensing_date < temporal_start):
-                    results.remove(result)
+                    to_download.remove(result)
+                    All_filenames.remove(fullname_file)
                 elif os.path.isfile(fullname_file):
-                    results.remove(result)
+                    to_download.remove(result)
                 else:
-                    # print(sensing_date, temporal_start, temporal_end)
-                    to_download.append(result)
                     Expected_filenames.append(fullname_file)
-            # print('After filtering, %d files'%len(to_download))
 
-            logger.info(f'{len(to_download)} VNP43MA1 files are needed')
-            filenames = earthaccess.download(to_download, VNP43_dir)
+            if len(to_download) > 0:
+                logger.info(f'{len(All_filenames)} VNP43MA1 files needed, {len(to_download)} have to be downloaded.')
+                filenames = earthaccess.download(to_download, VNP43_dir)
 
-            Downloaded_filenames = [f for f in Expected_filenames if os.path.isfile(f)]
-            if len(Downloaded_filenames) != len(Expected_filenames): 
-                Download_try += 1
-                logger.error(f'VNP43MA1 download failed at try {Download_try}')
-                if Download_try == 50:
-                    raise RuntimeError("Failed too download VNP43MA1 after too many attempts")
-                time.sleep(10)
+                Downloaded_filenames = [f for f in Expected_filenames if os.path.isfile(f)]
+                if len(Downloaded_filenames) != len(Expected_filenames): 
+                    Download_try += 1
+                    logger.error(f'VNP43MA1 download failed at try {Download_try}.')
+                    if Download_try == 20:
+                        raise RuntimeError("Failed too download VNP43MA1 after too many attempts.")
+                    time.sleep(10)
+                else:
+                    Download_try += 1
+                    logger.info(f'VNP43MA1 successfully downloaded at try {Download_try}.')
+                    Download_failed = False
             else:
-                Download_try += 1
-                logger.info(f'VNP43MA1 successfully downloaded at try {Download_try}')
-                Download_failed = False
-            
-        return filenames
+                    logger.info(f'{len(All_filenames)} VNP43MA1 files needed, already downloaded.')
+                    Download_failed = False
+
+        return All_filenames
 
 if __name__ == '__main__':
     aoi = '/Users/fengyin/S2B_MSIL1C_20220801T233659_N0400_R030_T01WCM_20220801T235506.SAFE/GRANULE/L1C_T01WCM_A028227_20220801T233653/IMG_DATA/T01WCM_20220801T233659_B02.jp2' 
