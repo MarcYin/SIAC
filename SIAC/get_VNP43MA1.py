@@ -474,57 +474,62 @@ def download_VNP43MA1(aoi, obs_time, VNP43_dir, logger, temporal_window = 16):
     
     temporal_filter = (temporal_start.strftime('%Y-%m-%dT%H:%M:%SZ'), temporal_end.strftime('%Y-%m-%dT%H:%M:%SZ'))
 
+    # Retry configuration
+    MAX_RETRIES = 20
+    RETRY_DELAY = 30  # seconds
+    
+    filenames_list = []
     for polygon_counterclockwise in counterclockwise_polygons:
+        # Search with retry
+        logger.info("Searching dataset granules...")
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                results = earthaccess.search_data(short_name="VNP43MA1",
+                                                  version="002",
+                                                  cloud_hosted=True,
+                                                  temporal = temporal_filter,
+                                                  polygon = polygon_counterclockwise.tolist(),
+                                                  )
+                break  # Success, break out of retry loop
+            except Exception as e:
+                logger.debug(f"Attempt {attempt}: Search failed with error: {e}")
+                if attempt == MAX_RETRIES:
+                    logger.debug("Max retries reached. Exiting.")                    
+                    raise  # Reraise if final attempt fails
+                time.sleep(RETRY_DELAY)
 
-        Download_failed = True
-        Download_try = 0
-        while Download_failed:
-            results = earthaccess.search_data(short_name="VNP43MA1",
-                                        version="002",
-                                        cloud_hosted=True,
-                                        temporal = temporal_filter,
-                                        polygon = polygon_counterclockwise.tolist(),
-                        )
-            if len(results) == 0:
-                print('No files found')
-                raise ValueError('No VNP43MA1 files found.')
+        if len(results) == 0:
+            logger.debug('No files found')
+            raise ValueError('No VNP43MA1 files found.')
         
-            to_download = results.copy()
-            Expected_filenames, All_filenames = [], []
-            for result in results:
-                fname = result['umm']['GranuleUR']
-                fullname_file = os.path.join(VNP43_dir, fname+".h5")
-                All_filenames.append(fullname_file)
-                sensing_date = datetime.strptime(fname.split('.')[1], 'A%Y%j')
-                
-                if (sensing_date > temporal_end) | (sensing_date < temporal_start):
-                    to_download.remove(result)
-                    All_filenames.remove(fullname_file)
-                elif os.path.isfile(fullname_file):
-                    to_download.remove(result)
-                else:
-                    Expected_filenames.append(fullname_file)
+        to_download = []
+        for result in results:
+            fname = result['umm']['GranuleUR']
+            sensing_date = datetime.strptime(fname.split('.')[1], 'A%Y%j')
+            if temporal_start <= sensing_date <= temporal_end:
+                to_download.append(result)
 
-            if len(to_download) > 0:
-                logger.info(f'{len(All_filenames)} VNP43MA1 files needed, {len(to_download)} have to be downloaded.')
+        if len(to_download) == 0:
+            logger.debug("No files matched the temporal range after filtering")
+            raise ValueError("No VNP43MA1 files matched the date filter")
+        
+        # Download with retry
+        logger.info(f"Downloading {len(to_download)} data granules...")
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
                 filenames = earthaccess.download(to_download, VNP43_dir)
+                filenames_list.extend(filenames)
+                break
+            except Exception as e:
+                logger.debug(f"Attempt {attempt}: Download failed with error: {e}")
+                if attempt == MAX_RETRIES:
+                    logger.debug("Max retries reached. Exiting.")
+                    raise
+                time.sleep(RETRY_DELAY)
 
-                Downloaded_filenames = [f for f in Expected_filenames if os.path.isfile(f)]
-                if len(Downloaded_filenames) != len(Expected_filenames): 
-                    Download_try += 1
-                    logger.error(f'VNP43MA1 download failed at try {Download_try}.')
-                    if Download_try == 20:
-                        raise RuntimeError("Failed too download VNP43MA1 after too many attempts.")
-                    time.sleep(10)
-                else:
-                    Download_try += 1
-                    logger.info(f'VNP43MA1 successfully downloaded at try {Download_try}.')
-                    Download_failed = False
-            else:
-                    logger.info(f'{len(All_filenames)} VNP43MA1 files needed, already downloaded.')
-                    Download_failed = False
+        logger.info(f"{len(filenames)} data granules are successfully downloaded.")
 
-        return All_filenames
+    return filenames_list
 
 if __name__ == '__main__':
     aoi = '/Users/fengyin/S2B_MSIL1C_20220801T233659_N0400_R030_T01WCM_20220801T235506.SAFE/GRANULE/L1C_T01WCM_A028227_20220801T233653/IMG_DATA/T01WCM_20220801T233659_B02.jp2' 
