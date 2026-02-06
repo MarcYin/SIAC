@@ -284,6 +284,103 @@ class TwoLayerNNEmulator:
             d_xcp=d_xcp,
         )
 
+    def compute_coefficients_multi(
+        self,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand],
+        compute_jacobian: bool = False,
+    ) -> list[RTCoefficients]:
+        """
+        Compute RT coefficients for multiple bands, preparing inputs once.
+
+        Args:
+            geometry: Viewing geometry
+            atmo_state: Atmospheric state
+            bands: List of sensor bands
+            compute_jacobian: Whether to compute Jacobians
+
+        Returns:
+            List of RTCoefficients, one per band.
+        """
+        # Prepare input array once for all bands
+        cos_sza = np.cos(geometry.sza.values)
+        cos_vza = np.cos(geometry.vza.values)
+        cos_raa = np.cos(geometry.raa.values)
+
+        aot = atmo_state.aot.values
+        tcwv = atmo_state.tcwv.values
+        tco3 = atmo_state.tco3.values
+        elevation = atmo_state.elevation.values
+
+        original_shape = cos_sza.shape
+        template = geometry.sza
+
+        inputs = np.column_stack(
+            [
+                cos_sza.ravel(),
+                cos_vza.ravel(),
+                cos_raa.ravel(),
+                aot.ravel(),
+                tcwv.ravel(),
+                tco3.ravel(),
+                elevation.ravel(),
+            ]
+        ).astype(np.float32)
+
+        results = []
+        for band in bands:
+            emulator = self._load_band_emulator(band.name)
+            outputs, jacobians = emulator.forward(inputs, compute_jacobian=compute_jacobian)
+
+            xap = outputs[:, 0].reshape(original_shape)
+            xbp = outputs[:, 1].reshape(original_shape)
+            xcp = outputs[:, 2].reshape(original_shape)
+
+            xap_da = xr.DataArray(xap, dims=template.dims, coords=template.coords)
+            xbp_da = xr.DataArray(xbp, dims=template.dims, coords=template.coords)
+            xcp_da = xr.DataArray(xcp, dims=template.dims, coords=template.coords)
+
+            d_xap = d_xbp = d_xcp = None
+            if compute_jacobian and jacobians is not None:
+                d_xap_aot = jacobians[:, 0, 3].reshape(original_shape)
+                d_xap_tcwv = jacobians[:, 0, 4].reshape(original_shape)
+                d_xbp_aot = jacobians[:, 1, 3].reshape(original_shape)
+                d_xbp_tcwv = jacobians[:, 1, 4].reshape(original_shape)
+                d_xcp_aot = jacobians[:, 2, 3].reshape(original_shape)
+                d_xcp_tcwv = jacobians[:, 2, 4].reshape(original_shape)
+
+                d_xap = xr.concat(
+                    [
+                        xr.DataArray(d_xap_aot, dims=template.dims, coords=template.coords),
+                        xr.DataArray(d_xap_tcwv, dims=template.dims, coords=template.coords),
+                    ],
+                    dim="param",
+                ).assign_coords(param=["aot", "tcwv"])
+
+                d_xbp = xr.concat(
+                    [
+                        xr.DataArray(d_xbp_aot, dims=template.dims, coords=template.coords),
+                        xr.DataArray(d_xbp_tcwv, dims=template.dims, coords=template.coords),
+                    ],
+                    dim="param",
+                ).assign_coords(param=["aot", "tcwv"])
+
+                d_xcp = xr.concat(
+                    [
+                        xr.DataArray(d_xcp_aot, dims=template.dims, coords=template.coords),
+                        xr.DataArray(d_xcp_tcwv, dims=template.dims, coords=template.coords),
+                    ],
+                    dim="param",
+                ).assign_coords(param=["aot", "tcwv"])
+
+            results.append(RTCoefficients(
+                xap=xap_da, xbp=xbp_da, xcp=xcp_da,
+                d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp,
+            ))
+
+        return results
+
     def supports_jacobian(self) -> bool:
         """Check if this backend supports analytical Jacobian computation."""
         return True
@@ -475,25 +572,16 @@ class _BandEmulator:
         output_idx: int,
     ) -> np.ndarray:
         """Compute Jacobian for a single output using backpropagation."""
-        n_samples, n_inputs = x.shape
-
         # ReLU derivatives
         d_relu1 = (a1 > 0).astype(np.float32)
         d_relu2 = (a2 > 0).astype(np.float32)
 
-        # Backpropagate through the network
-        # For forward pass: a1 = x @ w1, a2 = h1 @ w2, out = h2 @ w3
-        # Gradient: for a = x @ w, grad_x = grad_a @ w.T
+        # Vectorized backpropagation (no per-sample loop)
         grad_h2 = w3.ravel()  # dout/dh2 shape (hidden2,)
-
-        jacobians = np.zeros((n_samples, n_inputs), dtype=np.float32)
-
-        for i in range(n_samples):
-            grad_a2 = grad_h2 * d_relu2[i]  # (hidden2,)
-            grad_h1 = grad_a2 @ w2.T  # (hidden1,), for a2 = h1 @ w2
-            grad_a1 = grad_h1 * d_relu1[i]  # (hidden1,)
-            grad_x = grad_a1 @ w1.T  # (n_inputs,), for a1 = x @ w1
-            jacobians[i] = grad_x
+        grad_a2 = grad_h2[np.newaxis, :] * d_relu2    # (n_samples, hidden2)
+        grad_h1 = grad_a2 @ w2.T                       # (n_samples, hidden1)
+        grad_a1 = grad_h1 * d_relu1                    # (n_samples, hidden1)
+        jacobians = (grad_a1 @ w1.T).astype(np.float32)  # (n_samples, n_inputs)
 
         return jacobians
 

@@ -5,6 +5,7 @@ import xarray as xr
 from dataclasses import dataclass
 from typing import Any
 from siac.core.types import AtmosphericState, GeometryAngles, SensorConfig
+from siac.core.protocols import RTModelBackend
 
 @dataclass
 class CorrectionResult:
@@ -16,6 +17,11 @@ class CorrectionResult:
 
 class AtmosphericCorrector:
     def __init__(self, rt_model: Any, sensor_config: SensorConfig):
+        if not isinstance(rt_model, RTModelBackend):
+            raise TypeError(
+                f"rt_model must implement RTModelBackend protocol, "
+                f"got {type(rt_model).__name__}"
+            )
         self.rt_model = rt_model
         self.sensor_config = sensor_config
 
@@ -28,8 +34,7 @@ class AtmosphericCorrector:
             except KeyError:
                 continue
             coeffs = self.rt_model.compute_coefficients(geometry, atmo_state, band_spec, False)
-            y = coeffs.xap * toa[band_name] - coeffs.xbp
-            boa = y / (1.0 + coeffs.xcp * y)
+            boa = coeffs.apply_correction(toa[band_name])
             boa_vars[band_name] = boa.where((boa > 0) & (boa < 1.5))
 
         boa_ds = xr.Dataset(boa_vars)

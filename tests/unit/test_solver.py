@@ -13,6 +13,7 @@ from siac.solver.cost import (
     apply_smoothness_filter,
 )
 from siac.solver.multigrid import MultiGridSolver, MultiGridConfig
+from siac.core.types import AtmosphericState
 
 
 class TestLaplacianEigenvalues:
@@ -173,6 +174,110 @@ class TestMultiGridSolver:
         resampled = solver._resample_field(field, (64, 64))
 
         np.testing.assert_array_equal(resampled, field)
+
+
+class TestProtocolValidation:
+    """Tests for protocol validation at boundaries."""
+
+    def test_cost_function_invalid_rt_model(self, cost_function_inputs):
+        """CostFunction should reject non-RTModelBackend objects."""
+        from siac.solver.cost import CostFunction
+
+        with pytest.raises(TypeError, match="rt_model must implement RTModelBackend"):
+            CostFunction(
+                toa=cost_function_inputs["toa"],
+                surface_prior=cost_function_inputs["surface_prior"],
+                geometry=cost_function_inputs["geometry"],
+                atmo_prior=cost_function_inputs["atmo_prior"],
+                rt_model=object(),
+                bands=cost_function_inputs["bands"],
+                mask=cost_function_inputs["mask"],
+            )
+
+    def test_multigrid_solver_invalid_rt_model(self):
+        """MultiGridSolver.solve() should reject non-RTModelBackend objects."""
+        solver = MultiGridSolver()
+
+        shape = (16, 16)
+        toa = xr.DataArray(np.full((3, *shape), 0.2), dims=["band", "y", "x"])
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+
+        from siac.core.types import GeometryAngles, AtmosphericState, SurfacePrior, BRDFKernelWeights, SensorBand
+
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.full(shape, 0.12), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        bands = [SensorBand("B02", 490.0, 65.0, 10.0, 0)]
+
+        with pytest.raises(TypeError, match="rt_model must implement RTModelBackend"):
+            solver.solve(toa, surface_prior, geometry, atmo_prior, object(), cloud_mask, bands)
+
+
+class TestResampleFieldEquivalence:
+    """Tests for resampling field consistency."""
+
+    def test_resample_upsample(self):
+        """Upsampling should produce larger array with interpolated values."""
+        solver = MultiGridSolver()
+        field = np.array([[1.0, 2.0], [3.0, 4.0]])
+        result = solver._resample_field(field, (4, 4))
+
+        assert result.shape == (4, 4)
+        # Corners should be close to original values
+        assert abs(result[0, 0] - 1.0) < 0.5
+        assert abs(result[-1, -1] - 4.0) < 0.5
+
+    def test_resample_downsample(self):
+        """Downsampling should produce smaller array with averaged values."""
+        solver = MultiGridSolver()
+        field = np.ones((8, 8)) * 5.0
+        result = solver._resample_field(field, (4, 4))
+
+        assert result.shape == (4, 4)
+        np.testing.assert_allclose(result, 5.0, rtol=1e-6)
+
+    def test_resample_roundtrip(self):
+        """Downsample then upsample should approximately preserve smooth fields."""
+        solver = MultiGridSolver()
+        # Create smooth field
+        y, x = np.mgrid[:32, :32]
+        field = 0.5 + 0.1 * np.sin(2 * np.pi * x / 32) + 0.1 * np.cos(2 * np.pi * y / 32)
+
+        small = solver._resample_field(field, (8, 8))
+        restored = solver._resample_field(small, (32, 32))
+
+        # Mean should be preserved
+        np.testing.assert_allclose(field.mean(), restored.mean(), rtol=0.1)
 
 
 class TestCostFunctionGradient:

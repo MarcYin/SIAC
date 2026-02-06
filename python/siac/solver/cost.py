@@ -34,6 +34,7 @@ from siac.core.types import (
     SensorBand,
     SurfacePrior,
 )
+from siac.core.protocols import RTModelBackend
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,11 @@ class CostFunction:
             mask: Valid pixel mask (True = valid)
             config: Cost function configuration
         """
+        if not isinstance(rt_model, RTModelBackend):
+            raise TypeError(
+                f"rt_model must implement RTModelBackend protocol, "
+                f"got {type(rt_model).__name__}"
+            )
         self.toa = toa
         self.surface_prior = surface_prior
         self.geometry = geometry
@@ -257,21 +263,27 @@ class CostFunction:
             tcwv=xr.DataArray(tcwv, dims=self.atmo_prior.tcwv.dims),
         )
 
-        # Compute RT coefficients for each band
-        for i, band in enumerate(self.bands):
-            # Get RT coefficients with Jacobian
-            coeffs = self.rt_model.compute_coefficients(
-                self.geometry,
-                atmo_state,
-                band,
-                compute_jacobian=True,
+        # Compute RT coefficients for all bands (batch if supported)
+        if hasattr(self.rt_model, 'compute_coefficients_multi'):
+            all_coeffs = self.rt_model.compute_coefficients_multi(
+                self.geometry, atmo_state, self.bands, compute_jacobian=True,
             )
+        else:
+            all_coeffs = [
+                self.rt_model.compute_coefficients(
+                    self.geometry, atmo_state, band, compute_jacobian=True,
+                )
+                for band in self.bands
+            ]
+
+        for i, (band, coeffs) in enumerate(zip(self.bands, all_coeffs)):
 
             # Apply correction to get modeled BOA
-            toa_band = self.toa.isel(band=i).values if "band" in self.toa.dims else self.toa.values
-            boa_model = coeffs.apply_correction(
-                xr.DataArray(toa_band)
-            ).values
+            if "band" in self.toa.dims:
+                toa_band_da = self.toa.isel(band=i)
+            else:
+                toa_band_da = self.toa
+            boa_model = coeffs.apply_correction(toa_band_da).values
 
             # Get prior BOA for this band
             if self.boa_prior.ndim == 3:
@@ -296,7 +308,7 @@ class CostFunction:
             # Gradient via chain rule
             if coeffs.has_jacobian:
                 d_boa_aot, d_boa_tcwv = coeffs.compute_boa_jacobian(
-                    xr.DataArray(toa_band)
+                    toa_band_da
                 )
 
                 dj_aot += weight * diff * d_boa_aot.values

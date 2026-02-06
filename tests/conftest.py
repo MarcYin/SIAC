@@ -206,6 +206,127 @@ def sample_config_dict() -> dict:
 
 
 # =============================================================================
+# Mock RT model (shared across tests)
+# =============================================================================
+
+class MockRTModel:
+    """Mock RT model that satisfies RTModelBackend protocol."""
+
+    def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
+        """Return mock coefficients."""
+        from siac.core.types import RTCoefficients
+        shape = geometry.sza.shape
+
+        xap = xr.DataArray(np.full(shape, 0.95), dims=["y", "x"])
+        xbp = xr.DataArray(np.full(shape, 0.02), dims=["y", "x"])
+        xcp = xr.DataArray(np.full(shape, 0.1), dims=["y", "x"])
+
+        d_xap = d_xbp = d_xcp = None
+        if compute_jacobian:
+            d_xap = xr.concat(
+                [xr.DataArray(np.full(shape, -0.5), dims=["y", "x"]),
+                 xr.DataArray(np.full(shape, -0.01), dims=["y", "x"])],
+                dim="param",
+            ).assign_coords(param=["aot", "tcwv"])
+            d_xbp = xr.concat(
+                [xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+                 xr.DataArray(np.full(shape, 0.005), dims=["y", "x"])],
+                dim="param",
+            ).assign_coords(param=["aot", "tcwv"])
+            d_xcp = xr.concat(
+                [xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+                 xr.DataArray(np.full(shape, 0.002), dims=["y", "x"])],
+                dim="param",
+            ).assign_coords(param=["aot", "tcwv"])
+
+        return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp,
+                              d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp)
+
+    def supports_jacobian(self):
+        return True
+
+    @property
+    def backend_name(self):
+        return "mock"
+
+    def is_available_for_sensor(self, sensor_id, satellite_id):
+        return True
+
+
+@pytest.fixture
+def mock_rt_model():
+    """Shared mock RT model fixture."""
+    return MockRTModel()
+
+
+# =============================================================================
+# Cost function input fixtures
+# =============================================================================
+
+@pytest.fixture
+def cost_function_inputs():
+    """Standard inputs for cost function tests."""
+    from siac.core.types import GeometryAngles, AtmosphericState, SurfacePrior, BRDFKernelWeights, SensorBand
+
+    shape = (16, 16)
+
+    geometry = GeometryAngles(
+        sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+        saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+        vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+    )
+
+    atmo_prior = AtmosphericState(
+        aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
+        tcwv=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+        tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+        aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+        tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+        tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+        elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+    )
+
+    toa = xr.DataArray(
+        np.random.RandomState(42).uniform(0.05, 0.3, (3, *shape)).astype(np.float32),
+        dims=["band", "y", "x"],
+    )
+
+    brdf_weights = BRDFKernelWeights(
+        f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+        f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+        f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+        f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+        f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+    )
+
+    surface_prior = SurfacePrior(
+        boa=xr.DataArray(np.full(shape, 0.12), dims=["y", "x"]),
+        boa_unc=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+        kernels=brdf_weights,
+        mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+    )
+
+    mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+
+    bands = [
+        SensorBand("B02", 490.0, 65.0, 10.0, 0),
+        SensorBand("B03", 560.0, 35.0, 10.0, 1),
+        SensorBand("B04", 665.0, 30.0, 10.0, 2),
+    ]
+
+    return {
+        "toa": toa,
+        "surface_prior": surface_prior,
+        "geometry": geometry,
+        "atmo_prior": atmo_prior,
+        "bands": bands,
+        "mask": mask,
+    }
+
+
+# =============================================================================
 # Markers
 # =============================================================================
 

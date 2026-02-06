@@ -15,21 +15,6 @@ from siac.core.types import (
 from siac.correction.atmospheric import AtmosphericCorrector, CorrectionResult
 
 
-class MockRTModel:
-    """Mock RT model for testing."""
-
-    def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
-        """Return mock coefficients."""
-        shape = geometry.sza.shape
-
-        # Simple mock coefficients
-        xap = xr.DataArray(np.full(shape, 0.95), dims=["y", "x"])
-        xbp = xr.DataArray(np.full(shape, 0.02), dims=["y", "x"])
-        xcp = xr.DataArray(np.full(shape, 0.1), dims=["y", "x"])
-
-        return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp)
-
-
 class TestAtmosphericCorrector:
     """Tests for AtmosphericCorrector class."""
 
@@ -66,19 +51,17 @@ class TestAtmosphericCorrector:
 
         return toa, geometry, atmo_state
 
-    def test_creation(self):
+    def test_creation(self, mock_rt_model):
         """Corrector should be creatable."""
-        rt_model = MockRTModel()
-        corrector = AtmosphericCorrector(rt_model, SENTINEL2A_CONFIG)
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
 
         assert corrector.sensor_config == SENTINEL2A_CONFIG
 
-    def test_correct_basic(self, sample_inputs):
+    def test_correct_basic(self, sample_inputs, mock_rt_model):
         """Basic correction should work."""
         toa, geometry, atmo_state = sample_inputs
 
-        rt_model = MockRTModel()
-        corrector = AtmosphericCorrector(rt_model, SENTINEL2A_CONFIG)
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
 
         result = corrector.correct(toa, geometry, atmo_state)
 
@@ -86,12 +69,11 @@ class TestAtmosphericCorrector:
         assert "B02" in result.boa.data_vars
         assert result.boa["B02"].shape == (50, 50)
 
-    def test_correct_values(self, sample_inputs):
+    def test_correct_values(self, sample_inputs, mock_rt_model):
         """Correction should produce expected values."""
         toa, geometry, atmo_state = sample_inputs
 
-        rt_model = MockRTModel()
-        corrector = AtmosphericCorrector(rt_model, SENTINEL2A_CONFIG)
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
 
         result = corrector.correct(toa, geometry, atmo_state)
 
@@ -104,33 +86,55 @@ class TestAtmosphericCorrector:
             result.boa["B02"].values.mean(), expected_boa, rtol=1e-3
         )
 
-    def test_correct_with_cloud_mask(self, sample_inputs):
+    def test_correct_with_cloud_mask(self, sample_inputs, mock_rt_model):
         """Correction should respect cloud mask."""
         toa, geometry, atmo_state = sample_inputs
 
         cloud_mask = xr.DataArray(np.zeros((50, 50), dtype=bool), dims=["y", "x"])
         cloud_mask.values[10:20, 10:20] = True  # Cloud region
 
-        rt_model = MockRTModel()
-        corrector = AtmosphericCorrector(rt_model, SENTINEL2A_CONFIG)
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
 
         result = corrector.correct(toa, geometry, atmo_state, cloud_mask=cloud_mask)
 
         # Mask should exclude cloudy pixels
         assert (~result.mask.values[10:20, 10:20]).all()
 
-    def test_result_has_aot_tcwv(self, sample_inputs):
+    def test_result_has_aot_tcwv(self, sample_inputs, mock_rt_model):
         """Result should include AOT and TCWV."""
         toa, geometry, atmo_state = sample_inputs
 
-        rt_model = MockRTModel()
-        corrector = AtmosphericCorrector(rt_model, SENTINEL2A_CONFIG)
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
 
         result = corrector.correct(toa, geometry, atmo_state)
 
         assert result.aot is not None
         assert result.tcwv is not None
         np.testing.assert_allclose(result.aot.values, 0.15)
+
+    def test_invalid_rt_model_raises(self):
+        """Passing non-RTModelBackend should raise TypeError."""
+        with pytest.raises(TypeError, match="rt_model must implement RTModelBackend"):
+            AtmosphericCorrector(object(), SENTINEL2A_CONFIG)
+
+    def test_apply_correction_consistency(self, sample_inputs, mock_rt_model):
+        """Corrector should produce same result as RTCoefficients.apply_correction()."""
+        toa, geometry, atmo_state = sample_inputs
+
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
+        result = corrector.correct(toa, geometry, atmo_state)
+
+        # Manually compute via apply_correction
+        band_spec = SENTINEL2A_CONFIG.get_band("B02")
+        coeffs = mock_rt_model.compute_coefficients(geometry, atmo_state, band_spec, False)
+        expected = coeffs.apply_correction(toa["B02"])
+
+        # Filter to valid range like the corrector does
+        expected = expected.where((expected > 0) & (expected < 1.5))
+
+        np.testing.assert_allclose(
+            result.boa["B02"].values, expected.values, rtol=1e-6
+        )
 
 
 class TestCorrectionPhysics:

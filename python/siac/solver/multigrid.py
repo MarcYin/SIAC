@@ -33,9 +33,19 @@ from siac.core.types import (
     SensorBand,
     SurfacePrior,
 )
+from siac.core.protocols import RTModelBackend
 from siac.solver.cost import CostFunction, CostFunctionConfig
 
 logger = logging.getLogger(__name__)
+
+# Try to import Rust optimization functions
+try:
+    from siac._rust import remap_to_coarse_grid, interpolate_to_fine_grid
+    _HAS_RUST_OPT = True
+    logger.debug("Using Rust optimization functions")
+except ImportError:
+    _HAS_RUST_OPT = False
+    logger.debug("Rust optimization not available, using scipy fallback")
 
 
 @dataclass
@@ -129,6 +139,11 @@ class MultiGridSolver:
         Returns:
             SolverResult with solved AOT, TCWV and diagnostics.
         """
+        if not isinstance(rt_model, RTModelBackend):
+            raise TypeError(
+                f"rt_model must implement RTModelBackend protocol, "
+                f"got {type(rt_model).__name__}"
+            )
         # Get image dimensions
         full_shape = self._get_shape(cloud_mask)
         logger.info(f"Starting multi-grid solver for {full_shape} image")
@@ -294,7 +309,14 @@ class MultiGridSolver:
         if field.shape == target_shape:
             return field
 
-        # Use zoom for resampling
+        if _HAS_RUST_OPT:
+            data = np.ascontiguousarray(field, dtype=np.float64)
+            if target_shape[0] < field.shape[0]:
+                return np.asarray(remap_to_coarse_grid(data, target_shape[0], target_shape[1]))
+            else:
+                return np.asarray(interpolate_to_fine_grid(data, target_shape[0], target_shape[1]))
+
+        # Fallback: scipy zoom
         zoom_factors = (
             target_shape[0] / field.shape[0],
             target_shape[1] / field.shape[1],

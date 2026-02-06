@@ -28,6 +28,7 @@ fn siac_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Optimization utilities
     m.add_function(wrap_pyfunction!(optimization::remap_to_coarse_grid, m)?)?;
     m.add_function(wrap_pyfunction!(optimization::interpolate_to_fine_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(optimization::apply_laplacian, m)?)?;
 
     Ok(())
 }

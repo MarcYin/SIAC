@@ -7,7 +7,7 @@ import pytest
 import xarray as xr
 from pathlib import Path
 
-from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
+from siac.core.types import AtmosphericState, GeometryAngles, RTCoefficients, SensorBand
 
 
 class TestBandEmulator:
@@ -176,6 +176,120 @@ class TestTwoLayerNNEmulator:
         assert emulator.backend_name == "emulator"
         assert emulator.supports_jacobian() is True
         assert emulator.is_available_for_sensor("MSI", "S2A") is True
+
+
+class TestComputeCoefficientsMulti:
+    """Tests for batch coefficient computation."""
+
+    @pytest.fixture
+    def mock_emulator_dir(self, tmp_path):
+        """Create mock emulator directory with test weights (3 output heads)."""
+        np.random.seed(42)
+        hidden = 64
+        input_dim = 7
+
+        hidden_layers = [
+            [np.random.randn(input_dim, hidden).astype(np.float32) * 0.1,
+             np.zeros(hidden, dtype=np.float32)],
+            [np.random.randn(hidden, hidden).astype(np.float32) * 0.1,
+             np.zeros(hidden, dtype=np.float32)],
+        ]
+
+        # Three output heads (xap, xbp, xcp)
+        output_layers = [
+            [np.random.randn(hidden, 1).astype(np.float32) * 0.1,
+             np.zeros(1, dtype=np.float32)]
+            for _ in range(3)
+        ]
+
+        for band in ["B02", "B03", "B04"]:
+            path = tmp_path / f"S2A_{band}_emulator.npz"
+            np.savez(
+                path,
+                Hidden_Layers=np.array(hidden_layers, dtype=object),
+                Output_Layers=np.array(output_layers, dtype=object),
+            )
+
+        return tmp_path
+
+    def test_multi_equals_single(self, mock_emulator_dir):
+        """compute_coefficients_multi([band]) should equal compute_coefficients(band)."""
+        from siac.rt.emulator.two_nn import TwoLayerNNEmulator
+
+        shape = (8, 8)
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+
+        atmo_state = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+
+        emulator = TwoLayerNNEmulator(
+            emulator_dir=mock_emulator_dir,
+            sensor_id="MSI",
+            satellite_id="S2A",
+            use_rust=False,
+        )
+
+        band = SensorBand("B02", 490.0, 65.0, 10.0, 0)
+
+        # Single-band call
+        single = emulator.compute_coefficients(geometry, atmo_state, band, compute_jacobian=True)
+
+        # Multi-band call with one band
+        multi = emulator.compute_coefficients_multi(geometry, atmo_state, [band], compute_jacobian=True)
+
+        np.testing.assert_allclose(single.xap.values, multi[0].xap.values)
+        np.testing.assert_allclose(single.xbp.values, multi[0].xbp.values)
+        np.testing.assert_allclose(single.xcp.values, multi[0].xcp.values)
+
+    def test_multi_returns_correct_count(self, mock_emulator_dir):
+        """compute_coefficients_multi should return one result per band."""
+        from siac.rt.emulator.two_nn import TwoLayerNNEmulator
+
+        shape = (4, 4)
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+
+        atmo_state = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+
+        emulator = TwoLayerNNEmulator(
+            emulator_dir=mock_emulator_dir,
+            sensor_id="MSI",
+            satellite_id="S2A",
+            use_rust=False,
+        )
+
+        bands = [
+            SensorBand("B02", 490.0, 65.0, 10.0, 0),
+            SensorBand("B03", 560.0, 35.0, 10.0, 1),
+            SensorBand("B04", 665.0, 30.0, 10.0, 2),
+        ]
+
+        results = emulator.compute_coefficients_multi(geometry, atmo_state, bands)
+        assert len(results) == 3
 
 
 class TestEmulatorRegistry:
