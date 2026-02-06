@@ -1,0 +1,444 @@
+"""
+Sentinel-2 MSI preprocessor.
+
+This module handles reading and preprocessing Sentinel-2 Level-1C data
+in SAFE format (ESA SciHub or AWS formats).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import xarray as xr
+
+from siac.core.types import (
+    SENTINEL2A_CONFIG,
+    SENTINEL2B_CONFIG,
+    GeometryAngles,
+    SensorConfig,
+)
+from siac.io import read_raster, reproject_match
+from siac.satellite.base import (
+    BaseSatellitePreprocessor,
+    degrees_to_radians,
+    register_preprocessor,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@register_preprocessor("s2")
+class Sentinel2Preprocessor(BaseSatellitePreprocessor):
+    """
+    Preprocessor for Sentinel-2 MSI Level-1C data.
+
+    Supports both ESA SciHub SAFE format and AWS format.
+    """
+
+    # Band file patterns
+    BAND_PATTERNS = {
+        "B01": "*B01*.jp2",
+        "B02": "*B02*.jp2",
+        "B03": "*B03*.jp2",
+        "B04": "*B04*.jp2",
+        "B05": "*B05*.jp2",
+        "B06": "*B06*.jp2",
+        "B07": "*B07*.jp2",
+        "B08": "*B08*.jp2",
+        "B8A": "*B8A*.jp2",
+        "B09": "*B09*.jp2",
+        "B10": "*B10*.jp2",
+        "B11": "*B11*.jp2",
+        "B12": "*B12*.jp2",
+    }
+
+    def __init__(self, config: dict[str, Any] | None = None):
+        super().__init__(config)
+        self._satellite_id: str | None = None
+        self._granule_path: Path | None = None
+
+    @property
+    def sensor_config(self) -> SensorConfig:
+        """Return sensor configuration based on satellite (S2A or S2B)."""
+        if self._satellite_id == "S2B":
+            return SENTINEL2B_CONFIG
+        return SENTINEL2A_CONFIG
+
+    def load_toa(self, input_path: str | Path) -> xr.Dataset:
+        """Load TOA reflectance from Sentinel-2 SAFE directory."""
+        input_path = Path(input_path)
+        self._resolve_paths(input_path)
+
+        # Get scaling parameters
+        metadata = self.get_metadata(input_path)
+        quantification = metadata.get("quantification_value", 10000.0)
+        offsets = metadata.get("radiometric_offsets", {})
+
+        # Find and read band files
+        img_data_path = self._get_img_data_path()
+        data_vars = {}
+
+        for band_name, pattern in self.BAND_PATTERNS.items():
+            band_files = list(img_data_path.glob(pattern))
+            if not band_files:
+                logger.warning(f"Band {band_name} not found")
+                continue
+
+            band_file = band_files[0]
+            logger.debug(f"Reading {band_name} from {band_file}")
+
+            # Read DN values
+            da = read_raster(band_file)
+
+            # Apply radiometric calibration
+            offset = offsets.get(band_name, 0.0)
+            da = (da.astype(np.float32) + offset) / quantification
+
+            # Clip to valid range
+            da = da.clip(0, 1.5)
+
+            # Set band name
+            da.name = band_name
+            data_vars[band_name] = da
+
+        ds = xr.Dataset(data_vars)
+
+        # Add metadata
+        ds.attrs["sensor"] = "MSI"
+        ds.attrs["satellite"] = self._satellite_id
+        ds.attrs["observation_time"] = metadata.get("observation_time", "").isoformat()
+
+        return ds
+
+    def extract_geometry(self, input_path: str | Path) -> GeometryAngles:
+        """Extract sun and view angles from metadata."""
+        input_path = Path(input_path)
+        self._resolve_paths(input_path)
+
+        # Parse angle grids from XML
+        granule_xml = self._find_granule_xml()
+        tree = ET.parse(granule_xml)
+        root = tree.getroot()
+
+        # Extract sun angles (single grid for whole tile)
+        sun_angles = self._parse_sun_angles(root)
+
+        # Extract view angles (per-band, per-detector)
+        view_angles = self._parse_view_angles(root)
+
+        # Get reference band for grid
+        img_data_path = self._get_img_data_path()
+        ref_file = list(img_data_path.glob("*B04*.jp2"))[0]
+        ref_da = read_raster(ref_file)
+
+        # Resample angles to image grid
+        sza = self._angles_to_grid(sun_angles["zenith"], ref_da)
+        saa = self._angles_to_grid(sun_angles["azimuth"], ref_da)
+
+        # Use mean view angles (average across detectors)
+        vza = self._angles_to_grid(view_angles["zenith"], ref_da)
+        vaa = self._angles_to_grid(view_angles["azimuth"], ref_da)
+
+        # Convert to radians
+        return GeometryAngles(
+            sza=degrees_to_radians(sza),
+            saa=degrees_to_radians(saa),
+            vza=degrees_to_radians(vza),
+            vaa=degrees_to_radians(vaa),
+        )
+
+    def extract_cloud_mask(self, input_path: str | Path) -> xr.DataArray:
+        """
+        Generate cloud mask using simple threshold or ML model.
+
+        For full ML-based cloud detection, use the cloud detector module.
+        This provides a quick threshold-based mask.
+        """
+        input_path = Path(input_path)
+
+        # Load TOA for cloud detection bands
+        toa = self.load_toa(input_path)
+
+        # Simple cirrus + bright pixel detection
+        cloud_mask = xr.zeros_like(toa["B04"], dtype=bool)
+
+        # Cirrus band threshold (B10)
+        if "B10" in toa:
+            cirrus = reproject_match(toa["B10"], toa["B04"])
+            cloud_mask = cloud_mask | (cirrus > 0.01)
+
+        # Bright pixel threshold (simple)
+        cloud_mask = cloud_mask | (toa["B04"] > 0.35)
+
+        # Blue band bright
+        if "B02" in toa:
+            b02 = reproject_match(toa["B02"], toa["B04"])
+            cloud_mask = cloud_mask | (b02 > 0.4)
+
+        cloud_mask.name = "cloud_mask"
+        return cloud_mask
+
+    def get_metadata(self, input_path: str | Path) -> dict[str, Any]:
+        """Extract metadata from SAFE directory."""
+        input_path = Path(input_path)
+        self._resolve_paths(input_path)
+
+        metadata = {
+            "sensor": "MSI",
+            "satellite": self._satellite_id,
+            "input_path": str(input_path),
+        }
+
+        # Parse main metadata file
+        mtd_file = self._find_product_xml(input_path)
+        if mtd_file:
+            tree = ET.parse(mtd_file)
+            root = tree.getroot()
+
+            # Extract key metadata
+            metadata.update(self._parse_product_metadata(root))
+
+        # Parse granule metadata
+        granule_xml = self._find_granule_xml()
+        if granule_xml:
+            tree = ET.parse(granule_xml)
+            root = tree.getroot()
+            metadata.update(self._parse_granule_metadata(root))
+
+        return metadata
+
+    # =========================================================================
+    # Private Methods
+    # =========================================================================
+
+    def _resolve_paths(self, input_path: Path) -> None:
+        """Resolve SAFE directory structure."""
+        if self._granule_path is not None:
+            return
+
+        # Find granule directory
+        granule_dirs = list(input_path.glob("GRANULE/L1C_*"))
+        if not granule_dirs:
+            # Try AWS format
+            if (input_path / "metadata.xml").exists():
+                self._granule_path = input_path
+            else:
+                raise FileNotFoundError(f"No granule found in {input_path}")
+        else:
+            self._granule_path = granule_dirs[0]
+
+        # Detect satellite (S2A or S2B)
+        safe_name = input_path.name
+        if "S2A" in safe_name:
+            self._satellite_id = "S2A"
+        elif "S2B" in safe_name:
+            self._satellite_id = "S2B"
+        else:
+            # Try to detect from metadata
+            self._satellite_id = "S2A"  # Default
+
+    def _get_img_data_path(self) -> Path:
+        """Get path to IMG_DATA directory."""
+        img_data = self._granule_path / "IMG_DATA"
+        if not img_data.exists():
+            # AWS format
+            img_data = self._granule_path
+        return img_data
+
+    def _find_product_xml(self, input_path: Path) -> Path | None:
+        """Find main product metadata XML."""
+        candidates = [
+            input_path / "MTD_MSIL1C.xml",
+            input_path / "metadata.xml",
+        ]
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
+
+    def _find_granule_xml(self) -> Path | None:
+        """Find granule metadata XML."""
+        candidates = list(self._granule_path.glob("MTD_TL.xml"))
+        candidates += list(self._granule_path.glob("*MTD*.xml"))
+
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
+
+    def _parse_product_metadata(self, root: ET.Element) -> dict[str, Any]:
+        """Parse product-level metadata."""
+        metadata = {}
+
+        # Find namespace
+        ns = self._get_namespace(root)
+
+        # Processing baseline
+        baseline_elem = root.find(f".//{ns}PROCESSING_BASELINE")
+        if baseline_elem is not None:
+            metadata["processing_baseline"] = baseline_elem.text
+
+        # Quantification value
+        quant_elem = root.find(f".//{ns}QUANTIFICATION_VALUE")
+        if quant_elem is not None:
+            metadata["quantification_value"] = float(quant_elem.text)
+
+        # Radiometric offsets (Processing Baseline >= 04.00)
+        offsets = {}
+        for offset_elem in root.findall(f".//{ns}RADIO_ADD_OFFSET"):
+            band_id = offset_elem.get("band_id")
+            if band_id:
+                offsets[f"B{int(band_id):02d}"] = float(offset_elem.text)
+        if offsets:
+            metadata["radiometric_offsets"] = offsets
+
+        return metadata
+
+    def _parse_granule_metadata(self, root: ET.Element) -> dict[str, Any]:
+        """Parse granule-level metadata."""
+        metadata = {}
+        ns = self._get_namespace(root)
+
+        # Sensing time
+        time_elem = root.find(f".//{ns}SENSING_TIME")
+        if time_elem is not None:
+            try:
+                metadata["observation_time"] = datetime.strptime(
+                    time_elem.text, "%Y-%m-%dT%H:%M:%S.%fZ"
+                )
+            except ValueError:
+                metadata["observation_time"] = datetime.fromisoformat(
+                    time_elem.text.replace("Z", "+00:00")
+                )
+
+        # Tile ID
+        tile_elem = root.find(f".//{ns}TILE_ID")
+        if tile_elem is not None:
+            metadata["tile_id"] = tile_elem.text
+
+        return metadata
+
+    def _parse_sun_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
+        """Parse sun angle grids from XML."""
+        ns = self._get_namespace(root)
+
+        angles = {}
+
+        # Find Sun_Angles_Grid
+        sun_grid = root.find(f".//{ns}Sun_Angles_Grid")
+        if sun_grid is None:
+            # Try without namespace
+            sun_grid = root.find(".//Sun_Angles_Grid")
+
+        if sun_grid is not None:
+            zenith = sun_grid.find(f".//{ns}Zenith")
+            if zenith is None:
+                zenith = sun_grid.find(".//Zenith")
+
+            azimuth = sun_grid.find(f".//{ns}Azimuth")
+            if azimuth is None:
+                azimuth = sun_grid.find(".//Azimuth")
+
+            if zenith is not None:
+                angles["zenith"] = self._parse_angle_grid(zenith, ns)
+            if azimuth is not None:
+                angles["azimuth"] = self._parse_angle_grid(azimuth, ns)
+
+        return angles
+
+    def _parse_view_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
+        """Parse view angle grids from XML (mean across detectors)."""
+        ns = self._get_namespace(root)
+
+        # Get mean viewing angles
+        mean_vza = None
+        mean_vaa = None
+
+        # Look for Mean_Viewing_Incidence_Angle
+        for mean_elem in root.findall(f".//{ns}Mean_Viewing_Incidence_Angle"):
+            zenith = mean_elem.find(f"{ns}ZENITH_ANGLE")
+            azimuth = mean_elem.find(f"{ns}AZIMUTH_ANGLE")
+
+            if zenith is not None and azimuth is not None:
+                if mean_vza is None:
+                    mean_vza = float(zenith.text)
+                    mean_vaa = float(azimuth.text)
+                else:
+                    # Average across bands
+                    mean_vza = (mean_vza + float(zenith.text)) / 2
+                    mean_vaa = (mean_vaa + float(azimuth.text)) / 2
+
+        # Fallback values
+        if mean_vza is None:
+            mean_vza = 5.0
+            mean_vaa = 100.0
+
+        # Create uniform grids (simplified - full implementation would parse per-detector grids)
+        zenith_grid = np.full((23, 23), mean_vza)
+        azimuth_grid = np.full((23, 23), mean_vaa)
+
+        return {
+            "zenith": zenith_grid,
+            "azimuth": azimuth_grid,
+        }
+
+    def _parse_angle_grid(self, elem: ET.Element, ns: str) -> np.ndarray:
+        """Parse angle values from grid element."""
+        values_list = elem.find(f"{ns}Values_List")
+        if values_list is None:
+            values_list = elem.find("Values_List")
+
+        if values_list is None:
+            # Return default grid
+            return np.full((23, 23), 30.0)
+
+        rows = []
+        for values in values_list.findall(f"{ns}VALUES"):
+            if values is None:
+                values = values_list.find("VALUES")
+            if values is not None and values.text:
+                row = [float(v) for v in values.text.split()]
+                rows.append(row)
+
+        if not rows:
+            return np.full((23, 23), 30.0)
+
+        return np.array(rows)
+
+    def _angles_to_grid(
+        self,
+        angles: np.ndarray,
+        target: xr.DataArray,
+    ) -> xr.DataArray:
+        """Interpolate angle grid to image resolution."""
+        # Create DataArray from angle grid
+        # Angles are on 5km grid (23x23 for 10980x10980 image at 10m)
+        height, width = angles.shape
+
+        # Approximate coordinates
+        bounds = target.rio.bounds()
+        x = np.linspace(bounds[0], bounds[2], width)
+        y = np.linspace(bounds[3], bounds[1], height)  # Note: y is inverted
+
+        da = xr.DataArray(
+            angles.astype(np.float32),
+            dims=["y", "x"],
+            coords={"y": y, "x": x},
+        )
+        da = da.rio.write_crs(target.rio.crs)
+
+        # Resample to target grid
+        return reproject_match(da, target, resampling="bilinear")
+
+    def _get_namespace(self, root: ET.Element) -> str:
+        """Extract XML namespace from root element."""
+        match = re.match(r"\{(.+)\}", root.tag)
+        if match:
+            return "{" + match.group(1) + "}"
+        return ""

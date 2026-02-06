@@ -1,0 +1,42 @@
+[package]
+name = "siac_rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Feng Yin <ucfafyi@ucl.ac.uk>"]
+description = "Rust performance extensions for SIAC atmospheric correction"
+license = "AGPL-3.0"
+repository = "https://github.com/MarcYin/SIAC"
+
+[lib]
+name = "siac_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Python bindings
+pyo3 = { version = "0.20", features = ["extension-module"] }
+numpy = "0.20"
+
+# Numerical computing
+ndarray = { version = "0.15", features = ["rayon"] }
+ndarray-stats = "0.5"
+
+# Parallelism
+rayon = "1.8"
+
+# FFT for PSF convolution
+rustfft = "6.2"
+
+# Fast math
+num-traits = "0.2"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "kernels"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

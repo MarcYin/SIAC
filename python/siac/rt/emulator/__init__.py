@@ -1,0 +1,16 @@
+"""
+Neural network emulator backend.
+
+Provides fast RT coefficient computation using pre-trained neural networks
+that approximate 6S radiative transfer model outputs.
+"""
+
+from siac.rt.emulator.two_nn import (
+    TwoLayerNNEmulator,
+    EmulatorRegistry,
+)
+
+__all__ = [
+    "TwoLayerNNEmulator",
+    "EmulatorRegistry",
+]
