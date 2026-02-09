@@ -10,6 +10,10 @@ from siac.core.types import (
     SurfacePrior,
     SensorBand,
     SensorConfig,
+    ObservationBundle,
+    SolverInputBundle,
+    SolvedAtmosphere,
+    CorrectionResult,
 )
 from siac.core.protocols import (
     SatellitePreprocessor,
@@ -36,6 +40,11 @@ __all__ = [
     "SurfacePrior",
     "SensorBand",
     "SensorConfig",
+    # Pipeline contracts
+    "ObservationBundle",
+    "SolverInputBundle",
+    "SolvedAtmosphere",
+    "CorrectionResult",
     # Protocols
     "SatellitePreprocessor",
     "AtmosphericPriorProvider",

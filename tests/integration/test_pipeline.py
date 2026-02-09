@@ -1,22 +1,29 @@
 """
-Integration smoke test: solver -> corrector pipeline.
+Integration tests: solver -> corrector pipeline + run_pipeline orchestration.
 """
 
+import dataclasses
+import time
 import numpy as np
 import pytest
 import xarray as xr
+from pathlib import Path
 
 from siac.core.types import (
     AtmosphericState,
     BRDFKernelWeights,
+    CorrectionResult,
     GeometryAngles,
+    ObservationBundle,
     RTCoefficients,
     SensorBand,
+    SolvedAtmosphere,
     SurfacePrior,
     SENTINEL2A_CONFIG,
 )
 from siac.correction.atmospheric import AtmosphericCorrector
 from siac.solver.multigrid import MultiGridSolver, MultiGridConfig
+from siac.pipeline import run_pipeline
 
 
 @pytest.mark.integration
@@ -148,3 +155,294 @@ class TestPipelineSmoke:
             boa = result.boa[band_name].values
             valid = np.isfinite(boa)
             assert valid.any()
+
+
+# =====================================================================
+# Layer 4 — Pipeline orchestration (run_pipeline)
+# =====================================================================
+
+@pytest.mark.integration
+class TestRunPipeline:
+    """Tests for run_pipeline() happy path and call ordering."""
+
+    def test_pipeline_happy_path(
+        self,
+        mock_preprocessor,
+        mock_atmo_provider,
+        mock_surface_prior_provider,
+        mock_grid_assembler,
+        mock_solver_fn,
+        mock_corrector_fn,
+        mock_rt_model,
+    ):
+        result = run_pipeline(
+            input_path=Path("/fake/path"),
+            aoi=None,
+            config=None,
+            preprocessor=mock_preprocessor,
+            atmo_provider=mock_atmo_provider,
+            surface_prior_provider=mock_surface_prior_provider,
+            grid_assembler=mock_grid_assembler,
+            solver=mock_solver_fn,
+            corrector=mock_corrector_fn,
+            rt_model=mock_rt_model,
+        )
+        assert isinstance(result, CorrectionResult)
+
+    def test_pipeline_calls_all_modules(
+        self,
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        mock_solver_input_bundle,
+        mock_solved_atmosphere,
+        mock_rt_model,
+    ):
+        """Wrap each mock with a call counter."""
+        call_counts = {"m1": 0, "m2": 0, "m3": 0, "m4": 0, "m5": 0, "m6": 0}
+
+        def pp(path, aoi=None):
+            call_counts["m1"] += 1
+            return mock_observation_bundle
+
+        def atmo(bounds, crs, obs_time, res):
+            call_counts["m2"] += 1
+            return mock_atmospheric_state
+
+        def surf(bounds, crs, obs_time, sc, geom, res):
+            call_counts["m3"] += 1
+            return mock_surface_prior
+
+        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+            call_counts["m4"] += 1
+            return mock_solver_input_bundle
+
+        def solve(inputs, cfg):
+            call_counts["m5"] += 1
+            return mock_solved_atmosphere
+
+        def correct(obs, solved, rt):
+            call_counts["m6"] += 1
+            return CorrectionResult(
+                boa=obs.toa, boa_unc=None, aot=solved.aot,
+                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+            )
+
+        run_pipeline(
+            Path("/fake"), None, None,
+            preprocessor=pp, atmo_provider=atmo,
+            surface_prior_provider=surf, grid_assembler=assemble,
+            solver=solve, corrector=correct, rt_model=mock_rt_model,
+        )
+        assert all(v == 1 for v in call_counts.values()), call_counts
+
+    def test_pipeline_module_call_order(
+        self,
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        mock_solver_input_bundle,
+        mock_solved_atmosphere,
+        mock_rt_model,
+    ):
+        """M1 before M4; M4 before M5; M5 before M6."""
+        order = []
+
+        def pp(path, aoi=None):
+            order.append("m1")
+            return mock_observation_bundle
+
+        def atmo(bounds, crs, obs_time, res):
+            order.append("m2")
+            return mock_atmospheric_state
+
+        def surf(bounds, crs, obs_time, sc, geom, res):
+            order.append("m3")
+            return mock_surface_prior
+
+        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+            order.append("m4")
+            return mock_solver_input_bundle
+
+        def solve(inputs, cfg):
+            order.append("m5")
+            return mock_solved_atmosphere
+
+        def correct(obs, solved, rt):
+            order.append("m6")
+            return CorrectionResult(
+                boa=obs.toa, boa_unc=None, aot=solved.aot,
+                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+            )
+
+        run_pipeline(
+            Path("/fake"), None, None,
+            preprocessor=pp, atmo_provider=atmo,
+            surface_prior_provider=surf, grid_assembler=assemble,
+            solver=solve, corrector=correct, rt_model=mock_rt_model,
+        )
+        assert order.index("m1") < order.index("m4")
+        assert order.index("m4") < order.index("m5")
+        assert order.index("m5") < order.index("m6")
+
+    def test_pipeline_returns_correction_result(
+        self,
+        mock_preprocessor,
+        mock_atmo_provider,
+        mock_surface_prior_provider,
+        mock_grid_assembler,
+        mock_solver_fn,
+        mock_corrector_fn,
+        mock_rt_model,
+    ):
+        result = run_pipeline(
+            Path("/fake"), None, None,
+            preprocessor=mock_preprocessor,
+            atmo_provider=mock_atmo_provider,
+            surface_prior_provider=mock_surface_prior_provider,
+            grid_assembler=mock_grid_assembler,
+            solver=mock_solver_fn,
+            corrector=mock_corrector_fn,
+            rt_model=mock_rt_model,
+        )
+        assert isinstance(result, CorrectionResult)
+        assert isinstance(result.boa, xr.Dataset)
+
+
+@pytest.mark.integration
+class TestPipelineValidation:
+    """run_pipeline catches invalid module outputs early."""
+
+    def test_pipeline_invalid_m1_missing_time(
+        self,
+        mock_observation_bundle,
+        mock_atmo_provider,
+        mock_surface_prior_provider,
+        mock_grid_assembler,
+        mock_solver_fn,
+        mock_corrector_fn,
+        mock_rt_model,
+    ):
+        bad_meta = {k: v for k, v in mock_observation_bundle.metadata.items()
+                    if k != "observation_time"}
+        bad_obs = dataclasses.replace(mock_observation_bundle, metadata=bad_meta)
+
+        def bad_pp(path, aoi=None):
+            return bad_obs
+
+        with pytest.raises(AssertionError, match="observation_time"):
+            run_pipeline(
+                Path("/fake"), None, None,
+                preprocessor=bad_pp,
+                atmo_provider=mock_atmo_provider,
+                surface_prior_provider=mock_surface_prior_provider,
+                grid_assembler=mock_grid_assembler,
+                solver=mock_solver_fn,
+                corrector=mock_corrector_fn,
+                rt_model=mock_rt_model,
+            )
+
+    def test_pipeline_invalid_m2_negative_unc(
+        self,
+        mock_preprocessor,
+        mock_atmospheric_state,
+        mock_surface_prior_provider,
+        mock_grid_assembler,
+        mock_solver_fn,
+        mock_corrector_fn,
+        mock_rt_model,
+    ):
+        bad_atmo = dataclasses.replace(
+            mock_atmospheric_state,
+            aot_unc=xr.DataArray(
+                np.full(mock_atmospheric_state.aot_unc.shape, -0.1),
+                dims=["y", "x"],
+            ),
+        )
+
+        def bad_m2(bounds, crs, obs_time, res):
+            return bad_atmo
+
+        with pytest.raises(AssertionError, match="non-negative"):
+            run_pipeline(
+                Path("/fake"), None, None,
+                preprocessor=mock_preprocessor,
+                atmo_provider=bad_m2,
+                surface_prior_provider=mock_surface_prior_provider,
+                grid_assembler=mock_grid_assembler,
+                solver=mock_solver_fn,
+                corrector=mock_corrector_fn,
+                rt_model=mock_rt_model,
+            )
+
+    def test_pipeline_m1_exception_propagates(
+        self,
+        mock_atmo_provider,
+        mock_surface_prior_provider,
+        mock_grid_assembler,
+        mock_solver_fn,
+        mock_corrector_fn,
+        mock_rt_model,
+    ):
+        def bad_pp(path, aoi=None):
+            raise FileNotFoundError("SAFE dir missing")
+
+        with pytest.raises(FileNotFoundError, match="SAFE dir missing"):
+            run_pipeline(
+                Path("/fake"), None, None,
+                preprocessor=bad_pp,
+                atmo_provider=mock_atmo_provider,
+                surface_prior_provider=mock_surface_prior_provider,
+                grid_assembler=mock_grid_assembler,
+                solver=mock_solver_fn,
+                corrector=mock_corrector_fn,
+                rt_model=mock_rt_model,
+            )
+
+
+@pytest.mark.integration
+class TestConcurrency:
+    """M2 and M3 should run concurrently."""
+
+    def test_m2_m3_run_concurrently(
+        self,
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        mock_solver_input_bundle,
+        mock_solved_atmosphere,
+        mock_rt_model,
+    ):
+        def slow_m2(bounds, crs, obs_time, res):
+            time.sleep(0.3)
+            return mock_atmospheric_state
+
+        def slow_m3(bounds, crs, obs_time, sc, geom, res):
+            time.sleep(0.3)
+            return mock_surface_prior
+
+        def pp(path, aoi=None):
+            return mock_observation_bundle
+
+        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+            return mock_solver_input_bundle
+
+        def solve(inputs, cfg):
+            return mock_solved_atmosphere
+
+        def correct(obs, solved, rt):
+            return CorrectionResult(
+                boa=obs.toa, boa_unc=None, aot=solved.aot,
+                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+            )
+
+        t0 = time.monotonic()
+        run_pipeline(
+            Path("/fake"), None, None,
+            preprocessor=pp, atmo_provider=slow_m2,
+            surface_prior_provider=slow_m3, grid_assembler=assemble,
+            solver=solve, corrector=correct, rt_model=mock_rt_model,
+        )
+        elapsed = time.monotonic() - t0
+        # If truly concurrent, should take ~0.3s not ~0.6s
+        assert elapsed < 0.55, f"M2+M3 took {elapsed:.2f}s — expected < 0.55s (concurrent)"

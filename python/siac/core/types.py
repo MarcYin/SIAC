@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import xarray as xr
@@ -425,6 +425,48 @@ class SensorConfig:
         """Tuple of all band center wavelengths."""
         return tuple(b.center_wavelength for b in self.bands)
 
+    def select_bands_in_range(
+        self, wl_min_nm: float, wl_max_nm: float
+    ) -> list[SensorBand]:
+        """Select bands whose center wavelength falls within [wl_min_nm, wl_max_nm]."""
+        return [
+            b for b in self.bands
+            if wl_min_nm <= b.center_wavelength <= wl_max_nm
+        ]
+
+    def select_nearest_band(
+        self, target_nm: float, tolerance_nm: float = 50.0
+    ) -> SensorBand | None:
+        """Find the band closest to target_nm within tolerance."""
+        closest = None
+        min_diff = float("inf")
+        for band in self.bands:
+            diff = abs(band.center_wavelength - target_nm)
+            if diff < min_diff and diff <= tolerance_nm:
+                min_diff = diff
+                closest = band
+        return closest
+
+    @property
+    def vis_bands(self) -> list[SensorBand]:
+        """Visible bands (400-700 nm)."""
+        return self.select_bands_in_range(400.0, 700.0)
+
+    @property
+    def nir_bands(self) -> list[SensorBand]:
+        """Near-infrared bands (750-1000 nm)."""
+        return self.select_bands_in_range(750.0, 1000.0)
+
+    @property
+    def swir_bands(self) -> list[SensorBand]:
+        """Shortwave infrared bands (1000-2500 nm), excluding absorption windows."""
+        return [
+            b for b in self.bands
+            if 1000.0 <= b.center_wavelength <= 2500.0
+            and not (1350.0 <= b.center_wavelength <= 1420.0)  # cirrus
+            and not (1800.0 <= b.center_wavelength <= 1950.0)  # WV absorption
+        ]
+
 
 # =============================================================================
 # Predefined Sensor Configurations
@@ -496,6 +538,94 @@ SENSOR_CONFIGS: dict[tuple[str, str], SensorConfig] = {
     ("MSI", "S2B"): SENTINEL2B_CONFIG,
     ("OLI", "L8"): LANDSAT8_OLI_CONFIG,
 }
+
+
+# =============================================================================
+# Pipeline Contract Types (Module Output Contracts)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class ObservationBundle:
+    """Complete observation data from satellite preprocessing.
+
+    Output contract of M1 (Satellite Preprocessor).
+    Contains everything the pipeline needs from the satellite input.
+    """
+
+    toa: xr.Dataset  # TOA reflectance, one var per band
+    geometry: GeometryAngles  # SZA/SAA/VZA/VAA in radians
+    cloud_mask: xr.DataArray  # bool, True = cloudy/invalid
+    sensor_config: SensorConfig  # band definitions + scale/offset
+    metadata: dict[str, Any]  # must include 'observation_time': datetime
+    crs: str  # e.g. "EPSG:32632"
+    bounds: tuple[float, float, float, float]  # (xmin, ymin, xmax, ymax)
+
+
+@dataclass(frozen=True)
+class SolverInputBundle:
+    """All inputs to the aerosol solver, resampled to solver grids.
+
+    Output contract of M4 (Grid Assembler). Everything in this bundle
+    is spatially aligned and ready for the solver to consume directly.
+    """
+
+    # Observation (resampled to aux resolution)
+    toa: xr.DataArray  # (bands, y, x) at aux resolution
+    geometry: GeometryAngles  # at aux resolution
+    cloud_mask: xr.DataArray  # (y, x) at aux resolution
+    sensor_config: SensorConfig
+    bands: list[SensorBand]  # solver bands (wavelength-selected)
+
+    # Atmospheric prior (resampled to aux resolution)
+    atmo_prior: AtmosphericState  # all fields at aux resolution
+
+    # Surface prior (resampled to aux resolution)
+    surface_prior: SurfacePrior  # at aux resolution
+
+    # RT backend (not resampled — it's a model, not raster data)
+    rt_model: Any  # RTModelBackend (Any to avoid circular import)
+
+    # Grid metadata
+    aux_resolution_m: float  # e.g. 500.0
+    aerosol_resolution_m: float  # e.g. 1000.0
+
+
+@dataclass(frozen=True)
+class SolvedAtmosphere:
+    """Solver output: retrieved atmospheric parameters + diagnostics.
+
+    Output contract of M5 (Aerosol Solver). Contains the solved AOT/TCWV
+    fields at the aerosol retrieval resolution, plus the full
+    AtmosphericState (with solved values merged in) for use by the
+    corrector.
+    """
+
+    atmo_state: AtmosphericState  # full state with solved AOT/TCWV
+    aot: xr.DataArray  # solved AOT at aerosol resolution
+    tcwv: xr.DataArray  # solved TCWV at aerosol resolution
+    aot_unc: xr.DataArray  # posterior AOT uncertainty
+    tcwv_unc: xr.DataArray  # posterior TCWV uncertainty
+
+    # Diagnostics
+    cost_final: float  # final cost function value
+    n_iterations: int  # total optimizer iterations
+    converged: bool  # did the solver converge?
+
+
+@dataclass(frozen=True)
+class CorrectionResult:
+    """Final output of atmospheric correction.
+
+    Output contract of M6 (Atmospheric Corrector).
+    """
+
+    boa: xr.Dataset  # BOA reflectance, one var per band, at native resolution
+    boa_unc: xr.Dataset | None  # per-band uncertainty (optional)
+    aot: xr.DataArray  # solved AOT map
+    tcwv: xr.DataArray  # solved TCWV map
+    cloud_mask: xr.DataArray  # final cloud mask
+    metadata: dict[str, Any]  # processing metadata (timings, versions, etc.)
 
 
 def get_sensor_config(sensor_id: str, satellite_id: str) -> SensorConfig:

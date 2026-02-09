@@ -260,6 +260,207 @@ def mock_rt_model():
 
 
 # =============================================================================
+# Pipeline contract fixtures (new)
+# =============================================================================
+
+@pytest.fixture
+def mock_sensor_config():
+    """3-band sensor config (Blue, Green, Red) for pipeline contract tests."""
+    from siac.core.types import SensorBand, SensorConfig
+    return SensorConfig(
+        sensor_id="MOCK",
+        satellite_id="TEST",
+        bands=(
+            SensorBand("B01", 443.0, 20.0, 60.0, 0),
+            SensorBand("B02", 490.0, 65.0, 10.0, 1),
+            SensorBand("B03", 560.0, 35.0, 10.0, 2),
+            SensorBand("B04", 665.0, 30.0, 10.0, 3),
+        ),
+        default_ref_scale=1.0 / 10000.0,
+        default_ref_offset=0.0,
+    )
+
+
+PIPELINE_SHAPE = (32, 32)
+
+
+@pytest.fixture
+def mock_geometry():
+    """GeometryAngles at pipeline test resolution."""
+    from siac.core.types import GeometryAngles
+    shape = PIPELINE_SHAPE
+    return GeometryAngles(
+        sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+        saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+        vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+    )
+
+
+@pytest.fixture
+def mock_observation_bundle(mock_sensor_config, mock_geometry):
+    """Complete valid ObservationBundle with 32x32 synthetic TOA."""
+    from siac.core.types import ObservationBundle
+    shape = PIPELINE_SHAPE
+    toa_ds = xr.Dataset({
+        "B02": xr.DataArray(np.random.RandomState(42).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
+        "B03": xr.DataArray(np.random.RandomState(43).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
+        "B04": xr.DataArray(np.random.RandomState(44).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
+    })
+    cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+    return ObservationBundle(
+        toa=toa_ds,
+        geometry=mock_geometry,
+        cloud_mask=cloud_mask,
+        sensor_config=mock_sensor_config,
+        metadata={"observation_time": datetime(2023, 7, 15, 10, 30, 0)},
+        crs="EPSG:32632",
+        bounds=(300000.0, 5500000.0, 309780.0, 5600040.0),
+    )
+
+
+@pytest.fixture
+def mock_atmospheric_state():
+    """Spatially uniform AtmosphericState at 32x32."""
+    from siac.core.types import AtmosphericState
+    shape = PIPELINE_SHAPE
+    return AtmosphericState(
+        aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
+        tcwv=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+        tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+        aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+        tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+        tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+        elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+    )
+
+
+@pytest.fixture
+def mock_surface_prior():
+    """Uniform SurfacePrior at 32x32."""
+    from siac.core.types import SurfacePrior, BRDFKernelWeights
+    shape = PIPELINE_SHAPE
+    brdf = BRDFKernelWeights(
+        f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+        f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+        f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+        f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+        f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+    )
+    return SurfacePrior(
+        boa=xr.DataArray(np.full(shape, 0.12), dims=["y", "x"]),
+        boa_unc=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+        kernels=brdf,
+        mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+    )
+
+
+@pytest.fixture
+def mock_solved_atmosphere(mock_atmospheric_state):
+    """Dummy solved output (converged, 5 iterations)."""
+    from siac.core.types import SolvedAtmosphere
+    return SolvedAtmosphere(
+        atmo_state=mock_atmospheric_state,
+        aot=mock_atmospheric_state.aot,
+        tcwv=mock_atmospheric_state.tcwv,
+        aot_unc=mock_atmospheric_state.aot_unc,
+        tcwv_unc=mock_atmospheric_state.tcwv_unc,
+        cost_final=0.001,
+        n_iterations=5,
+        converged=True,
+    )
+
+
+@pytest.fixture
+def mock_solver_input_bundle(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_rt_model,
+):
+    """Pre-assembled SolverInputBundle (skips M4)."""
+    from siac.core.types import SolverInputBundle
+    obs = mock_observation_bundle
+    bands = obs.sensor_config.select_bands_in_range(400.0, 520.0)
+    band_names = [b.name for b in bands]
+    toa_arrays = [obs.toa[bn] for bn in band_names if bn in obs.toa.data_vars]
+    toa_da = xr.concat(toa_arrays, dim="band") if toa_arrays else obs.toa[list(obs.toa.data_vars)[0]].expand_dims("band")
+    return SolverInputBundle(
+        toa=toa_da,
+        geometry=obs.geometry,
+        cloud_mask=obs.cloud_mask,
+        sensor_config=obs.sensor_config,
+        bands=bands,
+        atmo_prior=mock_atmospheric_state,
+        surface_prior=mock_surface_prior,
+        rt_model=mock_rt_model,
+        aux_resolution_m=500.0,
+        aerosol_resolution_m=1000.0,
+    )
+
+
+# =============================================================================
+# Mock module callables for pipeline tests
+# =============================================================================
+
+@pytest.fixture
+def mock_preprocessor(mock_observation_bundle):
+    """(Path, AOI) -> ObservationBundle. Returns fixed bundle."""
+    def _preprocess(input_path, aoi=None):
+        return mock_observation_bundle
+    return _preprocess
+
+
+@pytest.fixture
+def mock_atmo_provider(mock_atmospheric_state):
+    """(bounds, crs, time, res) -> AtmosphericState."""
+    def _get_prior(bounds, crs, obs_time, resolution):
+        return mock_atmospheric_state
+    return _get_prior
+
+
+@pytest.fixture
+def mock_surface_prior_provider(mock_surface_prior):
+    """(bounds, crs, time, sensor_config, geometry, res) -> SurfacePrior."""
+    def _get_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+        return mock_surface_prior
+    return _get_surface_prior
+
+
+@pytest.fixture
+def mock_grid_assembler(mock_solver_input_bundle):
+    """Grid assembler that returns a pre-built SolverInputBundle."""
+    def _assemble(obs, atmo, surface, rt_model, aux_res=500.0, aero_res=1000.0):
+        return mock_solver_input_bundle
+    return _assemble
+
+
+@pytest.fixture
+def mock_solver_fn(mock_solved_atmosphere):
+    """Solver that returns a pre-built SolvedAtmosphere."""
+    def _solve(inputs, config):
+        return mock_solved_atmosphere
+    return _solve
+
+
+@pytest.fixture
+def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
+    """Corrector that returns a synthetic CorrectionResult."""
+    from siac.core.types import CorrectionResult
+    def _correct(obs, solved, rt_model):
+        return CorrectionResult(
+            boa=obs.toa,
+            boa_unc=None,
+            aot=solved.aot,
+            tcwv=solved.tcwv,
+            cloud_mask=obs.cloud_mask,
+            metadata={"processing_time_s": 0.01},
+        )
+    return _correct
+
+
+# =============================================================================
 # Cost function input fixtures
 # =============================================================================
 

@@ -13,6 +13,7 @@ from typing import Any
 
 import xarray as xr
 
+from siac.core.aoi import AOI
 from siac.core.config import SIACConfig
 from siac.core.types import AtmosphericState, GeometryAngles, SensorConfig
 from siac.satellite import get_preprocessor, detect_sensor
@@ -42,6 +43,7 @@ class SIAC:
         self.config = config
         self._preprocessor = None
         self._atmo_provider = None
+        self._brdf_provider = None
         self._rt_model = None
         self._solver = None
 
@@ -84,24 +86,28 @@ class SIAC:
         cloud_mask = preprocess_result["cloud_mask"]
         metadata = preprocess_result["metadata"]
 
-        # 3. Get atmospheric priors
+        # 3. Resolve AOI from config or TOA extent
+        aoi = self._resolve_aoi(toa)
+        logger.info(f"AOI resolved: bounds={aoi.get_bounds()}, crs={aoi.crs}")
+
+        # 4. Get atmospheric priors (now AOI-scoped)
         logger.info("Fetching atmospheric priors...")
-        atmo_prior = self._get_atmospheric_prior(toa, metadata)
+        atmo_prior = self._get_atmospheric_prior(aoi, metadata)
 
-        # 4. Get surface prior from BRDF
+        # 5. Get surface prior from BRDF (now AOI-scoped)
         logger.info("Computing surface prior...")
-        surface_prior = self._get_surface_prior(geometry, metadata)
+        surface_prior = self._get_surface_prior(aoi, geometry, metadata)
 
-        # 5. Setup RT model
+        # 6. Setup RT model
         rt_model = self._get_rt_model(sensor_config)
 
-        # 6. Solve for atmospheric parameters
+        # 7. Solve for atmospheric parameters
         logger.info("Solving for atmospheric parameters...")
         solver_result = self._solve_atmosphere(
             toa, surface_prior, geometry, atmo_prior, rt_model, cloud_mask, sensor_config
         )
 
-        # 7. Apply atmospheric correction
+        # 8. Apply atmospheric correction
         logger.info("Applying atmospheric correction...")
         solved_atmo = atmo_prior.with_updated_aot_tcwv(
             aot=solver_result.aot,
@@ -113,44 +119,110 @@ class SIAC:
         corrector = AtmosphericCorrector(rt_model, sensor_config)
         result = corrector.correct(toa, geometry, solved_atmo, cloud_mask)
 
-        # 8. Save output if path provided
+        # 9. Save output if path provided
         if output_path is not None:
             self._save_output(result, output_path)
 
         logger.info(f"Complete. Mean AOT: {float(result.aot.mean()):.3f}")
         return result
 
-    def _get_atmospheric_prior(self, toa: xr.Dataset, metadata: dict) -> AtmosphericState:
-        """Get atmospheric prior from configured provider."""
-        if self._atmo_provider is None:
-            cams_dir = self.config.atmo_prior.data_path
-            self._atmo_provider = CAMSProvider(cams_dir)
+    def _resolve_aoi(self, toa: xr.Dataset) -> AOI:
+        """
+        Resolve AOI from config or from the TOA extent.
 
-        # Get bounds from TOA
+        If config.aoi is set, creates AOI from GeoJSON/bounds/WKT.
+        Otherwise, extracts AOI from the TOA dataset extent.
+        """
+        if self.config.aoi is not None:
+            aoi_spec = self.config.aoi
+            # Could be a file path, WKT, or bounds string
+            if isinstance(aoi_spec, (list, tuple)) and len(aoi_spec) == 4:
+                return AOI.from_bounds(tuple(aoi_spec))
+            return AOI.from_geojson(aoi_spec)
+
+        # Default: use TOA extent
         first_var = list(toa.data_vars)[0]
-        da = toa[first_var]
-        if hasattr(da, 'rio'):
-            bounds = da.rio.bounds()
-            crs = str(da.rio.crs)
-            resolution = abs(da.rio.resolution()[0])
-        else:
-            bounds = (0, 0, 1, 1)
-            crs = "EPSG:4326"
-            resolution = 10.0
+        return AOI.from_raster(toa[first_var])
 
+    def _get_atmospheric_prior(self, aoi: AOI, metadata: dict) -> AtmosphericState:
+        """Get atmospheric prior from configured provider, scoped to AOI."""
+        if self._atmo_provider is None:
+            provider_name = self.config.atmo_prior.provider
+            if provider_name == "cams":
+                self._atmo_provider = CAMSProvider(self.config.atmo_prior.data_path)
+            elif provider_name == "merra2":
+                from siac.priors.atmospheric.merra2 import MERRA2Provider
+                self._atmo_provider = MERRA2Provider(
+                    cache_dir=self.config.atmo_prior.cache_dir,
+                )
+            else:
+                logger.warning(
+                    f"Unknown atmospheric provider '{provider_name}', "
+                    f"falling back to CAMS"
+                )
+                self._atmo_provider = CAMSProvider(self.config.atmo_prior.data_path)
+
+        # Get bounds and CRS from AOI
+        bounds = aoi.get_bounds()
+        crs = aoi.crs
+
+        # Try to get native CRS resolution info
+        resolution = 10.0  # default
         obs_time = metadata.get("observation_time", datetime.now())
+
         return self._atmo_provider.get_prior(bounds, crs, obs_time, resolution)
 
-    def _get_surface_prior(self, geometry: GeometryAngles, metadata: dict):
-        """Get surface prior from BRDF."""
+    def _get_surface_prior(self, aoi: AOI, geometry: GeometryAngles, metadata: dict):
+        """Get surface prior from BRDF, scoped to AOI."""
+        # Get BRDF provider
+        brdf_provider = self._get_brdf_provider()
+
+        # Fetch BRDF parameters scoped to AOI
+        bounds = aoi.get_bounds()
+        obs_time = metadata.get("observation_time", datetime.now())
+        resolution = 500.0  # MODIS native resolution for BRDF
+
+        # Default MODIS bands for atmospheric correction (1-7)
+        bands = list(range(1, 8))
+
+        brdf_weights = brdf_provider.get_brdf_parameters(
+            bounds=bounds,
+            crs=aoi.crs,
+            obs_time=obs_time,
+            target_resolution=resolution,
+            bands=bands,
+            temporal_window=self.config.brdf.temporal_window,
+        )
+
+        # Derive surface prior via kernel model
         deriver = KernelModelDeriver(
             psf_sigma_x=self.config.surface_prior.psf_sigma_x,
             psf_sigma_y=self.config.surface_prior.psf_sigma_y,
-            apply_psf=True,
+            apply_psf=self.config.surface_prior.apply_psf,
         )
-        # TODO: Load BRDF weights from MCD43 provider
-        # For now return None - would need brdf_weights
-        return None
+        return deriver.compute_surface_prior(brdf_weights, geometry)
+
+    def _get_brdf_provider(self):
+        """Get or create the BRDF product provider."""
+        if self._brdf_provider is not None:
+            return self._brdf_provider
+
+        provider_name = self.config.brdf.provider
+        if provider_name == "mcd43":
+            from siac.priors.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
+            self._brdf_provider = MCD43EarthAccessProvider(
+                cache_dir=self.config.brdf.cache_dir,
+            )
+        elif provider_name == "gee":
+            from siac.priors.brdf.gee_stub import GEEBRDFProvider
+            self._brdf_provider = GEEBRDFProvider()
+        else:
+            raise ValueError(
+                f"Unknown BRDF provider '{provider_name}'. "
+                f"Available: 'mcd43', 'gee'"
+            )
+
+        return self._brdf_provider
 
     def _get_rt_model(self, sensor_config: SensorConfig):
         """Get RT model backend."""
@@ -207,3 +279,183 @@ def process_landsat8(input_path: str, output_path: str | None = None, **kwargs) 
     """Convenience function for Landsat 8 processing."""
     siac = SIAC.from_defaults(sensor="l8")
     return siac.process(input_path, output_path)
+
+
+# =====================================================================
+# New modular pipeline entry point (PLANS.md §7)
+# =====================================================================
+
+from siac.core.types import (
+    ObservationBundle,
+    SolvedAtmosphere,
+    SolverInputBundle,
+    SurfacePrior,
+)
+from siac.pipeline import (
+    AtmoPriorFn,
+    CorrectorFn,
+    GridAssemblerFn,
+    PreprocessorFn,
+    SolverFn,
+    SurfacePriorFn,
+    run_pipeline,
+)
+
+
+def siac_process(
+    config: SIACConfig,
+    input_path: Path,
+    *,
+    aoi: AOI | None = None,
+    preprocessor: PreprocessorFn | None = None,
+    atmo_provider: AtmoPriorFn | None = None,
+    surface_prior_provider: SurfacePriorFn | None = None,
+    grid_assembler: GridAssemblerFn | None = None,
+    solver: SolverFn | None = None,
+    corrector: CorrectorFn | None = None,
+    rt_model: Any | None = None,
+) -> CorrectionResult:
+    """Public entry point for the modular pipeline.
+
+    Resolves ``None`` arguments to config-driven defaults, then delegates
+    to :func:`run_pipeline`.
+    """
+    preprocessor = preprocessor or _resolve_preprocessor(config)
+    atmo_provider = atmo_provider or _resolve_atmo_provider(config)
+    surface_prior_provider = surface_prior_provider or _resolve_surface_prior_provider(config)
+    grid_assembler = grid_assembler or _resolve_grid_assembler()
+    solver = solver or _resolve_solver(config)
+    corrector = corrector or _resolve_corrector(config)
+    rt_model = rt_model or _resolve_rt_model_for_pipeline(config)
+
+    return run_pipeline(
+        input_path,
+        aoi,
+        config,
+        preprocessor=preprocessor,
+        atmo_provider=atmo_provider,
+        surface_prior_provider=surface_prior_provider,
+        grid_assembler=grid_assembler,
+        solver=solver,
+        corrector=corrector,
+        rt_model=rt_model,
+    )
+
+
+# ── _resolve_* helpers ────────────────────────────────────────────────
+
+def _resolve_preprocessor(config: SIACConfig) -> PreprocessorFn:
+    """Return a callable ``(path, aoi) -> ObservationBundle``."""
+    sensor = config.sensor
+    if sensor in ("s2", "sentinel2"):
+        from siac.satellite.sentinel2 import Sentinel2Preprocessor
+        pp = Sentinel2Preprocessor()
+        return pp.preprocess
+    raise ValueError(f"Unknown sensor: {sensor!r}")
+
+
+def _resolve_atmo_provider(config: SIACConfig) -> AtmoPriorFn:
+    """Return a callable ``(bounds, crs, time, res) -> AtmosphericState``."""
+    provider_name = config.atmo_prior.provider
+    if provider_name == "cams":
+        provider = CAMSProvider(config.atmo_prior.data_path)
+        return provider.get_prior
+    if provider_name == "merra2":
+        from siac.priors.atmospheric.merra2 import MERRA2Provider
+        provider = MERRA2Provider(cache_dir=config.atmo_prior.cache_dir)
+        return provider.get_prior
+    raise ValueError(f"Unknown atmo provider: {provider_name!r}")
+
+
+def _resolve_surface_prior_provider(config: SIACConfig) -> SurfacePriorFn:
+    """Return a callable matching the M3 signature -> SurfacePrior."""
+    # Default: BRDF-derived prior via kernel model
+    def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+        from siac.priors.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
+        brdf_prov = MCD43EarthAccessProvider(
+            cache_dir=config.brdf.cache_dir,
+        )
+        brdf_weights = brdf_prov.get_brdf_parameters(
+            bounds=bounds,
+            crs=crs,
+            obs_time=obs_time,
+            target_resolution=resolution,
+            bands=list(range(1, 8)),
+            temporal_window=config.brdf.temporal_window,
+        )
+        deriver = KernelModelDeriver(
+            psf_sigma_x=config.surface_prior.psf_sigma_x,
+            psf_sigma_y=config.surface_prior.psf_sigma_y,
+            apply_psf=config.surface_prior.apply_psf,
+        )
+        return deriver.compute_surface_prior(brdf_weights, geometry)
+
+    return _brdf_surface_prior
+
+
+def _resolve_grid_assembler() -> GridAssemblerFn:
+    """Return the default grid assembler function."""
+    from siac.grid.assembler import assemble_grids
+    return assemble_grids
+
+
+def _resolve_solver(config: SIACConfig) -> SolverFn:
+    """Return the default solver callable."""
+    def _default_solver(inputs: SolverInputBundle, cfg) -> SolvedAtmosphere:
+        solver_config = MultiGridConfig(
+            aot_gamma=config.solver.aot_gamma,
+            tcwv_gamma=config.solver.tcwv_gamma,
+            aot_bounds=tuple(config.solver.aot_bounds),
+            tcwv_bounds=tuple(config.solver.tcwv_bounds),
+        )
+        mg_solver = MultiGridSolver(solver_config)
+        result = mg_solver.solve(
+            inputs.toa,
+            inputs.surface_prior,
+            inputs.geometry,
+            inputs.atmo_prior,
+            inputs.rt_model,
+            inputs.cloud_mask,
+            inputs.bands,
+        )
+        solved_atmo = inputs.atmo_prior.with_updated_aot_tcwv(
+            aot=result.aot,
+            tcwv=result.tcwv,
+            aot_unc=result.aot_unc,
+            tcwv_unc=result.tcwv_unc,
+        )
+        return SolvedAtmosphere(
+            atmo_state=solved_atmo,
+            aot=result.aot,
+            tcwv=result.tcwv,
+            aot_unc=result.aot_unc,
+            tcwv_unc=result.tcwv_unc,
+            cost_final=float(result.final_cost),
+            n_iterations=result.n_iterations,
+            converged=result.success,
+        )
+
+    return _default_solver
+
+
+def _resolve_corrector(config: SIACConfig) -> CorrectorFn:
+    """Return the default corrector callable."""
+    def _default_corrector(obs: ObservationBundle, solved: SolvedAtmosphere, rt_model) -> CorrectionResult:
+        corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
+        return corrector_obj.correct(obs.toa, obs.geometry, solved.atmo_state, obs.cloud_mask)
+
+    return _default_corrector
+
+
+def _resolve_rt_model_for_pipeline(config: SIACConfig):
+    """Return an RT model instance from config."""
+    rt_config = config.rt_model
+    if rt_config.backend == "emulator":
+        return TwoLayerNNEmulator(
+            emulator_dir=rt_config.emulator_dir,
+            sensor_id="MSI",
+            satellite_id="S2A",
+        )
+    if rt_config.backend == "lut" and rt_config.lut_path:
+        return ZarrLUTBackend(rt_config.lut_path)
+    raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")
