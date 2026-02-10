@@ -1,0 +1,272 @@
+"""Additional coverage tests for readers/reprojection/writers modules."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+import xarray as xr
+
+from siac.io.readers import (
+    check_rasters_aligned,
+    get_raster_info,
+    read_hdf_subdataset,
+    read_jp2,
+    read_multiband,
+    read_multiband_stack,
+    read_netcdf_variable,
+    read_raster,
+    read_raster_at_resolution,
+    read_raster_window,
+    read_zarr_array,
+)
+from siac.io.reprojection import (
+    align_grids,
+    clip_to_bounds,
+    clip_to_geometry,
+    compute_common_bounds,
+    get_crs,
+    get_transform,
+    reproject_dataset_match,
+    reproject_match,
+    reproject_to_crs,
+    resample,
+    resample_to_shape,
+    transform_points,
+)
+from siac.io.writers import (
+    _compute_overview_levels,
+    _prepare_for_write,
+    write_auxiliary_products,
+    write_boa_products,
+    write_netcdf,
+    write_rgb_quicklook,
+)
+
+
+def _make_da(shape: tuple[int, int] = (32, 32), crs: str = "EPSG:32632") -> xr.DataArray:
+    """Create a small spatial DataArray with CRS."""
+    data = np.arange(shape[0] * shape[1], dtype=np.float32).reshape(shape)
+    x = np.linspace(500000.0, 500000.0 + (shape[1] - 1) * 10.0, shape[1])
+    y = np.linspace(4500000.0 + (shape[0] - 1) * 10.0, 4500000.0, shape[0])
+    da = xr.DataArray(data, dims=["y", "x"], coords={"y": y, "x": x})
+    return da.rio.write_crs(crs)
+
+
+def _write_multiband(path: Path) -> None:
+    """Write a 2-band test raster."""
+    band1 = _make_da((16, 16))
+    band2 = band1 + 1000.0
+    stacked = xr.concat([band1, band2], dim="band").assign_coords(band=[1, 2])
+    stacked.rio.to_raster(path)
+
+
+class TestReadersExtra:
+    def test_read_raster_band_select_and_squeeze(self, tmp_path: Path):
+        p = tmp_path / "multi.tif"
+        _write_multiband(p)
+        da = read_raster(p, band=1)
+        assert da.dims == ("y", "x")
+        assert da.shape == (16, 16)
+
+    def test_read_raster_window_and_resolution_paths(self, tmp_path: Path):
+        p = tmp_path / "base.tif"
+        _make_da((32, 32)).rio.to_raster(p)
+
+        clipped = read_raster_window(p, bounds=(500050.0, 4500050.0, 500150.0, 4500150.0))
+        assert clipped.size > 0
+
+        # Already close to target resolution -> early return path
+        same = read_raster_at_resolution(p, target_resolution=10.0)
+        assert same.shape == (32, 32)
+
+        # Coarsen path
+        coarse = read_raster_at_resolution(p, target_resolution=20.0)
+        assert coarse.shape[0] < 32
+        assert coarse.shape[1] < 32
+
+    def test_read_multiband_and_stack_and_mismatch(self, tmp_path: Path):
+        p1 = tmp_path / "b1.tif"
+        p2 = tmp_path / "b2.tif"
+        _make_da((12, 12)).rio.to_raster(p1)
+        (_make_da((12, 12)) + 1).rio.to_raster(p2)
+
+        ds = read_multiband([p1, p2], band_names=["B1", "B2"])
+        assert set(ds.data_vars) == {"B1", "B2"}
+
+        stacked = read_multiband_stack([p1, p2], band_names=["B1", "B2"])
+        assert stacked.shape == (2, 12, 12)
+
+        with pytest.raises(ValueError):
+            read_multiband([p1, p2], band_names=["B1"])
+
+    def test_specialized_reader_wrappers(self, tmp_path: Path):
+        p = tmp_path / "a.tif"
+        _make_da((8, 8)).rio.to_raster(p)
+        assert read_jp2(p).shape == (8, 8)
+
+        # HDF wrapper just builds a GDAL URI and forwards to read_raster.
+        # We validate wiring by monkeypatching read_raster.
+        from siac.io import readers as m
+
+        seen = {}
+        orig = m.read_raster
+        try:
+            def _fake(path, **kwargs):
+                seen["path"] = path
+                return _make_da((4, 4))
+            m.read_raster = _fake  # type: ignore[assignment]
+            out = read_hdf_subdataset("f.hdf", "SUB")
+            assert out.shape == (4, 4)
+            assert str(seen["path"]).startswith('HDF4_EOS:EOS_GRID:"f.hdf"')
+        finally:
+            m.read_raster = orig  # type: ignore[assignment]
+
+    def test_netcdf_and_zarr_readers(self, tmp_path: Path):
+        da = _make_da((10, 10))
+        ds = da.to_dataset(name="var")
+        ds.attrs["crs"] = "EPSG:32632"
+        nc = tmp_path / "x.nc"
+        ds.to_netcdf(nc)
+        da_nc = read_netcdf_variable(nc, "var")
+        assert da_nc.shape == (10, 10)
+
+        zarr_path = tmp_path / "x.zarr"
+        ds.to_zarr(zarr_path, mode="w")
+        out_ds = read_zarr_array(zarr_path)
+        out_da = read_zarr_array(zarr_path, variable="var")
+        assert isinstance(out_ds, xr.Dataset)
+        assert isinstance(out_da, xr.DataArray)
+
+    def test_raster_info_and_alignment(self, tmp_path: Path):
+        p1 = tmp_path / "r1.tif"
+        p2 = tmp_path / "r2.tif"
+        p3 = tmp_path / "r3.tif"
+        _make_da((10, 10), crs="EPSG:32632").rio.to_raster(p1)
+        _make_da((10, 10), crs="EPSG:32632").rio.to_raster(p2)
+        _make_da((10, 10), crs="EPSG:4326").rio.to_raster(p3)
+
+        info = get_raster_info(p1)
+        assert info["driver"] in {"GTiff", "COG"}
+        assert info["shape"][0] == 1
+        assert check_rasters_aligned(p1, p2)
+        assert not check_rasters_aligned(p1, p3)
+
+
+class TestReprojectionExtra:
+    def test_reproject_and_resample_variants(self):
+        da = _make_da((24, 24), crs="EPSG:32632")
+        out = reproject_to_crs(da, "EPSG:4326", resolution=0.0002, resampling="nearest")
+        assert out.rio.crs is not None
+
+        target = _make_da((12, 12), crs="EPSG:32632")
+        matched = reproject_match(da, target, resampling="bilinear")
+        assert matched.shape == target.shape
+
+        ds = xr.Dataset({"a": da})
+        out_ds = reproject_dataset_match(ds, target)
+        assert out_ds["a"].shape == target.shape
+
+        r1 = resample(da, target_resolution=20.0)
+        r2 = resample_to_shape(da, target_shape=(8, 8))
+        assert r1.shape[0] < da.shape[0]
+        assert r2.shape == (8, 8)
+
+    def test_clip_transform_and_grid_utils(self):
+        da = _make_da((20, 20), crs="EPSG:32632")
+        b = da.rio.bounds()
+        clipped = clip_to_bounds(da, (b[0], b[1], b[0] + 50.0, b[1] + 50.0))
+        assert clipped.size > 0
+
+        geom = {
+            "type": "Polygon",
+            "coordinates": [[
+                [b[0], b[1]],
+                [b[0] + 70.0, b[1]],
+                [b[0] + 70.0, b[1] + 70.0],
+                [b[0], b[1] + 70.0],
+                [b[0], b[1]],
+            ]],
+        }
+        clipped_geom = clip_to_geometry(da, geom)
+        assert clipped_geom.size > 0
+
+        x2, y2 = transform_points([0.0, 1.0], [0.0, 1.0], "EPSG:4326", "EPSG:3857")
+        assert x2.shape == (2,)
+        assert y2.shape == (2,)
+
+        assert get_transform(da) is not None
+        assert get_crs(da) == "EPSG:32632"
+
+        same = align_grids(da)
+        assert len(same) == 1
+
+        other = _make_da((18, 18), crs="EPSG:32632")
+        aligned = align_grids(da, other, reference_idx=0)
+        assert len(aligned) == 2
+        assert aligned[1].shape == da.shape
+
+        u = compute_common_bounds(da, other, method="union")
+        i = compute_common_bounds(da, other, method="intersection")
+        assert u[0] <= i[0]
+
+
+class TestWritersExtra:
+    def test_prepare_helpers(self):
+        da = _make_da((16, 16))
+        out = _prepare_for_write(da, dtype="uint16", nodata=None)
+        assert out.dtype == np.uint16
+
+        out2 = _prepare_for_write(da, dtype=None, nodata=None)
+        assert out2.rio.nodata is not None
+
+        levels = _compute_overview_levels(_make_da((2048, 2048)))
+        assert levels and levels[0] == 2
+
+    def test_write_netcdf_and_siac_product_writers(self, tmp_path: Path):
+        da = _make_da((16, 16))
+        ds = xr.Dataset(
+            {
+                "B02": da / 10000.0,
+                "B03": da / 11000.0,
+                "B04": da / 12000.0,
+                "B04_unc": xr.full_like(da, 0.01),
+            }
+        )
+
+        nc = tmp_path / "a.nc"
+        write_netcdf(ds, nc, compression={})
+        assert nc.exists()
+
+        out_dir = tmp_path / "boa"
+        paths = write_boa_products(
+            ds,
+            output_dir=out_dir,
+            sensor="S2A",
+            tile_id="T31UDQ",
+            datetime_str="20240101T100000",
+            include_uncertainty=False,
+        )
+        assert "B04_unc" not in paths
+        assert len(paths) == 3
+
+        aux = write_auxiliary_products(
+            da / 1000.0,
+            da / 2000.0,
+            output_dir=tmp_path / "aux",
+            sensor="S2A",
+            tile_id="T31UDQ",
+            datetime_str="20240101T100000",
+        )
+        assert aux["aot"].exists()
+        assert aux["tcwv"].exists()
+
+    def test_write_rgb_quicklook(self, tmp_path: Path):
+        da = _make_da((64, 64))
+        boa = xr.Dataset(
+            {"B02": da / 10000.0, "B03": da / 10000.0, "B04": da / 10000.0}
+        )
+        out = tmp_path / "quicklook.tif"
+        p = write_rgb_quicklook(boa, out, target_resolution=40.0)
+        assert p.exists()

@@ -528,13 +528,20 @@ class _BandEmulator:
         compute_jacobian: bool,
     ) -> tuple[np.ndarray, np.ndarray | None]:
         """Forward pass using Python/NumPy implementation."""
+        # Use float64 intermediates to improve Jacobian/numerical consistency.
+        x = x.astype(np.float64, copy=False)
+
         # Hidden layer 1
         w1, b1 = self.hidden_layers[0]
+        w1 = np.asarray(w1, dtype=np.float64)
+        b1 = np.asarray(b1, dtype=np.float64)
         a1 = x @ w1 + b1
         h1 = np.maximum(a1, 0)  # ReLU
 
         # Hidden layer 2
         w2, b2 = self.hidden_layers[1]
+        w2 = np.asarray(w2, dtype=np.float64)
+        b2 = np.asarray(b2, dtype=np.float64)
         a2 = h1 @ w2 + b2
         h2 = np.maximum(a2, 0)  # ReLU
 
@@ -543,6 +550,8 @@ class _BandEmulator:
         jacobians = []
 
         for i, (w3, b3) in enumerate(self.output_layers):
+            w3 = np.asarray(w3, dtype=np.float64)
+            b3 = np.asarray(b3, dtype=np.float64)
             out = h2 @ w3 + b3
             outputs.append(out)
 
@@ -572,17 +581,19 @@ class _BandEmulator:
         output_idx: int,
     ) -> np.ndarray:
         """Compute Jacobian for a single output using backpropagation."""
-        # ReLU derivatives
-        d_relu1 = (a1 > 0).astype(np.float32)
-        d_relu2 = (a2 > 0).astype(np.float32)
+        # Use float64 intermediates for numerical stability in Jacobians.
+        d_relu1 = (a1 > 0).astype(np.float64)
+        d_relu2 = (a2 > 0).astype(np.float64)
 
-        # Vectorized backpropagation (no per-sample loop)
-        grad_h2 = w3.ravel()  # dout/dh2 shape (hidden2,)
-        grad_a2 = grad_h2[np.newaxis, :] * d_relu2    # (n_samples, hidden2)
-        grad_h1 = grad_a2 @ w2.T                       # (n_samples, hidden1)
-        grad_a1 = grad_h1 * d_relu1                    # (n_samples, hidden1)
-        jacobians = (grad_a1 @ w1.T).astype(np.float32)  # (n_samples, n_inputs)
+        w1_64 = w1.astype(np.float64, copy=False)
+        w2_64 = w2.astype(np.float64, copy=False)
+        grad_h2 = w3.ravel().astype(np.float64, copy=False)  # dout/dh2
 
+        # Vectorized backpropagation (no per-sample loop).
+        grad_a2 = grad_h2[np.newaxis, :] * d_relu2
+        grad_h1 = grad_a2 @ w2_64.T
+        grad_a1 = grad_h1 * d_relu1
+        jacobians = grad_a1 @ w1_64.T
         return jacobians
 
 

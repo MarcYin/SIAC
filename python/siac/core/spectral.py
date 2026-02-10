@@ -20,6 +20,13 @@ import xarray as xr
 from numpy.typing import NDArray
 
 
+def _trapezoid(y: NDArray, x: NDArray) -> float:
+    """Compatibility wrapper for NumPy 1.x/2.x integration API."""
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
+
+
 # ── Reference sensor definitions ──────────────────────────────────────
 
 # MODIS land bands: (band_name, center_nm, fwhm_nm)
@@ -148,21 +155,21 @@ def _build_conversion_matrix(
     for i, name in enumerate(ref_names):
         wl_r, resp_r = ref_bands[name]
         interp_r = np.interp(common_wl, wl_r, resp_r, left=0.0, right=0.0)
-        norm = np.trapezoid(interp_r, common_wl)
+        norm = _trapezoid(interp_r, common_wl)
         ref_resp[i] = interp_r / norm if norm > 0 else interp_r
 
     # Pre-compute normalised sensor responses
     sensor_resp = np.zeros((n_sensor, len(common_wl)))
     for j, sb in enumerate(sensor_bands):
         sr = sb.effective_response(common_wl)
-        norm = np.trapezoid(sr, common_wl)
+        norm = _trapezoid(sr, common_wl)
         sensor_resp[j] = sr / norm if norm > 0 else sr
 
     # Compute overlap matrix: integral of ref_i * sensor_j over wavelength
     matrix = np.zeros((n_ref, n_sensor))
     for i in range(n_ref):
         for j in range(n_sensor):
-            overlap = np.trapezoid(ref_resp[i] * sensor_resp[j], common_wl)
+            overlap = _trapezoid(ref_resp[i] * sensor_resp[j], common_wl)
             matrix[i, j] = overlap if overlap > 1e-6 else 0.0
 
     return matrix, ref_names

@@ -202,6 +202,10 @@ class ZarrLUTBackend:
         Returns:
             Tuple of (path_reflectance, trans_down, trans_up, sph_albedo)
         """
+        # Ensure LUT and coordinate cache are initialized.
+        if not self._lut_coords:
+            _ = self.lut
+
         original_shape = sza.shape
 
         # Flatten inputs

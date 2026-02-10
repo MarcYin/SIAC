@@ -1,0 +1,71 @@
+[workspace]
+name = "siac"
+version = "0.1.0"
+description = "Local Pixi workspace for SIAC development in Codex"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64"]
+
+[dependencies]
+python = ">=3.10,<3.13"
+pip = ">=24.0"
+rust = ">=1.75"
+maturin = ">=1.4,<2.0"
+
+# Core geospatial
+xarray = ">=2024.1.0"
+rioxarray = ">=0.15.0"
+rasterio = ">=1.3.0"
+pyproj = ">=3.6.0"
+
+# Scientific computing
+numpy = ">=1.26.0"
+scipy = ">=1.12.0"
+scikit-learn = ">=1.4.0"
+scikit-image = ">=0.22.0"
+
+# ML for cloud detection
+lightgbm = ">=4.0.0"
+
+# Configuration & validation
+pydantic = ">=2.5.0"
+pydantic-settings = ">=2.1.0"
+pyyaml = ">=6.0.0"
+
+# HTTP & data access
+requests = ">=2.31.0"
+fsspec = ">=2024.2.0"
+zarr = ">=2.17.0"
+h5py = ">=3.10.0"
+
+# Utilities
+psutil = ">=5.9.0"
+tqdm = ">=4.66.0"
+
+[feature.dev.dependencies]
+pytest = ">=8.0.0"
+pytest-cov = ">=4.1.0"
+pytest-xdist = ">=3.5.0"
+pytest-benchmark = ">=4.0.0"
+hypothesis = ">=6.98.0"
+mypy = ">=1.8.0"
+ruff = ">=0.2.0"
+pre-commit = ">=3.6.0"
+
+[feature.gee.pypi-dependencies]
+earthengine-api = ">=0.1.390"
+
+[feature.py6s.pypi-dependencies]
+Py6S = ">=1.9.0"
+
+[environments]
+default = { features = ["dev", "gee"] }
+py6s = { features = ["dev", "gee", "py6s"] }
+
+[tasks]
+bootstrap = "python -m pip install -e . --no-deps"
+test = "pytest tests -v"
+test-fast = "pytest tests -m 'not slow and not integration and not regression and not gee and not py6s' -v"
+lint = "ruff check python/siac tests"
+format = "ruff format python/siac tests"
+typecheck = "mypy python/siac"
+build-rust = "maturin develop --release"

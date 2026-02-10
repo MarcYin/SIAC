@@ -15,6 +15,7 @@ from siac.core.types import (
     SolvedAtmosphere,
     CorrectionResult,
 )
+from siac.core.aoi import AOI
 from siac.core.protocols import (
     SatellitePreprocessor,
     AtmosphericPriorProvider,
@@ -45,6 +46,7 @@ __all__ = [
     "SolverInputBundle",
     "SolvedAtmosphere",
     "CorrectionResult",
+    "AOI",
     # Protocols
     "SatellitePreprocessor",
     "AtmosphericPriorProvider",
