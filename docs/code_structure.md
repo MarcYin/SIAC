@@ -46,7 +46,12 @@ siac/
 │   │   └── two_nn.py               # Two-layer NN emulator
 │   ├── lut/
 │   │   ├── __init__.py
-│   │   └── zarr_lut.py             # Zarr look-up table backend
+│   │   ├── constants.py            # Default LUT URLs and coordinate constants
+│   │   ├── http_zip_store.py       # ReadOnlyZipFileSystem-style ZIP access (local/HTTP/S3)
+│   │   ├── store.py                # Local/remote/ZIP store resolution
+│   │   ├── backend.py              # ZarrLUTBackend interpolation engine
+│   │   ├── create.py               # LUT generation from Py6S
+│   │   └── zarr_lut.py             # Compatibility facade (re-exports)
 │   └── direct/
 │       └── __init__.py              # (placeholder)
 │
@@ -217,8 +222,13 @@ siac.correction.atmospheric
 siac.rt.emulator.two_nn
  └── siac.core.types                    (+ optional Rust)
 
-siac.rt.lut.zarr_lut
- └── siac.core.types
+siac.rt.lut.backend
+ ├── siac.core.types
+ └── siac.rt.lut.store
+      └── siac.rt.lut.http_zip_store
+
+siac.rt.lut.create                   ← leaf (Py6S optional)
+siac.rt.lut.zarr_lut                 ← compatibility re-export facade
 
 siac.core.aoi
  ├── siac.io.geometry                   ← leaf
@@ -276,7 +286,7 @@ methods is accepted — no base class inheritance needed.
 
 | Protocol | Required methods | Implemented by |
 |---|---|---|
-| `RTModelBackend` | `compute_coefficients()`, `supports_jacobian()`, `backend_name`, `is_available_for_sensor()` | `siac.rt.emulator.two_nn.TwoLayerNNEmulator`, `siac.rt.lut.zarr_lut.ZarrLUTBackend` |
+| `RTModelBackend` | `compute_coefficients()`, `supports_jacobian()`, `backend_name`, `is_available_for_sensor()` | `siac.rt.emulator.two_nn.TwoLayerNNEmulator`, `siac.rt.lut.backend.ZarrLUTBackend` |
 | `SatellitePreprocessor` | `load_toa()`, `extract_geometry()`, `extract_cloud_mask()`, `get_metadata()` | `siac.satellite.sentinel2.Sentinel2Preprocessor` |
 | `AtmosphericPriorProvider` | `get_prior()`, `source_name` | `siac.priors.atmospheric.cams.CAMSProvider`, `siac.priors.atmospheric.merra2.MERRA2Provider` |
 | `BRDFProductProvider` | `get_brdf_parameters()`, `source_name` | `siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider` |

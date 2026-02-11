@@ -96,10 +96,21 @@ Each module's output feeds exactly into the inputs of downstream modules. No cro
                                         ├──▶ M4 (SolverInputBundle) ──▶ M5 (SolvedAtmosphere) ──▶ M6 (CorrectionResult)
   M3 (SurfacePrior) ───────────────────┤
                                         │
-  RT Backend (always local) ───────────┘
+  RT Backend (local or remote store) ──┘
 ```
 
-### 2.3 Key Design Rule
+### 2.3 LUT Backend Internal Split
+
+To keep LUT code maintainable, the Zarr LUT backend is separated by concern:
+
+- `siac.rt.lut.backend`: RT interpolation logic (`ZarrLUTBackend`)
+- `siac.rt.lut.store`: local/remote/S3/ZIP store resolution
+- `siac.rt.lut.http_zip_store`: ReadOnlyZipFileSystem-style ZIP access for local/HTTP/S3 LUT archives
+- `siac.rt.lut.create`: LUT generation utilities (`create_lut_from_py6s`)
+- `siac.rt.lut.constants`: default public LUT URL and LUT coordinate constants
+- `siac.rt.lut.zarr_lut`: compatibility facade that re-exports the public API
+
+### 2.4 Key Design Rule
 
 > **A module is any callable** that accepts its documented inputs and returns its documented output contract type. The pipeline does not care whether the callable is a function, a bound method, or a class instance with `__call__` — only that the return value satisfies the frozen dataclass contract.
 
