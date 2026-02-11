@@ -30,6 +30,11 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
+DEFAULT_LUT_URL = (
+    "https://gws-access.jasmin.ac.uk/public/nceo_isp/"
+    "libradtran_continental_average_lut_1nm.zarr.zip"
+)
+
 
 # =============================================================================
 # Sub-configuration Models
@@ -155,8 +160,18 @@ class RTModelConfig(BaseModel):
         description="Directory containing emulator .npz files",
     )
     lut_path: Path | str | None = Field(
-        default=None,
-        description="Path or URL to LUT Zarr store",
+        default=DEFAULT_LUT_URL,
+        description=(
+            "Path or URL to LUT store. Supports local .zarr directory, local .zarr.zip, "
+            "HTTP(S) URLs, and s3:// URLs."
+        ),
+    )
+    lut_storage_options: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Extra fsspec storage options for LUT loading. For S3, you can pass "
+            "{region, endpoint_url, key, secret, anon}."
+        ),
     )
     lut_interpolation: Literal["linear", "nearest", "cubic"] = Field(
         default="linear",
@@ -488,6 +503,18 @@ def get_lut_config(lut_path: str | Path) -> SIACConfig:
     return SIACConfig(
         rt_model=RTModelConfig(
             backend="lut",
-            lut_path=Path(lut_path) if not str(lut_path).startswith("http") else str(lut_path),
+            lut_path=_coerce_lut_source(lut_path),
         ),
     )
+
+
+def _coerce_lut_source(lut_path: str | Path) -> str | Path:
+    """Preserve URL-like LUT sources as strings, local paths as Path."""
+    if isinstance(lut_path, Path):
+        return lut_path
+
+    lut_str = str(lut_path)
+    if lut_str.startswith(("http://", "https://", "s3://", "file://")):
+        return lut_str
+
+    return Path(lut_str)

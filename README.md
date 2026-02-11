@@ -73,6 +73,13 @@ surface_prior:
 
 rt_model:
   backend: emulator  # emulator, lut, or py6s
+  # Used when backend=lut (default points to public continental LUT zip):
+  # lut_path: https://gws-access.jasmin.ac.uk/public/nceo_isp/libradtran_continental_average_lut_1nm.zarr.zip
+  # Supports local .zarr dir, local .zarr.zip, http(s)://, and s3:// paths.
+  # For S3-compatible object stores:
+  # lut_storage_options:
+  #   region: eu-west-2
+  #   endpoint_url: https://s3.eu-west-2.amazonaws.com
 
 solver:
   aot_gamma: 10.0

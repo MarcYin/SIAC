@@ -242,7 +242,11 @@ class SIAC:
                 rt_config.backend = "lut"
 
         if rt_config.backend == "lut" and rt_config.lut_path:
-            self._rt_model = ZarrLUTBackend(rt_config.lut_path)
+            self._rt_model = ZarrLUTBackend(
+                rt_config.lut_path,
+                interpolation_method=rt_config.lut_interpolation,
+                storage_options=rt_config.lut_storage_options,
+            )
 
         return self._rt_model
 
@@ -457,5 +461,9 @@ def _resolve_rt_model_for_pipeline(config: SIACConfig):
             satellite_id="S2A",
         )
     if rt_config.backend == "lut" and rt_config.lut_path:
-        return ZarrLUTBackend(rt_config.lut_path)
+        return ZarrLUTBackend(
+            rt_config.lut_path,
+            interpolation_method=rt_config.lut_interpolation,
+            storage_options=rt_config.lut_storage_options,
+        )
     raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")

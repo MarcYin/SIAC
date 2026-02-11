@@ -7,12 +7,14 @@ import yaml
 from pathlib import Path
 
 from siac.core.config import (
+    DEFAULT_LUT_URL,
     SIACConfig,
     AtmoPriorConfig,
     BRDFConfig,
     RTModelConfig,
     SolverConfig,
     OutputConfig,
+    get_lut_config,
     get_default_config,
 )
 
@@ -28,6 +30,7 @@ class TestSIACConfig:
         assert config.atmo_prior.provider == "cams"
         assert config.brdf.provider == "mcd43"
         assert config.rt_model.backend == "emulator"
+        assert config.rt_model.lut_path == DEFAULT_LUT_URL
 
     def test_config_from_dict(self):
         """Config should be creatable from dict."""
@@ -169,3 +172,10 @@ class TestOutputConfig:
         for comp in ["deflate", "lzw", "zstd", "none"]:
             config = OutputConfig(compression=comp)
             assert config.compression == comp
+
+
+class TestLUTConfigHelpers:
+    def test_get_lut_config_preserves_s3_url(self):
+        cfg = get_lut_config("s3://bucket/path/lut.zarr")
+        assert cfg.rt_model.backend == "lut"
+        assert cfg.rt_model.lut_path == "s3://bucket/path/lut.zarr"
