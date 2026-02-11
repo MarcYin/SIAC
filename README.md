@@ -116,6 +116,52 @@ flowchart LR
     M6 --> Output["Outputs"]
 ```
 
+## CDSE STAC S2 Search/Download (New Helper)
+
+You can now search Sentinel-2 L1C scenes from Copernicus Data Space Ecosystem (CDSE) STAC and download a SIAC-ready `.SAFE` subset (13 bands + key XML metadata), then query CopDEM tiles and crop DEM to AOI:
+
+```python
+from SIAC import (
+    SIAC_S2,
+    get_cdse_access_token,
+    search_and_download_cdse_s2,
+    search_cdse_dem_http_urls,
+    open_cdse_dem_crop,
+)
+
+token = get_cdse_access_token(username="your_cdse_user", password="your_cdse_pass")
+
+items, safe_dirs = search_and_download_cdse_s2(
+    output_dir="./cdse_s2_data",
+    aoi="./aoi.geojson",
+    start_time="2025-01-01T00:00:00Z",
+    end_time="2025-01-31T23:59:59Z",
+    max_cloud_cover=20,
+    max_items=1,
+    access_token=token,
+)
+
+dem_s2_http_urls = search_cdse_dem_http_urls(aoi="./aoi.geojson", prefer_30m=True)
+dem = open_cdse_dem_crop(
+    dem_s2_http_urls,
+    aoi="./aoi.geojson",
+    xRes=30,
+    yRes=30,
+    crs="EPSG:32631",
+    access_token=token,
+)
+dem.rio.to_raster("./cdse_dem_30m.tif")
+
+SIAC_S2(safe_dirs[0], global_dem="./cdse_dem_30m.tif", aoi="./aoi.geojson", cams_dir=cams_dir)
+```
+
+Notes:
+- `open_cdse_dem_crop` requires `rioxarray` (plus `rasterio`) in your environment.
+- CDSE band and metadata downloads use HTTPS STAC asset links with OIDC bearer token.
+- CopDEM tile discovery uses CDSE STAC, but DEM download URLs are composed to public-open buckets:
+  - `https://copernicus-dem-30m.s3.amazonaws.com/{tile_id}/{tile_id}.tif`
+  - `https://copernicus-dem-90m.s3.amazonaws.com/{tile_id}/{tile_id}.tif`
+
 ## Documentation
 
 - Hosted docs: [marcyin.github.io/SIAC](https://marcyin.github.io/SIAC/)
