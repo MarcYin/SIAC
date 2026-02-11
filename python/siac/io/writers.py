@@ -432,7 +432,10 @@ def write_rgb_quicklook(
     # Scale to 0-255
     rgb_scaled = (rgb - scale[0]) / (scale[1] - scale[0])
     rgb_scaled = rgb_scaled.clip(0, 1) * 255
-    rgb_scaled = rgb_scaled.astype(np.uint8)
+    # Reproject/scaling paths can carry float NaN nodata metadata.
+    # Replace NaN pixels and use an integer nodata before casting to uint8.
+    rgb_scaled = rgb_scaled.fillna(0).astype(np.uint8)
+    rgb_scaled = rgb_scaled.rio.write_nodata(0)
 
     # Write
     rgb_scaled.rio.to_raster(str(output_path), driver="GTiff")
