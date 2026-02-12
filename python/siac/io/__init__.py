@@ -76,6 +76,21 @@ from siac.io.geometry import (
     pixel_coords_to_geo,
     geo_to_pixel_coords,
 )
+from siac.io.s2_data_source import (
+    S2DataAccess,
+    S2Product,
+    S2Query,
+    deduplicate_products,
+    fetch_s2,
+    search_s2,
+    select_best_product,
+)
+from siac.io.copernicus_dataspace import (
+    CopernicusDataspaceBackend,
+    download_cdse,
+    search_cdse,
+)
+from siac.io.gcs_sentinel2 import GCSSentinel2Backend, download_gcs, search_gcs
 
 __all__ = [
     # Readers
@@ -131,4 +146,20 @@ __all__ = [
     "create_grid_from_bounds",
     "pixel_coords_to_geo",
     "geo_to_pixel_coords",
+    # Sentinel-2 data access
+    "S2Query",
+    "S2Product",
+    "S2DataAccess",
+    "search_s2",
+    "fetch_s2",
+    "deduplicate_products",
+    "select_best_product",
+    # CDSE backend
+    "CopernicusDataspaceBackend",
+    "search_cdse",
+    "download_cdse",
+    # GCS backend
+    "GCSSentinel2Backend",
+    "search_gcs",
+    "download_gcs",
 ]
