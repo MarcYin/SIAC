@@ -54,6 +54,19 @@ class TestResolvePreprocessor:
 
 
 class TestResolveAtmoProvider:
+    def test_mcd19_provider_returns_callable(self):
+        """MCD19 atmo provider branch should resolve to a callable."""
+
+        class _FakeAtmo:
+            provider = "mcd19"
+            cache_dir = None
+
+        class _FakeConfig:
+            atmo_prior = _FakeAtmo()
+
+        fn = _resolve_atmo_provider(_FakeConfig())
+        assert callable(fn)
+
     def test_unknown_provider_raises(self):
         """Unknown atmo provider should raise ValueError."""
 
@@ -68,6 +81,26 @@ class TestResolveAtmoProvider:
 
 
 class TestResolveSurfacePriorProvider:
+    def test_vnp43_returns_callable(self):
+        """VNP43 branch should resolve to a callable."""
+
+        class _FakeBrdf:
+            provider = "vnp43"
+            cache_dir = None
+            temporal_window = 16
+
+        class _FakeSurfacePrior:
+            psf_sigma_x = 29.75
+            psf_sigma_y = 39.0
+            apply_psf = True
+
+        class _FakeConfig:
+            brdf = _FakeBrdf()
+            surface_prior = _FakeSurfacePrior()
+
+        fn = _resolve_surface_prior_provider(_FakeConfig())
+        assert callable(fn)
+
     def test_returns_callable(self):
         """Default resolver should return a callable."""
 

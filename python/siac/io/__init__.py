@@ -91,6 +91,13 @@ from siac.io.copernicus_dataspace import (
     search_cdse,
 )
 from siac.io.gcs_sentinel2 import GCSSentinel2Backend, download_gcs, search_gcs
+from siac.io.earthaccess_source import EarthAccessSource
+from siac.io.earthaccess_catalog import (
+    EarthAccessCatalog,
+    EarthaccessProduct,
+    ProductValidationResult,
+    default_products,
+)
 
 __all__ = [
     # Readers
@@ -162,4 +169,10 @@ __all__ = [
     "GCSSentinel2Backend",
     "search_gcs",
     "download_gcs",
+    # Earthaccess
+    "EarthAccessSource",
+    "EarthAccessCatalog",
+    "EarthaccessProduct",
+    "ProductValidationResult",
+    "default_products",
 ]

@@ -1,5 +1,9 @@
 # SIAC v2 — Code Structure & Module Dependency Graph
 
+Status note (2026-02-12): this document mixes current structure and target
+architecture. Earthaccess-related modules listed here are planned integration
+targets unless they already exist in `python/siac/`.
+
 ## Package Tree
 
 ```
@@ -338,6 +342,23 @@ siac.io
       ├── siac.priors.brdf           (MCD43 HDF via earthaccess)
       └── siac.core.aoi              (geometry + reprojection)
 ```
+
+---
+
+## Earthaccess Rollout Mapping (Planned)
+
+For implementation order and acceptance gates, see
+`docs/EARTHACCESS_PLAN.md`.
+
+Planned module additions/updates mapped to architecture slots:
+
+| Area | Planned files | Purpose |
+|---|---|---|
+| Shared Earthaccess boundary | `python/siac/io/earthaccess_source.py`, `python/siac/io/earthaccess_catalog.py` | Centralize auth/search/open/download and product registry |
+| Landsat ingestion path | `python/siac/io/landsat_data_source.py`, `python/siac/satellite/landsat.py` | AOI/time discovery and M1 `ObservationBundle` output for Landsat |
+| Atmospheric priors | `python/siac/priors/atmospheric/mcd19_earthaccess.py`, `python/siac/priors/atmospheric/merra2.py` | Earthaccess-backed AOD/atmospheric prior providers |
+| BRDF providers | `python/siac/priors/brdf/mcd43_earthaccess.py`, `python/siac/priors/brdf/vnp43_earthaccess.py` | MODIS/VIIRS BRDF sources for M3 |
+| Pipeline/config wiring | `python/siac/siac.py`, `python/siac/core/config.py` | Provider resolution and config-driven selection |
 
 ---
 

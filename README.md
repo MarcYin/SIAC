@@ -22,6 +22,9 @@ A modular, extensible framework for atmospheric correction of satellite imagery.
 # From PyPI (when released)
 pip install siac
 
+# Enable NASA Earthdata access (earthaccess integration)
+pip install "siac[earthaccess]"
+
 # Development installation
 git clone https://github.com/MarcYin/SIAC.git
 cd SIAC/siac_v2
@@ -60,7 +63,7 @@ SIAC uses a hierarchical configuration system. Create a `siac_config.yaml`:
 sensor: auto  # s2, l8, or auto
 
 atmo_prior:
-  provider: cams  # cams, merra2, era5, or user
+  provider: cams  # cams, merra2, mcd19, era5, or user
 
 brdf:
   provider: mcd43  # mcd43, vnp43, mcd19, gee, zarr

@@ -27,6 +27,7 @@ without changing the solver or correction stages.
 9. [Sensor-Agnostic Spectral Model & Surface Prior](#9-sensor-agnostic-spectral-model--surface-prior)
 10. [Pluggable Data Providers (Atmosphere / BRDF / Surface Prior)](#10-pluggable-data-providers-atmosphere--brdf--surface-prior)
 11. [Centralised Authentication](#11-centralised-authentication)
+12. [Earthaccess Rollout Plan (Pre-Implementation)](#12-earthaccess-rollout-plan-pre-implementation)
 
 ---
 
@@ -889,11 +890,11 @@ result = siac_process(config, input_path, solver=passthrough_solver)
 
 This ensures efficient data access (no over-fetching) and consistent spatial alignment.
 
-### 6.1 Implemented Work (earthaccess + AOI wiring)
+### 6.1 Planned Work (earthaccess + AOI wiring)
 
-**Status**: Implemented (Session 2026-02-07)
+**Status**: Planned (pre-implementation)
 
-The existing implementation introduced:
+The target implementation introduces:
 
 | File | Action | Description |
 |------|--------|-------------|
@@ -1636,3 +1637,47 @@ AWS also falls back to standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
 - **`CopernicusDataspaceBackend`** accepts optional `auth` for CDSE OAuth2
 - **`CAMSProvider`** accepts optional `auth` for CDS API key injection
 - **`_resolve_rt_model_for_pipeline`** injects AWS credentials into `storage_options` for S3 LUT paths
+## 12. Earthaccess Rollout Plan (Pre-Implementation)
+
+This section defines the implementation order for NASA Earthdata access via
+`earthaccess`, with explicit module boundaries and acceptance criteria.
+
+Detailed execution plan: see `docs/EARTHACCESS_PLAN.md`.
+
+### 12.1 Scope
+
+Planned Earthaccess-backed capabilities:
+
+- Landsat scene discovery + access path in M1 data ingestion flow
+- Atmospheric priors using NASA products (including MCD19 AOD path in M2)
+- BRDF products for surface priors in M3:
+  - MODIS MCD43 family
+  - VIIRS VNP43 equivalents
+
+### 12.2 Guardrails
+
+- AOI-scoped queries only (no global over-fetch)
+- No direct Earthaccess calls from solver/corrector modules
+- Provider outputs must remain contract-pure:
+  - M2 returns `AtmosphericState`
+  - M3 returns `SurfacePrior`
+- All product IDs/short names must be validated in code via dataset discovery
+  before hard-coding defaults
+
+### 12.3 Milestones
+
+| Milestone | Goal | Exit Criteria |
+|---|---|---|
+| M0 | Earthaccess foundation + product registry | Auth/search/open wrappers tested; dataset registry documented |
+| M1 | Landsat access path | Scene search/download/open works for AOI/time and feeds M1 preprocessor |
+| M2 | Atmospheric priors via Earthaccess | MCD19 AOD path returns valid `AtmosphericState`; fallback strategy defined |
+| M3 | BRDF providers | MCD43 + VNP43 providers return valid BRDF inputs to M3 |
+| M4 | Pipeline wiring + docs/examples | Config-driven provider resolution works; docs and tests updated |
+
+### 12.4 Definition of Done
+
+- Unit tests for each Earthaccess wrapper/provider module
+- Integration tests for at least one live Earthdata query path (network-marked)
+- AOI clipping and reprojection behavior verified for M2/M3 outputs
+- Config examples for Landsat + MCD19 + MCD43/VNP43 in docs
+- No behavior regressions in existing S2/CAMS/local workflows

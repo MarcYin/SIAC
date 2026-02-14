@@ -44,9 +44,12 @@ DEFAULT_LUT_URL = (
 class AtmoPriorConfig(BaseModel):
     """Configuration for atmospheric prior data provider."""
 
-    provider: Literal["cams", "merra2", "era5", "user"] = Field(
+    provider: Literal["cams", "merra2", "mcd19", "era5", "user"] = Field(
         default="cams",
-        description="Atmospheric data source: 'cams' (ECMWF), 'merra2' (NASA), 'era5', or 'user'",
+        description=(
+            "Atmospheric data source: 'cams' (ECMWF), 'merra2' (NASA), "
+            "'mcd19' (Earthaccess AOD-focused), 'era5', or 'user'"
+        ),
     )
     data_path: Path | None = Field(
         default=None,

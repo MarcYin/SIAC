@@ -159,6 +159,11 @@ class SIAC:
                 self._atmo_provider = MERRA2Provider(
                     cache_dir=self.config.atmo_prior.cache_dir,
                 )
+            elif provider_name == "mcd19":
+                from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider
+                self._atmo_provider = MCD19AODProvider(
+                    cache_dir=self.config.atmo_prior.cache_dir,
+                )
             else:
                 logger.warning(
                     f"Unknown atmospheric provider '{provider_name}', "
@@ -219,13 +224,18 @@ class SIAC:
             self._brdf_provider = MCD43EarthAccessProvider(
                 cache_dir=self.config.brdf.cache_dir,
             )
+        elif provider_name == "vnp43":
+            from siac.priors.brdf.vnp43_earthaccess import VNP43EarthAccessProvider
+            self._brdf_provider = VNP43EarthAccessProvider(
+                cache_dir=self.config.brdf.cache_dir,
+            )
         elif provider_name == "gee":
             from siac.priors.brdf.gee_stub import GEEBRDFProvider
             self._brdf_provider = GEEBRDFProvider()
         else:
             raise ValueError(
                 f"Unknown BRDF provider '{provider_name}'. "
-                f"Available: 'mcd43', 'gee'"
+                f"Available: 'mcd43', 'vnp43', 'gee'"
             )
 
         return self._brdf_provider
@@ -381,15 +391,29 @@ def _resolve_atmo_provider(
         from siac.priors.atmospheric.merra2 import MERRA2Provider
         provider = MERRA2Provider(cache_dir=config.atmo_prior.cache_dir)
         return provider.get_prior
+    if provider_name == "mcd19":
+        from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider
+        provider = MCD19AODProvider(cache_dir=config.atmo_prior.cache_dir)
+        return provider.get_prior
     raise ValueError(f"Unknown atmo provider: {provider_name!r}")
 
 
 def _resolve_surface_prior_provider(config: SIACConfig) -> SurfacePriorFn:
     """Return a callable matching the M3 signature -> SurfacePrior."""
+    provider_name = getattr(config.brdf, "provider", "mcd43")
+
+    if provider_name == "mcd43":
+        from siac.priors.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
+        provider_cls = MCD43EarthAccessProvider
+    elif provider_name == "vnp43":
+        from siac.priors.brdf.vnp43_earthaccess import VNP43EarthAccessProvider
+        provider_cls = VNP43EarthAccessProvider
+    else:
+        raise ValueError(f"Unknown BRDF provider for surface prior: {provider_name!r}")
+
     # Default: BRDF-derived prior via kernel model
     def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
-        from siac.priors.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
-        brdf_prov = MCD43EarthAccessProvider(
+        brdf_prov = provider_cls(
             cache_dir=config.brdf.cache_dir,
         )
         brdf_weights = brdf_prov.get_brdf_parameters(
