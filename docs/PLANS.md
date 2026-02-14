@@ -1637,6 +1637,7 @@ AWS also falls back to standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
 - **`CopernicusDataspaceBackend`** accepts optional `auth` for CDSE OAuth2
 - **`CAMSProvider`** accepts optional `auth` for CDS API key injection
 - **`_resolve_rt_model_for_pipeline`** injects AWS credentials into `storage_options` for S3 LUT paths
+
 ## 12. Earthaccess Rollout Plan (Pre-Implementation)
 
 This section defines the implementation order for NASA Earthdata access via
