@@ -221,14 +221,18 @@ class TestExceptionsAndStubs:
         safe_backend = backend.download(found_backend[0], tmp_path)
         assert safe_backend.exists()
 
-        with pytest.raises(NotImplementedError):
-            search_gcs(query)
-        with pytest.raises(NotImplementedError):
-            download_gcs(prod, tmp_path)
-        with pytest.raises(NotImplementedError):
-            GCSSentinel2Backend().search(query)
-        with pytest.raises(NotImplementedError):
-            GCSSentinel2Backend().download(prod, tmp_path)
+        import siac.io.gcs_sentinel2 as gcs_mod
+
+        gcs_safe = tmp_path / f"{prod.product_id}.SAFE"
+        gcs_safe.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(gcs_mod, "search_gcs", lambda q: [prod])  # noqa: ARG005
+        monkeypatch.setattr(gcs_mod, "download_gcs", lambda p, d: gcs_safe)  # noqa: ARG005
+
+        assert gcs_mod.search_gcs(query) == [prod]
+        assert gcs_mod.download_gcs(prod, tmp_path) == gcs_safe
+        assert GCSSentinel2Backend().search(query) == [prod]
+        assert GCSSentinel2Backend().download(prod, tmp_path) == gcs_safe
 
 
 class TestCAMSProvider:
