@@ -14,6 +14,7 @@ from typing import Any
 import xarray as xr
 
 from siac.core.aoi import AOI
+from siac.core.auth import CredentialManager
 from siac.core.config import SIACConfig
 from siac.core.types import AtmosphericState, GeometryAngles, SensorConfig
 from siac.satellite import get_preprocessor, detect_sensor
@@ -41,6 +42,7 @@ class SIAC:
 
     def __init__(self, config: SIACConfig):
         self.config = config
+        self._auth = CredentialManager.from_config(config)
         self._preprocessor = None
         self._atmo_provider = None
         self._brdf_provider = None
@@ -149,7 +151,9 @@ class SIAC:
         if self._atmo_provider is None:
             provider_name = self.config.atmo_prior.provider
             if provider_name == "cams":
-                self._atmo_provider = CAMSProvider(self.config.atmo_prior.data_path)
+                self._atmo_provider = CAMSProvider(
+                    self.config.atmo_prior.data_path, auth=self._auth,
+                )
             elif provider_name == "merra2":
                 from siac.priors.atmospheric.merra2 import MERRA2Provider
                 self._atmo_provider = MERRA2Provider(
@@ -160,7 +164,9 @@ class SIAC:
                     f"Unknown atmospheric provider '{provider_name}', "
                     f"falling back to CAMS"
                 )
-                self._atmo_provider = CAMSProvider(self.config.atmo_prior.data_path)
+                self._atmo_provider = CAMSProvider(
+                    self.config.atmo_prior.data_path, auth=self._auth,
+                )
 
         # Get bounds and CRS from AOI
         bounds = aoi.get_bounds()
@@ -311,6 +317,7 @@ def siac_process(
     input_path: Path,
     *,
     aoi: AOI | None = None,
+    auth: CredentialManager | None = None,
     preprocessor: PreprocessorFn | None = None,
     atmo_provider: AtmoPriorFn | None = None,
     surface_prior_provider: SurfacePriorFn | None = None,
@@ -324,13 +331,16 @@ def siac_process(
     Resolves ``None`` arguments to config-driven defaults, then delegates
     to :func:`run_pipeline`.
     """
+    if auth is None:
+        auth = CredentialManager.from_config(config)
+
     preprocessor = preprocessor or _resolve_preprocessor(config)
-    atmo_provider = atmo_provider or _resolve_atmo_provider(config)
+    atmo_provider = atmo_provider or _resolve_atmo_provider(config, auth=auth)
     surface_prior_provider = surface_prior_provider or _resolve_surface_prior_provider(config)
     grid_assembler = grid_assembler or _resolve_grid_assembler()
     solver = solver or _resolve_solver(config)
     corrector = corrector or _resolve_corrector(config)
-    rt_model = rt_model or _resolve_rt_model_for_pipeline(config)
+    rt_model = rt_model or _resolve_rt_model_for_pipeline(config, auth=auth)
 
     return run_pipeline(
         input_path,
@@ -358,11 +368,14 @@ def _resolve_preprocessor(config: SIACConfig) -> PreprocessorFn:
     raise ValueError(f"Unknown sensor: {sensor!r}")
 
 
-def _resolve_atmo_provider(config: SIACConfig) -> AtmoPriorFn:
+def _resolve_atmo_provider(
+    config: SIACConfig,
+    auth: CredentialManager | None = None,
+) -> AtmoPriorFn:
     """Return a callable ``(bounds, crs, time, res) -> AtmosphericState``."""
     provider_name = config.atmo_prior.provider
     if provider_name == "cams":
-        provider = CAMSProvider(config.atmo_prior.data_path)
+        provider = CAMSProvider(config.atmo_prior.data_path, auth=auth)
         return provider.get_prior
     if provider_name == "merra2":
         from siac.priors.atmospheric.merra2 import MERRA2Provider
@@ -451,7 +464,10 @@ def _resolve_corrector(config: SIACConfig) -> CorrectorFn:
     return _default_corrector
 
 
-def _resolve_rt_model_for_pipeline(config: SIACConfig):
+def _resolve_rt_model_for_pipeline(
+    config: SIACConfig,
+    auth: CredentialManager | None = None,
+):
     """Return an RT model instance from config."""
     rt_config = config.rt_model
     if rt_config.backend == "emulator":
@@ -461,9 +477,18 @@ def _resolve_rt_model_for_pipeline(config: SIACConfig):
             satellite_id="S2A",
         )
     if rt_config.backend == "lut" and rt_config.lut_path:
+        storage_options = dict(rt_config.lut_storage_options)
+        # Inject AWS credentials if not already present
+        if (
+            auth is not None
+            and auth.has_credentials("aws")
+            and "key" not in storage_options
+            and str(rt_config.lut_path).startswith("s3://")
+        ):
+            storage_options.update(auth.get_storage_options("aws"))
         return ZarrLUTBackend(
             rt_config.lut_path,
             interpolation_method=rt_config.lut_interpolation,
-            storage_options=rt_config.lut_storage_options,
+            storage_options=storage_options,
         )
     raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")

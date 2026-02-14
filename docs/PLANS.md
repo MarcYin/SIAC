@@ -26,6 +26,7 @@ without changing the solver or correction stages.
 8. [Core Requirements for Adding New Sensors](#8-core-requirements-for-adding-new-sensors)
 9. [Sensor-Agnostic Spectral Model & Surface Prior](#9-sensor-agnostic-spectral-model--surface-prior)
 10. [Pluggable Data Providers (Atmosphere / BRDF / Surface Prior)](#10-pluggable-data-providers-atmosphere--brdf--surface-prior)
+11. [Centralised Authentication](#11-centralised-authentication)
 
 ---
 
@@ -1593,3 +1594,45 @@ class MyRTBackend:
 | 4 | `compute_coefficients` returns valid `RTCoefficients` | all fields present, physically bounded |
 | 5 | Custom backend via user class | user class used, result validated |
 | 6 | `is_available_for_sensor` rejects unsupported | returns `False` for unknown sensor |
+
+---
+
+## 11. Centralised Authentication
+
+SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA Earthdata, GCS). Rather than handling credentials independently in each module, a single **`CredentialManager`** (`siac.core.auth`) acts as a thread-safe credential registry.
+
+### Key types
+
+| Type | Location | Purpose |
+|---|---|---|
+| `CredentialSpec` | `core/auth.py` | Frozen `(key, secret)` pair |
+| `OAuthToken` | `core/auth.py` | Cached bearer token with monotonic expiry |
+| `CredentialManager` | `core/auth.py` | Registry + factory + token cache |
+| `CredentialConfig` | `core/config.py` | Pydantic model for config-file credentials |
+| `AuthenticationError` | `core/exceptions.py` | Raised on missing/failed auth |
+
+### Credential resolution order (in `from_config`)
+
+1. `SIACConfig.credentials` fields (programmatic / YAML)
+2. `SIAC_*` environment variables
+3. External config files (`~/.cdsapirc`)
+
+### Env-var mapping
+
+| Provider | Key env var | Secret env var |
+|---|---|---|
+| CDSE | `SIAC_CDSE_USERNAME` | `SIAC_CDSE_PASSWORD` |
+| CDS API | `SIAC_CDS_API_KEY` | — |
+| AWS/S3 | `SIAC_AWS_ACCESS_KEY_ID` | `SIAC_AWS_SECRET_ACCESS_KEY` |
+| Earthdata | `SIAC_EARTHDATA_USERNAME` | `SIAC_EARTHDATA_PASSWORD` |
+| GCS | `SIAC_GCS_CREDENTIALS_FILE` | — |
+
+AWS also falls back to standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
+
+### Integration points
+
+- **`SIAC.__init__`** creates `self._auth = CredentialManager.from_config(config)`
+- **`siac_process()`** accepts optional `auth` kwarg; defaults to `from_config`
+- **`CopernicusDataspaceBackend`** accepts optional `auth` for CDSE OAuth2
+- **`CAMSProvider`** accepts optional `auth` for CDS API key injection
+- **`_resolve_rt_model_for_pipeline`** injects AWS credentials into `storage_options` for S3 LUT paths

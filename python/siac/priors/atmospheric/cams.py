@@ -10,11 +10,15 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
 from siac.core.types import AtmosphericState
+
+if TYPE_CHECKING:
+    from siac.core.auth import CredentialManager
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +81,12 @@ class CAMSProvider:
         data_dir: str | Path,
         temporal_interp: bool = True,
         download_missing: bool = False,
+        auth: CredentialManager | None = None,
     ):
         self.data_dir = Path(data_dir)
         self.temporal_interp = temporal_interp
         self.download_missing = download_missing
+        self._auth = auth
 
     @property
     def source_name(self) -> str:
@@ -360,8 +366,14 @@ class CAMSProvider:
             "leadtime_hour": self._CDS_LEAD_TIMES,
         }
 
+        client_kwargs: dict[str, str] = {}
+        if self._auth is not None and self._auth.has_credentials("cds"):
+            cds_cred = self._auth.get_credentials("cds")
+            if cds_cred.key:
+                client_kwargs["key"] = cds_cred.key
+
         try:
-            cdsapi.Client().retrieve(self._CDS_DATASET, request).download(str(output_path))
+            cdsapi.Client(**client_kwargs).retrieve(self._CDS_DATASET, request).download(str(output_path))
         except Exception as e:
             logger.warning(f"Failed to download CAMS data for {obs_time:%Y-%m-%d}: {e}")
             return None

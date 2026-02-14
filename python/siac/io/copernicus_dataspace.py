@@ -13,12 +13,15 @@ import tempfile
 import zipfile
 from datetime import datetime, time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from siac.core.exceptions import DataNotFoundError
 from siac.io.s2_data_source import S2Product, S2Query
+
+if TYPE_CHECKING:
+    from siac.core.auth import CredentialManager
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +201,12 @@ def _get_json(url: str, timeout: int = 60) -> dict[str, Any]:
 
 
 def _token_from_credentials(username: str, password: str, timeout: int = 60) -> str:
+    token, _ = _token_exchange(username, password, timeout)
+    return token
+
+
+def _token_exchange(username: str, password: str, timeout: int = 60) -> tuple[str, int]:
+    """Exchange credentials for an access token. Returns (token, expires_in)."""
     resp = requests.post(
         CDSE_TOKEN_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -210,10 +219,12 @@ def _token_from_credentials(username: str, password: str, timeout: int = 60) -> 
         timeout=timeout,
     )
     resp.raise_for_status()
-    token = resp.json().get("access_token")
+    body = resp.json()
+    token = body.get("access_token")
     if not isinstance(token, str) or not token:
         raise DataNotFoundError("CDSE token response does not include access_token.")
-    return token
+    expires_in = int(body.get("expires_in", 300))
+    return token, expires_in
 
 
 def _resolve_auth_header(access_key: str | None, secret_key: str | None) -> dict[str, str]:
@@ -340,12 +351,27 @@ class CopernicusDataspaceBackend:
         self,
         access_key: str | None = None,
         secret_key: str | None = None,
+        auth: CredentialManager | None = None,
     ):
         self._access_key = access_key
         self._secret_key = secret_key
+        self._auth = auth
+
+    def _get_auth_header(self) -> dict[str, str]:
+        """Resolve auth header, preferring explicit keys over auth manager."""
+        if self._access_key or self._secret_key:
+            return _resolve_auth_header(self._access_key, self._secret_key)
+        if self._auth is not None and self._auth.has_credentials("cdse"):
+            token = self._auth.get_cdse_token()
+            return {"Authorization": f"Bearer {token}"}
+        return {}
 
     def search(self, query: S2Query) -> list[S2Product]:
         return search_cdse(query, self._access_key, self._secret_key)
 
     def download(self, product: S2Product, dest_dir: Path) -> Path:
+        if not self._access_key and not self._secret_key and self._auth is not None:
+            if self._auth.has_credentials("cdse"):
+                token = self._auth.get_cdse_token()
+                return download_cdse(product, dest_dir, access_key=token)
         return download_cdse(product, dest_dir, self._access_key, self._secret_key)

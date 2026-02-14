@@ -43,3 +43,9 @@ class ValidationError(SIACError):
     """Data validation error."""
 
     pass
+
+
+class AuthenticationError(SIACError):
+    """Credentials missing or authentication failed for a data provider."""
+
+    pass

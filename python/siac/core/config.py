@@ -270,6 +270,24 @@ class SolverConfig(BaseModel):
         return v
 
 
+class CredentialConfig(BaseModel):
+    """Credentials for remote data providers.
+
+    All fields are optional.  When ``SIACConfig`` is loaded via
+    ``pydantic_settings`` the env-var prefix is
+    ``SIAC_CREDENTIALS__<FIELD>`` (double-underscore nested delimiter).
+    """
+
+    cdse_username: str | None = None
+    cdse_password: str | None = None
+    cds_api_key: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    earthdata_username: str | None = None
+    earthdata_password: str | None = None
+    gcs_credentials_file: Path | None = None
+
+
 class OutputConfig(BaseModel):
     """Configuration for output products."""
 
@@ -360,6 +378,10 @@ class SIACConfig(BaseSettings):
     output: OutputConfig = Field(
         default_factory=OutputConfig,
         description="Output product configuration",
+    )
+    credentials: CredentialConfig = Field(
+        default_factory=CredentialConfig,
+        description="Credentials for remote data providers (CDSE, CDS, AWS, Earthdata, GCS)",
     )
 
     # Global settings

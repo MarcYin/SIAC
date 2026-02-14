@@ -13,7 +13,8 @@ siac/
 │   ├── types.py                     # All data types & sensor configs
 │   ├── protocols.py                 # @runtime_checkable Protocol definitions
 │   ├── config.py                    # SIACConfig (pydantic_settings)
-│   ├── exceptions.py                # Error hierarchy
+│   ├── exceptions.py                # Error hierarchy (+ AuthenticationError)
+│   ├── auth.py                      # CredentialManager, CredentialSpec, OAuthToken
 │   ├── spectral.py                  # SpectralBandDescriptor, band convolution
 │   ├── validation.py                # Contract validators (_validate_*)
 │   └── aoi.py                       # AOI (area of interest) handling
@@ -159,6 +160,7 @@ dependencies.
 ```
 siac.siac
  ├── siac.core.config
+ ├── siac.core.auth
  ├── siac.core.types
  ├── siac.core.aoi
  ├── siac.pipeline
@@ -234,6 +236,8 @@ siac.core.aoi
  ├── siac.io.geometry                   ← leaf
  └── siac.io.reprojection               ← leaf
 
+siac.core.auth
+ └── siac.core.exceptions               ← leaf
 siac.core.spectral                      ← leaf
 siac.core.config                        ← leaf (pydantic_settings)
 siac.core.exceptions                    ← leaf
@@ -276,6 +280,9 @@ Supporting types used within contracts:
 | `BRDFKernelWeights` | `siac.core.types.BRDFKernelWeights` | SurfacePrior |
 | `RTCoefficients` | `siac.core.types.RTCoefficients` | RT backends |
 | `SpectralBandDescriptor` | `siac.core.spectral.SpectralBandDescriptor` | Spectral convolution |
+| `CredentialSpec` | `siac.core.auth.CredentialSpec` | Credential storage |
+| `CredentialManager` | `siac.core.auth.CredentialManager` | Auth registry & token cache |
+| `CredentialConfig` | `siac.core.config.CredentialConfig` | Config-file credential fields |
 
 ---
 
@@ -352,7 +359,8 @@ tests/
 │   ├── test_solver.py               # Cost function, multi-grid solver
 │   ├── test_satellite.py            # Preprocessor registry, sensor detection
 │   ├── test_io.py                   # Readers, writers
-│   └── test_config.py               # SIACConfig (requires pydantic_settings)
+│   ├── test_config.py               # SIACConfig (requires pydantic_settings)
+│   └── test_auth.py                 # CredentialManager, token caching, env vars
 ├── integration/
 │   ├── test_pipeline.py             # run_pipeline() orchestration & concurrency
 │   ├── test_injection.py            # Custom callable injection & contract violation
