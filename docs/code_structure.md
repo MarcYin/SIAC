@@ -1,8 +1,9 @@
 # SIAC v2 — Code Structure & Module Dependency Graph
 
-Status note (2026-02-12): this document mixes current structure and target
-architecture. Earthaccess-related modules listed here are planned integration
-targets unless they already exist in `python/siac/`.
+Status note (2026-02-14): this document mixes current structure and target
+architecture. Sentinel-2 data access backends (`copernicus_dataspace.py`,
+`gcs_sentinel2.py`) and Earthaccess foundation modules now exist; remaining
+"planned" references mainly apply to future Landsat ingestion expansion.
 
 ## Package Tree
 
@@ -38,7 +39,7 @@ siac/
 │   │   ├── __init__.py
 │   │   ├── kernels.py               # Ross-Thick Li-Sparse kernels
 │   │   ├── mcd43_earthaccess.py     # MODIS MCD43 via earthaccess
-│   │   └── gee_stub.py             # Google Earth Engine (stub)
+│   │   └── gee_stub.py             # Google Earth Engine backend placeholder
 │   └── surface/                     # M3 — Surface prior derivation
 │       ├── __init__.py
 │       ├── kernel_model.py          # BRDF → SurfacePrior deriver
@@ -81,8 +82,8 @@ siac/
     ├── geometry.py                  # AOI loading, bounds math
     ├── earthaccess_source.py        # NASA Earthdata wrapper
     ├── s2_data_source.py            # S2Query, S2Product, deduplication
-    ├── copernicus_dataspace.py      # CDSE backend (stub)
-    └── gcs_sentinel2.py             # GCS public bucket backend (stub)
+    ├── copernicus_dataspace.py      # CDSE backend
+    └── gcs_sentinel2.py             # GCS public bucket backend
 ```
 
 ---
@@ -333,8 +334,8 @@ siac.io
  ├── earthaccess_source  EarthAccessSource (NASA Earthdata wrapper)
  │
  ├── s2_data_source.py   S2Query, S2Product, S2DataBackend protocol
- │    ├── copernicus_dataspace.py   CopernicusDataspaceBackend (stub)
- │    └── gcs_sentinel2.py         GCSSentinel2Backend (stub)
+ │    ├── copernicus_dataspace.py   CopernicusDataspaceBackend
+ │    └── gcs_sentinel2.py         GCSSentinel2Backend
  │
  └── (used by)
       ├── siac.satellite.sentinel2   (reads SAFE via siac.io.readers)

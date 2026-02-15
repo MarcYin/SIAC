@@ -7,15 +7,16 @@ aerosol solving, and atmospheric correction.
 
 from __future__ import annotations
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import xarray as xr
 
 from siac.core.aoi import AOI
 from siac.core.auth import CredentialManager
 from siac.core.config import SIACConfig
+from siac.core.exceptions import DataNotFoundError
 from siac.core.types import AtmosphericState, GeometryAngles, SensorConfig
 from siac.satellite import get_preprocessor, detect_sensor
 from siac.priors.atmospheric import CAMSProvider
@@ -26,6 +27,9 @@ from siac.solver import MultiGridSolver, MultiGridConfig
 from siac.correction import AtmosphericCorrector, CorrectionResult
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from siac.io.s2_data_source import S2Query
 
 
 class SIAC:
@@ -299,6 +303,133 @@ def process_landsat8(input_path: str, output_path: str | None = None, **kwargs) 
     """Convenience function for Landsat 8 processing."""
     siac = SIAC.from_defaults(sensor="l8")
     return siac.process(input_path, output_path)
+
+
+def _resolve_s2_backend(config: SIACConfig, *, auth: CredentialManager | None = None):
+    """Resolve configured Sentinel-2 data backend object."""
+    backend_name = config.s2_data.backend
+    if backend_name == "cdse":
+        from siac.io.copernicus_dataspace import CopernicusDataspaceBackend
+        return CopernicusDataspaceBackend(
+            access_key=config.s2_data.cdse_access_key,
+            secret_key=config.s2_data.cdse_secret_key,
+            auth=auth,
+        )
+    if backend_name == "gcs":
+        from siac.io.gcs_sentinel2 import GCSSentinel2Backend
+        return GCSSentinel2Backend()
+    if backend_name == "local":
+        return None
+    raise ValueError(f"Unknown S2 backend: {backend_name!r}")
+
+
+def _coerce_date(value: date | str | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.strptime(str(value), "%Y-%m-%d").date()
+
+
+def _apply_s2_query_defaults(query: S2Query, *, config: SIACConfig) -> S2Query:
+    if query.max_cloud_cover == 100.0:
+        query.max_cloud_cover = config.s2_data.max_cloud_cover
+    if query.processing_level == "L1C" and config.s2_data.processing_level != "L1C":
+        query.processing_level = config.s2_data.processing_level
+    return query
+
+
+def _coerce_s2_query(query: S2Query | str | Path, *, config: SIACConfig):
+    from siac.io.s2_data_source import S2Query
+
+    if isinstance(query, S2Query):
+        q = S2Query(**query.__dict__)
+    else:
+        raw = str(query).strip()
+        try:
+            q = S2Query.from_tile_date(raw)
+        except ValueError:
+            q = S2Query.from_product_id(raw)
+            if "MSIL2A" in raw:
+                q.processing_level = "L2A"
+            elif "MSIL1C" in raw:
+                q.processing_level = "L1C"
+    return _apply_s2_query_defaults(q, config=config)
+
+
+def resolve_s2_input(
+    query: S2Query | str | Path,
+    config: SIACConfig,
+    *,
+    auth: CredentialManager | None = None,
+) -> Path:
+    """Resolve S2 query/path to local SAFE directory for M1 preprocessing."""
+    local_candidate = Path(query).expanduser() if isinstance(query, Path) else Path(str(query)).expanduser()
+    if local_candidate.exists():
+        return local_candidate
+
+    backend = _resolve_s2_backend(config, auth=auth)
+    if backend is None:
+        raise DataNotFoundError(
+            "S2 backend is 'local', but input path does not exist. "
+            "Provide a local SAFE path or switch config.s2_data.backend to 'cdse' or 'gcs'."
+        )
+
+    from siac.io.s2_data_source import S2DataAccess
+
+    cache_dir = config.s2_data.cache_dir
+    accessor = S2DataAccess(backend=backend, cache_dir=cache_dir)
+    q = _coerce_s2_query(query, config=config)
+    return accessor.get(q, dest_dir=cache_dir)
+
+
+def search_sentinel2(
+    *,
+    tile: str | None = None,
+    date: date | str | None = None,
+    date_value: date | str | None = None,
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    max_cloud_cover: float = 80.0,
+    backend: str = "cdse",
+    config: SIACConfig | None = None,
+    auth: CredentialManager | None = None,
+):
+    """Convenience API to search Sentinel-2 products without downloading."""
+    from siac.io.s2_data_source import S2Query, search_s2
+
+    cfg = config or SIACConfig(sensor="s2")
+    cfg = cfg.with_overrides(s2_data={"backend": backend, "max_cloud_cover": max_cloud_cover})
+    backend_obj = _resolve_s2_backend(cfg, auth=auth)
+    if backend_obj is None:
+        raise ValueError("search_sentinel2 does not support backend='local'.")
+
+    query = S2Query(
+        mgrs_tile=tile,
+        date=_coerce_date(date if date is not None else date_value),
+        start_date=_coerce_date(start_date),
+        end_date=_coerce_date(end_date),
+        bbox=bbox,
+        max_cloud_cover=max_cloud_cover,
+        processing_level=cfg.s2_data.processing_level,
+    )
+    return search_s2(backend_obj, query)
+
+
+def siac_process_s2(
+    config: SIACConfig,
+    query: S2Query | str | Path,
+    *,
+    output_path: str | Path | None = None,
+    auth: CredentialManager | None = None,
+) -> CorrectionResult:
+    """Run full SIAC process from S2 query/path (product ID, tile+date, or local SAFE)."""
+    auth_obj = auth or CredentialManager.from_config(config)
+    input_path = resolve_s2_input(query, config, auth=auth_obj)
+    return SIAC(config).process(input_path, output_path)
 
 
 # =====================================================================

@@ -291,6 +291,44 @@ class CredentialConfig(BaseModel):
     gcs_credentials_file: Path | None = None
 
 
+class S2DataAccessConfig(BaseModel):
+    """Configuration for Sentinel-2 pre-M1 data access."""
+
+    backend: Literal["cdse", "gcs", "local"] = Field(
+        default="local",
+        description=(
+            "S2 data source backend: 'cdse' (Copernicus Data Space), "
+            "'gcs' (Google public bucket), or 'local'."
+        ),
+    )
+    cache_dir: Path | None = Field(
+        default=None,
+        description="Local cache directory for downloaded SAFE products",
+    )
+    max_cloud_cover: float = Field(
+        default=80.0,
+        ge=0.0,
+        le=100.0,
+        description="Maximum cloud cover filter applied during S2 search",
+    )
+    prefer_newest_baseline: bool = Field(
+        default=True,
+        description="Prefer newest processing baseline during product selection",
+    )
+    processing_level: Literal["L1C", "L2A"] = Field(
+        default="L1C",
+        description="Sentinel-2 processing level to target for search/fetch",
+    )
+    cdse_access_key: str | None = Field(
+        default=None,
+        description="CDSE access key/username override for S2 data access",
+    )
+    cdse_secret_key: str | None = Field(
+        default=None,
+        description="CDSE secret/password override for S2 data access",
+    )
+
+
 class OutputConfig(BaseModel):
     """Configuration for output products."""
 
@@ -385,6 +423,10 @@ class SIACConfig(BaseSettings):
     credentials: CredentialConfig = Field(
         default_factory=CredentialConfig,
         description="Credentials for remote data providers (CDSE, CDS, AWS, Earthdata, GCS)",
+    )
+    s2_data: S2DataAccessConfig = Field(
+        default_factory=S2DataAccessConfig,
+        description="Sentinel-2 data access configuration (query -> local SAFE resolution)",
     )
 
     # Global settings

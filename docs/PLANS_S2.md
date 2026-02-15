@@ -50,7 +50,14 @@ This section maps the core plan's six modules (M1–M6) to their S2-specific imp
 
 ## 2. Sentinel-2 Data Access Module
 
-**Status**: Planned
+**Status**: Partially implemented (core data-access path now wired)
+
+Implemented in code:
+- `S2Query`, `S2Product`, `S2DataAccess` orchestration (`python/siac/io/s2_data_source.py`)
+- `CopernicusDataspaceBackend` (`python/siac/io/copernicus_dataspace.py`)
+- `GCSSentinel2Backend` with real listing/download + retries (`python/siac/io/gcs_sentinel2.py`)
+- `S2DataAccessConfig` in `SIACConfig` (`python/siac/core/config.py`)
+- S2 convenience entrypoints `resolve_s2_input()`, `search_sentinel2()`, `siac_process_s2()` (`python/siac/siac.py`)
 
 ### Context
 

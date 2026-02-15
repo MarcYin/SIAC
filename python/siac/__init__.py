@@ -34,6 +34,15 @@ def __getattr__(name: str):
     if name == "process_landsat8":
         from siac.siac import process_landsat8
         return process_landsat8
+    if name == "resolve_s2_input":
+        from siac.siac import resolve_s2_input
+        return resolve_s2_input
+    if name == "siac_process_s2":
+        from siac.siac import siac_process_s2
+        return siac_process_s2
+    if name == "search_sentinel2":
+        from siac.siac import search_sentinel2
+        return search_sentinel2
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -42,4 +51,7 @@ __all__ = [
     "SIACConfig",
     "process_sentinel2",
     "process_landsat8",
+    "resolve_s2_input",
+    "siac_process_s2",
+    "search_sentinel2",
 ]

@@ -11,6 +11,7 @@ from siac.core.config import (
     SIACConfig,
     AtmoPriorConfig,
     BRDFConfig,
+    S2DataAccessConfig,
     RTModelConfig,
     SolverConfig,
     OutputConfig,
@@ -29,6 +30,7 @@ class TestSIACConfig:
         assert config.sensor == "auto"
         assert config.atmo_prior.provider == "cams"
         assert config.brdf.provider == "mcd43"
+        assert config.s2_data.backend == "local"
         assert config.rt_model.backend == "emulator"
         assert config.rt_model.lut_path == DEFAULT_LUT_URL
 
@@ -38,6 +40,7 @@ class TestSIACConfig:
             "sensor": "s2",
             "atmo_prior": {"provider": "merra2"},
             "brdf": {"provider": "vnp43", "temporal_window": 8},
+            "s2_data": {"backend": "gcs", "max_cloud_cover": 30.0},
         }
 
         config = SIACConfig(**data)
@@ -46,6 +49,8 @@ class TestSIACConfig:
         assert config.atmo_prior.provider == "merra2"
         assert config.brdf.provider == "vnp43"
         assert config.brdf.temporal_window == 8
+        assert config.s2_data.backend == "gcs"
+        assert config.s2_data.max_cloud_cover == 30.0
 
     def test_config_to_yaml(self, tmp_path: Path):
         """Config should serialize to YAML."""
@@ -136,6 +141,21 @@ class TestBRDFConfig:
 
         with pytest.raises(ValueError):
             BRDFConfig(temporal_window=50)
+
+
+class TestS2DataAccessConfig:
+    def test_s2_backend_choices(self):
+        for backend in ["cdse", "gcs", "local"]:
+            cfg = S2DataAccessConfig(backend=backend)
+            assert cfg.backend == backend
+
+    def test_s2_cloud_cover_bounds(self):
+        cfg = S2DataAccessConfig(max_cloud_cover=25.0)
+        assert cfg.max_cloud_cover == 25.0
+        with pytest.raises(ValueError):
+            S2DataAccessConfig(max_cloud_cover=-1.0)
+        with pytest.raises(ValueError):
+            S2DataAccessConfig(max_cloud_cover=101.0)
 
 
 class TestSolverConfig:
