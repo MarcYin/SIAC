@@ -110,6 +110,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 python_classes = ["Test*"]
+pythonpath = ["python"]
 addopts = [
     "-v",
     "--tb=short",
@@ -118,6 +119,7 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
     "--cov-report=xml:coverage.xml",
+    "--cov-report=json:coverage.json",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -153,7 +155,7 @@ exclude_lines = [
     "@abstractmethod",
     "@overload",
 ]
-fail_under = 80
+fail_under = 95
 show_missing = true
 skip_covered = false
 

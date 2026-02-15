@@ -603,8 +603,9 @@ pytest tests/benchmarks/ -m benchmark --benchmark-only
 # Full suite
 pytest tests/ --tb=short
 
-# With coverage
-pytest tests/ --cov=siac --cov-report=term-missing
+# With strict coverage gates (global >=95%, each file >90%)
+pytest tests/ --cov=siac --cov-report=term-missing --cov-report=json:coverage.json --cov-report=xml:coverage.xml
+python tools/check_coverage_thresholds.py --min-total 95 --min-file 90
 ```
 
 ### CI Configuration

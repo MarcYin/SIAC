@@ -260,8 +260,9 @@ pip install -e ".[dev]"
 # Run tests
 pytest tests/ -v
 
-# Run with coverage
-pytest tests/ --cov=siac --cov-report=html
+# Run with strict coverage gates (global >=95%, each file >90%)
+pytest tests/ --cov=siac --cov-report=json:coverage.json --cov-report=xml:coverage.xml --cov-report=html
+python tools/check_coverage_thresholds.py --min-total 95 --min-file 90
 
 # Build Rust extensions
 maturin develop --release
