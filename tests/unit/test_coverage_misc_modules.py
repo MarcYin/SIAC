@@ -125,6 +125,18 @@ class TestAOI:
         with pytest.raises(ValueError, match="CRS is not set"):
             AOI.from_raster(da)
 
+    def test_from_raster_missing_rio_accessor_raises(self):
+        with pytest.raises(ValueError, match="missing rioxarray accessor"):
+            AOI.from_raster(object())  # type: ignore[arg-type]
+
+    def test_detect_crs_additional_paths(self, tmp_path: Path):
+        bad_json = tmp_path / "bad.json"
+        bad_json.write_text("{not-json")
+        assert _detect_crs(bad_json) is None
+
+        assert _detect_crs({"type": "Feature", "crs": "EPSG:4326"}) == "EPSG:4326"
+        assert _detect_crs({"type": "Feature", "crs": {"properties": {"other": "x"}}}) is None
+
 
 class TestExceptionsAndStubs:
     def test_exception_hierarchy(self):

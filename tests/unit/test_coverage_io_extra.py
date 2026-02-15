@@ -38,6 +38,9 @@ from siac.io.reprojection import (
 from siac.io.writers import (
     _compute_overview_levels,
     _prepare_for_write,
+    write_cog,
+    write_dataset,
+    write_zarr,
     write_auxiliary_products,
     write_boa_products,
     write_netcdf,
@@ -270,3 +273,55 @@ class TestWritersExtra:
         out = tmp_path / "quicklook.tif"
         p = write_rgb_quicklook(boa, out, target_resolution=40.0)
         assert p.exists()
+
+    def test_write_dataset_skip_nonspatial_and_write_zarr_chunks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        spatial = _make_da((16, 16))
+        ds_skip = xr.Dataset(
+            {
+                "meta": xr.DataArray(np.ones((16, 16), dtype=np.int16), dims=["y", "x"]),
+            }
+        )
+        paths = write_dataset(ds_skip, tmp_path / "out_skip", as_cog=False)
+        assert paths == {}
+
+        ds = xr.Dataset({"B02": spatial})
+        paths2 = write_dataset(ds, tmp_path / "out_ok", as_cog=False)
+        assert "B02" in paths2
+
+        monkeypatch.setattr(xr.Dataset, "chunk", lambda self, chunks: self)
+        zarr_path = tmp_path / "chunked.zarr"
+        write_zarr(ds[["B02"]], zarr_path, chunks={"y": 8, "x": 8})
+        assert zarr_path.exists()
+
+    def test_write_netcdf_dataarray_default_compression_and_write_cog_overviews(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        da = _make_da((16, 16))
+        captures: list[dict[str, object]] = []
+
+        monkeypatch.setattr(
+            xr.DataArray,
+            "to_netcdf",
+            lambda self, path, encoding=None, **kwargs: captures.append(  # noqa: ANN001
+                {"path": path, "encoding": encoding, "kwargs": kwargs}
+            ),
+        )
+        write_netcdf(da.rename(None), tmp_path / "d.nc", compression=None)
+        assert captures and "data" in captures[-1]["encoding"]
+
+        cog_calls: list[dict[str, object]] = []
+
+        def _fake_to_raster(self, path, **kwargs):  # noqa: ANN001
+            cog_calls.append(kwargs)
+            Path(path).write_bytes(b"x")
+
+        monkeypatch.setattr(type(da.rio), "to_raster", _fake_to_raster, raising=False)
+        out = write_cog(da, tmp_path / "x.tif", overviews=[2, 4], compression="deflate")
+        assert out.exists()
+        assert cog_calls and cog_calls[-1]["overviews"] == [2, 4]

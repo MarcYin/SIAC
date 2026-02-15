@@ -126,6 +126,15 @@ class TestFromConfig:
         cred = mgr.get_credentials("cds")
         assert cred.key == "my-cds-key"
 
+    def test_cdsapirc_read_error_is_ignored(self, monkeypatch, tmp_path):
+        rc_file = tmp_path / ".cdsapirc"
+        rc_file.write_text("key: ignored")
+        monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("siac.core.auth.Path.read_text", lambda self: (_ for _ in ()).throw(OSError("nope")))
+
+        mgr = CredentialManager.from_config(None)
+        assert mgr.has_credentials("cds") is False
+
 
 # ── 3. CDSE token caching ───────────────────────────────────────────
 
@@ -202,6 +211,19 @@ class TestCDSEToken:
         with pytest.raises(AuthenticationError, match="username.*password|password.*username"):
             mgr.get_cdse_token()
 
+    @patch("siac.core.auth._cdse_token_exchange")
+    @patch("siac.core.auth.time")
+    def test_existing_newer_token_is_kept(self, mock_time, mock_exchange):
+        mgr = self._make_mgr_with_cdse_creds()
+        # Stale wrt margin (so refresh path is entered), but still newer than fetched token.
+        mgr._oauth_tokens["cdse"] = OAuthToken(access_token="existing", expires_at=1000.0)
+
+        mock_time.monotonic = MagicMock(side_effect=[950.0, 950.0])
+        mock_exchange.return_value = ("fresh", 1)  # expires_at=951
+
+        token = mgr.get_cdse_token()
+        assert token == "existing"
+
 
 # ── 4. get_storage_options ───────────────────────────────────────────
 
@@ -261,3 +283,31 @@ class TestCDSEBackendWithAuth:
         )
         header = backend._get_auth_header()
         assert header == {"Authorization": "Bearer direct_token"}
+
+
+class TestCDSETokenExchange:
+    def test_exchange_success_and_missing_token(self, monkeypatch):
+        class _Resp:
+            def __init__(self, body):
+                self._body = body
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._body
+
+        monkeypatch.setattr(
+            "siac.core.auth.requests.post",
+            lambda *args, **kwargs: _Resp({"access_token": "abc", "expires_in": 123}),
+        )
+        token, exp = _cdse_token_exchange("u", "p")
+        assert token == "abc"
+        assert exp == 123
+
+        monkeypatch.setattr(
+            "siac.core.auth.requests.post",
+            lambda *args, **kwargs: _Resp({"expires_in": 123}),
+        )
+        with pytest.raises(AuthenticationError, match="access_token"):
+            _cdse_token_exchange("u", "p")

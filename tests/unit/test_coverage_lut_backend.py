@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import struct
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -261,6 +262,64 @@ class _BytesRangeFS:
         return self.payload[start_i:end_i]
 
 
+def _build_eocd(
+    *,
+    disk: int = 0,
+    cd_disk: int = 0,
+    entries_disk: int = 0,
+    entries_total: int = 0,
+    cd_size: int = 0,
+    cd_offset: int = 0,
+    comment_len: int = 0,
+) -> bytes:
+    return struct.pack(
+        "<IHHHHIIH",
+        0x06054B50,
+        disk,
+        cd_disk,
+        entries_disk,
+        entries_total,
+        cd_size,
+        cd_offset,
+        comment_len,
+    )
+
+
+def _build_cd_header(
+    *,
+    signature: int = 0x02014B50,
+    flag: int = 0,
+    compression: int = 0,
+    comp_size: int = 1,
+    uncomp_size: int = 1,
+    fname_len: int = 0,
+    extra_len: int = 0,
+    comment_len: int = 0,
+    disk_start: int = 0,
+    rel_offset: int = 100,
+) -> bytes:
+    return struct.pack(
+        "<IHHHHHHIIIHHHHHII",
+        signature,
+        20,
+        20,
+        flag,
+        compression,
+        0,
+        0,
+        0,
+        comp_size,
+        uncomp_size,
+        fname_len,
+        extra_len,
+        comment_len,
+        disk_start,
+        0,
+        0,
+        rel_offset,
+    )
+
+
 class TestHTTPRangeHelpers:
     def test_http_range_filesystem_with_range_support(self, monkeypatch):
         import requests
@@ -334,6 +393,125 @@ class TestHTTPRangeHelpers:
         with pytest.raises(KeyError):
             _ = store["missing"]
         store.close()
+
+    def test_zipfs_initialize_error_branches_zip64_and_central_directory(self):
+        # ZIP64 sentinel values + too-short tail for ZIP64 EOCD locator.
+        tail_short = b"A" * 10 + _build_eocd(
+            disk=0xFFFF,
+            cd_disk=0xFFFF,
+            entries_disk=0xFFFF,
+            entries_total=0xFFFF,
+            cd_size=0xFFFFFFFF,
+            cd_offset=0xFFFFFFFF,
+            comment_len=0,
+        )
+        zip_fs = _ReadOnlyZipFileSystem(_BytesRangeFS(tail_short), "dummy.zip")
+        with pytest.raises(ValueError, match="ZIP64 EOCD and locator do not fit"):
+            asyncio.run(zip_fs._initialize())
+
+        # ZIP64 markers present but ZIP64 EOCD signature missing in the searched window.
+        tail_long = b"A" * 120 + _build_eocd(
+            disk=0xFFFF,
+            cd_disk=0xFFFF,
+            entries_disk=0xFFFF,
+            entries_total=0xFFFF,
+            cd_size=0xFFFFFFFF,
+            cd_offset=0xFFFFFFFF,
+            comment_len=0,
+        )
+        zip_fs2 = _ReadOnlyZipFileSystem(_BytesRangeFS(tail_long), "dummy.zip")
+        with pytest.raises(ValueError, match="No ZIP64 EOCD found"):
+            asyncio.run(zip_fs2._initialize())
+
+        # Multi-disk central directory is rejected.
+        tail_multidisk = b"A" * 10 + _build_eocd(disk=1, cd_disk=0, entries_disk=1, entries_total=1)
+        zip_fs3 = _ReadOnlyZipFileSystem(_BytesRangeFS(tail_multidisk), "dummy.zip")
+        with pytest.raises(ValueError, match="Unsupported multi-disk"):
+            asyncio.run(zip_fs3._initialize())
+
+    def test_zipfs_initialize_error_branches_cd_entries(self):
+        class _TwoPhaseFS:
+            def __init__(self, tail: bytes, cd_payload: bytes):
+                self.tail = tail
+                self.cd_payload = cd_payload
+
+            async def _cat_file(self, path, start=None, end=None, **kwargs):  # noqa: ANN001, ARG002
+                if start is not None and start < 0:
+                    return self.tail
+                return self.cd_payload
+
+        # cd_size > returned bytes
+        tail = b"A" * 20 + _build_eocd(entries_disk=1, entries_total=1, cd_size=50, cd_offset=0)
+        fs_short = _TwoPhaseFS(tail, b"x" * 10)
+        zip_fs = _ReadOnlyZipFileSystem(fs_short, "dummy.zip")
+        with pytest.raises(ValueError, match="Failed to read central directory"):
+            asyncio.run(zip_fs._initialize())
+
+        # Truncated entry (< 46 bytes)
+        tail2 = b"A" * 20 + _build_eocd(entries_disk=1, entries_total=1, cd_size=20, cd_offset=0)
+        fs_trunc_entry = _TwoPhaseFS(tail2, b"x" * 20)
+        zip_fs2 = _ReadOnlyZipFileSystem(fs_trunc_entry, "dummy.zip")
+        with pytest.raises(ValueError, match="Truncated central directory entry"):
+            asyncio.run(zip_fs2._initialize())
+
+        # Invalid central directory signature.
+        bad_sig = _build_cd_header(signature=0x12345678)
+        tail3 = b"A" * 20 + _build_eocd(entries_disk=1, entries_total=1, cd_size=len(bad_sig), cd_offset=0)
+        fs_bad_sig = _TwoPhaseFS(tail3, bad_sig)
+        zip_fs3 = _ReadOnlyZipFileSystem(fs_bad_sig, "dummy.zip")
+        with pytest.raises(ValueError, match="Invalid central directory signature"):
+            asyncio.run(zip_fs3._initialize())
+
+    def test_zipfs_initialize_error_branches_filename_and_extra(self):
+        class _TwoPhaseFS:
+            def __init__(self, tail: bytes, cd_payload: bytes):
+                self.tail = tail
+                self.cd_payload = cd_payload
+
+            async def _cat_file(self, path, start=None, end=None, **kwargs):  # noqa: ANN001, ARG002
+                if start is not None and start < 0:
+                    return self.tail
+                return self.cd_payload
+
+        def _run_with_cd(cd_payload: bytes, msg: str) -> None:
+            tail = b"A" * 20 + _build_eocd(
+                entries_disk=1,
+                entries_total=1,
+                cd_size=len(cd_payload),
+                cd_offset=0,
+            )
+            zip_fs = _ReadOnlyZipFileSystem(_TwoPhaseFS(tail, cd_payload), "dummy.zip")
+            with pytest.raises(ValueError, match=msg):
+                asyncio.run(zip_fs._initialize())
+
+        # filename bytes missing
+        _run_with_cd(_build_cd_header(fname_len=5), "Truncated filename")
+
+        # extra field body missing
+        cd_extra_short = _build_cd_header(fname_len=1, extra_len=5) + b"a"
+        _run_with_cd(cd_extra_short, "Truncated extra field")
+
+        # extra field header missing (need at least 4 bytes)
+        cd_extra_header = _build_cd_header(fname_len=1, extra_len=3) + b"a" + b"\x01\x02\x03"
+        _run_with_cd(cd_extra_header, "Truncated extra field header")
+
+        # extra field payload missing after valid tag/size
+        cd_extra_payload = _build_cd_header(fname_len=1, extra_len=5) + b"a" + struct.pack("<HH", 1, 5) + b"x"
+        _run_with_cd(cd_extra_payload, "Truncated extra field payload")
+
+    def test_zipfs_parent_directory_construction_branch(self):
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+            # No explicit directory entries; parent dirs are inferred from file names.
+            zf.writestr("nested/dir/a.bin", b"a")
+            zf.writestr("nested/dir/b.bin", b"b")
+
+        zip_fs = _ReadOnlyZipFileSystem(_BytesRangeFS(buf.getvalue()), "dummy.zip")
+        asyncio.run(zip_fs._initialize())
+        assert zip_fs._files is not None
+        assert "nested" in zip_fs._files
+        assert "nested/dir" in zip_fs._files
+        assert "nested/dir/a.bin" in zip_fs._files
 
 
 class _FallbackSession:
@@ -506,6 +684,70 @@ class TestZipStoreUtilities:
             del store["x"]
         store.close()
 
+    def test_read_only_zip_listing_detail_and_close(self):
+        import siac.rt.lut.http_zip_store as zip_store
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+            zf.writestr(".zgroup", '{"zarr_format":2}')
+            zf.writestr("arr/", b"")
+            zf.writestr(
+                "arr/.zarray",
+                '{"zarr_format":2,"shape":[1],"chunks":[1],"dtype":"<u1","compressor":null,"fill_value":0,"order":"C","filters":null}',
+            )
+            zf.writestr("arr/0", b"\x01")
+
+        class _ClosableBytesFS(_BytesRangeFS):
+            def __init__(self, payload: bytes):
+                super().__init__(payload)
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        fs = _ClosableBytesFS(buf.getvalue())
+        zip_fs = zip_store._ReadOnlyZipFileSystem(fs, "dummy.zip")
+
+        async def _exercise():
+            root = await zip_fs._ls("", detail=True)
+            one = await zip_fs._ls(".zgroup", detail=True)
+            return root, one
+
+        root_listing, file_listing = asyncio.run(_exercise())
+        assert any(item["type"] == "directory" for item in root_listing)
+        assert file_listing[0]["type"] == "file"
+        zip_fs.close()
+        assert fs.closed is True
+
+    def test_store_helper_paths_and_local_mapper_branch(self, monkeypatch, tmp_path: Path):
+        import siac.rt.lut.store as lut_store
+
+        local_file_uri = (tmp_path / "lut.zarr").as_uri()
+        local_path = lut_store.as_local_path(local_file_uri)
+        assert local_path is not None
+        assert str(local_path).endswith("lut.zarr")
+
+        opts = lut_store.normalize_storage_options(
+            "s3://bucket/key",
+            {
+                "region": "eu-west-1",
+                "endpoint_url": "https://example.invalid",
+                "client_kwargs": {"region_name": "keep-me"},
+            },
+        )
+        assert opts["client_kwargs"]["region_name"] == "keep-me"
+        assert opts["client_kwargs"]["endpoint_url"] == "https://example.invalid"
+
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(
+            "fsspec.get_mapper",
+            lambda path, **kwargs: captured.update({"path": path, "kwargs": kwargs}) or {"ok": True},
+        )
+        out = lut_store.build_lut_store(str(tmp_path / "x.zarr"), {"anon": True})
+        assert out == {"ok": True}
+        assert captured["path"] == str(tmp_path / "x.zarr")
+        assert captured["kwargs"] == {"anon": True}
+
 
 class TestCreateLUTFromPy6S:
     def test_import_error_branch(self, tmp_path: Path):
@@ -581,3 +823,79 @@ class TestCreateLUTFromPy6S:
         assert "path_reflectance" in ds
         assert ds["path_reflectance"].shape == (1, 1, 1, 1, 1, 1)
         assert ds.attrs["aerosol_type"] == "unknown"
+
+    def test_create_lut_defaults_maritime_and_progress(self, tmp_path: Path, monkeypatch):
+        import siac.rt.lut.create as create_mod
+
+        class _FakeGeometry:
+            @staticmethod
+            def User():
+                return SimpleNamespace()
+
+        class _FakeWavelength:
+            def __init__(self, value):
+                self.value = value
+
+        class _FakeAtmosProfile:
+            @staticmethod
+            def UserWaterAndOzone(tcwv, ozone):
+                return (tcwv, ozone)
+
+        class _FakeAeroProfile:
+            Continental = "continental"
+            Maritime = "maritime"
+
+        class _FakeSixS:
+            def __init__(self):
+                self.outputs = None
+                self.geometry = None
+                self.aot550 = 0.0
+                self.wavelength = None
+
+            def run(self):
+                val = 0.02 + 0.1 * self.aot550 + 0.001 * float(getattr(self.wavelength, "value", 0.5))
+                self.outputs = SimpleNamespace(
+                    atmospheric_intrinsic_reflectance=val,
+                    transmittance_total_scattering=SimpleNamespace(downward=0.8, upward=0.85),
+                    spherical_albedo=0.03,
+                )
+
+        fake_module = SimpleNamespace(
+            SixS=_FakeSixS,
+            AtmosProfile=_FakeAtmosProfile,
+            AeroProfile=_FakeAeroProfile,
+            Geometry=_FakeGeometry,
+            Wavelength=_FakeWavelength,
+        )
+        monkeypatch.setitem(sys.modules, "Py6S", fake_module)
+        monkeypatch.setattr(create_mod.np, "logspace", lambda *args, **kwargs: np.array([0.2], dtype=np.float32))
+
+        # Defaults path (aot_values/tcwv_values None) + maritime branch.
+        create_lut_from_py6s(
+            output_path=tmp_path / "defaults.zarr",
+            wavelengths=[500.0],
+            sza_range=(0, 1, 1),
+            vza_range=(0, 1, 1),
+            raa_range=(0, 1, 1),
+            aot_values=None,
+            tcwv_values=None,
+            aerosol_type="maritime",
+        )
+
+        logged: list[str] = []
+        monkeypatch.setattr(
+            create_mod.logger,
+            "info",
+            lambda msg: logged.append(str(msg)),
+        )
+        create_lut_from_py6s(
+            output_path=tmp_path / "progress.zarr",
+            wavelengths=[500.0],
+            sza_range=(0, 10, 1),
+            vza_range=(0, 10, 1),
+            raa_range=(0, 10, 1),
+            aot_values=[0.1],
+            tcwv_values=[1.0],
+            aerosol_type="continental",
+        )
+        assert any("Progress: 1000/1000" in m for m in logged)

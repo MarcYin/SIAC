@@ -2,6 +2,10 @@
 Unit tests for BRDF kernel calculations.
 """
 
+import importlib
+import sys
+from types import ModuleType
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -151,3 +155,45 @@ class TestAlbedoFunctions:
         # BSA should be close to WSA at nadir
         wsa = compute_white_sky_albedo(f0, f1, f2)
         assert abs(bsa[0, 0] - wsa[0, 0]) < 0.1
+
+
+class TestKernelCoverageExtras:
+    def test_compute_kernels_modis_and_invalid(self):
+        vza = np.array([[0.1]], dtype=np.float32)
+        sza = np.array([[0.2]], dtype=np.float32)
+        raa = np.array([[0.3]], dtype=np.float32)
+
+        k_vol, k_geo = compute_kernels(vza, sza, raa, kernel_type="modis")
+        assert k_vol.shape == (1, 1)
+        assert k_geo.shape == (1, 1)
+
+        with pytest.raises(ValueError, match="Unknown kernel type"):
+            compute_kernels(vza, sza, raa, kernel_type="roujean")
+
+    def test_rust_accelerated_branch_via_reload(self, monkeypatch: pytest.MonkeyPatch):
+        class _FakeRustKernels:
+            def __init__(self, hb, br):  # noqa: ANN001
+                self.hb = hb
+                self.br = br
+
+            def compute(self, vza, sza, raa):  # noqa: ANN001
+                _ = (sza, raa)
+                return np.full_like(vza, 0.5), np.full_like(vza, -1.5)
+
+        fake_module = ModuleType("siac._rust")
+        fake_module.RossThickLiSparse = _FakeRustKernels  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "siac._rust", fake_module)
+
+        import siac.priors.brdf.kernels as kernels_mod
+
+        kernels_mod = importlib.reload(kernels_mod)
+        kernels = kernels_mod.BRDFKernels(use_rust=True)
+        vza = np.zeros((2, 2), dtype=np.float32)
+        sza = np.zeros((2, 2), dtype=np.float32)
+        raa = np.zeros((2, 2), dtype=np.float32)
+        k_vol, k_geo = kernels.compute(vza, sza, raa)
+        assert np.allclose(k_vol, 0.5)
+        assert np.allclose(k_geo, -1.5)
+
+        monkeypatch.delitem(sys.modules, "siac._rust", raising=False)
+        importlib.reload(kernels_mod)
