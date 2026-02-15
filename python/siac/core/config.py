@@ -329,6 +329,100 @@ class S2DataAccessConfig(BaseModel):
     )
 
 
+class CloudMaskConfig(BaseModel):
+    """Configuration for cloud/cloud-shadow class generation."""
+
+    mode: Literal["auto", "external_file", "user_callable", "none"] = Field(
+        default="auto",
+        description=(
+            "Cloud-mask source mode: 'auto' (run default detector), "
+            "'external_file', 'user_callable', or 'none'."
+        ),
+    )
+    provider: Literal["omnicloudmask"] = Field(
+        default="omnicloudmask",
+        description="Default cloud detector provider for mode='auto'.",
+    )
+    external_mask_path: Path | None = Field(
+        default=None,
+        description="Path to existing cloud/shadow raster for mode='external_file'.",
+    )
+    class_mapping: dict[int, list[int]] | None = Field(
+        default=None,
+        description=(
+            "Mapping from standardized class keys {0,1,2,3} to source class values. "
+            "Multiple source classes can map to one target class."
+        ),
+    )
+    unmapped_to_missing: bool = Field(
+        default=True,
+        description="When True, source classes not present in mapping are set to class 0.",
+    )
+    target_resolution_m: float = Field(
+        default=10.0,
+        gt=0.0,
+        description="Target resolution (meters) for cloud-mask generation.",
+    )
+    resolution_policy: Literal["auto", "force"] = Field(
+        default="auto",
+        description=(
+            "'auto': downsample finer-than-target data; keep coarser by default. "
+            "'force': always resample to target_resolution_m."
+        ),
+    )
+    allow_upsample_to_target: bool = Field(
+        default=False,
+        description=(
+            "If True and resolution_policy='auto', coarser data can be upsampled to target resolution."
+        ),
+    )
+    # Runtime-only callable hook for Python users; not serialized in YAML workflows.
+    user_callable: Any | None = Field(
+        default=None,
+        description="Callable returning cloud classes for mode='user_callable'.",
+    )
+
+
+class ExecutionConfig(BaseModel):
+    """Configuration for orchestration backend and concurrency controls."""
+
+    backend: Literal["thread", "dask"] = Field(
+        default="thread",
+        description="Execution backend for pipeline orchestration.",
+    )
+    max_workers: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum parallel workers for orchestration tasks.",
+    )
+    retries: int = Field(
+        default=2,
+        ge=0,
+        description="Retry count for transient M2/M3 provider failures.",
+    )
+    stage_timeout_s: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="Optional timeout per concurrent provider stage in seconds.",
+    )
+    dashboard: bool = Field(
+        default=False,
+        description="Enable dashboard when backend='dask'.",
+    )
+    dashboard_address: str | None = Field(
+        default=None,
+        description="Dashboard bind address for dask backend.",
+    )
+    performance_report_path: Path | None = Field(
+        default=None,
+        description="Optional dask performance report HTML output path.",
+    )
+    show_progress: bool = Field(
+        default=False,
+        description="Emit backend progress endpoints/log hints.",
+    )
+
+
 class OutputConfig(BaseModel):
     """Configuration for output products."""
 
@@ -427,6 +521,14 @@ class SIACConfig(BaseSettings):
     s2_data: S2DataAccessConfig = Field(
         default_factory=S2DataAccessConfig,
         description="Sentinel-2 data access configuration (query -> local SAFE resolution)",
+    )
+    cloud_mask: CloudMaskConfig = Field(
+        default_factory=CloudMaskConfig,
+        description="Cloud/cloud-shadow mask generation configuration",
+    )
+    execution: ExecutionConfig = Field(
+        default_factory=ExecutionConfig,
+        description="Execution backend and concurrency settings",
     )
 
     # Global settings

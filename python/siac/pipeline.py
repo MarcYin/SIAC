@@ -2,20 +2,17 @@
 Pipeline orchestration for SIAC atmospheric correction.
 
 This module contains the ``run_pipeline()`` function that wires modules
-M1–M6 together.  Each module is passed in as a plain callable — the
-pipeline never instantiates providers itself.
-
-Type aliases for each callable signature are defined here as well so that
-type checkers can verify user-provided overrides.
+M1-M6 together. Each module is passed in as a plain callable.
 """
 
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 import xarray as xr
 
@@ -69,7 +66,322 @@ SolverFn = Callable[[SolverInputBundle, Any], SolvedAtmosphere]
 CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, Any], CorrectionResult]
 
 
-# ── Pipeline orchestrator ──────────────────────────────────────────────
+_EXECUTION_KEYS = (
+    "backend",
+    "max_workers",
+    "retries",
+    "stage_timeout_s",
+    "dashboard",
+    "dashboard_address",
+    "performance_report_path",
+    "show_progress",
+)
+
+
+def _execution_values(source: Any) -> dict[str, Any]:
+    """Extract execution keys from dict/model-like objects."""
+    if source is None:
+        return {}
+    if isinstance(source, dict):
+        return {k: source[k] for k in _EXECUTION_KEYS if k in source}
+
+    out: dict[str, Any] = {}
+    for key in _EXECUTION_KEYS:
+        if hasattr(source, key):
+            out[key] = getattr(source, key)
+    return out
+
+
+def _resolve_execution_settings(
+    config: Any,
+    *,
+    execution: Any | None,
+    max_workers: int | None,
+) -> dict[str, Any]:
+    """Resolve execution settings from config + call overrides."""
+    settings: dict[str, Any] = {
+        "backend": "thread",
+        "max_workers": 4,
+        "retries": 2,
+        "stage_timeout_s": None,
+        "dashboard": False,
+        "dashboard_address": None,
+        "performance_report_path": None,
+        "show_progress": False,
+    }
+
+    settings.update(_execution_values(getattr(config, "execution", None)))
+    settings.update(_execution_values(execution))
+    if max_workers is not None:
+        settings["max_workers"] = max_workers
+
+    backend = str(settings.get("backend", "thread")).lower()
+    if backend not in {"thread", "dask"}:
+        raise ValueError(f"Unsupported execution backend: {backend!r}")
+    settings["backend"] = backend
+
+    workers = int(settings.get("max_workers", 4))
+    if workers < 1:
+        raise ValueError("max_workers must be >= 1")
+    settings["max_workers"] = workers
+
+    retries = int(settings.get("retries", 2))
+    if retries < 0:
+        raise ValueError("retries must be >= 0")
+    settings["retries"] = retries
+
+    timeout = settings.get("stage_timeout_s")
+    if timeout is not None:
+        timeout = float(timeout)
+        if timeout <= 0:
+            raise ValueError("stage_timeout_s must be > 0 when provided")
+    settings["stage_timeout_s"] = timeout
+
+    report_path = settings.get("performance_report_path")
+    if report_path is not None:
+        report_path = Path(report_path)
+    settings["performance_report_path"] = report_path
+
+    settings["dashboard"] = bool(settings.get("dashboard", False))
+    settings["show_progress"] = bool(settings.get("show_progress", False))
+    return settings
+
+
+def _aerosol_resolution(config: Any) -> float:
+    solver_cfg = getattr(config, "solver", None)
+    if solver_cfg is not None:
+        return float(getattr(solver_cfg, "aerosol_resolution", 1000.0))
+    return 1000.0
+
+
+def _call_with_retries(
+    fn: Callable[..., Any],
+    args: tuple[Any, ...],
+    *,
+    retries: int,
+    stage_name: str,
+) -> Any:
+    """Call a stage function with bounded retries."""
+    for attempt in range(retries + 1):
+        try:
+            return fn(*args)
+        except Exception:
+            if attempt >= retries:
+                raise
+            logger.warning(
+                "%s failed on attempt %d/%d; retrying",
+                stage_name,
+                attempt + 1,
+                retries + 1,
+            )
+
+    raise RuntimeError(f"Unreachable retry state for {stage_name}")
+
+
+def _prepare_observation(
+    input_path: Path,
+    aoi: AOI | None,
+    config: Any,
+    *,
+    preprocessor: PreprocessorFn,
+) -> tuple[ObservationBundle, tuple[float, float, float, float], str, datetime, float]:
+    logger.info("M1: Preprocessing satellite data...")
+    obs = preprocessor(input_path, aoi)
+    _validate_observation_bundle(obs)
+
+    bounds = obs.bounds
+    crs = obs.crs
+    obs_time = obs.metadata["observation_time"]
+    resolution = _aerosol_resolution(config)
+    return obs, bounds, crs, obs_time, resolution
+
+
+def _run_tail(
+    obs: ObservationBundle,
+    atmo: AtmosphericState,
+    surface: SurfacePrior,
+    config: Any,
+    *,
+    grid_assembler: GridAssemblerFn,
+    solver: SolverFn,
+    corrector: CorrectorFn,
+    rt_model: Any,
+) -> CorrectionResult:
+    _validate_atmospheric_state(atmo)
+    _validate_surface_prior(surface)
+
+    logger.info("M4: Assembling solver grids...")
+    solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
+
+    logger.info("M5: Solving for aerosol parameters...")
+    solved = solver(solver_inputs, config)
+
+    logger.info("M6: Applying atmospheric correction...")
+    result = corrector(obs, solved, rt_model)
+
+    logger.info("Pipeline complete.")
+    return result
+
+
+def _run_pipeline_thread(
+    input_path: Path,
+    aoi: AOI | None,
+    config: Any,
+    *,
+    preprocessor: PreprocessorFn,
+    atmo_provider: AtmoPriorFn,
+    surface_prior_provider: SurfacePriorFn,
+    grid_assembler: GridAssemblerFn,
+    solver: SolverFn,
+    corrector: CorrectorFn,
+    rt_model: Any,
+    settings: dict[str, Any],
+) -> CorrectionResult:
+    obs, bounds, crs, obs_time, resolution = _prepare_observation(
+        input_path,
+        aoi,
+        config,
+        preprocessor=preprocessor,
+    )
+
+    timeout = settings["stage_timeout_s"]
+    retries = settings["retries"]
+    logger.info("M2+M3: Fetching atmospheric & surface priors...")
+    with ThreadPoolExecutor(max_workers=settings["max_workers"]) as executor:
+        f_m2 = executor.submit(
+            _call_with_retries,
+            atmo_provider,
+            (bounds, crs, obs_time, resolution),
+            retries=retries,
+            stage_name="M2",
+        )
+        f_m3 = executor.submit(
+            _call_with_retries,
+            surface_prior_provider,
+            (bounds, crs, obs_time, obs.sensor_config, obs.geometry, resolution),
+            retries=retries,
+            stage_name="M3",
+        )
+        try:
+            atmo = f_m2.result(timeout=timeout)
+            surface = f_m3.result(timeout=timeout)
+        except FuturesTimeoutError as exc:
+            f_m2.cancel()
+            f_m3.cancel()
+            raise TimeoutError(
+                f"M2/M3 timed out after {timeout:.1f}s (thread backend)"
+            ) from exc
+        except Exception:
+            f_m2.cancel()
+            f_m3.cancel()
+            raise
+
+    return _run_tail(
+        obs,
+        atmo,
+        surface,
+        config,
+        grid_assembler=grid_assembler,
+        solver=solver,
+        corrector=corrector,
+        rt_model=rt_model,
+    )
+
+
+def _run_pipeline_dask(
+    input_path: Path,
+    aoi: AOI | None,
+    config: Any,
+    *,
+    preprocessor: PreprocessorFn,
+    atmo_provider: AtmoPriorFn,
+    surface_prior_provider: SurfacePriorFn,
+    grid_assembler: GridAssemblerFn,
+    solver: SolverFn,
+    corrector: CorrectorFn,
+    rt_model: Any,
+    settings: dict[str, Any],
+) -> CorrectionResult:
+    try:
+        from dask.distributed import (  # type: ignore[import-not-found]
+            Client,
+            LocalCluster,
+            TimeoutError as DaskTimeoutError,
+            performance_report,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Dask backend requested but dask.distributed is not installed. "
+            "Install dask/distributed or set execution.backend='thread'."
+        ) from exc
+
+    cluster_kwargs: dict[str, Any] = {
+        "n_workers": settings["max_workers"],
+        "threads_per_worker": 1,
+        "processes": False,
+        "dashboard_address": settings["dashboard_address"] if settings["dashboard"] else None,
+    }
+    timeout = settings["stage_timeout_s"]
+    retries = settings["retries"]
+
+    with LocalCluster(**cluster_kwargs) as cluster, Client(cluster) as client:
+        if settings["show_progress"] and getattr(client, "dashboard_link", None):
+            logger.info("Dask dashboard: %s", client.dashboard_link)
+
+        report_ctx = nullcontext()
+        report_path = settings["performance_report_path"]
+        if report_path is not None:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_ctx = performance_report(filename=str(report_path))
+
+        with report_ctx:
+            obs, bounds, crs, obs_time, resolution = _prepare_observation(
+                input_path,
+                aoi,
+                config,
+                preprocessor=preprocessor,
+            )
+
+            logger.info("M2+M3: Fetching atmospheric & surface priors...")
+            f_m2 = client.submit(
+                _call_with_retries,
+                atmo_provider,
+                (bounds, crs, obs_time, resolution),
+                retries=retries,
+                stage_name="M2",
+            )
+            f_m3 = client.submit(
+                _call_with_retries,
+                surface_prior_provider,
+                (bounds, crs, obs_time, obs.sensor_config, obs.geometry, resolution),
+                retries=retries,
+                stage_name="M3",
+            )
+            try:
+                atmo = f_m2.result(timeout=timeout)
+                surface = f_m3.result(timeout=timeout)
+            except DaskTimeoutError as exc:
+                f_m2.cancel()
+                f_m3.cancel()
+                raise TimeoutError(
+                    f"M2/M3 timed out after {timeout:.1f}s (dask backend)"
+                ) from exc
+            except Exception:
+                f_m2.cancel()
+                f_m3.cancel()
+                raise
+
+    return _run_tail(
+        obs,
+        atmo,
+        surface,
+        config,
+        grid_assembler=grid_assembler,
+        solver=solver,
+        corrector=corrector,
+        rt_model=rt_model,
+    )
+
 
 def run_pipeline(
     input_path: Path,
@@ -83,60 +395,41 @@ def run_pipeline(
     solver: SolverFn,
     corrector: CorrectorFn,
     rt_model: Any,
-    max_workers: int = 4,
+    max_workers: int | None = None,
+    execution: Any | None = None,
 ) -> CorrectionResult:
-    """Orchestrate module execution with concurrent data sourcing.
+    """Orchestrate module execution with a selectable execution backend."""
+    settings = _resolve_execution_settings(
+        config,
+        execution=execution,
+        max_workers=max_workers,
+    )
 
-    This is a plain function — no class, no state.  Each module callable
-    is passed as an argument (either a bound method or a plain function).
-
-    Phases:
-        1. M1 (preprocess) — must complete first to get bounds/crs/time.
-        2. M2 + M3 run concurrently (independent I/O).
-        3. M4 → M5 → M6 run sequentially.
-    """
-    # Phase 1: Preprocess
-    logger.info("M1: Preprocessing satellite data…")
-    obs = preprocessor(input_path, aoi)
-    _validate_observation_bundle(obs)
-
-    bounds = obs.bounds
-    crs = obs.crs
-    obs_time = obs.metadata["observation_time"]
-    resolution = getattr(config, "solver", None)
-    if resolution is not None:
-        resolution = getattr(resolution, "aerosol_resolution", 1000.0)
-    else:
-        resolution = 1000.0
-
-    # Phase 2: Concurrent data sourcing
-    logger.info("M2+M3: Fetching atmospheric & surface priors…")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        f_m2 = executor.submit(atmo_provider, bounds, crs, obs_time, resolution)
-        f_m3 = executor.submit(
-            surface_prior_provider,
-            bounds,
-            crs,
-            obs_time,
-            obs.sensor_config,
-            obs.geometry,
-            resolution,
+    if settings["backend"] == "dask":
+        return _run_pipeline_dask(
+            input_path,
+            aoi,
+            config,
+            preprocessor=preprocessor,
+            atmo_provider=atmo_provider,
+            surface_prior_provider=surface_prior_provider,
+            grid_assembler=grid_assembler,
+            solver=solver,
+            corrector=corrector,
+            rt_model=rt_model,
+            settings=settings,
         )
-        atmo = f_m2.result()
-        surface = f_m3.result()
 
-    _validate_atmospheric_state(atmo)
-    _validate_surface_prior(surface)
-
-    # Phase 3: Sequential processing
-    logger.info("M4: Assembling solver grids…")
-    solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
-
-    logger.info("M5: Solving for aerosol parameters…")
-    solved = solver(solver_inputs, config)
-
-    logger.info("M6: Applying atmospheric correction…")
-    result = corrector(obs, solved, rt_model)
-
-    logger.info("Pipeline complete.")
-    return result
+    return _run_pipeline_thread(
+        input_path,
+        aoi,
+        config,
+        preprocessor=preprocessor,
+        atmo_provider=atmo_provider,
+        surface_prior_provider=surface_prior_provider,
+        grid_assembler=grid_assembler,
+        solver=solver,
+        corrector=corrector,
+        rt_model=rt_model,
+        settings=settings,
+    )

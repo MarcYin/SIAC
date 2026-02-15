@@ -22,7 +22,7 @@ without changing the solver or correction stages.
 4. [Module Definitions](#4-module-definitions)
 5. [Custom Provider Pattern (User-Injected Functions)](#5-custom-provider-pattern-user-injected-functions)
 6. [AOI Scoping Rules (Global)](#6-aoi-scoping-rules-global)
-7. [Pipeline Orchestration (Sequential → Parallel)](#7-pipeline-orchestration-sequential--parallel)
+7. [Pipeline Orchestration (Execution Backends + Parallel Stages)](#7-pipeline-orchestration-execution-backends--parallel-stages)
 8. [Core Requirements for Adding New Sensors](#8-core-requirements-for-adding-new-sensors)
 9. [Sensor-Agnostic Spectral Model & Surface Prior](#9-sensor-agnostic-spectral-model--surface-prior)
 10. [Pluggable Data Providers (Atmosphere / BRDF / Surface Prior)](#10-pluggable-data-providers-atmosphere--brdf--surface-prior)
@@ -927,41 +927,54 @@ Key design decisions:
 
 ---
 
-## 7. Pipeline Orchestration (Sequential → Parallel)
+## 7. Pipeline Orchestration (Execution Backends + Parallel Stages)
 
 ### 7.1 Sensor-Agnostic Pipeline Flow
 
-Expressed in terms of modules and contracts:
+Expressed in terms of modules and contracts (target design):
 
 ```
-1. M1: preprocess(input_path, aoi)                                      → ObservationBundle
-2. M2: get_prior(bounds, crs, time, res)                                → AtmosphericState
-3. M3: get_surface_prior(bounds, crs, time, sensor_config, geometry, res) → SurfacePrior
-4. M4: assemble(obs, atmo, surface, rt_model)                           → SolverInputBundle
-5. M5: solve(inputs, solver_config)                                      → SolvedAtmosphere
-6. M6: correct(obs, solved, rt_model)                                    → CorrectionResult
+1. M1a: metadata + TOA load                                           → partial ObservationBundle inputs
+2. M1b: geometry + cloud/classes from shared TOA (parallel branches)  → complete ObservationBundle
+3. M2: get_prior(bounds, crs, time, res)                              → AtmosphericState
+4. M3: get_surface_prior(bounds, crs, time, sensor_config, geometry, res) → SurfacePrior
+5. M4: assemble(obs, atmo, surface, rt_model)                         → SolverInputBundle
+6. M5: solve(inputs, solver_config)                                   → SolvedAtmosphere
+7. M6: correct(obs, solved, rt_model)                                 → CorrectionResult
 ```
 
-Steps 1–3 are independent and can execute concurrently. Steps 4–6 are sequential.
+Execution policy:
 
-### 7.2 Parallel Fetch Groups
+- M1b geometry and cloud tasks run concurrently and share TOA to avoid duplicate reads.
+- M2 and M3 run concurrently once required metadata (`bounds`, `crs`, `time`) is available.
+- M4–M6 remain ordered.
 
-The pipeline supports a parallel I/O model mapped to module calls:
+### 7.2 Execution Backends
 
-- **Group A (M1)**: `preprocess()` → `ObservationBundle` (may be split internally into fast metadata + slow band loading)
-- **Group B (M2)**: `get_prior()` → `AtmosphericState`
-- **Group C (M3)**: `get_surface_prior()` → `SurfacePrior`
+Two orchestration backends are supported:
 
-**Design rule**: Groups A/B/C are independent modules returning independent contracts. They are fetched concurrently.
+| Backend | Role | Notes |
+|------|------|--------|
+| `thread` | Compatibility fallback | Local `ThreadPoolExecutor`; minimal dependencies. |
+| `dask` | Primary target backend | `dask.distributed` scheduling, retries, diagnostics dashboard, performance reports. |
 
-**Note**: M3 may depend on geometry from M1 for BRDF-based priors. In this case, M1 provides a fast metadata-only path:
-```python
-# M1 fast path: extract just geometry + metadata (< 1s)
-obs_meta = preprocessor.get_metadata_fast(input_path)
-# M3 can start with geometry from obs_meta while M1 continues loading TOA bands
-```
+Design rule:
 
-### 7.3 Input Requirements Per Processing Stage
+- Module contracts do not change by backend.
+- Backend selection only changes scheduling/orchestration behavior.
+
+### 7.3 Parallel Fetch Groups
+
+Parallel groups mapped to module responsibilities:
+
+- **Group A (M1b-geom)**: geometry extraction from M1 inputs.
+- **Group B (M1b-cloud)**: cloud/class generation from shared TOA and metadata.
+- **Group C (M2)**: atmospheric prior retrieval.
+- **Group D (M3)**: surface prior retrieval.
+
+Group A and B are always independent after TOA is loaded. Group C and D are independent after M1 metadata is available.
+
+### 7.4 Input Requirements Per Processing Stage
 
 #### Stage 1: Aerosol & Water Vapour Retrieval (M5 Solver)
 
@@ -990,156 +1003,63 @@ It receives a single `SolverInputBundle` containing:
 
 The corrector upsamples solved AOT/TCWV to native band resolutions for per-pixel correction.
 
-### 7.4 Dependency Analysis
+### 7.5 Dependency Analysis
 
 ```
-  TIME ──────────────────────────────────────────────────────────────▶
+  TIME ────────────────────────────────────────────────────────────────────▶
 
-  M1 ▐██████████████████████████████▌ preprocess → ObservationBundle  ~30s
-  M2 ▐████████████████▌ get_prior → AtmosphericState                 ~15s
-  M3 ▐████████████████████▌ get_surface_prior → SurfacePrior          ~20s
-                   │
-    ┌──────────────▼────────────────┐
-    │ M4: assemble → SolverInputBundle │      ← starts at max(M1, M2, M3)
-    └──────────────┬────────────────┘
-                   │
-    ┌──────────────▼────────────────┐
-    │ M5: solve → SolvedAtmosphere  │
-    └──────────────┬────────────────┘
-                   │
-    ┌──────────────▼────────────────┐
-    │ M6: correct → CorrectionResult│
-    └───────────────────────────────┘
+  M1a ▐████████████████▌ metadata + TOA load
+            │
+            ├──────────► M1b-geom  ▐████▌
+            └──────────► M1b-cloud ▐█████▌
+
+  M2  (after M1a metadata)  ▐████████████▌
+  M3  (after M1a metadata)  ▐██████████████▌
+                    │
+    ┌───────────────▼─────────────────┐
+    │ M4: assemble → SolverInputBundle│  ← starts at max(M1b, M2, M3)
+    └───────────────┬─────────────────┘
+                    │
+    ┌───────────────▼─────────────────┐
+    │ M5: solve → SolvedAtmosphere    │
+    └───────────────┬─────────────────┘
+                    │
+    ┌───────────────▼─────────────────┐
+    │ M6: correct → CorrectionResult  │
+    └─────────────────────────────────┘
 ```
 
-### 7.5 Implementation: `run_pipeline()` Function
+### 7.6 Implementation: `run_pipeline()` Backend Strategy
 
-Planned implementation lives in `python/siac/pipeline.py`:
+`python/siac/pipeline.py` should dispatch by execution backend:
 
 ```python
-from concurrent.futures import ThreadPoolExecutor
-
-def run_pipeline(
-    input_path: Path,
-    aoi: AOI | None,
-    config: SIACConfig,
-    *,
-    preprocessor: PreprocessorFn,
-    atmo_provider: AtmoPriorFn,
-    surface_prior_provider: SurfacePriorFn,
-    grid_assembler: GridAssemblerFn,
-    solver: SolverFn,
-    corrector: CorrectorFn,
-    rt_model: RTModelBackend,
-    max_workers: int = 4,
-) -> CorrectionResult:
-    """Orchestrate module execution with concurrent data sourcing.
-
-    This is a plain function — no class, no state. Each module callable
-    is passed as an argument (either a bound method or a plain function).
-    Easy to test, debug, and trace.
-    """
-    # Phase 1: Preprocess (needs to complete first to get bounds)
-    obs = preprocessor(input_path, aoi)
-    _validate_observation_bundle(obs)
-
-    bounds = obs.bounds
-    crs = obs.crs
-    obs_time = obs.metadata["observation_time"]
-    resolution = config.solver.aerosol_resolution
-
-    # Phase 2: Concurrent data sourcing (M2, M3 are independent)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        f_m2 = executor.submit(atmo_provider, bounds, crs, obs_time, resolution)
-        f_m3 = executor.submit(
-            surface_prior_provider,
-            bounds, crs, obs_time, obs.sensor_config, obs.geometry, resolution,
-        )
-        atmo = f_m2.result()
-        surface = f_m3.result()
-
-    _validate_atmospheric_state(atmo)
-    _validate_surface_prior(surface)
-
-    # Phase 3: Sequential processing
-    solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
-    solved = solver(solver_inputs, config.solver)
-    result = corrector(obs, solved, rt_model)
-
-    return result
+def run_pipeline(..., execution: ExecutionConfig) -> CorrectionResult:
+    if execution.backend == "dask":
+        return _run_pipeline_dask(..., execution=execution)
+    return _run_pipeline_thread(..., execution=execution)
 ```
 
-Note: no `self`, no stored state. Every dependency is an explicit argument. A stack
-trace from any failure points directly to the failing function — no method-resolution
-hunting.
+Dask path design:
 
-**Convenience wrapper** (`python/siac/siac.py`):
+- Create a `dask.distributed.Client`.
+- Submit M1 split tasks, then dependent M2/M3 tasks.
+- Use retries and per-stage timeout configuration for remote I/O tasks.
+- Optionally generate `performance_report` HTML.
+- Preserve existing validation checks before M4.
 
-```python
-def siac_process(
-    config: SIACConfig,
-    input_path: Path,
-    *,
-    aoi: AOI | None = None,
-    preprocessor: PreprocessorFn | None = None,
-    atmo_provider: AtmoPriorFn | None = None,
-    surface_prior_provider: SurfacePriorFn | None = None,
-    grid_assembler: GridAssemblerFn | None = None,
-    solver: SolverFn | None = None,
-    corrector: CorrectorFn | None = None,
-    rt_model: RTModelBackend | None = None,
-) -> CorrectionResult:
-    """Public entry point. Resolves defaults from config, then calls run_pipeline()."""
-    preprocessor = preprocessor or _resolve_preprocessor(config)
-    atmo_provider = atmo_provider or _resolve_atmo_provider(config)
-    surface_prior_provider = surface_prior_provider or _resolve_surface_prior_provider(config)
-    grid_assembler = grid_assembler or assemble_grids
-    solver = solver or solve_aerosol
-    corrector = corrector or correct_atmosphere
-    rt_model = rt_model or _resolve_rt_model(config)
+Thread path design:
 
-    return run_pipeline(
-        input_path, aoi, config,
-        preprocessor=preprocessor,
-        atmo_provider=atmo_provider,
-        surface_prior_provider=surface_prior_provider,
-        grid_assembler=grid_assembler,
-        solver=solver,
-        corrector=corrector,
-        rt_model=rt_model,
-    )
-```
+- Maintain simple local fallback with `ThreadPoolExecutor`.
+- Keep behavior parity with Dask path (same contracts, same exceptions).
 
-The `_resolve_*` helpers are plain functions that read `config` and return
-configured class instances or functions:
+Operational diagnostics:
 
-```python
-def _resolve_atmo_provider(config: SIACConfig) -> AtmoPriorFn:
-    """Return a callable (bounds, crs, time, res) -> AtmosphericState."""
-    match config.atmo_prior.provider:
-        case "cams":
-            provider = CAMSProvider(cams_dir=config.atmo_prior.cams_dir)
-            return provider.get_prior
-        case "merra2":
-            provider = MERRA2Provider(cache_dir=config.atmo_prior.cache_dir)
-            return provider.get_prior
-        case _:
-            raise ValueError(f"Unknown atmo provider: {config.atmo_prior.provider}")
+- Dask dashboard URL emitted in logs when enabled.
+- Optional run artifact: `output_dir/reports/dask-performance.html`.
+- Optional stage summary JSON for CI artifacts.
 
-def _resolve_preprocessor(config: SIACConfig) -> PreprocessorFn:
-    match config.sensor:
-        case "sentinel2":
-            return Sentinel2Preprocessor().preprocess
-        case "landsat89":
-            return Landsat89Preprocessor().preprocess
-        case _:
-            raise ValueError(f"Unknown sensor: {config.sensor}")
-```
-
-The pattern is: **construct the class** (configuring state once), then **return its method**
-as a plain callable. The pipeline sees only `Callable[..., SomeContract]`.
-
-### 7.6 Multi-Resolution Data Assembly (M4 Responsibility)
+### 7.7 Multi-Resolution Data Assembly (M4 Responsibility)
 
 SIAC operates across three spatial scales. The Grid Assembler (M4) is solely
 responsible for aligning data between them:
@@ -1152,57 +1072,40 @@ Core requirement: M4 produces a `SolverInputBundle` where all raster data is
 on the same grid. M6 receives native-resolution data from M1 and upsamples solved
 fields.
 
-### 7.7 Verification Plan (Orchestration)
+### 7.8 Verification Plan (Orchestration)
 
-**Tests** (`tests/integration/test_pipeline.py` — extend existing):
+**Tests** (`tests/integration/test_pipeline.py` and `tests/unit/test_satellite.py` — extend existing):
 
-**`run_pipeline()` — Happy path & call order:**
-
-| Test | What | Assert |
-|------|------|--------|
-| `test_pipeline_happy_path` | All six mock modules → `CorrectionResult` | No error, valid result type |
-| `test_pipeline_calls_all_modules` | Wrap each mock with call counter | Each mock called exactly once |
-| `test_pipeline_module_call_order` | Record call timestamps | M1 before M4; M4 before M5; M5 before M6 |
-| `test_pipeline_m2_m3_after_m1` | Record call times | M2 and M3 start after M1 returns (needs bounds) |
-| `test_pipeline_returns_correction_result` | Check returned type | `isinstance(result, CorrectionResult)` |
-
-**`run_pipeline()` — Validation integration:**
+**`run_pipeline()` — Happy path & ordering:**
 
 | Test | What | Assert |
 |------|------|--------|
-| `test_pipeline_invalid_m1_output` | M1 returns bundle missing `observation_time` | Clear error before M4 starts |
-| `test_pipeline_invalid_m2_output` | M2 returns negative uncertainties | Clear error before M4 starts |
-| `test_pipeline_invalid_m3_output` | M3 returns shape mismatch | Clear error before M4 starts |
-| `test_pipeline_m1_exception` | M1 raises `FileNotFoundError` | Exception propagates with useful traceback |
-| `test_pipeline_m2_exception` | M2 raises `ConnectionError` | Exception propagates, not swallowed by thread |
+| `test_pipeline_happy_path` | All modules mocked | Returns `CorrectionResult` |
+| `test_pipeline_call_order` | Trace stage transitions | M1 before M4; M4 before M5; M5 before M6 |
+| `test_m1_geometry_cloud_parallel` | M1 geometry/cloud each sleep 0.5 s | Combined latency < 0.8 s |
+| `test_shared_toa_single_read` | Instrument TOA read counter | TOA read exactly once |
 
-**`siac_process()` — Config resolution:**
-
-| Test | What | Assert |
-|------|------|--------|
-| `test_siac_process_resolves_defaults` | Call with config only (no overrides) | `_resolve_*` helpers called, pipeline runs |
-| `test_siac_process_explicit_override` | Pass custom `atmo_provider` | Config default NOT called |
-| `test_siac_process_none_means_default` | All args are `None` | Resolved to config defaults |
-
-**`tests/unit/test_resolve.py` — `_resolve_*` helpers:**
+**Backend parity tests:**
 
 | Test | What | Assert |
 |------|------|--------|
-| `test_resolve_preprocessor_sentinel2` | `config.sensor = "sentinel2"` | Returns callable wrapping `Sentinel2Preprocessor` |
-| `test_resolve_preprocessor_unknown` | `config.sensor = "unknown"` | `ValueError` |
-| `test_resolve_atmo_cams` | `config.atmo_prior.provider = "cams"` | Returns `CAMSProvider.get_prior` bound method |
-| `test_resolve_atmo_merra2` | `config.atmo_prior.provider = "merra2"` | Returns `MERRA2Provider.get_prior` bound method |
-| `test_resolve_atmo_unknown` | `config.atmo_prior.provider = "xxx"` | `ValueError` |
-| `test_resolve_rt_model_emulator` | `config.rt_model.backend = "emulator"` | Returns `EmulatorBackend` instance |
-| `test_resolve_returns_callable` | All `_resolve_*` helpers | Returned value is `callable()` |
+| `test_dask_vs_thread_equivalence` | Same mocked inputs/backends | Output arrays equal within tolerance |
+| `test_thread_backend_fallback` | `backend="thread"` | Pipeline still works without Dask |
 
-**Concurrency tests** (`tests/benchmarks/test_perf.py`):
+**Resilience tests (Dask path):**
 
 | Test | What | Assert |
 |------|------|--------|
-| `test_m2_m3_concurrent` | M2/M3 mocks each sleep 0.5 s | Total time < 0.8 s (parallel, not 1.0 s) |
-| `test_pipeline_sequential_fallback` | `max_workers=1` | Pipeline still works, M2/M3 run sequentially |
-| `test_concurrent_exception_handling` | M2 raises after 0.2 s | Exception propagated, M3 not swallowed |
+| `test_retry_transient_m2_failure` | M2 fails once then succeeds | Pipeline succeeds with retry |
+| `test_stage_timeout` | Slow M3 exceeds timeout | Clear timeout error with stage context |
+| `test_cancellation_propagation` | Hard failure in one branch | Dependent futures canceled/aborted |
+
+**Observability tests:**
+
+| Test | What | Assert |
+|------|------|--------|
+| `test_performance_report_output` | `performance_report` enabled | HTML file created |
+| `test_progress_summary_output` | stage-summary enabled | JSON summary created |
 
 ---
 
@@ -1219,7 +1122,7 @@ You must provide something that produces an `ObservationBundle`.
 class MySensorPreprocessor:
     def load_toa(self, input_path: Path) -> xr.Dataset: ...
     def extract_geometry(self, input_path: Path) -> GeometryAngles: ...
-    def extract_cloud_mask(self, input_path: Path) -> xr.DataArray: ...
+    def extract_cloud_mask(self, input_path: Path, toa: xr.Dataset | None = None) -> xr.DataArray: ...
     def get_metadata(self, input_path: Path) -> dict[str, Any]: ...
     def build_sensor_config(self, metadata: dict) -> SensorConfig: ...
 

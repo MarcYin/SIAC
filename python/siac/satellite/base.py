@@ -7,6 +7,8 @@ preprocessors and common utilities shared across sensors.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from inspect import Parameter, signature
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -72,12 +74,17 @@ class BaseSatellitePreprocessor(ABC):
         ...
 
     @abstractmethod
-    def extract_cloud_mask(self, input_path: str | Path) -> xr.DataArray:
+    def extract_cloud_mask(
+        self,
+        input_path: str | Path,
+        toa: xr.Dataset | None = None,
+    ) -> xr.DataArray:
         """
         Generate cloud mask.
 
         Args:
             input_path: Path to satellite data
+            toa: Optional preloaded TOA dataset to avoid duplicate reads
 
         Returns:
             Boolean DataArray (True = cloudy/invalid)
@@ -121,19 +128,43 @@ class BaseSatellitePreprocessor(ABC):
         toa = self.load_toa(input_path)
         logger.info(f"Loaded TOA with bands: {list(toa.data_vars)}")
 
-        geometry = self.extract_geometry(input_path)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_geometry = executor.submit(self.extract_geometry, input_path)
+            f_cloud = executor.submit(self._extract_cloud_mask_with_toa, input_path, toa)
+
+            geometry = f_geometry.result()
+            cloud_mask = f_cloud.result()
+
         logger.info(f"Extracted geometry (SZA mean: {float(geometry.sza.mean()):.2f} rad)")
 
-        cloud_mask = self.extract_cloud_mask(input_path)
         cloud_fraction = float(cloud_mask.mean())
         logger.info(f"Cloud fraction: {cloud_fraction:.1%}")
 
-        return {
+        result = {
             "toa": toa,
             "geometry": geometry,
             "cloud_mask": cloud_mask,
             "metadata": metadata,
         }
+        cloud_classes = getattr(self, "_last_cloud_classes", None)
+        if cloud_classes is not None:
+            result["cloud_classes"] = cloud_classes
+        return result
+
+    def _extract_cloud_mask_with_toa(
+        self,
+        input_path: Path,
+        toa: xr.Dataset,
+    ) -> xr.DataArray:
+        """Call extract_cloud_mask with TOA when the implementation supports it."""
+        params = signature(self.extract_cloud_mask).parameters.values()
+        accepts_toa = any(
+            p.name == "toa" or p.kind == Parameter.VAR_KEYWORD
+            for p in params
+        )
+        if accepts_toa:
+            return self.extract_cloud_mask(input_path, toa=toa)
+        return self.extract_cloud_mask(input_path)
 
 
 # =============================================================================

@@ -3,7 +3,9 @@ Integration tests: solver -> corrector pipeline + run_pipeline orchestration.
 """
 
 import dataclasses
+import sys
 import time
+from types import SimpleNamespace
 import numpy as np
 import pytest
 import xarray as xr
@@ -446,3 +448,89 @@ class TestConcurrency:
         elapsed = time.monotonic() - t0
         # If truly concurrent, should take ~0.3s not ~0.6s
         assert elapsed < 0.55, f"M2+M3 took {elapsed:.2f}s — expected < 0.55s (concurrent)"
+
+    def test_run_pipeline_dispatches_backend(self, monkeypatch):
+        calls = {}
+
+        def _fake_thread(*args, **kwargs):  # noqa: ANN001
+            calls["backend"] = "thread"
+            return "thread-result"
+
+        def _fake_dask(*args, **kwargs):  # noqa: ANN001
+            calls["backend"] = "dask"
+            return "dask-result"
+
+        monkeypatch.setattr("siac.pipeline._run_pipeline_thread", _fake_thread)
+        monkeypatch.setattr("siac.pipeline._run_pipeline_dask", _fake_dask)
+
+        cfg_thread = SimpleNamespace(
+            execution=SimpleNamespace(
+                backend="thread",
+                max_workers=2,
+                retries=0,
+                stage_timeout_s=None,
+                dashboard=False,
+                dashboard_address=None,
+                performance_report_path=None,
+                show_progress=False,
+            )
+        )
+        out_thread = run_pipeline(
+            Path("/fake"),
+            None,
+            cfg_thread,
+            preprocessor=lambda path, aoi=None: None,
+            atmo_provider=lambda *args, **kwargs: None,
+            surface_prior_provider=lambda *args, **kwargs: None,
+            grid_assembler=lambda *args, **kwargs: None,
+            solver=lambda *args, **kwargs: None,
+            corrector=lambda *args, **kwargs: None,
+            rt_model=None,
+        )
+        assert out_thread == "thread-result"
+        assert calls["backend"] == "thread"
+
+        cfg_dask = SimpleNamespace(
+            execution=SimpleNamespace(
+                backend="dask",
+                max_workers=2,
+                retries=0,
+                stage_timeout_s=None,
+                dashboard=False,
+                dashboard_address=None,
+                performance_report_path=None,
+                show_progress=False,
+            )
+        )
+        out_dask = run_pipeline(
+            Path("/fake"),
+            None,
+            cfg_dask,
+            preprocessor=lambda path, aoi=None: None,
+            atmo_provider=lambda *args, **kwargs: None,
+            surface_prior_provider=lambda *args, **kwargs: None,
+            grid_assembler=lambda *args, **kwargs: None,
+            solver=lambda *args, **kwargs: None,
+            corrector=lambda *args, **kwargs: None,
+            rt_model=None,
+        )
+        assert out_dask == "dask-result"
+        assert calls["backend"] == "dask"
+
+    def test_dask_backend_missing_dependency_raises(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "dask", None)
+        monkeypatch.setitem(sys.modules, "dask.distributed", None)
+
+        with pytest.raises(RuntimeError, match="dask.distributed is not installed"):
+            run_pipeline(
+                Path("/fake"),
+                None,
+                SimpleNamespace(execution=SimpleNamespace(backend="dask")),
+                preprocessor=lambda path, aoi=None: None,
+                atmo_provider=lambda *args, **kwargs: None,
+                surface_prior_provider=lambda *args, **kwargs: None,
+                grid_assembler=lambda *args, **kwargs: None,
+                solver=lambda *args, **kwargs: None,
+                corrector=lambda *args, **kwargs: None,
+                rt_model=None,
+            )

@@ -11,6 +11,8 @@ from siac.core.config import (
     SIACConfig,
     AtmoPriorConfig,
     BRDFConfig,
+    CloudMaskConfig,
+    ExecutionConfig,
     S2DataAccessConfig,
     RTModelConfig,
     SolverConfig,
@@ -31,6 +33,8 @@ class TestSIACConfig:
         assert config.atmo_prior.provider == "cams"
         assert config.brdf.provider == "mcd43"
         assert config.s2_data.backend == "local"
+        assert config.cloud_mask.mode == "auto"
+        assert config.execution.backend == "thread"
         assert config.rt_model.backend == "emulator"
         assert config.rt_model.lut_path == DEFAULT_LUT_URL
 
@@ -41,6 +45,12 @@ class TestSIACConfig:
             "atmo_prior": {"provider": "merra2"},
             "brdf": {"provider": "vnp43", "temporal_window": 8},
             "s2_data": {"backend": "gcs", "max_cloud_cover": 30.0},
+            "cloud_mask": {
+                "mode": "external_file",
+                "external_mask_path": "/tmp/cloud.tif",
+                "class_mapping": {2: [8, 9, 10], 3: [3], 1: [4, 5, 6, 7]},
+            },
+            "execution": {"backend": "thread", "max_workers": 8, "retries": 1},
         }
 
         config = SIACConfig(**data)
@@ -51,6 +61,10 @@ class TestSIACConfig:
         assert config.brdf.temporal_window == 8
         assert config.s2_data.backend == "gcs"
         assert config.s2_data.max_cloud_cover == 30.0
+        assert config.cloud_mask.mode == "external_file"
+        assert str(config.cloud_mask.external_mask_path) == "/tmp/cloud.tif"
+        assert config.execution.max_workers == 8
+        assert config.execution.retries == 1
 
     def test_config_to_yaml(self, tmp_path: Path):
         """Config should serialize to YAML."""
@@ -156,6 +170,43 @@ class TestS2DataAccessConfig:
             S2DataAccessConfig(max_cloud_cover=-1.0)
         with pytest.raises(ValueError):
             S2DataAccessConfig(max_cloud_cover=101.0)
+
+
+class TestCloudMaskConfig:
+    def test_modes(self):
+        for mode in ["auto", "external_file", "user_callable", "none"]:
+            cfg = CloudMaskConfig(mode=mode)
+            assert cfg.mode == mode
+
+    def test_target_resolution_must_be_positive(self):
+        with pytest.raises(ValueError):
+            CloudMaskConfig(target_resolution_m=0.0)
+
+    def test_resolution_policy_choices(self):
+        cfg = CloudMaskConfig(resolution_policy="force")
+        assert cfg.resolution_policy == "force"
+
+
+class TestExecutionConfig:
+    def test_backend_choices(self):
+        for backend in ["thread", "dask"]:
+            cfg = ExecutionConfig(backend=backend)
+            assert cfg.backend == backend
+
+    def test_max_workers_and_retries_bounds(self):
+        cfg = ExecutionConfig(max_workers=2, retries=3)
+        assert cfg.max_workers == 2
+        assert cfg.retries == 3
+        with pytest.raises(ValueError):
+            ExecutionConfig(max_workers=0)
+        with pytest.raises(ValueError):
+            ExecutionConfig(retries=-1)
+
+    def test_stage_timeout_optional_and_positive(self):
+        assert ExecutionConfig(stage_timeout_s=None).stage_timeout_s is None
+        assert ExecutionConfig(stage_timeout_s=30.0).stage_timeout_s == 30.0
+        with pytest.raises(ValueError):
+            ExecutionConfig(stage_timeout_s=0.0)
 
 
 class TestSolverConfig:

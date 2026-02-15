@@ -201,3 +201,62 @@ class TestSentinel2Internals:
         geom = p.extract_geometry(safe)
         assert geom.sza.size > 0
         assert geom.vza.size > 0
+
+    def test_cloud_mask_error_paths_and_settings(self, tmp_path: Path, monkeypatch):
+        safe = _safe_tree(tmp_path)
+        p = Sentinel2Preprocessor(config={"cloud_mask": {"external_mask_path": "masks/cloud.tif"}})
+
+        toa = _toa = xr.Dataset({"B04": _da((2, 2), 0.2)})
+
+        calls = {"n": 0}
+
+        def _fake_build(*args, **kwargs):  # noqa: ANN001
+            calls["n"] += 1
+            if kwargs.get("mode") == "none":
+                return xr.full_like(_da((2, 2), 0.2), 1, dtype=np.uint8)
+            raise ValueError("Could not find any red band")
+
+        monkeypatch.setattr("siac.satellite.sentinel2.build_cloud_classes", _fake_build)
+        out = p.extract_cloud_mask(safe, toa=toa)
+        assert out.dtype == bool
+        assert calls["n"] == 2  # auto + fallback none
+
+        monkeypatch.setattr(
+            "siac.satellite.sentinel2.build_cloud_classes",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("other")),
+        )
+        with pytest.raises(ValueError, match="other"):
+            p.extract_cloud_mask(safe, toa=toa)
+
+        settings = p._cloud_mask_settings(safe)
+        assert settings["external_mask_path"] == safe / "masks" / "cloud.tif"
+        assert p._get_namespace(ET.fromstring("<root/>")) == ""
+
+    def test_finders_and_img_data_fallback_paths(self, tmp_path: Path):
+        p = Sentinel2Preprocessor()
+        safe = _safe_tree(tmp_path)
+        p._resolve_paths(safe)
+
+        # Product XML second-candidate branch and no-candidate branch.
+        md = safe / "metadata.xml"
+        md.write_text("<root/>")
+        if (safe / "MTD_MSIL1C.xml").exists():
+            (safe / "MTD_MSIL1C.xml").unlink()
+        assert p._find_product_xml(safe) == md
+        md.unlink()
+        assert p._find_product_xml(safe) is None
+
+        # Granule XML fallback candidate and no-candidate branch.
+        g = p._granule_path / "X_MTD_ALT.xml"
+        g.write_text("<root/>")
+        assert p._find_granule_xml() == g
+        g.unlink()
+        assert p._find_granule_xml() is None
+
+        # IMG_DATA fallback for AWS-like granule layout.
+        p2 = Sentinel2Preprocessor()
+        aws = tmp_path / "aws_scene"
+        aws.mkdir()
+        (aws / "metadata.xml").write_text("<root/>")
+        p2._resolve_paths(aws)
+        assert p2._get_img_data_path() == aws

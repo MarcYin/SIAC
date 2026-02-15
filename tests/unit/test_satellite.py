@@ -2,6 +2,7 @@
 Unit tests for satellite preprocessors.
 """
 
+import threading
 import numpy as np
 import pytest
 import xarray as xr
@@ -201,3 +202,61 @@ class TestPreprocessorBase:
         assert "get_metadata" in preprocessor.calls
         assert "toa" in result
         assert "geometry" in result
+
+    def test_preprocess_parallelizes_geometry_and_cloud_and_reuses_toa(self):
+        """Preprocess should run geometry/cloud in parallel and avoid TOA re-reads."""
+
+        geom_started = threading.Event()
+        cloud_started = threading.Event()
+
+        class TestPreprocessor(BaseSatellitePreprocessor):
+            def __init__(self):
+                super().__init__()
+                self.load_toa_calls = 0
+                self._last_toa = None
+
+            @property
+            def sensor_config(self):
+                from siac.core.types import SENTINEL2A_CONFIG
+                return SENTINEL2A_CONFIG
+
+            def load_toa(self, input_path):
+                del input_path
+                self.load_toa_calls += 1
+                self._last_toa = xr.Dataset(
+                    {
+                        "B02": xr.DataArray(
+                            np.ones((6, 6), dtype=np.float32),
+                            dims=["y", "x"],
+                        )
+                    }
+                )
+                return self._last_toa
+
+            def extract_geometry(self, input_path):
+                del input_path
+                from siac.core.types import GeometryAngles
+
+                geom_started.set()
+                assert cloud_started.wait(timeout=1.0)
+                arr = xr.DataArray(np.ones((6, 6)), dims=["y", "x"])
+                return GeometryAngles(sza=arr, saa=arr, vza=arr, vaa=arr)
+
+            def extract_cloud_mask(self, input_path, toa=None):
+                del input_path
+                cloud_started.set()
+                assert geom_started.wait(timeout=1.0)
+                assert toa is self._last_toa
+                return xr.DataArray(np.zeros((6, 6), dtype=bool), dims=["y", "x"])
+
+            def get_metadata(self, input_path):
+                del input_path
+                return {"sensor": "TEST"}
+
+        preprocessor = TestPreprocessor()
+        result = preprocessor.preprocess("/fake/path")
+
+        assert preprocessor.load_toa_calls == 1
+        assert geom_started.is_set()
+        assert cloud_started.is_set()
+        assert "cloud_mask" in result

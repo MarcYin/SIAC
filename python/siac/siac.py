@@ -82,6 +82,11 @@ class SIAC:
         # 1. Detect sensor and get preprocessor
         sensor_id = self.config.sensor if self.config.sensor != "auto" else detect_sensor(input_path)
         preprocessor = get_preprocessor(sensor_id)
+        if isinstance(getattr(preprocessor, "config", None), dict):
+            preprocessor.config = {
+                **preprocessor.config,
+                "cloud_mask": self.config.cloud_mask.model_dump(exclude={"user_callable"}),
+            }
         sensor_config = preprocessor.sensor_config
 
         # 2. Preprocess satellite data
@@ -124,6 +129,9 @@ class SIAC:
 
         corrector = AtmosphericCorrector(rt_model, sensor_config)
         result = corrector.correct(toa, geometry, solved_atmo, cloud_mask)
+        cloud_classes = preprocess_result.get("cloud_classes")
+        if cloud_classes is not None:
+            result.metadata["cloud_classes"] = cloud_classes
 
         # 9. Save output if path provided
         if output_path is not None:
@@ -503,8 +511,18 @@ def _resolve_preprocessor(config: SIACConfig) -> PreprocessorFn:
     """Return a callable ``(path, aoi) -> ObservationBundle``."""
     sensor = config.sensor
     if sensor in ("s2", "sentinel2"):
+        from inspect import signature
+
         from siac.satellite.sentinel2 import Sentinel2Preprocessor
-        pp = Sentinel2Preprocessor()
+
+        cloud_cfg = config.cloud_mask.model_dump(exclude={"user_callable"})
+        params = signature(Sentinel2Preprocessor).parameters
+        if "config" in params:
+            pp = Sentinel2Preprocessor(config={"cloud_mask": cloud_cfg})
+        else:
+            pp = Sentinel2Preprocessor()
+            if hasattr(pp, "config") and isinstance(pp.config, dict):
+                pp.config.setdefault("cloud_mask", cloud_cfg)
         return pp.preprocess
     raise ValueError(f"Unknown sensor: {sensor!r}")
 

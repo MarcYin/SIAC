@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from siac.cloud import build_cloud_classes, classes_to_bool_mask
 from siac.core.types import (
     SENTINEL2A_CONFIG,
     SENTINEL2B_CONFIG,
@@ -62,6 +63,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         super().__init__(config)
         self._satellite_id: str | None = None
         self._granule_path: Path | None = None
+        self._last_cloud_classes: xr.DataArray | None = None
 
     @property
     def sensor_config(self) -> SensorConfig:
@@ -153,36 +155,48 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             vaa=degrees_to_radians(vaa),
         )
 
-    def extract_cloud_mask(self, input_path: str | Path) -> xr.DataArray:
+    def extract_cloud_mask(
+        self,
+        input_path: str | Path,
+        toa: xr.Dataset | None = None,
+    ) -> xr.DataArray:
         """
-        Generate cloud mask using simple threshold or ML model.
-
-        For full ML-based cloud detection, use the cloud detector module.
-        This provides a quick threshold-based mask.
+        Generate boolean cloud mask from standardized cloud classes.
         """
         input_path = Path(input_path)
 
-        # Load TOA for cloud detection bands
-        toa = self.load_toa(input_path)
+        if toa is None:
+            toa = self.load_toa(input_path)
+        settings = self._cloud_mask_settings(input_path)
+        try:
+            cloud_classes = build_cloud_classes(
+                toa,
+                self.sensor_config,
+                mode=settings["mode"],
+                provider=settings["provider"],
+                class_mapping=settings["class_mapping"],
+                external_mask_path=settings["external_mask_path"],
+                user_callable=settings["user_callable"],
+                target_resolution_m=settings["target_resolution_m"],
+                resolution_policy=settings["resolution_policy"],
+                allow_upsample_to_target=settings["allow_upsample_to_target"],
+                unmapped_to_missing=settings["unmapped_to_missing"],
+            )
+        except ValueError as exc:
+            if settings["mode"] != "auto" or "Could not find any" not in str(exc):
+                raise
+            logger.warning(
+                "Auto cloud-mask mode needs red/green/nir bands; "
+                "falling back to clear mask because required bands are missing."
+            )
+            cloud_classes = build_cloud_classes(
+                toa,
+                self.sensor_config,
+                mode="none",
+            )
+        self._last_cloud_classes = cloud_classes
 
-        # Simple cirrus + bright pixel detection
-        cloud_mask = xr.zeros_like(toa["B04"], dtype=bool)
-
-        # Cirrus band threshold (B10)
-        if "B10" in toa:
-            cirrus = reproject_match(toa["B10"], toa["B04"])
-            cloud_mask = cloud_mask | (cirrus > 0.01)
-
-        # Bright pixel threshold (simple)
-        cloud_mask = cloud_mask | (toa["B04"] > 0.35)
-
-        # Blue band bright
-        if "B02" in toa:
-            b02 = reproject_match(toa["B02"], toa["B04"])
-            cloud_mask = cloud_mask | (b02 > 0.4)
-
-        cloud_mask.name = "cloud_mask"
-        return cloud_mask
+        return classes_to_bool_mask(cloud_classes)
 
     def get_metadata(self, input_path: str | Path) -> dict[str, Any]:
         """Extract metadata from SAFE directory."""
@@ -435,6 +449,31 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         # Resample to target grid
         return reproject_match(da, target, resampling="bilinear")
+
+    def _cloud_mask_settings(self, input_path: Path) -> dict[str, Any]:
+        """Resolve cloud-mask settings from preprocessor config and input path."""
+        defaults: dict[str, Any] = {
+            "mode": "auto",
+            "provider": "omnicloudmask",
+            "class_mapping": None,
+            "external_mask_path": None,
+            "user_callable": None,
+            "target_resolution_m": 10.0,
+            "resolution_policy": "auto",
+            "allow_upsample_to_target": False,
+            "unmapped_to_missing": True,
+        }
+        cloud_cfg = self.config.get("cloud_mask", {}) if isinstance(self.config, dict) else {}
+        if isinstance(cloud_cfg, dict):
+            defaults.update(cloud_cfg)
+        # Resolve external file path relative to SAFE directory when needed.
+        external = defaults.get("external_mask_path")
+        if isinstance(external, str) and external:
+            p = Path(external)
+            if not p.is_absolute():
+                p = input_path / p
+            defaults["external_mask_path"] = p
+        return defaults
 
     def _get_namespace(self, root: ET.Element) -> str:
         """Extract XML namespace from root element."""

@@ -85,12 +85,17 @@ class SatellitePreprocessor(Protocol):
         """
         ...
 
-    def extract_cloud_mask(self, input_path: str) -> xr.DataArray:
+    def extract_cloud_mask(
+        self,
+        input_path: str,
+        toa: xr.Dataset | None = None,
+    ) -> xr.DataArray:
         """
         Generate cloud mask from satellite data.
 
         Args:
             input_path: Path to satellite data directory or file
+            toa: Optional preloaded TOA dataset
 
         Returns:
             xr.DataArray with boolean mask (True = cloudy/invalid).
