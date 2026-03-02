@@ -11,7 +11,6 @@ import numpy as np
 import xarray as xr
 
 from siac.core.types import AtmosphericState, GeometryAngles, RTCoefficients, SensorBand
-from siac.rt.lut.constants import LUT_COORD_DIMS
 from siac.rt.lut.store import as_local_path, build_lut_store
 
 logger = logging.getLogger(__name__)
@@ -29,6 +28,25 @@ class ZarrLUTBackend:
         interpolation_method: Interpolation method ("linear" or "nearest")
         chunk_cache_size: Size of chunk cache in bytes
     """
+
+    _COEFFICIENT_VARS = (
+        "path_reflectance",
+        "transmittance_down",
+        "transmittance_up",
+        "spherical_albedo",
+    )
+    _SPECTRAL_VARS = (
+        "TOA_rho1",
+        "TOA_rho2",
+        "Eg_rho1",
+        "Eg_rho2",
+    )
+    _SOLAR_IRRADIANCE_NAMES = (
+        "extraterrestrial_solar_irradiance",
+        "solar_irradiance",
+    )
+    _DEFAULT_SURFACE_RHO1 = 0.15
+    _DEFAULT_SURFACE_RHO2 = 0.5
 
     def __init__(
         self,
@@ -88,9 +106,8 @@ class ZarrLUTBackend:
                 self._lut = xr.open_zarr(store=store, consolidated=False)
 
         # Cache coordinate arrays for fast interpolation
-        for dim in LUT_COORD_DIMS:
-            if dim in self._lut.coords:
-                self._lut_coords[dim] = self._lut.coords[dim].values
+        for dim, coord in self._lut.coords.items():
+            self._lut_coords[dim] = coord.values
 
         logger.info(
             f"LUT loaded with dimensions: "
@@ -144,32 +161,60 @@ class ZarrLUTBackend:
         # Get band wavelength for LUT selection
         wavelength = band.center_wavelength
 
-        # Interpolate LUT
-        path_ref, trans_down, trans_up, sph_alb = self._interpolate_lut(
-            sza_deg, vza_deg, raa_deg, aot, tcwv, wavelength
-        )
+        if self._supports_coefficient_lut():
+            # Interpolate compact LUT variables, then derive RT coefficients.
+            path_ref, trans_down, trans_up, sph_alb = self._interpolate_lut(
+                sza_deg,
+                vza_deg,
+                raa_deg,
+                aot,
+                tcwv,
+                atmo_state.tco3.values,
+                elevation,
+                wavelength,
+            )
 
-        # Apply elevation correction
-        path_ref, trans_down, trans_up, sph_alb = self._apply_elevation_correction(
-            path_ref, trans_down, trans_up, sph_alb, elevation
-        )
+            # Legacy compact LUTs may not carry altitude as an explicit dimension.
+            if not self._coefficient_lut_has_altitude_axis():
+                path_ref, trans_down, trans_up, sph_alb = self._apply_elevation_correction(
+                    path_ref,
+                    trans_down,
+                    trans_up,
+                    sph_alb,
+                    elevation,
+                )
 
-        # Convert to RT coefficients
-        # The correction equation is:
-        #   y = xap * toa - xbp
-        #   boa = y / (1 + xcp * y)
-        #
-        # From RT parameters:
-        #   xap = 1 / (trans_down * trans_up)
-        #   xbp = path_ref / (trans_down * trans_up)
-        #   xcp = sph_alb / trans_up
+            # Convert to RT coefficients
+            # The correction equation is:
+            #   y = xap * toa - xbp
+            #   boa = y / (1 + xcp * y)
+            #
+            # From RT parameters:
+            #   xap = 1 / (trans_down * trans_up)
+            #   xbp = path_ref / (trans_down * trans_up)
+            #   xcp = sph_alb / trans_up
+            trans_total = trans_down * trans_up
+            trans_total = np.maximum(trans_total, 1e-10)  # Avoid division by zero
 
-        trans_total = trans_down * trans_up
-        trans_total = np.maximum(trans_total, 1e-10)  # Avoid division by zero
-
-        xap = 1.0 / trans_total
-        xbp = path_ref / trans_total
-        xcp = sph_alb / np.maximum(trans_up, 1e-10)
+            xap = 1.0 / trans_total
+            xbp = path_ref / trans_total
+            xcp = sph_alb / np.maximum(trans_up, 1e-10)
+        elif self._supports_spectral_lut():
+            xap, xbp, xcp = self._compute_coefficients_from_spectral_lut(
+                sza_deg,
+                vza_deg,
+                raa_deg,
+                aot,
+                tcwv,
+                atmo_state.tco3.values,
+                elevation,
+                band,
+            )
+        else:
+            raise ValueError(
+                "LUT does not contain a supported RT representation. "
+                "Expected compact coefficient variables or dense spectral LUT variables."
+            )
 
         # Create DataArrays
         template = geometry.sza
@@ -203,6 +248,8 @@ class ZarrLUTBackend:
         raa: np.ndarray,
         aot: np.ndarray,
         tcwv: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
         wavelength: float,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -224,8 +271,6 @@ class ZarrLUTBackend:
         aot_flat = aot.ravel()
         tcwv_flat = tcwv.ravel()
 
-        n_pixels = len(sza_flat)
-
         # Find nearest wavelength in LUT
         wl_idx = np.argmin(np.abs(self._lut_coords["wavelength"] - wavelength))
         wl_value = self._lut_coords["wavelength"][wl_idx]
@@ -234,22 +279,27 @@ class ZarrLUTBackend:
 
         # Select wavelength slice
         lut_wl = self.lut.sel(wavelength=wl_value, method="nearest")
-
-        # Initialize output arrays
-        path_ref = np.zeros(n_pixels, dtype=np.float32)
-        trans_down = np.zeros(n_pixels, dtype=np.float32)
-        trans_up = np.zeros(n_pixels, dtype=np.float32)
-        sph_alb = np.zeros(n_pixels, dtype=np.float32)
+        coords = self._build_point_coords(
+            sza=sza_flat,
+            vza=vza_flat,
+            raa=raa_flat,
+            aot=aot_flat,
+            tcwv=tcwv_flat,
+            tco3=tco3.ravel(),
+            elevation=elevation.ravel(),
+        )
 
         # Perform interpolation for each pixel
         # For efficiency, we batch pixels with similar coordinates
         if self.interpolation_method == "linear":
             path_ref, trans_down, trans_up, sph_alb = self._linear_interpolate(
-                lut_wl, sza_flat, vza_flat, raa_flat, aot_flat, tcwv_flat
+                lut_wl,
+                coords,
             )
         else:
             path_ref, trans_down, trans_up, sph_alb = self._nearest_interpolate(
-                lut_wl, sza_flat, vza_flat, raa_flat, aot_flat, tcwv_flat
+                lut_wl,
+                coords,
             )
 
         return (
@@ -262,43 +312,53 @@ class ZarrLUTBackend:
     def _linear_interpolate(
         self,
         lut: xr.Dataset,
-        sza: np.ndarray,
-        vza: np.ndarray,
-        raa: np.ndarray,
-        aot: np.ndarray,
-        tcwv: np.ndarray,
+        coords: dict[str, xr.DataArray],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Multi-dimensional linear interpolation."""
-        n_pixels = len(sza)
-
-        # Create coordinate arrays for interpolation
-        coords = {
-            "sza": xr.DataArray(sza, dims=["point"]),
-            "vza": xr.DataArray(vza, dims=["point"]),
-            "raa": xr.DataArray(raa, dims=["point"]),
-            "aot": xr.DataArray(aot, dims=["point"]),
-            "tcwv": xr.DataArray(tcwv, dims=["point"]),
-        }
-
         # Interpolate each variable
-        path_ref = lut["path_reflectance"].interp(**coords).values.astype(np.float32)
-        trans_down = lut["transmittance_down"].interp(**coords).values.astype(np.float32)
-        trans_up = lut["transmittance_up"].interp(**coords).values.astype(np.float32)
-        sph_alb = lut["spherical_albedo"].interp(**coords).values.astype(np.float32)
+        path_ref = self._interpolate_variable(lut["path_reflectance"], coords, "linear")
+        trans_down = self._interpolate_variable(lut["transmittance_down"], coords, "linear")
+        trans_up = self._interpolate_variable(lut["transmittance_up"], coords, "linear")
+        sph_alb = self._interpolate_variable(lut["spherical_albedo"], coords, "linear")
 
-        return path_ref, trans_down, trans_up, sph_alb
+        return (
+            path_ref.values.astype(np.float32),
+            trans_down.values.astype(np.float32),
+            trans_up.values.astype(np.float32),
+            sph_alb.values.astype(np.float32),
+        )
 
     def _nearest_interpolate(
         self,
         lut: xr.Dataset,
+        coords: dict[str, xr.DataArray],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Nearest-neighbor interpolation."""
+        path_ref = self._interpolate_variable(lut["path_reflectance"], coords, "nearest")
+        trans_down = self._interpolate_variable(lut["transmittance_down"], coords, "nearest")
+        trans_up = self._interpolate_variable(lut["transmittance_up"], coords, "nearest")
+        sph_alb = self._interpolate_variable(lut["spherical_albedo"], coords, "nearest")
+
+        return (
+            path_ref.values.astype(np.float32),
+            trans_down.values.astype(np.float32),
+            trans_up.values.astype(np.float32),
+            sph_alb.values.astype(np.float32),
+        )
+
+    def _build_point_coords(
+        self,
+        *,
         sza: np.ndarray,
         vza: np.ndarray,
         raa: np.ndarray,
         aot: np.ndarray,
         tcwv: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Nearest-neighbor interpolation."""
-        coords = {
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+    ) -> dict[str, xr.DataArray]:
+        """Build point-indexer coordinates for interpolation."""
+        coords: dict[str, xr.DataArray] = {
             "sza": xr.DataArray(sza, dims=["point"]),
             "vza": xr.DataArray(vza, dims=["point"]),
             "raa": xr.DataArray(raa, dims=["point"]),
@@ -306,12 +366,179 @@ class ZarrLUTBackend:
             "tcwv": xr.DataArray(tcwv, dims=["point"]),
         }
 
-        path_ref = lut["path_reflectance"].sel(**coords, method="nearest").values.astype(np.float32)
-        trans_down = lut["transmittance_down"].sel(**coords, method="nearest").values.astype(np.float32)
-        trans_up = lut["transmittance_up"].sel(**coords, method="nearest").values.astype(np.float32)
-        sph_alb = lut["spherical_albedo"].sel(**coords, method="nearest").values.astype(np.float32)
+        if "ozone" in self._lut_coords:
+            ozone = np.asarray(tco3, dtype=np.float32)
+            ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
+            # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
+            if ozone_axis.size and np.nanmax(np.abs(ozone_axis)) > 20 and np.nanmax(np.abs(ozone)) < 10:
+                ozone = ozone * 1000.0
+            coords["ozone"] = xr.DataArray(ozone, dims=["point"])
 
-        return path_ref, trans_down, trans_up, sph_alb
+        if "altitude" in self._lut_coords:
+            coords["altitude"] = xr.DataArray(
+                np.asarray(elevation, dtype=np.float32),
+                dims=["point"],
+            )
+
+        for name, coord in list(coords.items()):
+            if name not in self._lut_coords:
+                continue
+            axis = np.asarray(self._lut_coords[name], dtype=np.float32)
+            if axis.size == 0:
+                continue
+            coords[name] = xr.DataArray(
+                np.clip(coord.values, float(np.nanmin(axis)), float(np.nanmax(axis))),
+                dims=["point"],
+            )
+
+        return coords
+
+    @staticmethod
+    def _interpolate_variable(
+        var: xr.DataArray,
+        coords: dict[str, xr.DataArray],
+        method: str,
+    ) -> xr.DataArray:
+        """Interpolate one LUT variable using only coordinates it actually depends on."""
+        applicable = {name: coord for name, coord in coords.items() if name in var.dims}
+        if not applicable:
+            return var
+        if method == "linear":
+            return var.interp(**applicable)
+        return var.sel(**applicable, method="nearest")
+
+    def _compute_coefficients_from_spectral_lut(
+        self,
+        sza: np.ndarray,
+        vza: np.ndarray,
+        raa: np.ndarray,
+        aot: np.ndarray,
+        tcwv: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+        band: SensorBand,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Derive standard RT coefficients from dense spectral LUT terms."""
+        if "wavelength" not in self._lut_coords:
+            raise ValueError("Spectral LUT must define a wavelength coordinate")
+
+        coords = self._build_point_coords(
+            sza=sza.ravel(),
+            vza=vza.ravel(),
+            raa=raa.ravel(),
+            aot=aot.ravel(),
+            tcwv=tcwv.ravel(),
+            tco3=tco3.ravel(),
+            elevation=elevation.ravel(),
+        )
+        weights = self._spectral_integration_weights(band)
+
+        toa_rho1 = self._weighted_spectral_mean(
+            self._interpolate_variable(self.lut["TOA_rho1"], coords, self.interpolation_method),
+            weights,
+        ).values.astype(np.float32)
+        toa_rho2 = self._weighted_spectral_mean(
+            self._interpolate_variable(self.lut["TOA_rho2"], coords, self.interpolation_method),
+            weights,
+        ).values.astype(np.float32)
+        eg_rho1 = self._weighted_spectral_mean(
+            self._interpolate_variable(self.lut["Eg_rho1"], coords, self.interpolation_method),
+            weights,
+        ).values.astype(np.float32)
+        eg_rho2 = self._weighted_spectral_mean(
+            self._interpolate_variable(self.lut["Eg_rho2"], coords, self.interpolation_method),
+            weights,
+        ).values.astype(np.float32)
+
+        rho1, rho2 = self._spectral_reference_reflectances()
+        eps = 1e-10
+
+        denom = rho2 * eg_rho2 - rho1 * eg_rho1
+        denom = np.where(np.abs(denom) < eps, eps, denom)
+
+        s_term = (eg_rho2 - eg_rho1) / denom
+        path_ref = (
+            toa_rho2 * rho1 * eg_rho1 - toa_rho1 * rho2 * eg_rho2
+        ) / np.where(np.abs(rho1 * eg_rho1 - rho2 * eg_rho2) < eps, eps, rho1 * eg_rho1 - rho2 * eg_rho2)
+        t_up = (toa_rho2 - toa_rho1) / denom
+        eg0 = eg_rho1 * (1.0 - rho1 * s_term)
+        t_total = np.maximum(eg0 * t_up, eps)
+
+        xap = 1.0 / t_total
+        xbp = path_ref / t_total
+        xcp = s_term
+
+        return (
+            xap.reshape(sza.shape).astype(np.float32),
+            xbp.reshape(sza.shape).astype(np.float32),
+            xcp.reshape(sza.shape).astype(np.float32),
+        )
+
+    def _spectral_integration_weights(self, band: SensorBand) -> xr.DataArray:
+        """Build wavelength weights for spectral convolution (bandpass * optional solar spectrum)."""
+        wavelength = xr.DataArray(
+            np.asarray(self._lut_coords["wavelength"], dtype=np.float32),
+            dims=["wavelength"],
+            coords={"wavelength": self._lut_coords["wavelength"]},
+        )
+        sigma = max(
+            float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))),
+            1e-6,
+        )
+        bandpass = np.exp(
+            -0.5 * np.square((wavelength - float(band.center_wavelength)) / sigma)
+        ).astype(np.float32)
+        weights: xr.DataArray = bandpass
+
+        for name in self._SOLAR_IRRADIANCE_NAMES:
+            if name not in self.lut:
+                continue
+            solar = self.lut[name]
+            if "wavelength" not in solar.dims:
+                continue
+            extra_dims = [dim for dim in solar.dims if dim != "wavelength"]
+            if extra_dims:
+                solar = solar.mean(dim=extra_dims)
+            weights = bandpass * solar.astype(np.float32)
+            break
+
+        return weights
+
+    @staticmethod
+    def _weighted_spectral_mean(data: xr.DataArray, weights: xr.DataArray) -> xr.DataArray:
+        """Weighted mean over wavelength with coordinate-aware integration."""
+        if "wavelength" not in data.dims:
+            return data
+
+        local_weights = weights.sel(wavelength=data["wavelength"])
+        if data.sizes["wavelength"] == 1:
+            numerator = (data * local_weights).isel(wavelength=0, drop=True)
+            denominator = local_weights.isel(wavelength=0, drop=True)
+            return numerator / xr.where(np.abs(denominator) < 1e-10, 1e-10, denominator)
+
+        numerator = (data * local_weights).integrate("wavelength")
+        denominator = local_weights.integrate("wavelength")
+        denominator = xr.where(np.abs(denominator) < 1e-10, 1e-10, denominator)
+        return numerator / denominator
+
+    def _spectral_reference_reflectances(self) -> tuple[float, float]:
+        """Return reference surface reflectances used by dense spectral LUT variables."""
+        attrs = self.lut.attrs
+        rho1 = float(attrs.get("rho1", attrs.get("reference_reflectance_1", self._DEFAULT_SURFACE_RHO1)))
+        rho2 = float(attrs.get("rho2", attrs.get("reference_reflectance_2", self._DEFAULT_SURFACE_RHO2)))
+        return rho1, rho2
+
+    def _supports_coefficient_lut(self) -> bool:
+        """Check whether the loaded LUT exposes compact coefficient variables."""
+        return all(name in self.lut.data_vars for name in self._COEFFICIENT_VARS)
+
+    def _supports_spectral_lut(self) -> bool:
+        """Check whether the loaded LUT exposes dense spectral radiative terms."""
+        return all(name in self.lut.data_vars for name in self._SPECTRAL_VARS)
+
+    def _coefficient_lut_has_altitude_axis(self) -> bool:
+        """Return True when coefficient LUT variables already model altitude explicitly."""
+        return all("altitude" in self.lut[name].dims for name in self._COEFFICIENT_VARS if name in self.lut)
 
     def _apply_elevation_correction(
         self,

@@ -74,11 +74,158 @@ def _write_small_lut(path: Path, consolidated: bool = True) -> Path:
     return path
 
 
+def _write_small_spectral_lut(path: Path, *, include_solar: bool = True) -> tuple[Path, dict[str, float]]:
+    wavelength = np.array([480.0, 490.0, 500.0], dtype=np.float32)
+    sza = np.array([30.0], dtype=np.float32)
+    vza = np.array([10.0], dtype=np.float32)
+    raa = np.array([90.0], dtype=np.float32)
+    aot = np.array([0.2], dtype=np.float32)
+    tcwv = np.array([2.0], dtype=np.float32)
+    ozone = np.array([300.0], dtype=np.float32)
+    altitude = np.array([0.1], dtype=np.float32)
+
+    rho1 = 0.15
+    rho2 = 0.5
+    toa1 = 0.05
+    toa2 = 0.29
+    eg1 = 0.20
+    eg2 = 0.50
+
+    toa_shape = (
+        len(wavelength),
+        len(sza),
+        len(vza),
+        len(raa),
+        len(aot),
+        len(tcwv),
+        len(ozone),
+        len(altitude),
+    )
+    eg_shape = (
+        len(wavelength),
+        len(sza),
+        len(aot),
+        len(tcwv),
+        len(ozone),
+        len(altitude),
+    )
+    data_vars: dict[str, tuple[list[str], np.ndarray]] = {
+        "TOA_rho1": (
+            ["wavelength", "sza", "vza", "raa", "aot", "tcwv", "ozone", "altitude"],
+            np.full(toa_shape, toa1, dtype=np.float32),
+        ),
+        "TOA_rho2": (
+            ["wavelength", "sza", "vza", "raa", "aot", "tcwv", "ozone", "altitude"],
+            np.full(toa_shape, toa2, dtype=np.float32),
+        ),
+        "Eg_rho1": (
+            ["wavelength", "sza", "aot", "tcwv", "ozone", "altitude"],
+            np.full(eg_shape, eg1, dtype=np.float32),
+        ),
+        "Eg_rho2": (
+            ["wavelength", "sza", "aot", "tcwv", "ozone", "altitude"],
+            np.full(eg_shape, eg2, dtype=np.float32),
+        ),
+    }
+    if include_solar:
+        data_vars["extraterrestrial_solar_irradiance"] = (
+            ["wavelength"],
+            np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        )
+
+    ds = xr.Dataset(
+        data_vars,
+        coords={
+            "wavelength": wavelength,
+            "sza": sza,
+            "vza": vza,
+            "raa": raa,
+            "aot": aot,
+            "tcwv": tcwv,
+            "ozone": ozone,
+            "altitude": altitude,
+        },
+        attrs={"rho1": rho1, "rho2": rho2},
+    )
+    ds.to_zarr(path, mode="w", consolidated=True)
+
+    denom = rho2 * eg2 - rho1 * eg1
+    s_term = (eg2 - eg1) / denom
+    path_ref = (toa2 * rho1 * eg1 - toa1 * rho2 * eg2) / (rho1 * eg1 - rho2 * eg2)
+    t_up = (toa2 - toa1) / denom
+    eg0 = eg1 * (1.0 - rho1 * s_term)
+    t_total = eg0 * t_up
+    expected = {
+        "xap": 1.0 / t_total,
+        "xbp": path_ref / t_total,
+        "xcp": s_term,
+        "path_ref": path_ref,
+        "t_total": t_total,
+    }
+    return path, expected
+
+
 class TestZarrLUTBackend:
     def test_missing_lut_raises(self, tmp_path: Path):
         b = ZarrLUTBackend(tmp_path / "missing.zarr")
         with pytest.raises(FileNotFoundError):
             _ = b.lut
+
+    def test_load_lut_falls_back_from_v3_and_consolidated(self, monkeypatch):
+        import siac.rt.lut.backend as lut_backend
+
+        calls: list[dict[str, object]] = []
+        dataset = xr.Dataset(coords={"sza": [30.0], "vza": [10.0], "aot": [0.2]})
+
+        def _fake_open_zarr(*, store, consolidated, zarr_version=None):  # noqa: ANN001
+            calls.append(
+                {
+                    "store": store,
+                    "consolidated": consolidated,
+                    "zarr_version": zarr_version,
+                }
+            )
+            if len(calls) < 3:
+                raise RuntimeError("expected fallback")
+            return dataset
+
+        monkeypatch.setattr(lut_backend, "as_local_path", lambda path: None)
+        monkeypatch.setattr(
+            lut_backend,
+            "build_lut_store",
+            lambda path, options: {"zarr.json": b"{}"},
+        )
+        monkeypatch.setattr(lut_backend.xr, "open_zarr", _fake_open_zarr)
+
+        backend = ZarrLUTBackend("https://example.com/lut.zarr")
+        loaded = backend.lut
+
+        assert loaded is dataset
+        assert calls == [
+            {
+                "store": {"zarr.json": b"{}"},
+                "consolidated": False,
+                "zarr_version": 3,
+            },
+            {
+                "store": {"zarr.json": b"{}"},
+                "consolidated": True,
+                "zarr_version": None,
+            },
+            {
+                "store": {"zarr.json": b"{}"},
+                "consolidated": False,
+                "zarr_version": None,
+            },
+        ]
+        assert np.allclose(backend._lut_coords["sza"], [30.0])
+
+    def test_store_contains_key_handles_contains_errors(self):
+        class _BrokenContains:
+            def __contains__(self, item):  # noqa: ANN001, ARG002
+                raise RuntimeError("broken")
+
+        assert ZarrLUTBackend._store_contains_key(_BrokenContains(), "zarr.json") is False
 
     def test_linear_and_nearest_paths(self, tmp_path: Path):
         lut_path = _write_small_lut(tmp_path / "lut.zarr")
@@ -158,6 +305,241 @@ class TestZarrLUTBackend:
         lut_path = _write_small_lut(tmp_path / "lut_no_consolidated.zarr", consolidated=False)
         b = ZarrLUTBackend(lut_path, interpolation_method="nearest")
         assert "path_reflectance" in b.lut
+
+    def test_coefficient_lut_with_altitude_axis_skips_legacy_elevation_correction(self, tmp_path: Path, monkeypatch):
+        lut_path = tmp_path / "lut_with_altitude.zarr"
+        ds = xr.Dataset(
+            {
+                "path_reflectance": (
+                    ["sza", "vza", "raa", "aot", "tcwv", "altitude", "wavelength"],
+                    np.full((1, 1, 1, 1, 1, 1, 1), 0.02, dtype=np.float32),
+                ),
+                "transmittance_down": (
+                    ["sza", "vza", "raa", "aot", "tcwv", "altitude", "wavelength"],
+                    np.full((1, 1, 1, 1, 1, 1, 1), 0.85, dtype=np.float32),
+                ),
+                "transmittance_up": (
+                    ["sza", "vza", "raa", "aot", "tcwv", "altitude", "wavelength"],
+                    np.full((1, 1, 1, 1, 1, 1, 1), 0.90, dtype=np.float32),
+                ),
+                "spherical_albedo": (
+                    ["sza", "vza", "raa", "aot", "tcwv", "altitude", "wavelength"],
+                    np.full((1, 1, 1, 1, 1, 1, 1), 0.03, dtype=np.float32),
+                ),
+            },
+            coords={
+                "sza": np.array([30.0], dtype=np.float32),
+                "vza": np.array([10.0], dtype=np.float32),
+                "raa": np.array([90.0], dtype=np.float32),
+                "aot": np.array([0.2], dtype=np.float32),
+                "tcwv": np.array([2.0], dtype=np.float32),
+                "altitude": np.array([0.1], dtype=np.float32),
+                "wavelength": np.array([490.0], dtype=np.float32),
+            },
+        )
+        ds.to_zarr(lut_path, mode="w", consolidated=True)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+
+        def _should_not_run(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("legacy elevation correction should be skipped")
+
+        monkeypatch.setattr(backend, "_apply_elevation_correction", _should_not_run)
+
+        coeffs = backend.compute_coefficients(
+            _geometry((1, 1)),
+            _atmo((1, 1)),
+            SensorBand("B02", 490.0, 20.0, 10.0, 0),
+            compute_jacobian=False,
+        )
+
+        trans_total = 0.85 * 0.90
+        np.testing.assert_allclose(coeffs.xap.values, 1.0 / trans_total, rtol=1e-6)
+        np.testing.assert_allclose(coeffs.xbp.values, 0.02 / trans_total, rtol=1e-6)
+        np.testing.assert_allclose(coeffs.xcp.values, 0.03 / 0.90, rtol=1e-6)
+
+    def test_spectral_lut_derives_standard_coefficients(self, tmp_path: Path):
+        lut_path, expected = _write_small_spectral_lut(tmp_path / "lut_spectral.zarr")
+        geom = GeometryAngles(
+            sza=xr.DataArray(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full((2, 2), np.deg2rad(10.0), dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full((2, 2), np.deg2rad(90.0), dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+        coeffs = backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+
+        np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
+        np.testing.assert_allclose(coeffs.xbp.values, expected["xbp"], rtol=1e-5)
+        np.testing.assert_allclose(coeffs.xcp.values, expected["xcp"], rtol=1e-5)
+
+        toa = xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"])
+        expected_boa = ((0.15 - expected["path_ref"]) / expected["t_total"])
+        expected_boa = expected_boa / (1.0 + expected["xcp"] * expected_boa)
+        np.testing.assert_allclose(coeffs.apply_correction(toa).values, expected_boa, rtol=1e-5)
+
+    def test_spectral_lut_without_solar_irradiance_still_returns_finite_coefficients(self, tmp_path: Path):
+        lut_path, expected = _write_small_spectral_lut(
+            tmp_path / "lut_spectral_no_solar.zarr",
+            include_solar=False,
+        )
+        geom = _geometry((1, 1))
+        atmo = _atmo((1, 1))
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="nearest")
+        coeffs = backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+
+        assert np.isfinite(coeffs.xap.values).all()
+        np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
+
+    def test_unsupported_lut_representation_raises(self):
+        backend = ZarrLUTBackend("unused.zarr")
+        backend._lut = xr.Dataset(coords={"wavelength": [490.0]})
+        backend._lut_coords = {"wavelength": np.array([490.0], dtype=np.float32)}
+
+        with pytest.raises(ValueError, match="supported RT representation"):
+            backend.compute_coefficients(
+                _geometry((1, 1)),
+                _atmo((1, 1)),
+                SensorBand("B02", 490.0, 20.0, 10.0, 0),
+                compute_jacobian=False,
+            )
+
+    def test_interpolate_lut_initializes_coord_cache_on_demand(self, tmp_path: Path):
+        lut_path = _write_small_lut(tmp_path / "lut_coord_cache.zarr")
+        backend = ZarrLUTBackend(lut_path, interpolation_method="nearest")
+
+        path_ref, trans_down, trans_up, sph_alb = backend._interpolate_lut(
+            np.array([[30.0]], dtype=np.float32),
+            np.array([[10.0]], dtype=np.float32),
+            np.array([[90.0]], dtype=np.float32),
+            np.array([[0.2]], dtype=np.float32),
+            np.array([[2.0]], dtype=np.float32),
+            np.array([[0.3]], dtype=np.float32),
+            np.array([[0.1]], dtype=np.float32),
+            490.0,
+        )
+
+        assert "wavelength" in backend._lut_coords
+        assert path_ref.shape == (1, 1)
+        assert trans_down.shape == (1, 1)
+        assert trans_up.shape == (1, 1)
+        assert sph_alb.shape == (1, 1)
+
+    def test_build_point_coords_handles_unscaled_ozone_and_sparse_axes(self):
+        backend = ZarrLUTBackend("unused.zarr")
+        backend._lut_coords = {
+            "sza": np.array([0.0, 60.0], dtype=np.float32),
+            "vza": np.array([], dtype=np.float32),
+            "ozone": np.array([0.2, 0.4], dtype=np.float32),
+        }
+
+        coords = backend._build_point_coords(
+            sza=np.array([100.0], dtype=np.float32),
+            vza=np.array([15.0], dtype=np.float32),
+            raa=np.array([20.0], dtype=np.float32),
+            aot=np.array([0.2], dtype=np.float32),
+            tcwv=np.array([2.0], dtype=np.float32),
+            tco3=np.array([0.3], dtype=np.float32),
+            elevation=np.array([0.1], dtype=np.float32),
+        )
+
+        assert float(coords["sza"].values[0]) == 60.0
+        assert float(coords["vza"].values[0]) == 15.0
+        assert float(coords["ozone"].values[0]) == pytest.approx(0.3)
+
+    def test_interpolate_variable_returns_input_without_matching_coords(self):
+        var = xr.DataArray(np.array([1.0, 2.0], dtype=np.float32), dims=["band"])
+        coords = {"sza": xr.DataArray(np.array([30.0], dtype=np.float32), dims=["point"])}
+
+        result = ZarrLUTBackend._interpolate_variable(var, coords, "linear")
+
+        assert result is var
+
+    def test_spectral_backend_requires_wavelength_coordinate(self):
+        backend = ZarrLUTBackend("unused.zarr")
+        backend._lut = xr.Dataset(
+            {
+                "TOA_rho1": (["point"], np.array([0.05], dtype=np.float32)),
+                "TOA_rho2": (["point"], np.array([0.25], dtype=np.float32)),
+                "Eg_rho1": (["point"], np.array([0.2], dtype=np.float32)),
+                "Eg_rho2": (["point"], np.array([0.5], dtype=np.float32)),
+            }
+        )
+        backend._lut_coords = {}
+
+        with pytest.raises(ValueError, match="wavelength coordinate"):
+            backend._compute_coefficients_from_spectral_lut(
+                np.array([[30.0]], dtype=np.float32),
+                np.array([[10.0]], dtype=np.float32),
+                np.array([[90.0]], dtype=np.float32),
+                np.array([[0.2]], dtype=np.float32),
+                np.array([[2.0]], dtype=np.float32),
+                np.array([[0.3]], dtype=np.float32),
+                np.array([[0.1]], dtype=np.float32),
+                SensorBand("B02", 490.0, 20.0, 10.0, 0),
+            )
+
+    def test_spectral_weight_helpers_cover_fallback_and_single_wavelength(self):
+        backend = ZarrLUTBackend("unused.zarr")
+        backend._lut = xr.Dataset(
+            {
+                "extraterrestrial_solar_irradiance": (
+                    ["sample"],
+                    np.array([10.0, 12.0], dtype=np.float32),
+                ),
+                "solar_irradiance": (
+                    ["wavelength", "sample"],
+                    np.array(
+                        [
+                            [1.0, 3.0],
+                            [2.0, 4.0],
+                            [3.0, 5.0],
+                        ],
+                        dtype=np.float32,
+                    ),
+                ),
+            },
+            coords={
+                "wavelength": np.array([480.0, 490.0, 500.0], dtype=np.float32),
+                "sample": np.array([0, 1], dtype=np.int32),
+            },
+        )
+        backend._lut_coords = {
+            "wavelength": np.array([480.0, 490.0, 500.0], dtype=np.float32),
+        }
+
+        weights = backend._spectral_integration_weights(
+            SensorBand("B02", 490.0, 20.0, 10.0, 0)
+        )
+        assert weights.dims == ("wavelength",)
+        assert float(weights.max()) > 0.0
+
+        passthrough = xr.DataArray(np.array([7.0], dtype=np.float32), dims=["point"])
+        assert ZarrLUTBackend._weighted_spectral_mean(passthrough, weights) is passthrough
+
+        single = xr.DataArray(
+            np.array([0.25], dtype=np.float32),
+            dims=["wavelength"],
+            coords={"wavelength": np.array([490.0], dtype=np.float32)},
+        )
+        reduced = ZarrLUTBackend._weighted_spectral_mean(
+            single,
+            weights.sel(wavelength=[490.0]),
+        )
+        assert float(reduced.values) == pytest.approx(0.25)
 
     def test_http_zip_store_uses_custom_zip_mapper(self, monkeypatch):
         import siac.rt.lut.store as lut_store
