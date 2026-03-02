@@ -658,6 +658,30 @@ class TestZipStoreUtilities:
                 {"timeout": 1.0},
             )
 
+    def test_build_mapper_http_omits_none_headers_for_fs_serialization(self, monkeypatch):
+        import siac.rt.lut.http_zip_store as zip_store
+
+        class _FakeZipFS:
+            def __init__(self, fs, path, **kwargs):  # noqa: ANN001, ARG002
+                self.fs = fs
+                self.path = path
+
+        monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
+        monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda fs: "")
+        monkeypatch.setattr(
+            zip_store,
+            "FSMap",
+            lambda root, fs, check=False, create=False: SimpleNamespace(root=root, fs=fs),
+        )
+
+        mapper = zip_store.build_readonly_zip_mapper(
+            "https://example.com/lut.zip",
+            {"timeout": 1.0},
+        )
+
+        assert mapper.root == ""
+        assert mapper.fs.fs.to_dict(include_password=False)["timeout"] == 1.0
+
     def test_local_compressed_zip_fallback_detects_nested_zarr_root(self, tmp_path: Path):
         import siac.rt.lut.http_zip_store as zip_store
 

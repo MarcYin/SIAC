@@ -649,7 +649,10 @@ def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> Mut
             # Unsupported HTTP options should be explicit to avoid silent misuse.
             unknown = ", ".join(sorted(options))
             raise TypeError(f"Unsupported HTTP zip storage option(s): {unknown}")
-        base_fs = _HTTPRangeFileSystem(timeout=timeout, headers=headers)
+        http_fs_kwargs: dict[str, Any] = {"timeout": timeout}
+        if headers is not None:
+            http_fs_kwargs["headers"] = headers
+        base_fs = _HTTPRangeFileSystem(**http_fs_kwargs)
         zip_path = path
     elif path.startswith("s3://"):
         bucket, key = _parse_s3_url(path)
