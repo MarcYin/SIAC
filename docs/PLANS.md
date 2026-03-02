@@ -39,6 +39,7 @@ without changing the solver or correction stages.
 - **Explicit module contracts**: every module declares a typed output that exactly matches the input requirements of downstream consumers. No implicit coupling.
 - **User-replaceable modules**: users can inject their own callable (function or class instance) for any module as long as the return type satisfies the contract. Internal data sourcing is an implementation detail; the pipeline only cares about the output type.
 - **Sensor-agnostic correction pipeline**: the solver and correction stages must not depend on sensor-specific band names or file formats.
+- **Decoupled RT and AC choices**: "which radiative-transfer model supplies terms" and "which atmospheric-correction equation consumes them" are separate design axes. For example, emulator-backed coefficient correction and spectral-LUT convolution correction must both fit the architecture.
 - **Pluggable data providers**: atmospheric priors (CAMS/MERRA-2/etc.) and surface priors (BRDF / prior stores) are interchangeable.
 - **AOI-scoped I/O by default**: all auxiliary data reads and remote fetches are bounded by the AOI extent.
 - **Composable performance**: independent I/O tasks (satellite bands, priors, DEM, surface prior) should be parallelisable.
@@ -680,6 +681,38 @@ CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, RTModelBackend], Co
 
 **Key design rule**: the corrector operates at **native band resolutions**. It upsamples the solved AOT/TCWV (at aerosol resolution) to each band's native resolution.
 
+**Built-in atmospheric-correction family**:
+
+1. **Coefficient-space correction** (current default):
+   - Used with RT backends that return `RTCoefficients` directly.
+   - Typical sources: neural-network emulators, compact per-band LUTs, Py6S wrappers that already expose `xap/xbp/xcp`, and spectral LUT backends after bandpass convolution.
+   - Equation family:
+     - `y = xap * toa - xbp`
+     - `boa = y / (1 + xcp * y)`
+
+2. **Spectral-LUT derivation path** (backend strategy, not a separate M6 equation):
+   - Used when the RT backend starts from spectrally resolved LUT variables (for example `TOA_rho1`, `TOA_rho2`, `Eg_rho1`, `Eg_rho2`, `Eg_dir_rho1`) rather than final per-band coefficients.
+   - Workflow:
+     - subset LUT over atmospheric state,
+     - convolve LUT wavelength slices with the sensor bandpass / SRF in radiance and irradiance space,
+     - derive per-band `path_ref`, `T_total`, and `S` (spherical-albedo term),
+     - convert them into standard coefficients:
+       - `xap = 1 / T_total`
+       - `xbp = path_ref / T_total`
+       - `xcp = S`
+   - Once these coefficients are derived, M6 reuses the same coefficient-space equation as every other built-in path.
+   - This is the preferred backend design for hyperspectral sensors or any sensor whose band centers/FWHM vary enough that pre-baked coefficients are not the right abstraction.
+
+3. **Custom correction**:
+   - User supplies `CorrectorFn` directly.
+   - This covers BRDF-aware variants, adjacency-aware variants, or mission-specific radiance-to-reflectance schemes that do not fit either built-in family.
+
+**Dispatch rule**:
+- `CorrectorFn` stays the public injection boundary.
+- The built-in `correct_atmosphere()` remains a coefficient-space corrector.
+- Spectral LUT logic belongs in the RT backend, which derives `RTCoefficients` before handing values to M6.
+- The solver contract does not change.
+
 **Tests** (`tests/unit/test_correction.py` — extend existing):
 
 | Test | What | Assert |
@@ -690,10 +723,12 @@ CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, RTModelBackend], Co
 | `test_correct_cloud_mask_preserved` | Check `result.cloud_mask` | Matches original from M1 |
 | `test_correct_native_resolution` | Check BOA spatial shape | Matches M1 native TOA shape |
 | `test_correct_metadata_timing` | Check `result.metadata` | Contains `"processing_time_s"` |
+| `test_correct_coefficient_mode` | Emulator-style backend | Uses `RTCoefficients` path |
+| `test_correct_spectral_lut_coefficients` | Dense spectral LUT backend | Derived coefficients match direct `path_ref/T_total/S` formulation |
 
 ### 4.7 RT Model Backend (Cross-Cutting)
 
-The RT model is not a data-sourcing module — it is a **compute service** used by both M5 and M6. It is always local (no I/O latency).
+The RT model is a **compute-oriented service** used by both M5 and M6. A backend may lazily initialise from local files or remote stores (for example a remote ZIP-hosted Zarr LUT), but once opened it behaves like a local service from the pipeline's perspective.
 
 ```python
 class RTModelBackend(Protocol):
@@ -709,6 +744,17 @@ class RTModelBackend(Protocol):
     def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool: ...
 ```
 
+Dense spectral LUT workflows still fit this protocol. Their internal implementation may start from wavelength-resolved terms, but after SRF/bandpass convolution they should convert to standard coefficients before returning:
+
+- `xap = 1 / T_total`
+- `xbp = path_ref / T_total`
+- `xcp = S`
+
+Design intent:
+- `RTModelBackend` remains the main public contract.
+- A `SpectralLUTBackend` may do substantially more internal work than an emulator backend, but it still returns `RTCoefficients` at the boundary.
+- This keeps M6 and the user injection surface stable.
+
 **Tests** (`tests/unit/test_rt_backend.py`):
 
 | Test | What | Assert |
@@ -718,6 +764,7 @@ class RTModelBackend(Protocol):
 | `test_rt_backend_no_jacobian` | `compute_coefficients(..., compute_jacobian=False)` | `d_xap/d_xbp/d_xcp` are `None` |
 | `test_rt_backend_unsupported_sensor` | `is_available_for_sensor("UNKNOWN", "SAT")` | Returns `False` |
 | `test_rt_coefficients_apply_correction` | Call `apply_correction(toa)` | BOA = known analytical formula |
+| `test_spectral_rt_backend_terms_shape` | `prepare_band_terms(...)` | Returns aligned `(path_ref, T_total, S)` arrays |
 
 ### 4.8 Satellite Data Access (Search + Download) — Generic Contract
 
@@ -1472,11 +1519,22 @@ Core rule: whichever provider is used, it returns `SurfacePrior` with spatially-
 
 Not a data provider — a compute module used by M5 and M6. Implementations:
 
-| Backend | Speed | Jacobian | Sensor coverage |
-|---------|-------|----------|-----------------|
-| `EmulatorBackend` | Fast | Analytical | S2, L8 (pre-trained) |
-| `LUTBackend` | Medium | Numerical | Any sensor (with LUT) |
-| `Py6SBackend` | Slow | Numerical | Any sensor |
+| Backend | Speed | Jacobian | Output contract | Sensor coverage |
+|---------|-------|----------|-----------------|-----------------|
+| `EmulatorBackend` | Fast | Analytical | `RTCoefficients` | S2, L8 (pre-trained) |
+| `CoefficientLUTBackend` | Medium | Numerical | `RTCoefficients` | Multispectral sensors with pre-banded LUT support |
+| `SpectralLUTBackend` | Medium-Slow | Numerical | `RTCoefficients` after SRF convolution | Hyperspectral or sensors needing on-the-fly SRF convolution |
+| `Py6SBackend` | Slow | Numerical | Usually `RTCoefficients` | Any sensor |
+
+Two distinct planning axes must be kept explicit:
+
+1. **RT model family**: emulator, compact LUT, dense spectral LUT, line-by-line / Py6S.
+2. **AC method**: built-in coefficient-space correction, or custom user correction.
+
+These axes are related but not identical:
+- an emulator almost always feeds coefficient correction;
+- a dense spectral LUT may compute `path_ref/T_total/S` internally, then collapse back to coefficients before M6;
+- Py6S may compute coefficients directly or derive them from more detailed intermediate terms, but the public boundary should still be `RTCoefficients`.
 
 Users can provide a custom RT backend by implementing the `RTModelBackend` protocol
 (this is the one place a multi-method protocol is justified — the backend has
@@ -1494,10 +1552,11 @@ class MyRTBackend:
 |---|------|--------|
 | 1 | Each backend satisfies `RTModelBackend` protocol | `isinstance` check passes |
 | 2 | `EmulatorBackend` analytical jacobian shape | `(n_params, n_bands)` matches config |
-| 3 | `LUTBackend` numerical jacobian finite | no NaN/Inf in output |
-| 4 | `compute_coefficients` returns valid `RTCoefficients` | all fields present, physically bounded |
-| 5 | Custom backend via user class | user class used, result validated |
-| 6 | `is_available_for_sensor` rejects unsupported | returns `False` for unknown sensor |
+| 3 | `CoefficientLUTBackend` numerical jacobian finite | no NaN/Inf in output |
+| 4 | `SpectralLUTBackend` bandpass convolution path | derived `xap/xbp/xcp` are stable and finite |
+| 5 | `compute_coefficients` returns valid `RTCoefficients` | all fields present, physically bounded |
+| 6 | Custom backend via user class | user class used, result validated |
+| 7 | `is_available_for_sensor` rejects unsupported | returns `False` for unknown sensor |
 
 ---
 
