@@ -28,6 +28,7 @@ venv/
 htmlcov/
 .coverage
 coverage.xml
+coverage.json
 
 # OS
 .DS_Store
