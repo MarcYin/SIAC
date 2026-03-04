@@ -40,6 +40,7 @@ h5py = ">=3.10.0"
 # Utilities
 psutil = ">=5.9.0"
 tqdm = ">=4.66.0"
+aiohttp = ">=3.13.3,<4"
 
 [feature.dev.dependencies]
 pytest = ">=8.0.0"

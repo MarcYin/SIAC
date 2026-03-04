@@ -50,6 +50,7 @@ dependencies = [
 
     # HTTP & data access
     "requests>=2.31.0",
+    "aiohttp>=3.13.3",
     "fsspec>=2024.2.0",
     "zarr>=2.17.0",
     "h5py>=3.10.0",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import struct
 import sys
@@ -19,7 +20,6 @@ from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
 from siac.rt.lut.zarr_lut import (
     ZarrLUTBackend,
     _HTTPRangeFileSystem,
-    _HTTPZipReadOnlyStore,
     _ReadOnlyZipFileSystem,
     create_lut_from_py6s,
 )
@@ -541,19 +541,28 @@ class TestZarrLUTBackend:
         )
         assert float(reduced.values) == pytest.approx(0.25)
 
-    def test_http_zip_store_uses_custom_zip_mapper(self, monkeypatch):
+    def test_http_zip_store_uses_reference_mapper_for_remote_zip(self, monkeypatch):
         import siac.rt.lut.store as lut_store
 
-        sentinel_store = {"dummy": b"1"}
+        class _FakeZipFS:
+            _files = {
+                "": {"children": ["lut.zarr"]},
+                "lut.zarr": {"children": ["lut.zarr/.zgroup"]},
+                "lut.zarr/.zgroup": {"offset": 1, "size": 2},
+            }
 
-        monkeypatch.setattr(
-            lut_store,
-            "build_readonly_zip_mapper",
-            lambda path, opts: sentinel_store,
-        )
+        class _FakeMapper(dict):
+            def __init__(self):
+                super().__init__()
+                self.fs = _FakeZipFS()
+                self.root = "lut.zarr"
+
+        sentinel_store = {"kind": "reference"}
+        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda path, opts: _FakeMapper())
+        monkeypatch.setattr("fsspec.get_mapper", lambda path, **kwargs: sentinel_store)
 
         store = lut_store.build_lut_store("https://example.com/lut.zarr.zip", storage_options={})
-        assert store is sentinel_store
+        assert store == sentinel_store
 
     def test_http_zip_headers_validation(self):
         import siac.rt.lut.http_zip_store as zip_store
@@ -752,30 +761,6 @@ class TestHTTPRangeHelpers:
         assert "/arr" in ls_root
         assert payload.startswith(b"{")
 
-    def test_http_zip_store_reads_zarr_entries(self, monkeypatch):
-        import requests
-
-        buf = BytesIO()
-        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
-            zf.writestr(".zgroup", '{"zarr_format":2}')
-            zf.writestr(".zattrs", "{}")
-            zf.writestr("arr/", b"")
-            zf.writestr(
-                "arr/.zarray",
-                '{"zarr_format":2,"shape":[1],"chunks":[1],"dtype":"<u1","compressor":null,"fill_value":0,"order":"C","filters":null}',
-            )
-            zf.writestr("arr/0", b"\x01")
-        fake = _FakeSession(buf.getvalue(), support_range=True)
-        monkeypatch.setattr(requests, "Session", lambda: fake)
-
-        store = _HTTPZipReadOnlyStore("https://example.com/lut.zarr.zip")
-        assert ".zgroup" in store
-        assert "arr/.zarray" in store
-        assert store[".zgroup"].startswith(b"{")
-        with pytest.raises(KeyError):
-            _ = store["missing"]
-        store.close()
-
     def test_zipfs_initialize_error_branches_zip64_and_central_directory(self):
         # ZIP64 sentinel values + too-short tail for ZIP64 EOCD locator.
         tail_short = b"A" * 10 + _build_eocd(
@@ -946,13 +931,13 @@ class TestZipStoreUtilities:
         assert listing == ["https://example.com/fallback.zip"]
         fs.close()
 
-    def test_local_range_filesystem(self, tmp_path: Path):
+    def test_local_filesystem_wrapper(self, tmp_path: Path):
         import siac.rt.lut.http_zip_store as zip_store
 
         file_path = tmp_path / "x.bin"
         file_path.write_bytes(b"0123456789")
 
-        local_fs = zip_store._LocalRangeFileSystem()
+        local_fs = zip_store._build_local_filesystem()
         info = asyncio.run(local_fs._info(str(file_path)))
         assert info["type"] == "file"
         assert info["size"] == 10
@@ -1076,20 +1061,6 @@ class TestZipStoreUtilities:
         assert ".zgroup" in mapper
         assert mapper[".zgroup"].startswith(b"{")
 
-    def test_http_zip_store_read_only_methods(self, monkeypatch):
-        import siac.rt.lut.http_zip_store as zip_store
-
-        class _FakeMapper(dict):
-            fs = None
-
-        monkeypatch.setattr(zip_store, "build_readonly_zip_mapper", lambda path, options: _FakeMapper())
-        store = zip_store._HTTPZipReadOnlyStore("https://example.com/lut.zip", timeout=1.0)
-        with pytest.raises(TypeError):
-            store["x"] = b"1"
-        with pytest.raises(TypeError):
-            del store["x"]
-        store.close()
-
     def test_read_only_zip_listing_detail_and_close(self):
         import siac.rt.lut.http_zip_store as zip_store
 
@@ -1153,6 +1124,150 @@ class TestZipStoreUtilities:
         assert out == {"ok": True}
         assert captured["path"] == str(tmp_path / "x.zarr")
         assert captured["kwargs"] == {"anon": True}
+
+    def test_remote_zip_builds_and_reuses_reference_json(self, monkeypatch, tmp_path: Path):
+        import siac.rt.lut.store as lut_store
+
+        class _FakeZipFS:
+            _files = {
+                "": {"children": ["lut.zarr"]},
+                "lut.zarr": {"children": ["lut.zarr/.zgroup", "lut.zarr/arr"]},
+                "lut.zarr/arr": {"children": ["lut.zarr/arr/0"]},
+                "lut.zarr/.zgroup": {"offset": 11, "size": 17},
+                "lut.zarr/arr/0": {"offset": 42, "size": 3},
+            }
+
+        class _FakeMapper(dict):
+            def __init__(self):
+                super().__init__()
+                self.fs = _FakeZipFS()
+                self.root = "lut.zarr"
+
+        build_calls = {"n": 0}
+        reference_calls: list[dict[str, object]] = []
+
+        def _fake_build(path: str, options: dict[str, object]):
+            build_calls["n"] += 1
+            assert path == "https://example.com/lut.zarr.zip"
+            assert options == {"timeout": 5.0}
+            return _FakeMapper()
+
+        def _fake_get_mapper(path: str, **kwargs):
+            assert path == "reference://"
+            reference_calls.append(kwargs)
+            return {"kind": "reference", "kwargs": kwargs}
+
+        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", _fake_build)
+        monkeypatch.setattr("fsspec.get_mapper", _fake_get_mapper)
+
+        options = {"timeout": 5.0, "reference_cache_dir": str(tmp_path)}
+        out1 = lut_store.build_lut_store("https://example.com/lut.zarr.zip", options)
+        out2 = lut_store.build_lut_store("https://example.com/lut.zarr.zip", options)
+
+        assert out1["kind"] == "reference"
+        assert out2["kind"] == "reference"
+        assert build_calls["n"] == 1
+        assert len(reference_calls) == 2
+        assert reference_calls[0]["remote_protocol"] == "https"
+        assert reference_calls[0]["remote_options"] == {"timeout": 5.0, "asynchronous": True}
+        assert isinstance(reference_calls[0]["fo"], dict)
+
+        reference_json = lut_store._reference_json_path(
+            "https://example.com/lut.zarr.zip",
+            lut_store._ReferenceOptions(
+                refresh=False,
+                reference_json=None,
+                cache_dir=tmp_path,
+            ),
+        )
+        assert reference_json.exists()
+        payload = json.loads(reference_json.read_text(encoding="utf-8"))
+        assert payload["version"] == 1
+        assert payload["refs"][".zgroup"] == ["https://example.com/lut.zarr.zip", 11, 17]
+        assert payload["refs"]["arr/0"] == ["https://example.com/lut.zarr.zip", 42, 3]
+
+    def test_remote_zip_migrates_legacy_httprange_reference_json(self, monkeypatch, tmp_path: Path):
+        import siac.rt.lut.store as lut_store
+
+        reference_json = lut_store._reference_json_path(
+            "https://example.com/lut.zarr.zip",
+            lut_store._ReferenceOptions(
+                refresh=False,
+                reference_json=None,
+                cache_dir=tmp_path,
+            ),
+        )
+        reference_json.parent.mkdir(parents=True, exist_ok=True)
+        reference_json.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "refs": {
+                        ".zgroup": ["httprange://https://example.com/lut.zarr.zip", 11, 17],
+                        "arr/0": ["httprange://https://example.com/lut.zarr.zip", 42, 3],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            lut_store,
+            "build_readonly_zip_mapper",
+            lambda path, options: (_ for _ in ()).throw(AssertionError("should not rebuild zip mapper")),
+        )
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(
+            "fsspec.get_mapper",
+            lambda path, **kwargs: captured.update({"path": path, "kwargs": kwargs}) or {"kind": "reference"},
+        )
+
+        out = lut_store.build_lut_store(
+            "https://example.com/lut.zarr.zip",
+            {"timeout": 5.0, "reference_cache_dir": str(tmp_path)},
+        )
+        assert out == {"kind": "reference"}
+        assert captured["path"] == "reference://"
+        assert captured["kwargs"]["remote_protocol"] == "https"
+        refs = captured["kwargs"]["fo"]["refs"]
+        assert refs[".zgroup"][0] == "https://example.com/lut.zarr.zip"
+        assert refs["arr/0"][0] == "https://example.com/lut.zarr.zip"
+
+        rewritten = json.loads(reference_json.read_text(encoding="utf-8"))
+        assert rewritten["refs"][".zgroup"][0] == "https://example.com/lut.zarr.zip"
+        assert rewritten["refs"]["arr/0"][0] == "https://example.com/lut.zarr.zip"
+
+    def test_remote_zip_reference_mapper_failure_raises(self, monkeypatch, tmp_path: Path):
+        import siac.rt.lut.store as lut_store
+
+        class _FakeZipFS:
+            _files = {
+                "": {"children": ["lut.zarr"]},
+                "lut.zarr": {"children": ["lut.zarr/.zgroup"]},
+                "lut.zarr/.zgroup": {"offset": 4, "size": 8},
+            }
+
+        class _FakeMapper(dict):
+            def __init__(self):
+                super().__init__()
+                self.fs = _FakeZipFS()
+                self.root = "lut.zarr"
+
+        sentinel = _FakeMapper()
+        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda path, options: sentinel)
+
+        def _raise_reference(path: str, **kwargs):
+            if path == "reference://":
+                raise RuntimeError("reference backend unavailable")
+            return {"unexpected": True}
+
+        monkeypatch.setattr("fsspec.get_mapper", _raise_reference)
+
+        with pytest.raises(RuntimeError, match="reference backend unavailable"):
+            _ = lut_store.build_lut_store(
+                "https://example.com/lut.zarr.zip",
+                {"reference_cache_dir": str(tmp_path)},
+            )
 
 
 class TestCreateLUTFromPy6S:

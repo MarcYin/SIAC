@@ -173,7 +173,9 @@ class RTModelConfig(BaseModel):
         default_factory=dict,
         description=(
             "Extra fsspec storage options for LUT loading. For S3, you can pass "
-            "{region, endpoint_url, key, secret, anon}."
+            "{region, endpoint_url, key, secret, anon}. For remote .zarr.zip LUTs "
+            "you can also control reference caching with "
+            "{reference_cache_dir, reference_json, reference_refresh}."
         ),
     )
     lut_interpolation: Literal["linear", "nearest", "cubic"] = Field(
