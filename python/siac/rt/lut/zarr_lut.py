@@ -11,7 +11,6 @@ from siac.rt.lut.constants import DEFAULT_LUT_URL
 from siac.rt.lut.create import create_lut_from_py6s
 from siac.rt.lut.http_zip_store import (
     _HTTPRangeFileSystem,
-    _HTTPZipReadOnlyStore,
     _ReadOnlyZipFileSystem,
 )
 
@@ -20,6 +19,5 @@ __all__ = [
     "ZarrLUTBackend",
     "create_lut_from_py6s",
     "_HTTPRangeFileSystem",
-    "_HTTPZipReadOnlyStore",
     "_ReadOnlyZipFileSystem",
 ]

@@ -9,12 +9,14 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import struct
-from collections.abc import Iterable, Iterator, MutableMapping
+from collections.abc import Iterable, MutableMapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from fsspec.asyn import AsyncFileSystem, sync
+from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
+from fsspec.implementations.local import LocalFileSystem
 from fsspec.mapping import FSMap
 
 
@@ -172,67 +174,12 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
         self._session.close()
 
 
-class _LocalRangeFileSystem(AsyncFileSystem):
-    """Minimal local byte-range filesystem used by ReadOnlyZipFileSystem."""
-
-    protocol = "localrange"
-    cachable = False
-
-    async def _cat_file(
-        self,
-        path: str,
-        start: int | None = None,
-        end: int | None = None,
-        **kwargs: Any,
-    ) -> bytes:
-        del kwargs
-        local_path = Path(path)
-        size = local_path.stat().st_size
-        start_i, end_i = _slice_bounds(size, start, end)
-        if start_i >= end_i:
-            return b""
-
-        with local_path.open("rb") as handle:
-            handle.seek(start_i)
-            return handle.read(end_i - start_i)
-
-    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        del kwargs
-        local_path = Path(path)
-        if not local_path.exists():
-            raise FileNotFoundError(path)
-        return {
-            "name": str(local_path),
-            "type": "directory" if local_path.is_dir() else "file",
-            "size": local_path.stat().st_size if local_path.is_file() else 0,
-            "created": None,
-            "islink": local_path.is_symlink(),
-        }
-
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
-        del kwargs
-        local_path = Path(path)
-        if not local_path.exists():
-            raise FileNotFoundError(path)
-        if local_path.is_dir():
-            children = sorted(local_path.iterdir())
-            if detail:
-                out: list[dict[str, Any]] = []
-                for child in children:
-                    out.append(
-                        {
-                            "name": str(child),
-                            "type": "directory" if child.is_dir() else "file",
-                            "size": child.stat().st_size if child.is_file() else 0,
-                            "created": None,
-                            "islink": child.is_symlink(),
-                        }
-                    )
-                return out
-            return [str(child) for child in children]
-
-        info = await self._info(path)
-        return [info] if detail else [str(local_path)]
+def _build_local_filesystem() -> AsyncFileSystem:
+    """Return an async wrapper over fsspec's LocalFileSystem."""
+    return AsyncFileSystemWrapper(
+        fs=LocalFileSystem(auto_mkdir=False),
+        asynchronous=True,
+    )
 
 
 class _ReadOnlyZipFileSystem(AsyncFileSystem):
@@ -662,7 +609,7 @@ def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> Mut
         if options:
             unknown = ", ".join(sorted(options))
             raise TypeError(f"Unsupported local zip storage option(s): {unknown}")
-        base_fs = _LocalRangeFileSystem()
+        base_fs = _build_local_filesystem()
         zip_path = str(_parse_local_path(path))
 
     zip_fs = _ReadOnlyZipFileSystem(base_fs, zip_path)
@@ -685,45 +632,3 @@ def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> Mut
         fallback_mapper = fallback_zip_fs.get_mapper("")
         root = _detect_zarr_prefix_from_names(fallback_mapper.keys())
         return fallback_zip_fs.get_mapper(root)
-
-
-class _HTTPZipReadOnlyStore(MutableMapping[str, bytes]):
-    """Backward-compatible HTTP ZIP mapping wrapper.
-
-    This keeps the old internal test hook name while delegating to the new
-    ReadOnlyZipFileSystem-based mapper.
-    """
-
-    def __init__(
-        self,
-        url: str,
-        *,
-        timeout: float = 30.0,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        options: dict[str, Any] = {"timeout": timeout}
-        if headers is not None:
-            options["headers"] = headers
-        options.update(kwargs)
-        self._mapper = build_readonly_zip_mapper(url, options)
-
-    def __getitem__(self, key: str) -> bytes:
-        return self._mapper[key]
-
-    def __setitem__(self, key: str, value: bytes) -> None:
-        raise TypeError("Remote ZIP Zarr store is read-only")
-
-    def __delitem__(self, key: str) -> None:
-        raise TypeError("Remote ZIP Zarr store is read-only")
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._mapper)
-
-    def __len__(self) -> int:
-        return len(self._mapper)
-
-    def close(self) -> None:
-        fs = getattr(self._mapper, "fs", None)
-        if fs is not None and hasattr(fs, "close"):
-            fs.close()

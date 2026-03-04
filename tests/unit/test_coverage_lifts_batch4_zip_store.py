@@ -95,13 +95,13 @@ def test_http_range_fs_probe_and_fallback_branches(monkeypatch):
     fs2.close()
 
 
-def test_local_range_fs_directory_detail_and_file_path(tmp_path: Path):
+def test_local_fs_wrapper_directory_detail_and_file_path(tmp_path: Path):
     d = tmp_path / "d"
     d.mkdir()
     f = d / "a.bin"
     f.write_bytes(b"0123")
 
-    fs = zip_store._LocalRangeFileSystem()
+    fs = zip_store._build_local_filesystem()
     detail = asyncio.run(fs._ls(str(d), detail=True))
     assert detail and detail[0]["type"] == "file"
 
@@ -184,13 +184,3 @@ def test_build_s3_fs_and_mapper_validation_paths(monkeypatch):
     monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda zfs: (_ for _ in ()).throw(ValueError("other parse error")))
     with pytest.raises(ValueError, match="other parse error"):
         zip_store.build_readonly_zip_mapper("/tmp/lut.zip", {})
-
-
-def test_http_zip_store_iter_and_len(monkeypatch):
-    class _Mapper(dict):
-        fs = None
-
-    monkeypatch.setattr(zip_store, "build_readonly_zip_mapper", lambda path, options: _Mapper({"a": b"1", "b": b"2"}))
-    s = zip_store._HTTPZipReadOnlyStore("https://example.com/lut.zip")
-    assert sorted(list(iter(s))) == ["a", "b"]
-    assert len(s) == 2

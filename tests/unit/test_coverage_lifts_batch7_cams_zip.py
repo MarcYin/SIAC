@@ -236,7 +236,7 @@ def test_http_zip_store_additional_branches(monkeypatch: pytest.MonkeyPatch, tmp
     assert out == b"hor"
     fs_short.close()
 
-    local = zip_store._LocalRangeFileSystem()
+    local = zip_store._build_local_filesystem()
     f = tmp_path / "x.bin"
     f.write_bytes(b"abcd")
     assert asyncio.run(local._cat_file(str(f), start=2, end=2)) == b""
@@ -250,9 +250,28 @@ def test_http_zip_store_additional_branches(monkeypatch: pytest.MonkeyPatch, tmp
         asyncio.run(z_noeocd._initialize())
 
     captured_opts: dict[str, object] = {}
-    monkeypatch.setattr(zip_store, "build_readonly_zip_mapper", lambda path, options: captured_opts.setdefault("options", options) or {})
-    _ = zip_store._HTTPZipReadOnlyStore("https://example.com/lut.zip", headers={"Authorization": "token"})
-    assert captured_opts["options"]["headers"] == {"Authorization": "token"}
+
+    class _FakeHTTPFS:
+        def __init__(self, **kwargs):
+            captured_opts["http_kwargs"] = kwargs
+
+    class _FakeZipFS:
+        def __init__(self, fs, path, **kwargs):  # noqa: ANN001, ARG002
+            self.fs = fs
+
+    monkeypatch.setattr(zip_store, "_HTTPRangeFileSystem", _FakeHTTPFS)
+    monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
+    monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda zfs: "")
+    monkeypatch.setattr(
+        zip_store,
+        "FSMap",
+        lambda root, fs, check=False, create=False: {"root": root, "fs": fs},
+    )
+    _ = zip_store.build_readonly_zip_mapper(
+        "https://example.com/lut.zip",
+        {"headers": {"Authorization": "token"}},
+    )
+    assert captured_opts["http_kwargs"]["headers"] == {"Authorization": "token"}
 
     class _FakeS3:
         def __init__(self, **kwargs):
@@ -262,10 +281,3 @@ def test_http_zip_store_additional_branches(monkeypatch: pytest.MonkeyPatch, tmp
     _ = zip_store._build_s3_filesystem({"anon": True, "key": "AK", "secret": "SK"})
     assert captured_opts["s3_kwargs"]["anon"] is True
     assert "key" not in captured_opts["s3_kwargs"]
-
-    class _Mapper(dict):
-        fs = object()
-
-    monkeypatch.setattr(zip_store, "build_readonly_zip_mapper", lambda path, options: _Mapper({"a": b"1"}))
-    store = zip_store._HTTPZipReadOnlyStore("https://example.com/lut.zip")
-    store.close()

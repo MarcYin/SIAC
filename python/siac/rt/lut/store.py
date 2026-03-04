@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from siac.rt.lut.http_zip_store import build_readonly_zip_mapper
+
+logger = logging.getLogger(__name__)
+
+_ZARR_MARKER_KEYS = (".zgroup", ".zattrs", ".zmetadata", "zarr.json")
+_DEFAULT_REFERENCE_CACHE_DIR = Path.home() / ".cache" / "siac" / "lut_refs"
+_LEGACY_REFERENCE_SCHEME = "httprange://"
+
+
+@dataclass(frozen=True)
+class _ReferenceOptions:
+    refresh: bool
+    reference_json: Path | None
+    cache_dir: Path | None
 
 
 def is_remote_path(path: str) -> bool:
@@ -31,6 +48,38 @@ def as_local_path(path: str) -> Path | None:
     return Path(path)
 
 
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _split_storage_options(storage_options: dict[str, Any]) -> tuple[dict[str, Any], _ReferenceOptions]:
+    """Split reference-cache options from backend storage options."""
+    options = dict(storage_options)
+    if "use_reference" in options:
+        raise TypeError(
+            "storage_options['use_reference'] is no longer supported; "
+            "remote zipped LUTs always use reference JSON mapping."
+        )
+    reference_json = options.pop("reference_json", None)
+    reference_cache_dir = options.pop("reference_cache_dir", None)
+    reference_options = _ReferenceOptions(
+        refresh=_coerce_bool(options.pop("reference_refresh", False), default=False),
+        reference_json=Path(str(reference_json)).expanduser() if reference_json is not None else None,
+        cache_dir=Path(str(reference_cache_dir)).expanduser() if reference_cache_dir is not None else None,
+    )
+    return options, reference_options
+
+
 def normalize_storage_options(path: str, storage_options: dict[str, Any]) -> dict[str, Any]:
     """Normalize generic storage options, including S3 region/endpoint aliases."""
     options = dict(storage_options)
@@ -53,15 +102,206 @@ def normalize_storage_options(path: str, storage_options: dict[str, Any]) -> dic
     return options
 
 
+def _normalize_mapper_root(root: str) -> str:
+    normalized = (root or "").strip("/")
+    return "" if normalized in ("", ".") else normalized
+
+
+def _relative_reference_key(name: str, root: str) -> str | None:
+    normalized_name = name.strip("/")
+    if normalized_name == "":
+        return None
+    if not root:
+        return normalized_name
+    if normalized_name == root:
+        return None
+    prefix = f"{root}/"
+    if not normalized_name.startswith(prefix):
+        return None
+    return normalized_name[len(prefix) :]
+
+
+def _build_reference_document(path: str, zip_mapper: Any) -> dict[str, Any]:
+    """Build a reference-spec document from a zip-backed FSMap."""
+    zip_fs = getattr(zip_mapper, "fs", None)
+    files = getattr(zip_fs, "_files", None)
+    if not isinstance(files, dict):
+        raise ValueError("ZIP mapper does not expose indexed file metadata")
+
+    root = _normalize_mapper_root(str(getattr(zip_mapper, "root", "")))
+    refs: dict[str, list[Any]] = {}
+
+    for name, info in files.items():
+        if not isinstance(info, dict) or "children" in info:
+            continue
+        key = _relative_reference_key(str(name), root)
+        if key is None:
+            continue
+        offset = int(info.get("offset", 0))
+        size = int(info.get("size", 0))
+        if offset < 0 or size < 0:
+            raise ValueError(f"Invalid byte range for {name}: offset={offset}, size={size}")
+        refs[key] = [path, offset, size]
+
+    if not refs:
+        raise ValueError("No files available to build reference mapping")
+
+    return {"version": 1, "refs": refs}
+
+
+def _is_valid_reference_document(document: dict[str, Any]) -> bool:
+    refs = document.get("refs")
+    if not isinstance(refs, dict) or not refs:
+        return False
+    return any(marker in refs for marker in _ZARR_MARKER_KEYS)
+
+
+def _normalize_legacy_reference_document(document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Rewrite cached legacy `httprange://` targets to plain URLs."""
+    refs = document.get("refs")
+    if not isinstance(refs, dict) or not refs:
+        return document, False
+
+    changed = False
+    normalized_refs: dict[str, Any] = {}
+    for key, value in refs.items():
+        if isinstance(value, list) and value and isinstance(value[0], str) and value[0].startswith(_LEGACY_REFERENCE_SCHEME):
+            normalized_refs[key] = [value[0][len(_LEGACY_REFERENCE_SCHEME) :], *value[1:]]
+            changed = True
+            continue
+        if isinstance(value, str) and value.startswith(_LEGACY_REFERENCE_SCHEME):
+            normalized_refs[key] = value[len(_LEGACY_REFERENCE_SCHEME) :]
+            changed = True
+            continue
+        normalized_refs[key] = value
+
+    if not changed:
+        return document, False
+
+    normalized_document = dict(document)
+    normalized_document["refs"] = normalized_refs
+    return normalized_document, True
+
+
+def _reference_json_path(path: str, reference_options: _ReferenceOptions) -> Path:
+    if reference_options.reference_json is not None:
+        return reference_options.reference_json
+
+    cache_dir = reference_options.cache_dir or _DEFAULT_REFERENCE_CACHE_DIR
+    parsed = urlparse(path)
+    stem = Path(parsed.path).name or "lut.zarr.zip"
+    digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
+    return cache_dir / f"{stem}.{digest}.references.json"
+
+
+def _write_reference_document(reference_path: Path, document: dict[str, Any]) -> None:
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = reference_path.with_suffix(reference_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+    tmp_path.replace(reference_path)
+
+
+def _load_reference_document(reference_path: Path) -> dict[str, Any]:
+    return json.loads(reference_path.read_text(encoding="utf-8"))
+
+
+def _reference_remote(path: str, storage_options: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """Resolve remote protocol/options for reference:// mapper."""
+    scheme = urlparse(path).scheme or None
+    if scheme in {"http", "https"}:
+        headers = storage_options.get("headers")
+        if headers is not None and not isinstance(headers, dict):
+            raise TypeError("storage_options['headers'] must be a dictionary if provided")
+        timeout = float(storage_options.get("timeout", 30.0))
+        options: dict[str, Any] = {"timeout": timeout, "asynchronous": True}
+        if headers is not None:
+            options["headers"] = headers
+        return scheme, options
+    if scheme is None:
+        return None, {}
+    options = dict(storage_options)
+    options.setdefault("asynchronous", True)
+    return scheme, options
+
+
+def _open_reference_mapper(
+    path: str,
+    storage_options: dict[str, Any],
+    reference_path: Path,
+    document: dict[str, Any] | None = None,
+) -> Any:
+    import fsspec
+
+    doc = document or _load_reference_document(reference_path)
+    refs = doc.get("refs")
+    if not isinstance(refs, dict):
+        raise ValueError(f"Invalid reference JSON at {reference_path}")
+
+    remote_protocol, remote_options = _reference_remote(path, storage_options)
+    kwargs: dict[str, Any] = {"fo": doc, "asynchronous": True}
+    if remote_protocol is not None:
+        kwargs["remote_protocol"] = remote_protocol
+    if remote_options:
+        kwargs["remote_options"] = remote_options
+
+    return fsspec.get_mapper("reference://", **kwargs)
+
+
+def _build_remote_zip_reference_mapper(path: str, storage_options: dict[str, Any], reference_options: _ReferenceOptions) -> Any:
+    """Build/open a cached reference mapper for remote ZIP LUTs."""
+    reference_path = _reference_json_path(path, reference_options)
+
+    if reference_path.exists() and not reference_options.refresh:
+        try:
+            document = _load_reference_document(reference_path)
+            if _is_valid_reference_document(document):
+                document, changed = _normalize_legacy_reference_document(document)
+                if changed:
+                    _write_reference_document(reference_path, document)
+                return _open_reference_mapper(
+                    path,
+                    storage_options,
+                    reference_path,
+                    document=document,
+                )
+            logger.warning(
+                "Invalid cached LUT reference JSON at %s; rebuilding.",
+                reference_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to read LUT reference JSON at %s (%s); rebuilding.",
+                reference_path,
+                exc,
+            )
+
+    zip_mapper = build_readonly_zip_mapper(path, storage_options)
+    document = _build_reference_document(path, zip_mapper)
+    _write_reference_document(reference_path, document)
+    return _open_reference_mapper(
+        path,
+        storage_options,
+        reference_path,
+        document=document,
+    )
+
+
 def build_lut_store(path: str, storage_options: dict[str, Any]) -> Any:
     """Build a zarr-readable store from local/HTTP/S3 path or zip archive."""
     import fsspec
 
-    resolved_storage_options = normalize_storage_options(path, storage_options)
+    backend_options, reference_options = _split_storage_options(storage_options)
+    resolved_storage_options = normalize_storage_options(path, backend_options)
     local_path = as_local_path(path)
     path_or_url = str(local_path) if local_path is not None else path
 
     if is_zip_store(path_or_url):
+        if is_remote_path(path_or_url):
+            return _build_remote_zip_reference_mapper(
+                path_or_url,
+                resolved_storage_options,
+                reference_options,
+            )
         return build_readonly_zip_mapper(path_or_url, resolved_storage_options)
 
     if is_remote_path(path):
