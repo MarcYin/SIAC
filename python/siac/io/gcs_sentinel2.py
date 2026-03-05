@@ -8,13 +8,13 @@ See PLANS_S2.md §2, Phase 3.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import re
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -179,9 +179,8 @@ def _product_from_safe_prefix(safe_prefix: str) -> S2Product:
 
 
 def _matches_query(product: S2Product, query: S2Query) -> bool:
-    if query.mgrs_tile:
-        if product.mgrs_tile != _normalize_mgrs_tile(query.mgrs_tile):
-            return False
+    if query.mgrs_tile and product.mgrs_tile != _normalize_mgrs_tile(query.mgrs_tile):
+        return False
 
     if query.processing_level:
         level = query.processing_level.upper()
@@ -193,10 +192,7 @@ def _matches_query(product: S2Product, query: S2Query) -> bool:
         return False
     if query.start_date is not None and sensing_day < query.start_date:
         return False
-    if query.end_date is not None and sensing_day > query.end_date:
-        return False
-
-    return True
+    return not (query.end_date is not None and sensing_day > query.end_date)
 
 
 def _safe_prefix_from_source_url(source_url: str) -> str:
@@ -288,7 +284,7 @@ def _download_with_retry(
         try:
             _download_url_to_file(url, target)
             if expected_size is not None and target.stat().st_size != expected_size:
-                raise IOError(
+                raise OSError(
                     f"Downloaded size mismatch for {target.name}: "
                     f"expected={expected_size} got={target.stat().st_size}"
                 )

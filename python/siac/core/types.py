@@ -11,14 +11,11 @@ enable caching/hashing where appropriate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import xarray as xr
-from numpy.typing import NDArray
-
 
 # =============================================================================
 # Geometry Types
@@ -243,7 +240,7 @@ class RTCoefficients:
         # dy/d_param = d_xap * toa - d_xbp
         # dboa/dy = 1/denom - xcp * y / denom^2 = (1 - xcp*y/denom) / denom
         #         = 1 / denom^2
-        dboa_dy = 1.0 / (denom**2)
+        1.0 / (denom**2)
 
         # Chain rule for each parameter
         # d_xap, d_xbp, d_xcp have shape (..., 2) for [aot, tcwv]

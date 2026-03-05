@@ -1,17 +1,20 @@
 """Atmospheric correction: TOA to BOA conversion."""
 from __future__ import annotations
+
 import time
+from typing import Any
+
 import numpy as np
 import xarray as xr
-from dataclasses import dataclass
-from typing import Any
+
+from siac.core.protocols import RTModelBackend
 from siac.core.types import (
     AtmosphericState,
     CorrectionResult,
     GeometryAngles,
     SensorConfig,
 )
-from siac.core.protocols import RTModelBackend
+
 
 class AtmosphericCorrector:
     def __init__(self, rt_model: Any, sensor_config: SensorConfig):

@@ -163,7 +163,7 @@ class BRDFKernels:
         sin_sza: np.ndarray,
         sin_vza: np.ndarray,
         cos_raa: np.ndarray,
-        cos_phase: np.ndarray,
+        _cos_phase: np.ndarray,
     ) -> np.ndarray:
         """Li-Sparse geometric scattering kernel."""
         # Prime angles (scaled by br for sparse vegetation)

@@ -14,13 +14,13 @@ The multi-grid approach progressively refines from coarse to fine resolution.
 from siac.solver.cost import (
     CostFunction,
     CostFunctionConfig,
-    compute_laplacian_eigenvalues,
     apply_smoothness_filter,
+    compute_laplacian_eigenvalues,
     create_sparse_laplacian,
 )
 from siac.solver.multigrid import (
-    MultiGridSolver,
     MultiGridConfig,
+    MultiGridSolver,
     SolverResult,
     solve_atmospheric_parameters,
 )

@@ -22,12 +22,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import rioxarray  # noqa: F401 - needed for .rio accessor
 import xarray as xr
 from rasterio.enums import Resampling
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +88,8 @@ def read_raster(
     da = xr.open_dataarray(path, engine="rasterio", **open_kwargs)
 
     # Select specific band if requested
-    if band is not None:
-        if "band" in da.dims:
-            da = da.sel(band=band)
+    if band is not None and "band" in da.dims:
+        da = da.sel(band=band)
 
     # Squeeze single-band dimension to return (y, x) instead of (1, y, x)
     if "band" in da.dims and da.sizes["band"] == 1:
@@ -210,7 +212,6 @@ def read_multiband(
 
     data_vars = {}
     ref_crs = None
-    ref_transform = None
 
     for path, name in zip(paths, band_names):
         da = read_raster(path, chunks=chunks, masked=masked)
@@ -222,7 +223,7 @@ def read_multiband(
         # Store CRS info from first band
         if ref_crs is None:
             ref_crs = da.rio.crs
-            ref_transform = da.rio.transform()
+            da.rio.transform()
 
         data_vars[name] = da
 
@@ -453,11 +454,4 @@ def check_rasters_aligned(
         return False
 
     # Check bounds
-    if not np.allclose(
-        [info1["bounds"].left, info1["bounds"].bottom, info1["bounds"].right, info1["bounds"].top],
-        [info2["bounds"].left, info2["bounds"].bottom, info2["bounds"].right, info2["bounds"].top],
-        atol=tolerance,
-    ):
-        return False
-
-    return True
+    return np.allclose([info1["bounds"].left, info1["bounds"].bottom, info1["bounds"].right, info1["bounds"].top], [info2["bounds"].left, info2["bounds"].bottom, info2["bounds"].right, info2["bounds"].top], atol=tolerance)

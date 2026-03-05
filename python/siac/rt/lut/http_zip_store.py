@@ -9,15 +9,17 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import struct
-from collections.abc import Iterable, MutableMapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
 from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.mapping import FSMap
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, MutableMapping
 
 
 def _normalize_fs_path(path: str) -> str:

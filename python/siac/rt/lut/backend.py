@@ -606,7 +606,6 @@ class ZarrLUTBackend:
         delta_tcwv = 0.1
 
         template = geometry.sza
-        original_shape = template.shape
 
         # Perturb AOT
         aot_plus = atmo_state.with_updated_aot_tcwv(
@@ -672,7 +671,7 @@ class ZarrLUTBackend:
         """Name of the RT backend."""
         return "lut"
 
-    def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+    def is_available_for_sensor(self, _sensor_id: str, _satellite_id: str) -> bool:
         """Check if this backend has data for the specified sensor."""
         # LUT backend works for any sensor with known wavelengths
         return True

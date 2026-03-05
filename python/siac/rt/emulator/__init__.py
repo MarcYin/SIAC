@@ -6,8 +6,8 @@ that approximate 6S radiative transfer model outputs.
 """
 
 from siac.rt.emulator.two_nn import (
-    TwoLayerNNEmulator,
     EmulatorRegistry,
+    TwoLayerNNEmulator,
 )
 
 __all__ = [

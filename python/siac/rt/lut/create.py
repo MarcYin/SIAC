@@ -41,14 +41,16 @@ def create_lut_from_py6s(
     """
     try:
         from Py6S import (
-            SixS,
-            AtmosProfile,
             AeroProfile,
+            AtmosProfile,
             Geometry,
+            SixS,
             Wavelength,
         )
-    except ImportError:
-        raise ImportError("Py6S is required to create LUT. Install with: pip install Py6S")
+    except ImportError as exc:
+        raise ImportError(
+            "Py6S is required to create LUT. Install with: pip install Py6S"
+        ) from exc
 
     output_path = Path(output_path)
 

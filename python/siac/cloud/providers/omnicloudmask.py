@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
 from siac.cloud.mapping import apply_class_mapping
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 
 class OmniCloudMaskProvider:
@@ -28,7 +30,7 @@ class OmniCloudMaskProvider:
             model = omnicloudmask.OmniCloudMask()
             if hasattr(model, "predict"):
                 return model.predict
-            if hasattr(model, "__call__"):
+            if callable(model):
                 return model
 
         if hasattr(omnicloudmask, "predict"):
@@ -65,7 +67,7 @@ class OmniCloudMaskProvider:
 
         # Common binary output convention: 0 clear, 1 cloud.
         values = np.unique(np.asarray(arr.values[np.isfinite(arr.values)]))
-        if set(int(v) for v in values).issubset({0, 1}):
+        if {int(v) for v in values}.issubset({0, 1}):
             mapped = xr.where(arr.astype(np.int16) == 1, 2, 1).astype(np.uint8)
             mapped.name = "cloud_classes"
             return mapped

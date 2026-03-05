@@ -24,7 +24,7 @@ Example usage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -81,11 +81,10 @@ class AtmoPriorConfig(BaseModel):
     @model_validator(mode="after")
     def validate_user_provider(self) -> AtmoPriorConfig:
         """Ensure user-provided paths are set when provider='user'."""
-        if self.provider == "user":
-            if self.user_aot is None and self.user_tcwv is None:
-                raise ValueError(
-                    "When provider='user', at least user_aot or user_tcwv must be provided"
-                )
+        if self.provider == "user" and self.user_aot is None and self.user_tcwv is None:
+            raise ValueError(
+                "When provider='user', at least user_aot or user_tcwv must be provided"
+            )
         return self
 
 
@@ -173,9 +172,7 @@ class RTModelConfig(BaseModel):
         default_factory=dict,
         description=(
             "Extra fsspec storage options for LUT loading. For S3, you can pass "
-            "{region, endpoint_url, key, secret, anon}. For remote .zarr.zip LUTs "
-            "you can also control reference caching with "
-            "{reference_cache_dir, reference_json, reference_refresh}."
+            "{region, endpoint_url, key, secret, anon}."
         ),
     )
     lut_interpolation: Literal["linear", "nearest", "cubic"] = Field(
@@ -590,7 +587,7 @@ class SIACConfig(BaseSettings):
               backend: emulator
         """
         path = Path(path)
-        with open(path) as f:
+        with path.open() as f:
             data = yaml.safe_load(f)
 
         return cls(**data)
@@ -607,7 +604,7 @@ class SIACConfig(BaseSettings):
         # Convert to dict, handling Path objects
         data = self.model_dump(mode="json")
 
-        with open(path, "w") as f:
+        with path.open("w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
     def to_dict(self) -> dict[str, Any]:

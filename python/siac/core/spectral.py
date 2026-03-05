@@ -13,18 +13,22 @@ See PLANS.md §9 for design rationale.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
-import xarray as xr
-from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    import xarray as xr
+    from numpy.typing import NDArray
 
 
 def _trapezoid(y: NDArray, x: NDArray) -> float:
     """Compatibility wrapper for NumPy 1.x/2.x integration API."""
     if hasattr(np, "trapezoid"):
         return float(np.trapezoid(y, x))
-    return float(np.trapz(y, x))
+    return float(np.trapezoid(y, x))
 
 
 # ── Reference sensor definitions ──────────────────────────────────────

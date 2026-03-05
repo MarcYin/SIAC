@@ -8,9 +8,8 @@ parsing is added.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
@@ -18,6 +17,10 @@ import xarray as xr
 from siac.core.types import BRDFKernelWeights
 from siac.io.earthaccess_catalog import EarthAccessCatalog
 from siac.io.earthaccess_source import EarthAccessSource
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

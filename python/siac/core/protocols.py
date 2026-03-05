@@ -12,12 +12,14 @@ to implement the required methods with matching signatures.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TYPE_CHECKING, Protocol, Sequence, runtime_checkable
-
-import xarray as xr
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from datetime import datetime
+
+    import xarray as xr
+
     from siac.core.types import (
         AtmosphericState,
         BRDFKernelWeights,

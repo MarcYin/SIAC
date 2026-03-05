@@ -11,13 +11,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-import xarray as xr
-from pyproj import CRS
+from typing import TYPE_CHECKING, Any
 
 from siac.io.geometry import bounds_to_polygon, load_aoi, polygon_to_bounds
 from siac.io.reprojection import transform_bounds
+
+if TYPE_CHECKING:
+    import xarray as xr
+    from pyproj import CRS
 
 
 @dataclass(frozen=True)

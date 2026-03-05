@@ -20,27 +20,26 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import xarray as xr
 from scipy import ndimage, optimize
-from scipy.fftpack import dct, idct
 
+from siac.core.protocols import RTModelBackend
 from siac.core.types import (
     AtmosphericState,
     GeometryAngles,
     SensorBand,
     SurfacePrior,
 )
-from siac.core.protocols import RTModelBackend
 from siac.solver.cost import CostFunction, CostFunctionConfig
 
 logger = logging.getLogger(__name__)
 
 # Try to import Rust optimization functions
 try:
-    from siac._rust import remap_to_coarse_grid, interpolate_to_fine_grid
+    from siac._rust import interpolate_to_fine_grid, remap_to_coarse_grid
     _HAS_RUST_OPT = True
     logger.debug("Using Rust optimization functions")
 except ImportError:
@@ -457,7 +456,7 @@ class MultiGridSolver:
         self,
         aot: np.ndarray,
         tcwv: np.ndarray,
-        atmo_prior: AtmosphericState,
+        _atmo_prior: AtmosphericState,
         cost_func: CostFunction,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -467,8 +466,6 @@ class MultiGridSolver:
         scaled by the smoothness regularization.
         """
         # Prior uncertainties
-        aot_unc_prior = atmo_prior.aot_unc.values
-        tcwv_unc_prior = atmo_prior.tcwv_unc.values
 
         # Scale by smoothness gamma (higher gamma = more smoothing = higher unc)
         gamma_aot = cost_func.config.aot_gamma

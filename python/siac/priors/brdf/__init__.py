@@ -2,10 +2,10 @@
 
 from siac.priors.brdf.kernels import (
     BRDFKernels,
+    compute_black_sky_albedo,
     compute_kernels,
     compute_reflectance,
     compute_white_sky_albedo,
-    compute_black_sky_albedo,
 )
 from siac.priors.brdf.mcd43_earthaccess import (
     MCD43EarthAccessProvider,

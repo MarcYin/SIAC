@@ -7,18 +7,19 @@ preprocessors and common utilities shared across sensors.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from inspect import Parameter, signature
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from inspect import Parameter, signature
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import xarray as xr
 
-from siac.core.types import GeometryAngles, SensorConfig
+if TYPE_CHECKING:
+    import xarray as xr
+
+    from siac.core.types import GeometryAngles, SensorConfig
 
 logger = logging.getLogger(__name__)
 

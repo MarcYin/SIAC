@@ -55,7 +55,7 @@ def _ensure_expected_classes(out: xr.DataArray) -> xr.DataArray:
     if values.size == 0:
         return out
     uniques = np.unique(values)
-    if not set(int(v) for v in uniques).issubset(set(EXPECTED_CLASSES)):
+    if not {int(v) for v in uniques}.issubset(set(EXPECTED_CLASSES)):
         raise ValueError(
             f"Mapped cloud class values must be in {EXPECTED_CLASSES}, got {uniques.tolist()}"
         )

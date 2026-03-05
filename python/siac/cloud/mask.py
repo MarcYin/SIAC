@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 
 from siac.cloud.mapping import apply_class_mapping
 from siac.cloud.providers.omnicloudmask import OmniCloudMaskProvider
-from siac.core.types import SensorConfig
 from siac.io import read_raster, reproject_match
 from siac.io.reprojection import resample
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from siac.core.types import SensorConfig
 
 _EXPECTED_CLASS_VALUES = (0, 1, 2, 3)
 _COLOR_WINDOWS = {
@@ -88,9 +91,7 @@ def _resample_classes(
     if resolution_policy == "force":
         should_resample = abs(current - target_resolution_m) > 1e-6
     elif resolution_policy == "auto":
-        if current < target_resolution_m - 1e-6:
-            should_resample = True
-        elif current > target_resolution_m + 1e-6 and allow_upsample_to_target:
+        if current < target_resolution_m - 1e-6 or current > target_resolution_m + 1e-6 and allow_upsample_to_target:
             should_resample = True
     else:
         raise ValueError("resolution_policy must be 'auto' or 'force'")
@@ -358,7 +359,7 @@ def build_cloud_classes(
 
     # Ensure valid standardized classes and expected naming.
     uniques = np.unique(out.values)
-    if not set(int(v) for v in uniques).issubset(set(_EXPECTED_CLASS_VALUES)):
+    if not {int(v) for v in uniques}.issubset(set(_EXPECTED_CLASS_VALUES)):
         raise ValueError(
             f"Cloud classes must be in {_EXPECTED_CLASS_VALUES}; got {uniques.tolist()}"
         )

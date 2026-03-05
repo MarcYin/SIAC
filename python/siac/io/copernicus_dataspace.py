@@ -370,8 +370,12 @@ class CopernicusDataspaceBackend:
         return search_cdse(query, self._access_key, self._secret_key)
 
     def download(self, product: S2Product, dest_dir: Path) -> Path:
-        if not self._access_key and not self._secret_key and self._auth is not None:
-            if self._auth.has_credentials("cdse"):
-                token = self._auth.get_cdse_token()
-                return download_cdse(product, dest_dir, access_key=token)
+        if (
+            not self._access_key
+            and not self._secret_key
+            and self._auth is not None
+            and self._auth.has_credentials("cdse")
+        ):
+            token = self._auth.get_cdse_token()
+            return download_cdse(product, dest_dir, access_key=token)
         return download_cdse(product, dest_dir, self._access_key, self._secret_key)

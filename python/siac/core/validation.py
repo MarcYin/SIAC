@@ -8,16 +8,19 @@ downstream. These are called automatically by the pipeline orchestrator.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
-import xarray as xr
 
-from siac.core.types import (
-    AtmosphericState,
-    ObservationBundle,
-    SolverInputBundle,
-    SurfacePrior,
-)
+if TYPE_CHECKING:
+    import xarray as xr
+
+    from siac.core.types import (
+        AtmosphericState,
+        ObservationBundle,
+        SolverInputBundle,
+        SurfacePrior,
+    )
 
 
 def _spatial_shape(ds: xr.Dataset) -> tuple[int, ...]:
@@ -110,8 +113,8 @@ def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
         AssertionError: If any validation rule is violated.
     """
     # bands must be a subset of sensor_config.bands
-    config_bands = set(b.name for b in sib.sensor_config.bands)
-    solver_bands = set(b.name for b in sib.bands)
+    config_bands = {b.name for b in sib.sensor_config.bands}
+    solver_bands = {b.name for b in sib.bands}
     assert solver_bands <= config_bands, (
         f"Solver bands {solver_bands - config_bands} not in sensor_config"
     )

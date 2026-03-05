@@ -7,7 +7,7 @@ Provides pluggable RT backends:
 - direct: Direct Py6S simulation (slow, any sensor)
 """
 
-from siac.rt.emulator import TwoLayerNNEmulator, EmulatorRegistry
+from siac.rt.emulator import EmulatorRegistry, TwoLayerNNEmulator
 from siac.rt.lut import ZarrLUTBackend, create_lut_from_py6s
 
 __all__ = [

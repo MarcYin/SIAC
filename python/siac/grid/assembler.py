@@ -20,7 +20,6 @@ from siac.core.types import (
     AtmosphericState,
     GeometryAngles,
     ObservationBundle,
-    SensorBand,
     SolverInputBundle,
     SurfacePrior,
 )

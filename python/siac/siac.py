@@ -6,29 +6,46 @@ aerosol solving, and atmospheric correction.
 """
 
 from __future__ import annotations
+
 import logging
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
-
-import xarray as xr
+from typing import TYPE_CHECKING, Any
 
 from siac.core.aoi import AOI
 from siac.core.auth import CredentialManager
 from siac.core.config import SIACConfig
 from siac.core.exceptions import DataNotFoundError
-from siac.core.types import AtmosphericState, GeometryAngles, SensorConfig
-from siac.satellite import get_preprocessor, detect_sensor
+from siac.core.types import (
+    AtmosphericState,
+    GeometryAngles,
+    ObservationBundle,
+    SensorConfig,
+    SolvedAtmosphere,
+    SolverInputBundle,
+)
+from siac.correction import AtmosphericCorrector, CorrectionResult
+from siac.pipeline import (
+    AtmoPriorFn,
+    CorrectorFn,
+    GridAssemblerFn,
+    PreprocessorFn,
+    SolverFn,
+    SurfacePriorFn,
+    run_pipeline,
+)
 from siac.priors.atmospheric import CAMSProvider
 from siac.priors.surface.kernel_model import KernelModelDeriver
-from siac.rt.emulator import TwoLayerNNEmulator, EmulatorRegistry
+from siac.rt.emulator import TwoLayerNNEmulator
 from siac.rt.lut import ZarrLUTBackend
-from siac.solver import MultiGridSolver, MultiGridConfig
-from siac.correction import AtmosphericCorrector, CorrectionResult
+from siac.satellite import detect_sensor, get_preprocessor
+from siac.solver import MultiGridConfig, MultiGridSolver
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    import xarray as xr
+
     from siac.io.s2_data_source import S2Query
 
 
@@ -294,20 +311,20 @@ class SIAC:
 
     def _save_output(self, result: CorrectionResult, output_path: Path):
         """Save correction results."""
-        from siac.io import write_dataset, write_cog
+        from siac.io import write_dataset
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
         write_dataset(result.boa, output_path / "boa.nc")
         logger.info(f"Saved output to {output_path}")
 
 
-def process_sentinel2(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:
+def process_sentinel2(input_path: str, output_path: str | None = None, **_kwargs) -> CorrectionResult:
     """Convenience function for Sentinel-2 processing."""
     siac = SIAC.from_defaults(sensor="s2")
     return siac.process(input_path, output_path)
 
 
-def process_landsat8(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:
+def process_landsat8(input_path: str, output_path: str | None = None, **_kwargs) -> CorrectionResult:
     """Convenience function for Landsat 8 processing."""
     siac = SIAC.from_defaults(sensor="l8")
     return siac.process(input_path, output_path)
@@ -439,28 +456,6 @@ def siac_process_s2(
     input_path = resolve_s2_input(query, config, auth=auth_obj)
     return SIAC(config).process(input_path, output_path)
 
-
-# =====================================================================
-# New modular pipeline entry point (PLANS.md §7)
-# =====================================================================
-
-from siac.core.types import (
-    ObservationBundle,
-    SolvedAtmosphere,
-    SolverInputBundle,
-    SurfacePrior,
-)
-from siac.pipeline import (
-    AtmoPriorFn,
-    CorrectorFn,
-    GridAssemblerFn,
-    PreprocessorFn,
-    SolverFn,
-    SurfacePriorFn,
-    run_pipeline,
-)
-
-
 def siac_process(
     config: SIACConfig,
     input_path: Path,
@@ -561,7 +556,7 @@ def _resolve_surface_prior_provider(config: SIACConfig) -> SurfacePriorFn:
         raise ValueError(f"Unknown BRDF provider for surface prior: {provider_name!r}")
 
     # Default: BRDF-derived prior via kernel model
-    def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+    def _brdf_surface_prior(bounds, crs, obs_time, _sensor_config, geometry, resolution):
         brdf_prov = provider_cls(
             cache_dir=config.brdf.cache_dir,
         )
@@ -591,7 +586,7 @@ def _resolve_grid_assembler() -> GridAssemblerFn:
 
 def _resolve_solver(config: SIACConfig) -> SolverFn:
     """Return the default solver callable."""
-    def _default_solver(inputs: SolverInputBundle, cfg) -> SolvedAtmosphere:
+    def _default_solver(inputs: SolverInputBundle, _cfg) -> SolvedAtmosphere:
         solver_config = MultiGridConfig(
             aot_gamma=config.solver.aot_gamma,
             tcwv_gamma=config.solver.tcwv_gamma,
@@ -628,7 +623,7 @@ def _resolve_solver(config: SIACConfig) -> SolverFn:
     return _default_solver
 
 
-def _resolve_corrector(config: SIACConfig) -> CorrectorFn:
+def _resolve_corrector(_config: SIACConfig) -> CorrectorFn:
     """Return the default corrector callable."""
     def _default_corrector(obs: ObservationBundle, solved: SolvedAtmosphere, rt_model) -> CorrectionResult:
         corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)

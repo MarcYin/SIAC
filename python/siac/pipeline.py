@@ -8,21 +8,19 @@ M1-M6 together. Each module is passed in as a plain callable.
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
-import xarray as xr
-
-from siac.core.aoi import AOI
 from siac.core.types import (
     AtmosphericState,
     CorrectionResult,
     GeometryAngles,
     ObservationBundle,
-    SensorBand,
     SensorConfig,
     SolvedAtmosphere,
     SolverInputBundle,
@@ -33,6 +31,9 @@ from siac.core.validation import (
     _validate_observation_bundle,
     _validate_surface_prior,
 )
+
+if TYPE_CHECKING:
+    from siac.core.aoi import AOI
 
 logger = logging.getLogger(__name__)
 
@@ -306,8 +307,10 @@ def _run_pipeline_dask(
         from dask.distributed import (  # type: ignore[import-not-found]
             Client,
             LocalCluster,
-            TimeoutError as DaskTimeoutError,
             performance_report,
+        )
+        from dask.distributed import (
+            TimeoutError as DaskTimeoutError,
         )
     except Exception as exc:
         raise RuntimeError(

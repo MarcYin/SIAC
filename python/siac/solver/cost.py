@@ -20,21 +20,22 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 from scipy import sparse
 from scipy.fftpack import dct, idct
 
-from siac.core.types import (
-    AtmosphericState,
-    GeometryAngles,
-    RTCoefficients,
-    SensorBand,
-    SurfacePrior,
-)
 from siac.core.protocols import RTModelBackend
+
+if TYPE_CHECKING:
+    from siac.core.types import (
+        AtmosphericState,
+        GeometryAngles,
+        SensorBand,
+        SurfacePrior,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -276,13 +277,10 @@ class CostFunction:
                 for band in self.bands
             ]
 
-        for i, (band, coeffs) in enumerate(zip(self.bands, all_coeffs)):
+        for i, (_band, coeffs) in enumerate(zip(self.bands, all_coeffs)):
 
             # Apply correction to get modeled BOA
-            if "band" in self.toa.dims:
-                toa_band_da = self.toa.isel(band=i)
-            else:
-                toa_band_da = self.toa
+            toa_band_da = self.toa.isel(band=i) if "band" in self.toa.dims else self.toa
             boa_model = coeffs.apply_correction(toa_band_da).values
 
             # Get prior BOA for this band

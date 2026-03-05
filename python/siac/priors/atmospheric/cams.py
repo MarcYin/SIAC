@@ -8,7 +8,6 @@ Fetches atmospheric parameters (AOT, TCWV, TCO3) from ECMWF CAMS
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +17,8 @@ import xarray as xr
 from siac.core.types import AtmosphericState
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from siac.core.auth import CredentialManager
 
 logger = logging.getLogger(__name__)
@@ -205,7 +206,7 @@ class CAMSProvider:
 
         return var
 
-    def _create_default_array(self, bounds: tuple, crs: str, resolution: float, value: float) -> xr.DataArray:
+    def _create_default_array(self, bounds: tuple, _crs: str, resolution: float, value: float) -> xr.DataArray:
         """Create default array with constant value."""
         xmin, ymin, xmax, ymax = bounds
         nx = int((xmax - xmin) / resolution)
@@ -273,10 +274,7 @@ class CAMSProvider:
             ds = self._load_tif_dataset(path)
             if ds is None:
                 continue
-            if merged is None:
-                merged = ds
-            else:
-                merged = xr.merge([merged, ds], compat="override")
+            merged = ds if merged is None else xr.merge([merged, ds], compat="override")
 
         return merged
 

@@ -22,8 +22,8 @@ Zarr store layout::
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
@@ -34,6 +34,9 @@ from siac.core.types import (
     SensorConfig,
     SurfacePrior,
 )
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +231,7 @@ class PrebuiltPriorStore:
             5. Project reference bands → sensor bands.
             6. Return ``SurfacePrior``.
         """
+        del crs, geometry
         target_doy = _doy_from_datetime(obs_time)
         tiles = _select_tiles(self.store_path, bounds)
 

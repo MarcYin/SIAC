@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -204,7 +203,7 @@ class TwoLayerNNEmulator:
 
         # Stack inputs
         original_shape = cos_sza.shape
-        n_pixels = np.prod(original_shape)
+        np.prod(original_shape)
 
         # Flatten and stack
         inputs = np.column_stack(
@@ -407,7 +406,7 @@ class TwoLayerNNEmulator:
     def load(
         cls,
         satellite_id: str,
-        band_name: str,
+        _band_name: str,
         emulator_dir: str | Path | None = None,
     ) -> TwoLayerNNEmulator:
         """
@@ -572,13 +571,13 @@ class _BandEmulator:
 
     def _compute_jacobian_python(
         self,
-        x: np.ndarray,
+        _x: np.ndarray,
         a1: np.ndarray,
         a2: np.ndarray,
         w1: np.ndarray,
         w2: np.ndarray,
         w3: np.ndarray,
-        output_idx: int,
+        _output_idx: int,
     ) -> np.ndarray:
         """Compute Jacobian for a single output using backpropagation."""
         # Use float64 intermediates for numerical stability in Jacobians.

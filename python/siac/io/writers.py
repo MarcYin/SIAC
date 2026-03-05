@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +286,7 @@ def write_netcdf(
 
     # Apply encoding to all variables
     if isinstance(data, xr.Dataset):
-        encoding = {var: compression for var in data.data_vars}
+        encoding = dict.fromkeys(data.data_vars, compression)
     else:
         encoding = {data.name or "data": compression}
 
@@ -458,9 +461,8 @@ def _prepare_for_write(
     # Convert dtype if specified
     if dtype is not None:
         # Handle scaling for integer types
-        if dtype in ("uint16", "int16", "uint8"):
-            if nodata is None:
-                nodata = 0 if dtype.startswith("u") else -9999
+        if dtype in ("uint16", "int16", "uint8") and nodata is None:
+            nodata = 0 if dtype.startswith("u") else -9999
 
         data = data.astype(dtype)
 

@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -91,7 +90,7 @@ def load_aoi(
 
 def _load_geojson_file(path: str, target_crs: str | CRS | None) -> dict:
     """Load GeoJSON from file."""
-    with open(path) as f:
+    with Path(path).open() as f:
         geojson = json.load(f)
 
     return _normalize_geojson(geojson, target_crs)
@@ -125,7 +124,7 @@ def _normalize_geojson(geojson: dict, target_crs: str | CRS | None) -> dict:
     return geometry
 
 
-def _parse_wkt(wkt: str, target_crs: str | CRS | None) -> dict:
+def _parse_wkt(wkt: str, _target_crs: str | CRS | None) -> dict:
     """Parse WKT string to GeoJSON geometry."""
     try:
         from shapely import wkt as shapely_wkt
@@ -189,7 +188,7 @@ def _transform_geometry(
 
 def bounds_to_polygon(
     bounds: tuple[float, float, float, float],
-    crs: str | CRS | None = None,
+    _crs: str | CRS | None = None,
 ) -> dict:
     """
     Convert bounding box to GeoJSON polygon.
