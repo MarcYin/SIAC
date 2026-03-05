@@ -109,12 +109,54 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             da.name = band_name
             data_vars[band_name] = da
 
-        ds = xr.Dataset(data_vars)
+        if not data_vars:
+            raise RuntimeError(f"No Sentinel-2 bands found under {img_data_path}")
+
+        # Align all bands to a single high-resolution reference grid before creating
+        # the Dataset. Building a Dataset from mixed-resolution coordinates causes
+        # xarray to align on the union grid, introducing sparse/warped coordinates.
+        ref_name = next(
+            (name for name in ("B04", "B03", "B02", "B08") if name in data_vars),
+            next(iter(data_vars)),
+        )
+        ref_da = data_vars[ref_name]
+        aligned_vars: dict[str, xr.DataArray] = {}
+
+        for band_name, da in data_vars.items():
+            if self._coords_match(da, ref_da):
+                aligned_vars[band_name] = da
+                continue
+
+            try:
+                aligned = reproject_match(da, ref_da, resampling="bilinear")
+            except Exception as exc:
+                logger.debug(
+                    "Failed to reproject %s onto %s grid; falling back to interp (%s)",
+                    band_name,
+                    ref_name,
+                    exc,
+                )
+                aligned = da.interp(
+                    y=ref_da.coords["y"],
+                    x=ref_da.coords["x"],
+                    method="linear",
+                )
+
+            aligned.name = band_name
+            aligned_vars[band_name] = aligned.astype(np.float32)
+
+        ds = xr.Dataset(aligned_vars)
 
         # Add metadata
         ds.attrs["sensor"] = "MSI"
         ds.attrs["satellite"] = self._satellite_id
-        ds.attrs["observation_time"] = metadata.get("observation_time", "").isoformat()
+        obs_time = metadata.get("observation_time")
+        if isinstance(obs_time, datetime):
+            ds.attrs["observation_time"] = obs_time.isoformat()
+        elif isinstance(obs_time, str):
+            ds.attrs["observation_time"] = obs_time
+        else:
+            ds.attrs["observation_time"] = ""
 
         return ds
 
@@ -225,6 +267,13 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             root = tree.getroot()
             metadata.update(self._parse_granule_metadata(root))
 
+        if metadata.get("observation_time") is None:
+            inferred_time = self._parse_observation_time_from_name(input_path.name)
+            if inferred_time is None and self._granule_path is not None:
+                inferred_time = self._parse_observation_time_from_name(self._granule_path.name)
+            if inferred_time is not None:
+                metadata["observation_time"] = inferred_time
+
         return metadata
 
     # =========================================================================
@@ -321,7 +370,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         # Sensing time
         time_elem = root.find(f".//{ns}SENSING_TIME")
-        if time_elem is not None:
+        if time_elem is not None and time_elem.text:
             try:
                 metadata["observation_time"] = datetime.strptime(
                     time_elem.text, "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -337,6 +386,17 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             metadata["tile_id"] = tile_elem.text
 
         return metadata
+
+    @staticmethod
+    def _parse_observation_time_from_name(name: str) -> datetime | None:
+        """Infer sensing time from SAFE/granule names when XML metadata lacks it."""
+        match = re.search(r"_(\d{8}T\d{6})_", name)
+        if match is None:
+            return None
+        try:
+            return datetime.strptime(match.group(1), "%Y%m%dT%H%M%S")
+        except ValueError:
+            return None
 
     def _parse_sun_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
         """Parse sun angle grids from XML."""
@@ -474,6 +534,18 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 p = input_path / p
             defaults["external_mask_path"] = p
         return defaults
+
+    @staticmethod
+    def _coords_match(a: xr.DataArray, b: xr.DataArray) -> bool:
+        """Return True when two arrays share the same x/y grid."""
+        if "x" not in a.coords or "y" not in a.coords or "x" not in b.coords or "y" not in b.coords:
+            return False
+        return (
+            a.sizes.get("x") == b.sizes.get("x")
+            and a.sizes.get("y") == b.sizes.get("y")
+            and np.array_equal(a.coords["x"].values, b.coords["x"].values)
+            and np.array_equal(a.coords["y"].values, b.coords["y"].values)
+        )
 
     def _get_namespace(self, root: ET.Element) -> str:
         """Extract XML namespace from root element."""

@@ -55,6 +55,25 @@ print(result.boa)  # BOA reflectance dataset
 print(result.aot.mean())  # Mean AOT
 ```
 
+## Full Sentinel-2 Run (Real Data)
+
+Use the helper script to run the full Sentinel-2 workflow (query/download + M1-M6):
+
+```bash
+PYTHONPATH=python pixi run python tools/run_full_s2.py \
+  --query "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433" \
+  --backend gcs \
+  --cache-dir ~/.cache/siac/s2 \
+  --aoi-bbox 119.35 -25.10 119.42 -25.03 \
+  --aoi-crs EPSG:4326 \
+  --output-dir ./outputs/s2_full_run
+```
+
+Notes:
+- `--query` accepts a local SAFE path, product ID, or tile-date shorthand (`T31UDQ_20210801`).
+- Use `--aoi-bbox` to keep runs tractable on local machines.
+- Outputs are written to `output-dir/boa/*.tif`, `output-dir/atmosphere.nc`, and `output-dir/run_summary.json`.
+
 ## Configuration
 
 SIAC uses a hierarchical configuration system. Create a `siac_config.yaml`:

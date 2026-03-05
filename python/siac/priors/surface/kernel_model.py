@@ -70,6 +70,7 @@ class KernelModelDeriver:
         k_vol, k_geo = self._kernels.compute(
             geometry.vza, geometry.sza, geometry.raa
         )
+        k_vol, k_geo = self._align_kernels_to_brdf_grid(k_vol, k_geo, brdf_weights.f0)
 
         # Compute reflectance per band
         boa = compute_reflectance(
@@ -99,6 +100,80 @@ class KernelModelDeriver:
             kernels=brdf_weights,
             mask=mask,
         )
+
+    def _align_kernels_to_brdf_grid(
+        self,
+        k_vol: xr.DataArray,
+        k_geo: xr.DataArray,
+        ref: xr.DataArray,
+    ) -> tuple[xr.DataArray, xr.DataArray]:
+        """Align geometry kernels to the BRDF grid to avoid empty coord intersections."""
+        if not isinstance(k_vol, xr.DataArray) or not isinstance(k_geo, xr.DataArray):
+            return k_vol, k_geo
+        if not isinstance(ref, xr.DataArray):
+            return k_vol, k_geo
+
+        if "y" not in ref.dims or "x" not in ref.dims:
+            return k_vol, k_geo
+
+        target_y = ref.coords.get("y")
+        target_x = ref.coords.get("x")
+        if target_y is None or target_x is None:
+            return k_vol, k_geo
+
+        # Already aligned.
+        if (
+            "y" in k_vol.dims and "x" in k_vol.dims
+            and k_vol.sizes.get("y") == ref.sizes.get("y")
+            and k_vol.sizes.get("x") == ref.sizes.get("x")
+        ):
+            return k_vol, k_geo
+
+        try:
+            return (
+                k_vol.interp(y=target_y, x=target_x, method="linear"),
+                k_geo.interp(y=target_y, x=target_x, method="linear"),
+            )
+        except Exception:
+            # Fallback to shape-only resize when coordinates are not monotonic/aligned.
+            target_shape = (int(ref.sizes["y"]), int(ref.sizes["x"]))
+            return (
+                self._resize_kernel_grid(k_vol, target_shape, target_y, target_x),
+                self._resize_kernel_grid(k_geo, target_shape, target_y, target_x),
+            )
+
+    @staticmethod
+    def _resize_kernel_grid(
+        da: xr.DataArray,
+        target_shape: tuple[int, int],
+        target_y: xr.DataArray,
+        target_x: xr.DataArray,
+    ) -> xr.DataArray:
+        """Resize a 2-D kernel grid to target_shape while preserving output coords."""
+        src = np.asarray(da.values, dtype=np.float32)
+        h_out, w_out = target_shape
+
+        if src.ndim != 2:
+            return da
+        if src.shape == target_shape:
+            return xr.DataArray(src, dims=["y", "x"], coords={"y": target_y, "x": target_x})
+        if src.shape[0] == 0 or src.shape[1] == 0:
+            out = np.full(target_shape, np.nan, dtype=np.float32)
+            return xr.DataArray(out, dims=["y", "x"], coords={"y": target_y, "x": target_x})
+
+        zoom_y = h_out / src.shape[0]
+        zoom_x = w_out / src.shape[1]
+        out = ndimage.zoom(src, (zoom_y, zoom_x), order=1)
+        out = out[:h_out, :w_out]
+
+        if out.shape != target_shape:
+            padded = np.full(target_shape, np.nan, dtype=np.float32)
+            h = min(out.shape[0], h_out)
+            w = min(out.shape[1], w_out)
+            padded[:h, :w] = out[:h, :w]
+            out = padded
+
+        return xr.DataArray(out, dims=["y", "x"], coords={"y": target_y, "x": target_x})
 
     def _compute_uncertainty(
         self,

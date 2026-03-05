@@ -54,6 +54,20 @@ def _resample_da(
         method: ``"bilinear"`` (order=1), ``"nearest"`` (order=0), or
                 ``"area"`` (block mean via uniform_filter then subsampling).
     """
+    if da.ndim == 3 and "band" in da.dims:
+        band_vals = da.coords["band"].values if "band" in da.coords else np.arange(da.sizes["band"])
+        out_bands = [
+            _resample_da(da.sel(band=band, drop=True), target_shape, method)
+            for band in band_vals
+        ]
+        out = xr.concat(out_bands, dim="band")
+        return out.assign_coords(band=band_vals).transpose("band", "y", "x")
+
+    if da.ndim != 2:
+        raise ValueError(
+            f"_resample_da expects 2D or banded 3D DataArray, got dims={da.dims}"
+        )
+
     src = da.values.astype(np.float64)
     h_out, w_out = target_shape
 
@@ -169,11 +183,15 @@ def _resample_surface_prior(
     target_shape: tuple[int, int],
 ) -> SurfacePrior:
     """Resample surface prior fields to target shape."""
+    mask = sp.mask
+    if "band" in mask.dims:
+        mask = mask.any(dim="band")
+
     return SurfacePrior(
         boa=_resample_da(sp.boa, target_shape, "bilinear"),
         boa_unc=_resample_da(sp.boa_unc, target_shape, "bilinear"),
         kernels=sp.kernels,  # keep original (used for spectral, not spatial)
-        mask=_resample_cloud_mask(sp.mask, target_shape),
+        mask=_resample_cloud_mask(mask, target_shape),
     )
 
 

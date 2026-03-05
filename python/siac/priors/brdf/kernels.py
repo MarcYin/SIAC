@@ -95,7 +95,11 @@ class BRDFKernels:
 
         # Compute kernels
         if self._use_rust and vza_np.ndim == 2:
-            k_vol, k_geo = self._rust_kernels.compute(vza_np, sza_np, raa_np)
+            # Rust kernels are exposed as float64 numpy bindings.
+            vza_in = np.ascontiguousarray(vza_np, dtype=np.float64)
+            sza_in = np.ascontiguousarray(sza_np, dtype=np.float64)
+            raa_in = np.ascontiguousarray(raa_np, dtype=np.float64)
+            k_vol, k_geo = self._rust_kernels.compute(vza_in, sza_in, raa_in)
         else:
             k_vol, k_geo = self._compute_python(vza_np, sza_np, raa_np)
 

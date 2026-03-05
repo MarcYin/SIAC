@@ -259,6 +259,12 @@ class TestCAMSProvider:
         assert float(state.tcwv.mean()) == pytest.approx(1.5)
         assert float(state.tco3.mean()) == pytest.approx(0.3)
 
+    def test_default_prior_with_reversed_bounds(self, tmp_path: Path):
+        p = CAMSProvider(tmp_path)
+        state = p.get_prior((10.0, 10.0, 0.0, 0.0), "EPSG:4326", datetime(2024, 1, 1), 1.0)
+        assert state.aot.shape == (10, 10)
+        assert float(state.aot.mean()) == pytest.approx(0.15)
+
     def test_extract_variable_missing_var_fallback(self, tmp_path: Path):
         p = CAMSProvider(tmp_path)
         ds = xr.Dataset({"dummy": (("y", "x"), np.ones((3, 3), dtype=np.float32))})
@@ -439,6 +445,34 @@ class TestKernelModel:
         prior = kmd.compute_surface_prior(weights, geom, psf_params=(1.0, 1.0))
         assert prior.boa.shape == (2, 6, 6)
         assert prior.boa_unc.shape == (2, 6, 6)
+
+    def test_compute_surface_prior_handles_misaligned_coords(self, request: pytest.FixtureRequest):
+        KernelModelDeriver, _ = _kernel_model_classes(request)
+        geom = _geometry((8, 8))
+
+        y_ref = np.linspace(0.0, 7.0, 4, dtype=np.float32)
+        x_ref = np.linspace(0.0, 7.0, 4, dtype=np.float32)
+        f0 = xr.DataArray(
+            np.full((4, 4), 0.1, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": y_ref, "x": x_ref},
+        )
+        f1 = xr.full_like(f0, 0.05)
+        f2 = xr.full_like(f0, 0.02)
+        weights = BRDFKernelWeights(
+            f0=f0,
+            f1=f1,
+            f2=f2,
+            f0_unc=xr.full_like(f0, 0.01),
+            f1_unc=xr.full_like(f0, 0.005),
+            f2_unc=xr.full_like(f0, 0.002),
+        )
+
+        kmd = KernelModelDeriver(apply_psf=False)
+        prior = kmd.compute_surface_prior(weights, geom)
+
+        assert prior.boa.shape == (4, 4)
+        assert prior.boa_unc.shape == (4, 4)
 
     def test_convolution_helpers_handle_nan(self, request: pytest.FixtureRequest):
         KernelModelDeriver, _ = _kernel_model_classes(request)

@@ -158,3 +158,35 @@ class TestAssembleGrids:
         """Output should pass _validate_solver_input_bundle()."""
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
         _validate_solver_input_bundle(sib)  # should not raise
+
+    def test_surface_prior_with_band_dimension(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
+        """Assembler should handle banded SurfacePrior arrays from real BRDF providers."""
+        shape = large_surface.boa.shape
+        banded_boa = xr.DataArray(
+            np.stack(
+                [
+                    np.full(shape, 0.11, dtype=np.float32),
+                    np.full(shape, 0.13, dtype=np.float32),
+                ],
+                axis=0,
+            ),
+            dims=["band", "y", "x"],
+            coords={"band": [1, 2]},
+        )
+        banded_unc = xr.full_like(banded_boa, 0.02)
+        banded_mask = xr.DataArray(
+            np.ones((2, *shape), dtype=bool),
+            dims=["band", "y", "x"],
+            coords={"band": [1, 2]},
+        )
+        banded_surface = SurfacePrior(
+            boa=banded_boa,
+            boa_unc=banded_unc,
+            kernels=large_surface.kernels,
+            mask=banded_mask,
+        )
+
+        sib = assemble_grids(large_obs_bundle, large_atmo, banded_surface, mock_rt_model)
+        assert sib.surface_prior.boa.ndim == 3
+        assert sib.surface_prior.boa.shape[0] == 2
+        assert sib.surface_prior.mask.ndim == 2
