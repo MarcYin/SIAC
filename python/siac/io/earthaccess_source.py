@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -27,11 +29,15 @@ class EarthAccessSource:
         login_strategy: str | None = None,
         persist: bool | None = None,
         login_kwargs: dict[str, Any] | None = None,
+        earthdata_username: str | None = None,
+        earthdata_password: str | None = None,
     ) -> None:
         self.provider = provider
         self.login_strategy = login_strategy
         self.persist = persist
         self.login_kwargs = dict(login_kwargs or {})
+        self.earthdata_username = earthdata_username
+        self.earthdata_password = earthdata_password
 
         self._earthaccess: Any | None = None
         self._authenticated = False
@@ -58,21 +64,48 @@ class EarthAccessSource:
 
         ea = self._get_module()
         kwargs = dict(self.login_kwargs)
+        use_env_credentials = bool(self.earthdata_username and self.earthdata_password)
+        if use_env_credentials:
+            kwargs.setdefault("strategy", "environment")
         if self.login_strategy is not None:
             kwargs.setdefault("strategy", self.login_strategy)
         if self.persist is not None:
             kwargs.setdefault("persist", self.persist)
 
-        try:
-            if kwargs:
-                ea.login(**kwargs)
-            else:
+        with self._temporary_environment_credentials():
+            try:
+                if kwargs:
+                    ea.login(**kwargs)
+                else:
+                    ea.login()
+            except TypeError:
+                # Some earthaccess versions may not expose all kwargs.
                 ea.login()
-        except TypeError:
-            # Some earthaccess versions may not expose all kwargs.
-            ea.login()
 
         self._authenticated = True
+
+    @contextmanager
+    def _temporary_environment_credentials(self):
+        if not (self.earthdata_username and self.earthdata_password):
+            yield
+            return
+
+        previous_username = os.environ.get("EARTHDATA_USERNAME")
+        previous_password = os.environ.get("EARTHDATA_PASSWORD")
+        os.environ["EARTHDATA_USERNAME"] = self.earthdata_username
+        os.environ["EARTHDATA_PASSWORD"] = self.earthdata_password
+        try:
+            yield
+        finally:
+            if previous_username is None:
+                os.environ.pop("EARTHDATA_USERNAME", None)
+            else:
+                os.environ["EARTHDATA_USERNAME"] = previous_username
+
+            if previous_password is None:
+                os.environ.pop("EARTHDATA_PASSWORD", None)
+            else:
+                os.environ["EARTHDATA_PASSWORD"] = previous_password
 
     @staticmethod
     def normalize_bounds_to_wgs84(
@@ -103,12 +136,12 @@ class EarthAccessSource:
         return f"{xmin},{ymin},{xmax},{ymax}"
 
     @staticmethod
-    def temporal_window(obs_time: datetime, window_days: int) -> str:
-        """Create CMR temporal range string centered on ``obs_time``."""
+    def temporal_window(obs_time: datetime, window_days: int) -> tuple[str, str]:
+        """Create an Earthaccess-compatible temporal range centered on ``obs_time``."""
         delta = timedelta(days=max(0, int(window_days)))
         start = (obs_time - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
         end = (obs_time + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return f"{start},{end}"
+        return start, end
 
     def search_datasets(
         self,
@@ -120,7 +153,6 @@ class EarthAccessSource:
         **kwargs: Any,
     ) -> list[Any]:
         """Search CMR datasets through earthaccess."""
-        self._ensure_auth()
         ea = self._get_module()
 
         query = dict(kwargs)
@@ -150,21 +182,30 @@ class EarthAccessSource:
         **kwargs: Any,
     ) -> list[Any]:
         """Search CMR granules by short name with optional AOI/time filters."""
-        self._ensure_auth()
         ea = self._get_module()
 
         query = dict(kwargs)
         query["short_name"] = short_name
 
         if bounds is not None:
-            bbox_wgs84 = self.normalize_bounds_to_wgs84(bounds, crs)
-            query["bounding_box"] = self.to_cmr_bounding_box(bbox_wgs84)
+            # earthaccess.search_data() expects a 4-tuple here; passing the
+            # raw CMR string triggers DataGranules.bounding_box() TypeErrors.
+            query["bounding_box"] = self.normalize_bounds_to_wgs84(bounds, crs)
 
         if temporal is not None:
             if isinstance(temporal, tuple) and len(temporal) == 2:
                 t0 = temporal[0].isoformat() if hasattr(temporal[0], "isoformat") else str(temporal[0])
                 t1 = temporal[1].isoformat() if hasattr(temporal[1], "isoformat") else str(temporal[1])
-                query["temporal"] = f"{t0},{t1}"
+                query["temporal"] = (t0, t1)
+            elif isinstance(temporal, str):
+                if "," in temporal:
+                    parts = [part.strip() for part in temporal.split(",", maxsplit=1)]
+                    query["temporal"] = tuple(parts)
+                elif "/" in temporal:
+                    parts = [part.strip() for part in temporal.split("/", maxsplit=1)]
+                    query["temporal"] = tuple(parts)
+                else:
+                    query["temporal"] = temporal
             else:
                 query["temporal"] = str(temporal)
 

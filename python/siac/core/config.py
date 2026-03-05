@@ -59,6 +59,10 @@ class AtmoPriorConfig(BaseModel):
         default=None,
         description="Directory for caching downloaded atmospheric data",
     )
+    download_missing: bool = Field(
+        default=True,
+        description="Auto-download missing atmospheric prior files when the provider supports it.",
+    )
     temporal_interpolation: Literal["nearest", "linear"] = Field(
         default="nearest",
         description="Temporal interpolation method for 3-hourly data",

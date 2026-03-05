@@ -297,7 +297,7 @@ class TestWritersExtra:
         write_zarr(ds[["B02"]], zarr_path, chunks={"y": 8, "x": 8})
         assert zarr_path.exists()
 
-    def test_write_netcdf_dataarray_default_compression_and_write_cog_overviews(
+    def test_write_netcdf_dataarray_default_compression_and_write_cog_options(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -314,6 +314,10 @@ class TestWritersExtra:
         )
         write_netcdf(da.rename(None), tmp_path / "d.nc", compression=None)
         assert captures and "data" in captures[-1]["encoding"]
+        assert captures[-1]["kwargs"]["engine"] == "h5netcdf"
+        assert captures[-1]["encoding"]["x"]["_FillValue"] is None
+        assert captures[-1]["encoding"]["y"]["_FillValue"] is None
+        assert captures[-1]["encoding"]["spatial_ref"]["_FillValue"] is None
 
         cog_calls: list[dict[str, object]] = []
 
@@ -324,4 +328,51 @@ class TestWritersExtra:
         monkeypatch.setattr(type(da.rio), "to_raster", _fake_to_raster, raising=False)
         out = write_cog(da, tmp_path / "x.tif", overviews=[2, 4], compression="deflate")
         assert out.exists()
-        assert cog_calls and cog_calls[-1]["overviews"] == [2, 4]
+        assert cog_calls
+        assert cog_calls[-1]["driver"] == "COG"
+        assert cog_calls[-1]["compress"] == "deflate"
+        assert cog_calls[-1]["level"] == 6
+        assert "overviews" not in cog_calls[-1]
+        assert "zlevel" not in cog_calls[-1]
+
+    def test_write_netcdf_rejects_scipy_and_missing_supported_engines(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        da = _make_da((8, 8)).rename("data")
+
+        with pytest.raises(ValueError, match="not supported"):
+            write_netcdf(da, tmp_path / "scipy.nc", engine="scipy")
+
+        def _missing(_name: str):  # noqa: ANN001
+            return None
+
+        monkeypatch.setattr("siac.io.writers.importlib.util.find_spec", _missing)
+        with pytest.raises(RuntimeError, match="requires h5netcdf or netCDF4"):
+            write_netcdf(da, tmp_path / "missing.nc")
+
+    def test_write_netcdf_sets_no_fillvalue_for_integer_data(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        cloud_mask = _make_da((8, 8)).astype(np.uint8)
+        cloud_mask.attrs["_FillValue"] = np.nan
+        ds = xr.Dataset({"cloud_mask": cloud_mask})
+        captures: list[dict[str, object]] = []
+
+        monkeypatch.setattr(
+            xr.Dataset,
+            "to_netcdf",
+            lambda _self, path, encoding=None, **kwargs: captures.append(  # noqa: ANN001
+                {"path": path, "encoding": encoding, "kwargs": kwargs, "attrs": dict(_self["cloud_mask"].attrs)}
+            ),
+        )
+
+        write_netcdf(ds, tmp_path / "mask.nc", compression=None)
+
+        assert captures
+        assert captures[-1]["kwargs"]["engine"] == "h5netcdf"
+        assert captures[-1]["encoding"]["cloud_mask"]["_FillValue"] is None
+        assert "_FillValue" not in captures[-1]["attrs"]

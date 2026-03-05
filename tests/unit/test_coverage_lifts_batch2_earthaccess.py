@@ -78,10 +78,10 @@ def test_earthaccess_source_auth_and_download_variants(monkeypatch, tmp_path: Pa
 
     src = EarthAccessSource(provider="LP", login_strategy="interactive", persist=True)
 
-    # Exercises kwargs branch in _ensure_auth.
+    # Search operations should not force authentication.
     ds = src.search_datasets(keyword="k", count=None)
     assert len(ds) == 2
-    assert fake.login_calls[-1] == {"strategy": "interactive", "persist": True}
+    assert fake.login_calls == []
 
     # search_datasets count truncation and provider override branch
     out = src.search_datasets(short_name="MCD43A1", provider="PO", count=1)
@@ -91,9 +91,11 @@ def test_earthaccess_source_auth_and_download_variants(monkeypatch, tmp_path: Pa
     # search_granules temporal string branch + count truncation
     gran = src.search_granules(short_name="MCD43A1", temporal="2024-01-01/2024-01-02", count=1)
     assert len(gran) == 1
+    assert fake.search_data_calls[-1]["temporal"] == ("2024-01-01", "2024-01-02")
 
-    # download output variants
+    # download output variants exercise authentication path
     assert src.download_granules(["none"], tmp_path / "d0") == []
+    assert fake.login_calls[-1] == {"strategy": "interactive", "persist": True}
     out1 = src.download_granules(["one"], tmp_path / "d1")
     assert len(out1) == 1 and out1[0].name == "one.h5"
     out_many = src.download_granules(["many"], tmp_path / "d2")
@@ -106,7 +108,7 @@ def test_earthaccess_source_typeerror_login_and_bounds_transform(monkeypatch):
     monkeypatch.setitem(sys.modules, "earthaccess", fake)
 
     src = EarthAccessSource(login_kwargs={"strategy": "not-supported"})
-    _ = src.search_datasets(keyword="x")
+    _ = src.open_granules([{"id": "x"}])
     assert src.is_authenticated is True
     assert fake.login_calls == [{}]
 
@@ -226,10 +228,25 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
     assert p_auth._download_cams_file(datetime(2024, 1, 3)) is None
 
 
-def test_cams_load_data_download_missing_path(monkeypatch, tmp_path: Path):
-    p = CAMSProvider(tmp_path, download_missing=True)
+def test_cams_download_missing_credentials_branch(monkeypatch, tmp_path: Path):
+    monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=lambda **_kwargs: None))
+    monkeypatch.delenv("CDSAPI_KEY", raising=False)
 
-    downloaded = tmp_path / "CAMS_2024-01-01.nc"
+    class _HomePath(type(Path())):
+        @classmethod
+        def home(cls):
+            return tmp_path
+
+    monkeypatch.setattr("siac.priors.atmospheric.cams.Path", _HomePath)
+
+    p = CAMSProvider(tmp_path, auth=SimpleNamespace(has_credentials=lambda _provider: False))
+    assert p._download_cams_file(datetime(2024, 1, 4)) is None
+
+
+def test_cams_load_data_download_missing_path(monkeypatch, tmp_path: Path):
+    p = CAMSProvider(tmp_path / "missing_dir", download_missing=True)
+
+    downloaded = tmp_path / "missing_dir" / "CAMS_2024-01-01.nc"
 
     monkeypatch.setattr(p, "_download_cams_file", lambda _t: downloaded)
     monkeypatch.setattr(p, "_load_from_explicit_path", lambda _path: "dataset")

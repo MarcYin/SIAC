@@ -12,6 +12,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from siac.core.aoi import AOI
 from siac.core.auth import CredentialManager
 from siac.core.config import SIACConfig
@@ -25,6 +27,7 @@ from siac.core.types import (
     SolverInputBundle,
 )
 from siac.correction import AtmosphericCorrector, CorrectionResult
+from siac.io.earthaccess_source import EarthAccessSource
 from siac.pipeline import (
     AtmoPriorFn,
     CorrectorFn,
@@ -47,6 +50,24 @@ if TYPE_CHECKING:
     import xarray as xr
 
     from siac.io.s2_data_source import S2Query
+
+
+def _earthaccess_source_from_auth(
+    auth: CredentialManager | None,
+    *,
+    provider: str | None = None,
+) -> EarthAccessSource:
+    """Build an Earthaccess source that can authenticate non-interactively when creds exist."""
+    kwargs: dict[str, Any] = {"provider": provider}
+    if auth is not None and hasattr(auth, "has_credentials") and auth.has_credentials("earthdata"):
+        cred = auth.get_credentials("earthdata")
+        kwargs.update(
+            earthdata_username=cred.key,
+            earthdata_password=cred.secret,
+            login_strategy="environment",
+            persist=False,
+        )
+    return EarthAccessSource(**kwargs)
 
 
 class SIAC:
@@ -181,17 +202,22 @@ class SIAC:
             provider_name = self.config.atmo_prior.provider
             if provider_name == "cams":
                 self._atmo_provider = CAMSProvider(
-                    self.config.atmo_prior.data_path, auth=self._auth,
+                    self.config.atmo_prior.data_path,
+                    temporal_interp=self.config.atmo_prior.temporal_interpolation == "linear",
+                    download_missing=self.config.atmo_prior.download_missing,
+                    auth=self._auth,
                 )
             elif provider_name == "merra2":
                 from siac.priors.atmospheric.merra2 import MERRA2Provider
                 self._atmo_provider = MERRA2Provider(
                     cache_dir=self.config.atmo_prior.cache_dir,
+                    source=_earthaccess_source_from_auth(self._auth),
                 )
             elif provider_name == "mcd19":
                 from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider
                 self._atmo_provider = MCD19AODProvider(
                     cache_dir=self.config.atmo_prior.cache_dir,
+                    source=_earthaccess_source_from_auth(self._auth),
                 )
             else:
                 logger.warning(
@@ -199,7 +225,10 @@ class SIAC:
                     f"falling back to CAMS"
                 )
                 self._atmo_provider = CAMSProvider(
-                    self.config.atmo_prior.data_path, auth=self._auth,
+                    self.config.atmo_prior.data_path,
+                    temporal_interp=self.config.atmo_prior.temporal_interpolation == "linear",
+                    download_missing=self.config.atmo_prior.download_missing,
+                    auth=self._auth,
                 )
 
         # Get bounds and CRS from AOI
@@ -252,11 +281,13 @@ class SIAC:
             from siac.priors.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
             self._brdf_provider = MCD43EarthAccessProvider(
                 cache_dir=self.config.brdf.cache_dir,
+                source=_earthaccess_source_from_auth(self._auth),
             )
         elif provider_name == "vnp43":
             from siac.priors.brdf.vnp43_earthaccess import VNP43EarthAccessProvider
             self._brdf_provider = VNP43EarthAccessProvider(
                 cache_dir=self.config.brdf.cache_dir,
+                source=_earthaccess_source_from_auth(self._auth),
             )
         elif provider_name == "gee":
             from siac.priors.brdf.gee_stub import GEEBRDFProvider
@@ -454,7 +485,9 @@ def siac_process_s2(
     """Run full SIAC process from S2 query/path (product ID, tile+date, or local SAFE)."""
     auth_obj = auth or CredentialManager.from_config(config)
     input_path = resolve_s2_input(query, config, auth=auth_obj)
-    return SIAC(config).process(input_path, output_path)
+    siac_obj = SIAC(config)
+    siac_obj._auth = auth_obj
+    return siac_obj.process(input_path, output_path)
 
 def siac_process(
     config: SIACConfig,
@@ -480,7 +513,7 @@ def siac_process(
 
     preprocessor = preprocessor or _resolve_preprocessor(config)
     atmo_provider = atmo_provider or _resolve_atmo_provider(config, auth=auth)
-    surface_prior_provider = surface_prior_provider or _resolve_surface_prior_provider(config)
+    surface_prior_provider = surface_prior_provider or _resolve_surface_prior_provider(config, auth=auth)
     grid_assembler = grid_assembler or _resolve_grid_assembler()
     solver = solver or _resolve_solver(config)
     corrector = corrector or _resolve_corrector(config)
@@ -529,20 +562,34 @@ def _resolve_atmo_provider(
     """Return a callable ``(bounds, crs, time, res) -> AtmosphericState``."""
     provider_name = config.atmo_prior.provider
     if provider_name == "cams":
-        provider = CAMSProvider(config.atmo_prior.data_path, auth=auth)
+        provider = CAMSProvider(
+            config.atmo_prior.data_path,
+            temporal_interp=config.atmo_prior.temporal_interpolation == "linear",
+            download_missing=config.atmo_prior.download_missing,
+            auth=auth,
+        )
         return provider.get_prior
     if provider_name == "merra2":
         from siac.priors.atmospheric.merra2 import MERRA2Provider
-        provider = MERRA2Provider(cache_dir=config.atmo_prior.cache_dir)
+        provider = MERRA2Provider(
+            cache_dir=config.atmo_prior.cache_dir,
+            source=_earthaccess_source_from_auth(auth),
+        )
         return provider.get_prior
     if provider_name == "mcd19":
         from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider
-        provider = MCD19AODProvider(cache_dir=config.atmo_prior.cache_dir)
+        provider = MCD19AODProvider(
+            cache_dir=config.atmo_prior.cache_dir,
+            source=_earthaccess_source_from_auth(auth),
+        )
         return provider.get_prior
     raise ValueError(f"Unknown atmo provider: {provider_name!r}")
 
 
-def _resolve_surface_prior_provider(config: SIACConfig) -> SurfacePriorFn:
+def _resolve_surface_prior_provider(
+    config: SIACConfig,
+    auth: CredentialManager | None = None,
+) -> SurfacePriorFn:
     """Return a callable matching the M3 signature -> SurfacePrior."""
     provider_name = getattr(config.brdf, "provider", "mcd43")
 
@@ -559,6 +606,7 @@ def _resolve_surface_prior_provider(config: SIACConfig) -> SurfacePriorFn:
     def _brdf_surface_prior(bounds, crs, obs_time, _sensor_config, geometry, resolution):
         brdf_prov = provider_cls(
             cache_dir=config.brdf.cache_dir,
+            source=_earthaccess_source_from_auth(auth),
         )
         brdf_weights = brdf_prov.get_brdf_parameters(
             bounds=bounds,
@@ -627,9 +675,60 @@ def _resolve_corrector(_config: SIACConfig) -> CorrectorFn:
     """Return the default corrector callable."""
     def _default_corrector(obs: ObservationBundle, solved: SolvedAtmosphere, rt_model) -> CorrectionResult:
         corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
-        return corrector_obj.correct(obs.toa, obs.geometry, solved.atmo_state, obs.cloud_mask)
+        first_band = obs.toa[next(iter(obs.toa.data_vars))]
+        atmo = solved.atmo_state
+        matched_atmo = AtmosphericState(
+            aot=_resample_field_to_template(atmo.aot, first_band),
+            tcwv=_resample_field_to_template(atmo.tcwv, first_band),
+            tco3=_resample_field_to_template(atmo.tco3, first_band),
+            aot_unc=_resample_field_to_template(atmo.aot_unc, first_band),
+            tcwv_unc=_resample_field_to_template(atmo.tcwv_unc, first_band),
+            tco3_unc=_resample_field_to_template(atmo.tco3_unc, first_band),
+            elevation=_resample_field_to_template(atmo.elevation, first_band),
+        )
+        return corrector_obj.correct(obs.toa, obs.geometry, matched_atmo, obs.cloud_mask)
 
     return _default_corrector
+
+
+def _resample_field_to_template(field, template):
+    """Resample a 2-D field to match a template grid for M6 correction."""
+    if field.shape == template.shape:
+        return field
+
+    if (
+        all(dim in field.dims for dim in ("y", "x"))
+        and all(dim in template.dims for dim in ("y", "x"))
+        and all(coord in field.coords for coord in ("y", "x"))
+        and all(coord in template.coords for coord in ("y", "x"))
+    ):
+        try:
+            return field.interp(y=template.coords["y"], x=template.coords["x"], method="linear")
+        except Exception:
+            pass
+
+    src = np.asarray(field.values, dtype=np.float32)
+    if src.ndim != 2:
+        return field
+
+    from scipy import ndimage
+    h_out = int(template.sizes["y"])
+    w_out = int(template.sizes["x"])
+    if src.shape[0] == 0 or src.shape[1] == 0:
+        out = np.full((h_out, w_out), np.nan, dtype=np.float32)
+    else:
+        out = ndimage.zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=1)
+        out = out[:h_out, :w_out]
+        if out.shape != (h_out, w_out):
+            padded = np.full((h_out, w_out), np.nan, dtype=np.float32)
+            padded[: out.shape[0], : out.shape[1]] = out
+            out = padded
+
+    return field.__class__(
+        out,
+        dims=template.dims,
+        coords={d: template.coords[d] for d in template.dims if d in template.coords},
+    )
 
 
 def _resolve_rt_model_for_pipeline(

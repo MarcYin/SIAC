@@ -1,4 +1,4 @@
-"""Default cloud/cloud-shadow provider using OmniCloudMask when available."""
+"""Default cloud/cloud-shadow provider using required OmniCloudMask inference."""
 
 from __future__ import annotations
 
@@ -14,48 +14,39 @@ if TYPE_CHECKING:
 
 
 class OmniCloudMaskProvider:
-    """Run OmniCloudMask (or fallback heuristic) and return standardized classes."""
+    """Run OmniCloudMask and return SIAC-standardized cloud classes."""
 
     def __init__(self, predictor: Callable[[np.ndarray], np.ndarray] | None = None):
         self._predictor = predictor
 
-    def _default_predictor(self) -> Callable[[np.ndarray], np.ndarray] | None:
+    @staticmethod
+    def _default_predictor() -> Callable[[np.ndarray], np.ndarray]:
         try:
             import omnicloudmask  # type: ignore[import-not-found]
-        except Exception:
-            return None
+        except Exception as exc:
+            raise ImportError(
+                "omnicloudmask is required for SIAC cloud masking. "
+                "Install the 'omnicloudmask' package."
+            ) from exc
 
-        # Adapter for likely OmniCloudMask APIs.
-        if hasattr(omnicloudmask, "OmniCloudMask"):
-            model = omnicloudmask.OmniCloudMask()
-            if hasattr(model, "predict"):
-                return model.predict
-            if callable(model):
-                return model
+        predict_from_array = getattr(omnicloudmask, "predict_from_array", None)
+        if not callable(predict_from_array):
+            raise RuntimeError(
+                "omnicloudmask does not expose a callable predict_from_array() entrypoint"
+            )
 
-        if hasattr(omnicloudmask, "predict"):
-            return omnicloudmask.predict
-
-        return None
-
-    @staticmethod
-    def _heuristic(red: np.ndarray, green: np.ndarray, nir: np.ndarray) -> np.ndarray:
-        missing = ~np.isfinite(red) | ~np.isfinite(green) | ~np.isfinite(nir)
-
-        classes = np.full(red.shape, 1, dtype=np.uint8)  # clear
-        cloud = ((red > 0.28) & (green > 0.30)) | (nir > 0.45)
-        shadow = (~cloud) & (nir < 0.12) & (red < 0.14) & (green < 0.14)
-
-        classes[cloud] = 2
-        classes[shadow] = 3
-        classes[missing] = 0
-        return classes
+        return predict_from_array
 
     @staticmethod
     def _normalize_raw_output(raw: np.ndarray, template: xr.DataArray) -> xr.DataArray:
-        if raw.ndim == 3 and raw.shape[-1] > 1:
-            # probabilities/logits in last dimension
-            raw = np.argmax(raw, axis=-1)
+        if raw.ndim == 3:
+            if raw.shape[0] == 1 and raw.shape[1:] == template.shape:
+                raw = raw[0]
+            elif raw.shape[0] > 1 and raw.shape[1:] == template.shape:
+                # Channel-first probabilities/logits from OCM confidence output.
+                raw = np.argmax(raw, axis=0)
+            elif raw.shape[-1] > 1 and raw.shape[:-1] == template.shape:
+                raw = np.argmax(raw, axis=-1)
 
         if raw.shape != template.shape:
             raise ValueError(
@@ -64,13 +55,6 @@ class OmniCloudMaskProvider:
             )
 
         arr = xr.DataArray(raw, dims=template.dims, coords=template.coords)
-
-        # Common binary output convention: 0 clear, 1 cloud.
-        values = np.unique(np.asarray(arr.values[np.isfinite(arr.values)]))
-        if {int(v) for v in values}.issubset({0, 1}):
-            mapped = xr.where(arr.astype(np.int16) == 1, 2, 1).astype(np.uint8)
-            mapped.name = "cloud_classes"
-            return mapped
 
         return arr
 
@@ -88,37 +72,35 @@ class OmniCloudMaskProvider:
             raise ValueError("red, green, and nir arrays must have identical shape")
 
         predictor = self._predictor or self._default_predictor()
-        if predictor is None:
-            classes = self._heuristic(
-                np.asarray(red.values, dtype=np.float32),
-                np.asarray(green.values, dtype=np.float32),
-                np.asarray(nir.values, dtype=np.float32),
-            )
-            out = xr.DataArray(classes, dims=red.dims, coords=red.coords, name="cloud_classes")
-            # Heuristic already matches the standardized classes.
-            return apply_class_mapping(out, None, unmapped_to_missing=True)
-
+        red_np = np.asarray(red.values, dtype=np.float32)
+        green_np = np.asarray(green.values, dtype=np.float32)
+        nir_np = np.asarray(nir.values, dtype=np.float32)
+        missing = ~np.isfinite(red_np) | ~np.isfinite(green_np) | ~np.isfinite(nir_np)
         rgbnir = np.stack(
             [
-                np.asarray(red.values, dtype=np.float32),
-                np.asarray(green.values, dtype=np.float32),
-                np.asarray(nir.values, dtype=np.float32),
+                np.where(np.isfinite(red_np), red_np, 0.0),
+                np.where(np.isfinite(green_np), green_np, 0.0),
+                np.where(np.isfinite(nir_np), nir_np, 0.0),
             ],
-            axis=-1,
+            axis=0,
         )
         raw = predictor(rgbnir)
         normalized = self._normalize_raw_output(np.asarray(raw), red)
 
-        # If the caller provides mapping, apply it. Otherwise keep standardized labels.
         if class_mapping:
-            return apply_class_mapping(
+            out = apply_class_mapping(
                 normalized,
                 class_mapping,
                 unmapped_to_missing=unmapped_to_missing,
             )
+        else:
+            # OmniCloudMask classes: 0 clear, 1 thick cloud, 2 thin cloud, 3 shadow.
+            out = apply_class_mapping(
+                normalized,
+                {1: [0], 2: [1, 2], 3: [3]},
+                unmapped_to_missing=unmapped_to_missing,
+            )
 
-        return apply_class_mapping(
-            normalized,
-            None,
-            unmapped_to_missing=unmapped_to_missing,
-        )
+        out = out.where(~missing, other=np.uint8(0)).astype(np.uint8)
+        out.name = "cloud_classes"
+        return out

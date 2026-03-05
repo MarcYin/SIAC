@@ -12,11 +12,12 @@ Example:
     >>> write_raster(da, "/path/to/output.tif")
     >>>
     >>> # Write as Cloud-Optimized GeoTIFF
-    >>> write_cog(da, "/path/to/output.tif", overviews=[2, 4, 8])
+    >>> write_cog(da, "/path/to/output.tif")
 """
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -30,11 +31,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Compression settings for different algorithms
-COMPRESSION_SETTINGS = {
+# Compression settings for GTiff/GeoTIFF drivers.
+GTIFF_COMPRESSION_SETTINGS = {
     "deflate": {"compress": "deflate", "zlevel": 6},
     "lzw": {"compress": "lzw"},
     "zstd": {"compress": "zstd", "zstd_level": 9},
+    "none": {},
+}
+
+# Compression settings accepted by GDAL's COG driver.
+COG_COMPRESSION_SETTINGS = {
+    "deflate": {"compress": "deflate", "level": 6},
+    "lzw": {"compress": "lzw"},
+    "zstd": {"compress": "zstd", "level": 9},
     "none": {},
 }
 
@@ -44,6 +53,28 @@ COG_SETTINGS = {
     "blocksize": 512,
     "overview_resampling": "average",
 }
+
+_NETCDF_DEFAULT = object()
+
+
+def _netcdf_fill_value(data: xr.DataArray) -> Any:
+    """Choose a NetCDF fill-value policy compatible with variable dtype."""
+    dtype = np.dtype(data.dtype)
+    if np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.bool_):
+        return None
+    if "_FillValue" in data.encoding:
+        return data.encoding["_FillValue"]
+    return _NETCDF_DEFAULT
+
+
+def _sanitize_netcdf_array(data: xr.DataArray) -> xr.DataArray:
+    """Remove fill-value attrs that are invalid for integer/bool NetCDF variables."""
+    out = data.copy(deep=False)
+    dtype = np.dtype(out.dtype)
+    if np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.bool_):
+        for key in ("_FillValue", "missing_value", "fill_value"):
+            out.attrs.pop(key, None)
+    return out
 
 
 # =============================================================================
@@ -92,7 +123,7 @@ def write_raster(
     write_kwargs = {
         "driver": "GTiff",
         "tiled": tiled,
-        **COMPRESSION_SETTINGS.get(compression, {}),
+        **GTIFF_COMPRESSION_SETTINGS.get(compression, {}),
         **kwargs,
     }
 
@@ -130,7 +161,8 @@ def write_cog(
         compression: Compression algorithm
         dtype: Output data type
         nodata: NoData value
-        overviews: Overview levels (e.g., [2, 4, 8, 16]). If None, auto-computed.
+        overviews: Retained for API compatibility. The GDAL COG driver manages
+            overview generation automatically, so explicit levels are ignored.
         overview_resampling: Resampling method for overviews
         blocksize: Block size for tiling
         **kwargs: Additional arguments passed to rioxarray
@@ -144,21 +176,18 @@ def write_cog(
     # Prepare data
     data = _prepare_for_write(data, dtype, nodata)
 
-    # Auto-compute overview levels if not specified
-    if overviews is None:
-        overviews = _compute_overview_levels(data)
-
     # Build COG write options
     write_kwargs = {
         "driver": "COG",
         "blocksize": blocksize,
         "overview_resampling": overview_resampling,
-        **COMPRESSION_SETTINGS.get(compression, {}),
+        **COG_COMPRESSION_SETTINGS.get(compression, {}),
         **kwargs,
     }
 
-    if overviews:
-        write_kwargs["overviews"] = list(overviews)
+    # The GDAL COG driver chooses overview levels automatically and rejects
+    # GTiff-style OVERVIEWS / OVERVIEW_LEVEL creation options.
+    _ = overviews
 
     # Write using rioxarray
     data.rio.to_raster(str(path), **write_kwargs)
@@ -279,18 +308,62 @@ def write_netcdf(
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload: xr.DataArray | xr.Dataset
 
     # Default compression
     if compression is None:
         compression = {"zlib": True, "complevel": 4}
+    effective_compression = dict(compression)
 
-    # Apply encoding to all variables
+    engine = kwargs.get("engine")
+    if engine is None:
+        if importlib.util.find_spec("h5netcdf") is not None:
+            kwargs["engine"] = "h5netcdf"
+            engine = "h5netcdf"
+        elif importlib.util.find_spec("netCDF4") is not None:
+            kwargs["engine"] = "netcdf4"
+            engine = "netcdf4"
+        else:
+            raise RuntimeError(
+                "NetCDF output requires h5netcdf or netCDF4; scipy fallback is disabled. "
+                "Install h5netcdf or netCDF4."
+            )
+    elif str(engine).lower() == "scipy":
+        raise ValueError(
+            "NetCDF scipy backend is not supported; use engine='h5netcdf' or engine='netcdf4'."
+        )
+
     if isinstance(data, xr.Dataset):
-        encoding = dict.fromkeys(data.data_vars, compression)
+        payload = data.copy(deep=False)
+        for name in list(payload.data_vars):
+            payload[name] = _sanitize_netcdf_array(payload[name])
+        for name in list(payload.coords):
+            payload.coords[name] = _sanitize_netcdf_array(payload.coords[name])
     else:
-        encoding = {data.name or "data": compression}
+        payload = _sanitize_netcdf_array(data)
 
-    data.to_netcdf(str(path), encoding=encoding, **kwargs)
+    # Apply encoding to all variables and coordinate variables.
+    encoding: dict[str, dict[str, Any]] = {}
+    if isinstance(payload, xr.Dataset):
+        for name, var in payload.data_vars.items():
+            var_encoding = dict(effective_compression)
+            fill_value = _netcdf_fill_value(var)
+            if fill_value is not _NETCDF_DEFAULT:
+                var_encoding["_FillValue"] = fill_value
+            encoding[name] = var_encoding
+        for name, _coord in payload.coords.items():
+            encoding[name] = {"_FillValue": None}
+    else:
+        var_name = payload.name or "data"
+        var_encoding = dict(effective_compression)
+        fill_value = _netcdf_fill_value(payload)
+        if fill_value is not _NETCDF_DEFAULT:
+            var_encoding["_FillValue"] = fill_value
+        encoding[var_name] = var_encoding
+        for name, _coord in payload.coords.items():
+            encoding[name] = {"_FillValue": None}
+
+    payload.to_netcdf(str(path), encoding=encoding, **kwargs)
 
     logger.info(f"Wrote NetCDF to {path}")
     return path

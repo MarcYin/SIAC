@@ -167,7 +167,11 @@ def test_resolve_aoi_branches(monkeypatch):
 
 
 def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    fake_auth = SimpleNamespace(
+        has_credentials=lambda provider: provider == "earthdata",
+        get_credentials=lambda _provider: SimpleNamespace(key="u", secret="p"),
+    )
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: fake_auth)
 
     calls = []
 
@@ -187,11 +191,13 @@ def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
     out_cams = siac_cams._get_atmospheric_prior(fake_aoi, metadata)
     assert out_cams[0] == (1.0, 2.0, 3.0, 4.0)
     assert out_cams[1] == "EPSG:4326"
+    assert calls[0][1]["download_missing"] is True
 
     cfg_merra = SIACConfig(sensor="s2", atmo_prior={"provider": "merra2", "cache_dir": "/tmp/cache"})
     siac_merra = SIAC(cfg_merra)
     monkeypatch.setattr("siac.priors.atmospheric.merra2.MERRA2Provider", _FakeProvider)
     assert siac_merra._get_atmospheric_prior(fake_aoi, metadata)[3] == 10.0
+    assert calls[1][1]["source"].earthdata_username == "u"
 
     cfg_mcd19 = SIACConfig(sensor="s2", atmo_prior={"provider": "mcd19", "cache_dir": "/tmp/cache"})
     siac_mcd19 = SIAC(cfg_mcd19)
@@ -209,7 +215,11 @@ def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
 
 
 def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    fake_auth = SimpleNamespace(
+        has_credentials=lambda provider: provider == "earthdata",
+        get_credentials=lambda _provider: SimpleNamespace(key="u", secret="p"),
+    )
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: fake_auth)
 
     cfg = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
     siac_obj = SIAC(cfg)
@@ -217,8 +227,9 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
     provider_calls = []
 
     class _FakeBRDFProvider:
-        def __init__(self, cache_dir=None):
+        def __init__(self, cache_dir=None, source=None):
             self.cache_dir = cache_dir
+            self.source = source
 
         def get_brdf_parameters(self, **kwargs):
             provider_calls.append(kwargs)
@@ -241,6 +252,7 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
     assert out[0] == "weights"
     assert out[1] is geom
     assert provider_calls and provider_calls[0]["bands"] == [1, 2, 3, 4, 5, 6, 7]
+    assert siac_obj._brdf_provider.source.earthdata_username == "u"
 
     cached = object()
     siac_obj._brdf_provider = cached
@@ -447,7 +459,7 @@ def test_siac_process_uses_resolvers_and_injections(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: "auth")
     monkeypatch.setattr("siac.siac._resolve_preprocessor", lambda _config: "pp")
     monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _config, auth=None: ("ap", auth))
-    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _config: "sp")
+    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _config, auth=None: ("sp", auth))
     monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "ga")
     monkeypatch.setattr("siac.siac._resolve_solver", lambda _config: "sv")
     monkeypatch.setattr("siac.siac._resolve_corrector", lambda _config: "cr")
@@ -463,6 +475,7 @@ def test_siac_process_uses_resolvers_and_injections(monkeypatch, tmp_path: Path)
     assert out == "pipeline-result"
     assert calls["preprocessor"] == "pp"
     assert calls["atmo_provider"] == ("ap", "auth")
+    assert calls["surface_prior_provider"] == ("sp", "auth")
 
     # Explicit injections should bypass resolver defaults.
     out2 = siac_process(
@@ -493,9 +506,11 @@ def test_resolve_preprocessor_and_atmo_provider_branches(monkeypatch):
     pp_fn = _resolve_preprocessor(cfg)
     assert pp_fn("/tmp/scene") == "obs"
 
+    calls = []
+
     class _FakeProvider:
         def __init__(self, *args, **kwargs):
-            pass
+            calls.append((args, kwargs))
 
         def get_prior(self, bounds, crs, obs_time, resolution):
             return (bounds, crs, obs_time, resolution)
@@ -503,18 +518,21 @@ def test_resolve_preprocessor_and_atmo_provider_branches(monkeypatch):
     monkeypatch.setattr("siac.siac.CAMSProvider", _FakeProvider)
     atmo_fn = _resolve_atmo_provider(cfg, auth="auth")
     assert atmo_fn((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 1), 1000.0)[3] == 1000.0
+    assert calls[0][1]["download_missing"] is True
 
     cfg_merra = SIACConfig(sensor="s2", atmo_prior={"provider": "merra2", "cache_dir": "/tmp/cache"})
     monkeypatch.setattr("siac.priors.atmospheric.merra2.MERRA2Provider", _FakeProvider)
     assert callable(_resolve_atmo_provider(cfg_merra))
+    assert "source" in calls[1][1]
 
 
 def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     cfg = SIACConfig(sensor="s2", brdf={"provider": "mcd43"}, rt_model={"backend": "lut", "lut_path": "s3://bucket/lut"})
 
     class _FakeBRDFProvider:
-        def __init__(self, cache_dir=None):
+        def __init__(self, cache_dir=None, source=None):
             self.cache_dir = cache_dir
+            self.source = source
 
         def get_brdf_parameters(self, **kwargs):
             return "weights"
@@ -529,7 +547,11 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeBRDFProvider)
     monkeypatch.setattr("siac.siac.KernelModelDeriver", _FakeDeriver)
 
-    surf_fn = _resolve_surface_prior_provider(cfg)
+    auth = SimpleNamespace(
+        has_credentials=lambda provider: provider == "earthdata",
+        get_credentials=lambda _provider: SimpleNamespace(key="u", secret="p"),
+    )
+    surf_fn = _resolve_surface_prior_provider(cfg, auth=auth)
     geom = _geometry()
     assert surf_fn((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 2), SENTINEL2A_CONFIG, geom, 500.0)[0] == "weights"
 
@@ -575,12 +597,15 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
             self.sensor_config = sensor_config
 
         def correct(self, toa, geometry, atmo_state, cloud_mask):
+            assert atmo_state.aot.shape == toa["B02"].shape
             return "corrected"
 
     monkeypatch.setattr("siac.siac.AtmosphericCorrector", _FakeCorrector)
     correct_fn = _resolve_corrector(cfg)
     obs = SimpleNamespace(toa=_toa_dataset(), geometry=geom, cloud_mask=inputs.cloud_mask, sensor_config=SENTINEL2A_CONFIG)
     assert correct_fn(obs, solved, "rt") == "corrected"
+    solved_mismatch = SimpleNamespace(atmo_state=_atmo_state(shape=(1, 1)))
+    assert correct_fn(obs, solved_mismatch, "rt") == "corrected"
 
     monkeypatch.setattr("siac.siac.TwoLayerNNEmulator", lambda **_kwargs: "emu")
     cfg_emu = SIACConfig(sensor="s2", rt_model={"backend": "emulator", "emulator_dir": "/tmp/e"})

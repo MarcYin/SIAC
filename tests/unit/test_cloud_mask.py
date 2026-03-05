@@ -227,9 +227,9 @@ def test_omnicloud_provider_predictor_paths():
     green = xr.DataArray(np.array([[0.1, 0.5]], dtype=np.float32), dims=["y", "x"])
     nir = xr.DataArray(np.array([[0.1, 0.5]], dtype=np.float32), dims=["y", "x"])
 
-    # Binary predictor: 1=cloud, 0=clear
+    # Official OmniCloudMask labels: 0=clear, 1/2=cloud, 3=shadow.
     p_binary = OmniCloudMaskProvider(
-        predictor=lambda arr: (arr[..., 0] > 0.2).astype(np.uint8)
+        predictor=lambda arr: (arr[0] > 0.2).astype(np.uint8)
     )
     out_binary = p_binary.predict(red, green, nir)
     np.testing.assert_array_equal(out_binary.values, np.array([[1, 2]], dtype=np.uint8))
@@ -246,6 +246,13 @@ def test_omnicloud_provider_predictor_paths():
         unmapped_to_missing=False,
     )
     np.testing.assert_array_equal(out_custom.values, np.array([[1, 2]], dtype=np.uint8))
+
+    with_missing = OmniCloudMaskProvider(
+        predictor=lambda _arr: np.array([[0, 3]], dtype=np.uint8)
+    )
+    red_missing = xr.DataArray(np.array([[np.nan, 0.5]], dtype=np.float32), dims=["y", "x"])
+    out_missing = with_missing.predict(red_missing, green, nir)
+    np.testing.assert_array_equal(out_missing.values, np.array([[0, 3]], dtype=np.uint8))
 
 
 
@@ -524,46 +531,22 @@ def test_build_cloud_classes_user_callable_shape_reproject_and_provider_error(
 
 
 def test_omnicloud_default_predictor_and_normalize_paths(monkeypatch: pytest.MonkeyPatch):
-    # OmniCloudMask class + predict method
-    module_predict = ModuleType("omnicloudmask")
-
-    class _ModelPredict:
-        def predict(self, arr):  # noqa: ANN001
-            return (arr[..., 0] > 0).astype(np.uint8)
-
-    module_predict.OmniCloudMask = _ModelPredict  # type: ignore[attr-defined]
-    monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module_predict)
-    assert callable(OmniCloudMaskProvider()._default_predictor())
-
-    # OmniCloudMask class + __call__
-    module_call = ModuleType("omnicloudmask")
-
-    class _ModelCall:
-        def __call__(self, arr):  # noqa: ANN001
-            return (arr[..., 0] > 0).astype(np.uint8)
-
-    module_call.OmniCloudMask = _ModelCall  # type: ignore[attr-defined]
-    monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module_call)
-    assert callable(OmniCloudMaskProvider()._default_predictor())
-
-    # top-level predict function
     module_fn = ModuleType("omnicloudmask")
-    module_fn.predict = lambda arr: (arr[..., 0] > 0).astype(np.uint8)  # type: ignore[attr-defined]
+    module_fn.predict_from_array = lambda arr: (arr[0] > 0).astype(np.uint8)  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module_fn)
     assert callable(OmniCloudMaskProvider()._default_predictor())
 
-    # module with no known entrypoint -> None
+    # module with no supported entrypoint should raise immediately.
     module_none = ModuleType("omnicloudmask")
     monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module_none)
-    assert OmniCloudMaskProvider()._default_predictor() is None
+    with pytest.raises(RuntimeError, match="predict_from_array"):
+        OmniCloudMaskProvider()._default_predictor()
 
     red = xr.DataArray(np.array([[0.1, 0.2]], dtype=np.float32), dims=["y", "x"])
     green = xr.DataArray(np.array([[0.1, 0.2]], dtype=np.float32), dims=["y", "x"])
     nir = xr.DataArray(np.array([[0.1, 0.2]], dtype=np.float32), dims=["y", "x"])
 
-    # Heuristic fallback path
-    provider = OmniCloudMaskProvider(predictor=None)
-    monkeypatch.setattr(provider, "_default_predictor", lambda: None)
+    provider = OmniCloudMaskProvider(predictor=lambda arr: (arr[0] > 0).astype(np.uint8))
     out = provider.predict(red, green, nir)
     assert out.shape == (1, 2)
 
@@ -573,7 +556,13 @@ def test_omnicloud_default_predictor_and_normalize_paths(monkeypatch: pytest.Mon
 
     # 3D logits/probabilities branch and shape mismatch error
     norm = OmniCloudMaskProvider._normalize_raw_output(
-        np.array([[[0.1, 0.9], [0.8, 0.2]]], dtype=np.float32),
+        np.array(
+            [
+                [[0.1, 0.9]],
+                [[0.9, 0.1]],
+            ],
+            dtype=np.float32,
+        ),
         red,
     )
     assert norm.shape == red.shape

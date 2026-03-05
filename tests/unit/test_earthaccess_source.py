@@ -50,17 +50,17 @@ def fake_earthaccess(monkeypatch):
 
 
 class TestEarthAccessSource:
-    def test_lazy_authentication(self, fake_earthaccess):
+    def test_search_does_not_force_authentication(self, fake_earthaccess):
         src = EarthAccessSource(provider="LPDAAC_ECS")
         assert src.is_authenticated is False
         assert fake_earthaccess.login_calls == 0
 
         _ = src.search_datasets(keyword="MCD43")
-        assert src.is_authenticated is True
-        assert fake_earthaccess.login_calls == 1
+        assert src.is_authenticated is False
+        assert fake_earthaccess.login_calls == 0
 
         _ = src.search_datasets(keyword="MCD43")
-        assert fake_earthaccess.login_calls == 1
+        assert fake_earthaccess.login_calls == 0
 
     def test_search_datasets_forwards_query(self, fake_earthaccess):
         src = EarthAccessSource(provider="LPDAAC_ECS")
@@ -84,24 +84,53 @@ class TestEarthAccessSource:
         assert len(granules) == 1
         kwargs = fake_earthaccess.search_data_calls[-1]
         assert kwargs["short_name"] == "MCD43A1"
-        assert kwargs["bounding_box"] == "10.0,20.0,11.0,21.0"
-        assert "2024-01-01" in kwargs["temporal"]
+        assert kwargs["bounding_box"] == (10.0, 20.0, 11.0, 21.0)
+        assert kwargs["temporal"] == ("2024-01-01T00:00:00", "2024-01-03T00:00:00")
 
     def test_open_and_download(self, fake_earthaccess, tmp_path: Path):
         src = EarthAccessSource()
         opened = src.open_granules([{"id": "a"}, {"id": "b"}])
         assert opened == ["opened:2"]
+        assert src.is_authenticated is True
+        assert fake_earthaccess.login_calls == 1
 
         out = src.download_granules([{"id": "a"}], tmp_path / "cache")
         assert len(out) == 1
         assert out[0].name == "g1.hdf"
         assert (tmp_path / "cache").exists()
 
+    def test_login_uses_temporary_environment_credentials(self, fake_earthaccess, monkeypatch):
+        monkeypatch.delenv("EARTHDATA_USERNAME", raising=False)
+        monkeypatch.delenv("EARTHDATA_PASSWORD", raising=False)
+
+        def _login(**kwargs):
+            fake_earthaccess.login_calls += 1
+            fake_earthaccess.last_login_kwargs = kwargs
+            fake_earthaccess.last_env = {
+                "EARTHDATA_USERNAME": __import__("os").environ.get("EARTHDATA_USERNAME"),
+                "EARTHDATA_PASSWORD": __import__("os").environ.get("EARTHDATA_PASSWORD"),
+            }
+
+        fake_earthaccess.login = _login
+
+        src = EarthAccessSource(
+            earthdata_username="user",
+            earthdata_password="secret",
+        )
+        src.open_granules([{"id": "a"}])
+
+        assert fake_earthaccess.login_calls == 1
+        assert fake_earthaccess.last_login_kwargs["strategy"] == "environment"
+        assert fake_earthaccess.last_env == {
+            "EARTHDATA_USERNAME": "user",
+            "EARTHDATA_PASSWORD": "secret",
+        }
+
     def test_temporal_window_helper(self):
         t = datetime(2024, 1, 15, 12, 30)
         temporal = EarthAccessSource.temporal_window(t, 2)
-        assert temporal.startswith("2024-01-13")
-        assert temporal.endswith("2024-01-17T12:30:00Z")
+        assert temporal[0].startswith("2024-01-13")
+        assert temporal[1] == "2024-01-17T12:30:00Z"
 
     def test_bounds_normalization_identity(self):
         bounds = (1.0, 2.0, 3.0, 4.0)

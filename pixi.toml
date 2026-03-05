@@ -25,6 +25,7 @@ scikit-image = ">=0.22.0"
 
 # ML for cloud detection
 lightgbm = ">=4.0.0"
+omnicloudmask = ">=1.7.0"
 
 # Configuration & validation
 pydantic = ">=2.5.0"
@@ -36,11 +37,15 @@ requests = ">=2.31.0"
 fsspec = ">=2024.2.0"
 zarr = ">=2.17.0"
 h5py = ">=3.10.0"
+h5netcdf = ">=1.3.0"
+earthaccess = ">=0.16.0"
+cdsapi = ">=0.7.7"
 
 # Utilities
 psutil = ">=5.9.0"
 tqdm = ">=4.66.0"
 aiohttp = ">=3.13.3,<4"
+libgdal-jp2openjpeg = ">=3.12.2,<4"
 
 [feature.dev.dependencies]
 pytest = ">=8.0.0"

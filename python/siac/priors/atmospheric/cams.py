@@ -8,6 +8,7 @@ Fetches atmospheric parameters (AOT, TCWV, TCO3) from ECMWF CAMS
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -136,8 +137,18 @@ class CAMSProvider:
         if direct is not None:
             return direct
 
-        if not self.data_dir.exists() or not self.data_dir.is_dir():
-            logger.warning(f"CAMS path does not exist or is not a directory: {self.data_dir}")
+        if not self.data_dir.exists():
+            if self.download_missing:
+                if self.data_dir.suffix:
+                    self.data_dir.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    self.data_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                logger.warning(f"CAMS path does not exist: {self.data_dir}")
+                return None
+
+        if self.data_dir.exists() and not self.data_dir.is_dir():
+            logger.warning(f"CAMS path is not a directory: {self.data_dir}")
             return None
 
         date_str = obs_time.strftime("%Y%m%d")
@@ -209,8 +220,10 @@ class CAMSProvider:
     def _create_default_array(self, bounds: tuple, _crs: str, resolution: float, value: float) -> xr.DataArray:
         """Create default array with constant value."""
         xmin, ymin, xmax, ymax = bounds
-        nx = int((xmax - xmin) / resolution)
-        ny = int((ymax - ymin) / resolution)
+        xmin, xmax = sorted((float(xmin), float(xmax)))
+        ymin, ymax = sorted((float(ymin), float(ymax)))
+        nx = max(1, int(np.ceil((xmax - xmin) / resolution)))
+        ny = max(1, int(np.ceil((ymax - ymin) / resolution)))
         return xr.DataArray(np.full((ny, nx), value, dtype=np.float32), dims=["y", "x"])
 
     def _default_prior(self, bounds: tuple, crs: str, resolution: float) -> AtmosphericState:
@@ -369,6 +382,11 @@ class CAMSProvider:
             cds_cred = self._auth.get_credentials("cds")
             if cds_cred.key:
                 client_kwargs["key"] = cds_cred.key
+
+        has_external_cds_config = bool(os.getenv("CDSAPI_KEY")) or Path.home().joinpath(".cdsapirc").exists()
+        if not client_kwargs and not has_external_cds_config:
+            logger.warning("CDS credentials are not configured; cannot auto-download CAMS data")
+            return None
 
         try:
             cdsapi.Client(**client_kwargs).retrieve(self._CDS_DATASET, request).download(str(output_path))
