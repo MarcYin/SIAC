@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -20,6 +20,9 @@ from siac.io.geometry import (
     raster_to_geojson_feature,
 )
 from siac.io.s2_data_source import S2DataAccess, S2Product, S2Query, _parse_query
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _da(shape: tuple[int, int] = (10, 10), crs: str = "EPSG:32632") -> xr.DataArray:

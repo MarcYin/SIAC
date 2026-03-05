@@ -13,7 +13,6 @@ from siac.io.s2_data_source import (
     select_best_product,
 )
 
-
 # ── S2Query ───────────────────────────────────────────────────────────
 
 class TestS2Query:

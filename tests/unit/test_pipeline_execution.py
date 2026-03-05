@@ -40,7 +40,7 @@ def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success"
             self.kwargs = kwargs
             FakeLocalCluster.last_kwargs = kwargs
 
-        def __enter__(self) -> "FakeLocalCluster":
+        def __enter__(self) -> FakeLocalCluster:
             return self
 
         def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
@@ -56,7 +56,7 @@ def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success"
             self.filename = filename
             FakePerformanceReport.last_filename = filename
 
-        def __enter__(self) -> "FakePerformanceReport":
+        def __enter__(self) -> FakePerformanceReport:
             FakePerformanceReport.entered = True
             return self
 
@@ -66,7 +66,7 @@ def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success"
             return False
 
     class FakeClient:
-        last_instance: "FakeClient" | None = None
+        last_instance: FakeClient | None = None
         mode: str = "success"
 
         def __init__(self, cluster: FakeLocalCluster):
@@ -76,7 +76,7 @@ def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success"
             self._submit_count = 0
             FakeClient.last_instance = self
 
-        def __enter__(self) -> "FakeClient":
+        def __enter__(self) -> FakeClient:
             return self
 
         def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:

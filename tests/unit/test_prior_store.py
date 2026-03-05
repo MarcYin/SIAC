@@ -6,14 +6,12 @@ See PLANS.md §9.6 test table.
 
 import json
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
 
 from siac.core.types import (
-    BRDFKernelWeights,
     GeometryAngles,
     SensorBand,
     SensorConfig,
@@ -25,7 +23,6 @@ from siac.priors.surface.prior_store import (
     _interpolate_doy,
     _select_tiles,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
@@ -185,13 +182,13 @@ class TestPrebuiltPriorStore:
     def test_ignores_geometry(self, zarr_store, sensor_config, geometry):
         """Pre-built prior should not vary with geometry."""
         store = PrebuiltPriorStore(zarr_store)
-        kwargs = dict(
-            bounds=(300000.0, 5500000.0, 300160.0, 5500160.0),
-            crs="EPSG:32632",
-            obs_time=datetime(2023, 7, 4),
-            sensor_config=sensor_config,
-            resolution=10.0,
-        )
+        kwargs = {
+            "bounds": (300000.0, 5500000.0, 300160.0, 5500160.0),
+            "crs": "EPSG:32632",
+            "obs_time": datetime(2023, 7, 4),
+            "sensor_config": sensor_config,
+            "resolution": 10.0,
+        }
         r1 = store.get_surface_prior(geometry=geometry, **kwargs)
 
         # Different geometry

@@ -7,14 +7,11 @@ import pytest
 import xarray as xr
 
 from siac.core.types import (
-    GeometryAngles,
-    AtmosphericState,
-    RTCoefficients,
-    BRDFKernelWeights,
-    SensorBand,
-    SensorConfig,
-    SENTINEL2A_CONFIG,
     LANDSAT8_OLI_CONFIG,
+    SENTINEL2A_CONFIG,
+    AtmosphericState,
+    GeometryAngles,
+    RTCoefficients,
     get_sensor_config,
 )
 

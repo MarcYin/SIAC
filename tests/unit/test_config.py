@@ -2,23 +2,23 @@
 Unit tests for SIAC configuration system.
 """
 
+from pathlib import Path
+
 import pytest
 import yaml
-from pathlib import Path
 
 from siac.core.config import (
     DEFAULT_LUT_URL,
-    SIACConfig,
     AtmoPriorConfig,
     BRDFConfig,
     CloudMaskConfig,
     ExecutionConfig,
-    S2DataAccessConfig,
-    RTModelConfig,
-    SolverConfig,
     OutputConfig,
+    RTModelConfig,
+    S2DataAccessConfig,
+    SIACConfig,
+    SolverConfig,
     get_lut_config,
-    get_default_config,
 )
 
 
@@ -78,7 +78,7 @@ class TestSIACConfig:
 
         assert yaml_path.exists()
 
-        with open(yaml_path) as f:
+        with yaml_path.open() as f:
             data = yaml.safe_load(f)
 
         assert data["sensor"] == "l8"

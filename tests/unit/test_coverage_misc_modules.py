@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from datetime import date, datetime
 from io import BytesIO
-from pathlib import Path
-import zipfile
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -20,17 +20,20 @@ from siac.core.exceptions import (
     ConfigurationError,
     DataNotFoundError,
     RTModelError,
-    SIACError,
     SensorNotSupportedError,
+    SIACError,
     SolverConvergenceError,
     ValidationError,
 )
 from siac.core.types import BRDFKernelWeights, GeometryAngles
 from siac.io.copernicus_dataspace import CopernicusDataspaceBackend, download_cdse, search_cdse
-from siac.io.gcs_sentinel2 import GCSSentinel2Backend, download_gcs, search_gcs
+from siac.io.gcs_sentinel2 import GCSSentinel2Backend
 from siac.io.s2_data_source import S2Product, S2Query
 from siac.priors.atmospheric.cams import CAMSProvider
 from siac.rt.direct import __all__ as direct_all
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _spatial_da(values: np.ndarray, crs: str | None = "EPSG:32632") -> xr.DataArray:
@@ -285,7 +288,7 @@ class TestCAMSProvider:
         # Monkeypatch loader internals using closure
         orig = xr.open_mfdataset
         try:
-            xr.open_mfdataset = lambda *args, **kwargs: ds  # type: ignore[assignment]
+            xr.open_mfdataset = lambda *_args, **_kwargs: ds  # type: ignore[assignment]
             state = p.get_prior((0.0, -1.0, 1.0, 1.0), "EPSG:4326", datetime(2024, 1, 1, 1), 1.0)
         finally:
             xr.open_mfdataset = orig  # type: ignore[assignment]

@@ -8,9 +8,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
 import siac.rt.emulator.two_nn as tnn
-
+from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
 
 
 def _geom(shape=(2, 2)):
@@ -23,7 +22,8 @@ def _geom(shape=(2, 2)):
 
 
 def _atmo(shape=(2, 2)):
-    da = lambda v: xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
+    def da(v):
+        return xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
     return AtmosphericState(aot=da(0.15), tcwv=da(2.0), tco3=da(0.3), aot_unc=da(0.05), tcwv_unc=da(0.3), tco3_unc=da(0.03), elevation=da(0.1))
 
 
@@ -63,7 +63,7 @@ def test_two_nn_compute_coeffs_jacobian_requested_but_none(monkeypatch, tmp_path
             ])
             return out, None
 
-    monkeypatch.setattr(emu, "_load_band_emulator", lambda band_name: _FakeBand())
+    monkeypatch.setattr(emu, "_load_band_emulator", lambda _band_name: _FakeBand())
     coeffs = emu.compute_coefficients(_geom(), _atmo(), SensorBand("B02", 490.0, 65.0, 10.0, 0), compute_jacobian=True)
     assert coeffs.d_xap is None
     assert coeffs.xap.shape == (2, 2)
@@ -155,7 +155,7 @@ def test_emulator_registry_branching(monkeypatch, tmp_path: Path):
 
     # list_supported_sensors branch with delegated is_sensor_supported
     reg3 = tnn.EmulatorRegistry(tmp_path)
-    monkeypatch.setattr(reg3, "is_sensor_supported", lambda sensor, sat: sat in {"S2A", "L8"})
+    monkeypatch.setattr(reg3, "is_sensor_supported", lambda _sensor, sat: sat in {"S2A", "L8"})
     supported = reg3.list_supported_sensors()
     assert ("MSI", "S2A") in supported
     assert ("OLI", "L8") in supported

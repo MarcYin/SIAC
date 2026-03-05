@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -14,6 +14,9 @@ import xarray as xr
 
 from siac.priors.atmospheric.cams import CAMSProvider
 from siac.rt.lut import http_zip_store as zip_store
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _Resp:
@@ -88,15 +91,15 @@ def test_cams_source_and_load_branch_paths(monkeypatch: pytest.MonkeyPatch, tmp_
 
     p = CAMSProvider(tmp_path)
     tif_ds = xr.Dataset({"aod550": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
-    monkeypatch.setattr(p, "_load_cams_tif_group", lambda d, i: tif_ds)
+    monkeypatch.setattr(p, "_load_cams_tif_group", lambda _d, _i: tif_ds)
     loaded = p._load_cams_data(datetime(2024, 1, 1))
     assert loaded is tif_ds
 
     p_download = CAMSProvider(tmp_path, download_missing=True)
     downloaded = tmp_path / "CAMS_2024-01-01.nc"
-    monkeypatch.setattr(p_download, "_load_cams_tif_group", lambda d, i: None)
-    monkeypatch.setattr(p_download, "_download_cams_file", lambda obs_time: downloaded)
-    monkeypatch.setattr(p_download, "_load_from_explicit_path", lambda path: "loaded")
+    monkeypatch.setattr(p_download, "_load_cams_tif_group", lambda _d, _i: None)
+    monkeypatch.setattr(p_download, "_download_cams_file", lambda _obs_time: downloaded)
+    monkeypatch.setattr(p_download, "_load_from_explicit_path", lambda _path: "loaded")
     assert p_download._load_cams_data(datetime(2024, 1, 1)) == "loaded"
 
 
@@ -125,7 +128,7 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     nc = tmp_path / "cams_bad.nc"
     nc.write_text("x")
-    monkeypatch.setattr(xr, "open_dataset", lambda path: (_ for _ in ()).throw(RuntimeError("bad nc")))
+    monkeypatch.setattr(xr, "open_dataset", lambda _path: (_ for _ in ()).throw(RuntimeError("bad nc")))
     assert p._load_from_explicit_path(nc) is None
 
     f1 = tmp_path / "cams_20240101_a.tif"
@@ -147,22 +150,34 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert merged is not None
     assert {"aod550", "tcwv"}.issubset(set(merged.data_vars))
 
-    monkeypatch.setattr(p, "_merge_tif_files", lambda files: xr.Dataset({"aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}))
+    monkeypatch.setattr(
+        p,
+        "_merge_tif_files",
+        lambda _files: xr.Dataset({"aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}),
+    )
     grouped = p._load_cams_tif_group("20240101", "2024-01-01")
     assert grouped is not None
 
     p2 = CAMSProvider(tmp_path)
     tif = tmp_path / "cams.tif"
     tif.write_text("x")
-    monkeypatch.setattr(xr, "open_dataarray", lambda path, engine=None: (_ for _ in ()).throw(RuntimeError("bad tif")))
+    def _raise_bad_tif(_path, engine=None):  # noqa: ANN001
+        _ = engine
+        raise RuntimeError("bad tif")
+
+    monkeypatch.setattr(xr, "open_dataarray", _raise_bad_tif)
     assert p2._load_tif_dataset(tif) is None
 
     da_single = xr.DataArray(np.ones((1, 2, 2), dtype=np.float32), dims=["band", "y", "x"], coords={"band": [1]})
-    monkeypatch.setattr(xr, "open_dataarray", lambda path, engine=None: da_single)
-    monkeypatch.setattr(p2, "_infer_variable_name", lambda name: None)
+    def _return_single(_path, engine=None):  # noqa: ANN001
+        _ = engine
+        return da_single
+
+    monkeypatch.setattr(xr, "open_dataarray", _return_single)
+    monkeypatch.setattr(p2, "_infer_variable_name", lambda _name: None)
     assert p2._load_tif_dataset(tif) is None
 
-    monkeypatch.setattr(p2, "_infer_variable_name", lambda name: "tcwv")
+    monkeypatch.setattr(p2, "_infer_variable_name", lambda _name: "tcwv")
     single = p2._load_tif_dataset(tif)
     assert single is not None and "tcwv" in single
 
@@ -207,7 +222,7 @@ def test_cams_download_auth_key_missing_branch(monkeypatch: pytest.MonkeyPatch, 
 
     auth = SimpleNamespace(
         has_credentials=lambda provider: provider == "cds",
-        get_credentials=lambda provider: SimpleNamespace(key=""),
+        get_credentials=lambda _provider: SimpleNamespace(key=""),
     )
     p = CAMSProvider(tmp_path, auth=auth)
     out = p._download_cams_file(datetime(2024, 1, 2))
@@ -261,12 +276,12 @@ def test_http_zip_store_additional_branches(monkeypatch: pytest.MonkeyPatch, tmp
 
     monkeypatch.setattr(zip_store, "_HTTPRangeFileSystem", _FakeHTTPFS)
     monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
-    monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda zfs: "")
-    monkeypatch.setattr(
-        zip_store,
-        "FSMap",
-        lambda root, fs, check=False, create=False: {"root": root, "fs": fs},
-    )
+    monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda _zfs: "")
+    def _fake_fsmap(root, fs, check=False, create=False):  # noqa: ANN001
+        _ = (check, create)
+        return {"root": root, "fs": fs}
+
+    monkeypatch.setattr(zip_store, "FSMap", _fake_fsmap)
     _ = zip_store.build_readonly_zip_mapper(
         "https://example.com/lut.zip",
         {"headers": {"Authorization": "token"}},

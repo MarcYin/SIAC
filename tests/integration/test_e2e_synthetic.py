@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pytest
 import xarray as xr
 
 from siac.core.types import (
@@ -25,14 +24,13 @@ from siac.core.types import (
     SurfacePrior,
 )
 from siac.core.validation import (
-    _validate_observation_bundle,
     _validate_atmospheric_state,
-    _validate_surface_prior,
+    _validate_observation_bundle,
     _validate_solver_input_bundle,
+    _validate_surface_prior,
 )
 from siac.grid.assembler import assemble_grids
 from siac.pipeline import run_pipeline
-
 
 # ── Synthetic data builders ──────────────────────────────────────────
 

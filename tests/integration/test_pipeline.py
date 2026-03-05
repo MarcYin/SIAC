@@ -5,27 +5,25 @@ Integration tests: solver -> corrector pipeline + run_pipeline orchestration.
 import dataclasses
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
 
 from siac.core.types import (
+    SENTINEL2A_CONFIG,
     AtmosphericState,
     BRDFKernelWeights,
     CorrectionResult,
     GeometryAngles,
-    ObservationBundle,
-    RTCoefficients,
     SensorBand,
-    SolvedAtmosphere,
     SurfacePrior,
-    SENTINEL2A_CONFIG,
 )
 from siac.correction.atmospheric import AtmosphericCorrector
-from siac.solver.multigrid import MultiGridSolver, MultiGridConfig
 from siac.pipeline import run_pipeline
+from siac.solver.multigrid import MultiGridConfig, MultiGridSolver
 
 
 @pytest.mark.integration
@@ -36,7 +34,6 @@ class TestPipelineSmoke:
     def synthetic_scene(self):
         """Create a synthetic 32x32 scene."""
         shape = (32, 32)
-        np.random.seed(99)
 
         # TOA reflectance (3 bands as Dataset for corrector, DataArray for solver)
         bands_list = [
@@ -479,12 +476,12 @@ class TestConcurrency:
             Path("/fake"),
             None,
             cfg_thread,
-            preprocessor=lambda path, aoi=None: None,
-            atmo_provider=lambda *args, **kwargs: None,
-            surface_prior_provider=lambda *args, **kwargs: None,
-            grid_assembler=lambda *args, **kwargs: None,
-            solver=lambda *args, **kwargs: None,
-            corrector=lambda *args, **kwargs: None,
+            preprocessor=lambda _path, _aoi=None: None,
+            atmo_provider=lambda *_args, **_kwargs: None,
+            surface_prior_provider=lambda *_args, **_kwargs: None,
+            grid_assembler=lambda *_args, **_kwargs: None,
+            solver=lambda *_args, **_kwargs: None,
+            corrector=lambda *_args, **_kwargs: None,
             rt_model=None,
         )
         assert out_thread == "thread-result"
@@ -506,12 +503,12 @@ class TestConcurrency:
             Path("/fake"),
             None,
             cfg_dask,
-            preprocessor=lambda path, aoi=None: None,
-            atmo_provider=lambda *args, **kwargs: None,
-            surface_prior_provider=lambda *args, **kwargs: None,
-            grid_assembler=lambda *args, **kwargs: None,
-            solver=lambda *args, **kwargs: None,
-            corrector=lambda *args, **kwargs: None,
+            preprocessor=lambda _path, _aoi=None: None,
+            atmo_provider=lambda *_args, **_kwargs: None,
+            surface_prior_provider=lambda *_args, **_kwargs: None,
+            grid_assembler=lambda *_args, **_kwargs: None,
+            solver=lambda *_args, **_kwargs: None,
+            corrector=lambda *_args, **_kwargs: None,
             rt_model=None,
         )
         assert out_dask == "dask-result"
@@ -526,11 +523,11 @@ class TestConcurrency:
                 Path("/fake"),
                 None,
                 SimpleNamespace(execution=SimpleNamespace(backend="dask")),
-                preprocessor=lambda path, aoi=None: None,
-                atmo_provider=lambda *args, **kwargs: None,
-                surface_prior_provider=lambda *args, **kwargs: None,
-                grid_assembler=lambda *args, **kwargs: None,
-                solver=lambda *args, **kwargs: None,
-                corrector=lambda *args, **kwargs: None,
+                preprocessor=lambda _path, _aoi=None: None,
+                atmo_provider=lambda *_args, **_kwargs: None,
+                surface_prior_provider=lambda *_args, **_kwargs: None,
+                grid_assembler=lambda *_args, **_kwargs: None,
+                solver=lambda *_args, **_kwargs: None,
+                corrector=lambda *_args, **_kwargs: None,
                 rt_model=None,
             )

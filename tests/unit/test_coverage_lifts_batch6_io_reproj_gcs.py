@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sys
 from datetime import date, datetime
-from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -18,6 +18,9 @@ from siac.io import readers as readers_mod
 from siac.io import reprojection as reproj_mod
 from siac.io.gcs_sentinel2 import GCS_DOWNLOAD_BASE
 from siac.io.s2_data_source import S2Product, S2Query
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _spatial_da(shape: tuple[int, int] = (8, 8), crs: str = "EPSG:32632") -> xr.DataArray:
@@ -63,7 +66,7 @@ def test_readers_open_kwargs_defaults_remote_and_alignment_branches(
 
     # Default band-name paths + squeeze in multiband readers.
     band1 = xr.DataArray(np.ones((1, 3, 3), dtype=np.float32), dims=["band", "y", "x"], coords={"band": [1]})
-    monkeypatch.setattr(readers_mod, "read_raster", lambda *args, **kwargs: band1)
+    monkeypatch.setattr(readers_mod, "read_raster", lambda *_args, **_kwargs: band1)
 
     ds = readers_mod.read_multiband([tmp_path / "a.tif"])  # band_names=None branch
     assert set(ds.data_vars) == {"a"}
@@ -212,7 +215,7 @@ def test_gcs_helpers_and_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     done.write_bytes(b"abc")
     assert gcs_mod._is_fully_downloaded(done, None)
 
-    monkeypatch.setattr(gcs_mod, "_list_api", lambda **kwargs: {"items": [], "nextPageToken": None})
+    monkeypatch.setattr(gcs_mod, "_list_api", lambda **_kwargs: {"items": [], "nextPageToken": None})
     assert not gcs_mod._prefix_exists("tiles/31/U/DQ/P.SAFE/")
 
     class _Resp:
@@ -227,7 +230,7 @@ def test_gcs_helpers_and_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     import urllib.request
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=300: _Resp())
+    monkeypatch.setattr(urllib.request, "urlopen", lambda _req, **_kwargs: _Resp())
     target = tmp_path / "x.bin"
     with pytest.raises(OSError):
         gcs_mod._download_url_to_file("https://example.com/x", target)
@@ -252,14 +255,14 @@ def test_gcs_retry_search_and_download_edge_cases(monkeypatch: pytest.MonkeyPatc
     assert gcs_mod.search_gcs(q_bad) == []
 
     q_good = S2Query(product_id="S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000")
-    monkeypatch.setattr(gcs_mod, "_prefix_exists", lambda prefix: False)
+    monkeypatch.setattr(gcs_mod, "_prefix_exists", lambda _prefix: False)
     assert gcs_mod.search_gcs(q_good) == []
 
     q_tile = S2Query(mgrs_tile="31UDQ", date=date(2024, 1, 3))
     monkeypatch.setattr(
         gcs_mod,
         "_list_safe_prefixes",
-        lambda prefix: [
+        lambda _prefix: [
             "bad_prefix",
             "tiles/31/U/DQ/S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000.SAFE/",
         ],
@@ -271,6 +274,6 @@ def test_gcs_retry_search_and_download_edge_cases(monkeypatch: pytest.MonkeyPatc
     safe_prefix = f"tiles/31/U/DQ/{product_id}.SAFE/"
     product = _product(product_id, source_url=f"gs://{gcs_mod.GCS_BUCKET}/{safe_prefix}")
 
-    monkeypatch.setattr(gcs_mod, "_list_objects_under", lambda prefix: [{"name": 123, "size": "1"}])
+    monkeypatch.setattr(gcs_mod, "_list_objects_under", lambda _prefix: [{"name": 123, "size": "1"}])
     with pytest.raises(DataNotFoundError, match="SAFE directory is empty"):
         gcs_mod.download_gcs(product, tmp_path)

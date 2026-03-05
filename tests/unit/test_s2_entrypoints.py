@@ -95,7 +95,7 @@ def test_siac_process_s2_resolves_and_runs_process(monkeypatch, tmp_path: Path):
     safe_dir.mkdir(parents=True, exist_ok=True)
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("siac.siac.resolve_s2_input", lambda query, config, auth=None: safe_dir)
+    monkeypatch.setattr("siac.siac.resolve_s2_input", lambda *_args, **_kwargs: safe_dir)
 
     def _fake_process(self, input_path, output_path=None):  # noqa: ANN001
         captured["input_path"] = Path(input_path)

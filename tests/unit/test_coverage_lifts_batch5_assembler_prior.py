@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
-import pytest
 import xarray as xr
 
 from siac.core.types import (
@@ -19,6 +19,9 @@ from siac.core.types import (
 )
 from siac.grid import assembler as asm
 from siac.priors.surface import prior_store as ps
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _make_sensor_config(*bands: SensorBand) -> SensorConfig:
@@ -81,7 +84,11 @@ def test_assembler_nearest_and_padding_paths(monkeypatch: pytest.MonkeyPatch) ->
     nearest = asm._resample_da(da, (4, 4), method="nearest")
     assert nearest.shape == (4, 4)
 
-    monkeypatch.setattr(asm, "zoom", lambda arr, factors, order=1: np.array([[arr[0, 0]]], dtype=np.float64))
+    monkeypatch.setattr(
+        asm,
+        "zoom",
+        lambda arr, _factors, **_kwargs: np.array([[arr[0, 0]]], dtype=np.float64),
+    )
     padded = asm._resample_da(da, (3, 3), method="bilinear")
     assert padded.shape == (3, 3)
 
@@ -192,7 +199,7 @@ def test_prior_store_projection_out_of_range_and_default_wavelengths(monkeypatch
     )
 
     monkeypatch.setattr(ps, "_select_tiles", lambda store_path, bounds: ["TILE"])  # noqa: ARG005
-    monkeypatch.setattr(xr, "open_zarr", lambda path: ds)
+    monkeypatch.setattr(xr, "open_zarr", lambda _path: ds)
 
     geom = GeometryAngles(
         sza=xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"]),

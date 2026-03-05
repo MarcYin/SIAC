@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -15,6 +15,9 @@ from siac.io.gcs_sentinel2 import (
     search_gcs,
 )
 from siac.io.s2_data_source import S2Query
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 TARGET_PRODUCT_ID = "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433"
 

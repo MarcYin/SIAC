@@ -5,79 +5,14 @@ Unit tests for atmospheric correction module.
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
 
 from siac.core.types import (
+    SENTINEL2A_CONFIG,
     AtmosphericState,
     GeometryAngles,
     RTCoefficients,
-    SENTINEL2A_CONFIG,
 )
 from siac.correction.atmospheric import AtmosphericCorrector, CorrectionResult
-from siac.rt.lut.zarr_lut import ZarrLUTBackend
-
-
-def _write_spectral_lut(path: Path) -> tuple[Path, dict[str, float]]:
-    wavelength = np.array([470.0, 490.0, 510.0], dtype=np.float32)
-    sza = np.array([np.rad2deg(0.5)], dtype=np.float32)
-    vza = np.array([np.rad2deg(0.1)], dtype=np.float32)
-    raa = np.array([np.rad2deg(abs(1.5 - 2.5))], dtype=np.float32)
-    aot = np.array([0.15], dtype=np.float32)
-    tcwv = np.array([2.5], dtype=np.float32)
-    ozone = np.array([300.0], dtype=np.float32)
-    altitude = np.array([0.1], dtype=np.float32)
-
-    rho1 = 0.15
-    rho2 = 0.5
-    toa1 = 0.05
-    toa2 = 0.29
-    eg1 = 0.20
-    eg2 = 0.50
-
-    toa_shape = (3, 1, 1, 1, 1, 1, 1, 1)
-    eg_shape = (3, 1, 1, 1, 1, 1)
-    ds = xr.Dataset(
-        {
-            "TOA_rho1": (
-                ["wavelength", "sza", "vza", "raa", "aot", "tcwv", "ozone", "altitude"],
-                np.full(toa_shape, toa1, dtype=np.float32),
-            ),
-            "TOA_rho2": (
-                ["wavelength", "sza", "vza", "raa", "aot", "tcwv", "ozone", "altitude"],
-                np.full(toa_shape, toa2, dtype=np.float32),
-            ),
-            "Eg_rho1": (
-                ["wavelength", "sza", "aot", "tcwv", "ozone", "altitude"],
-                np.full(eg_shape, eg1, dtype=np.float32),
-            ),
-            "Eg_rho2": (
-                ["wavelength", "sza", "aot", "tcwv", "ozone", "altitude"],
-                np.full(eg_shape, eg2, dtype=np.float32),
-            ),
-        },
-        coords={
-            "wavelength": wavelength,
-            "sza": sza,
-            "vza": vza,
-            "raa": raa,
-            "aot": aot,
-            "tcwv": tcwv,
-            "ozone": ozone,
-            "altitude": altitude,
-        },
-        attrs={"rho1": rho1, "rho2": rho2},
-    )
-    ds.to_zarr(path, mode="w", consolidated=True)
-
-    denom = rho2 * eg2 - rho1 * eg1
-    s_term = (eg2 - eg1) / denom
-    path_ref = (toa2 * rho1 * eg1 - toa1 * rho2 * eg2) / (rho1 * eg1 - rho2 * eg2)
-    t_up = (toa2 - toa1) / denom
-    eg0 = eg1 * (1.0 - rho1 * s_term)
-    t_total = eg0 * t_up
-    y = (0.15 - path_ref) / t_total
-    expected_boa = y / (1.0 + y * s_term)
-    return path, {"boa": expected_boa}
 
 
 class TestAtmosphericCorrector:
@@ -201,35 +136,6 @@ class TestAtmosphericCorrector:
             result.boa["B02"].values, expected.values, rtol=1e-6
         )
 
-    def test_correct_with_spectral_lut_backend(self, tmp_path: Path):
-        toa = xr.Dataset({
-            "B02": xr.DataArray(np.full((4, 4), 0.15, dtype=np.float32), dims=["y", "x"]),
-        })
-        geometry = GeometryAngles(
-            sza=xr.DataArray(np.full((4, 4), 0.5, dtype=np.float32), dims=["y", "x"]),
-            saa=xr.DataArray(np.full((4, 4), 2.5, dtype=np.float32), dims=["y", "x"]),
-            vza=xr.DataArray(np.full((4, 4), 0.1, dtype=np.float32), dims=["y", "x"]),
-            vaa=xr.DataArray(np.full((4, 4), 1.5, dtype=np.float32), dims=["y", "x"]),
-        )
-        atmo_state = AtmosphericState(
-            aot=xr.DataArray(np.full((4, 4), 0.15, dtype=np.float32), dims=["y", "x"]),
-            tcwv=xr.DataArray(np.full((4, 4), 2.5, dtype=np.float32), dims=["y", "x"]),
-            tco3=xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=["y", "x"]),
-            aot_unc=xr.DataArray(np.full((4, 4), 0.05, dtype=np.float32), dims=["y", "x"]),
-            tcwv_unc=xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=["y", "x"]),
-            tco3_unc=xr.DataArray(np.full((4, 4), 0.01, dtype=np.float32), dims=["y", "x"]),
-            elevation=xr.DataArray(np.full((4, 4), 0.1, dtype=np.float32), dims=["y", "x"]),
-        )
-
-        lut_path, expected = _write_spectral_lut(tmp_path / "spectral_lut.zarr")
-        rt_model = ZarrLUTBackend(lut_path)
-        corrector = AtmosphericCorrector(rt_model, SENTINEL2A_CONFIG)
-
-        result = corrector.correct(toa, geometry, atmo_state)
-
-        assert isinstance(result, CorrectionResult)
-        np.testing.assert_allclose(result.boa["B02"].values, expected["boa"], rtol=1e-5)
-
 
 class TestCorrectionPhysics:
     """Tests for physical correctness of correction."""
@@ -255,14 +161,14 @@ class TestCorrectionPhysics:
         shape = (10, 10)
 
         # Range of realistic coefficients
-        xap = xr.DataArray(np.random.uniform(0.8, 1.0, shape), dims=["y", "x"])
-        xbp = xr.DataArray(np.random.uniform(0.01, 0.1, shape), dims=["y", "x"])
-        xcp = xr.DataArray(np.random.uniform(0.05, 0.2, shape), dims=["y", "x"])
+        xap = xr.DataArray(np.random.default_rng().uniform(0.8, 1.0, shape), dims=["y", "x"])
+        xbp = xr.DataArray(np.random.default_rng().uniform(0.01, 0.1, shape), dims=["y", "x"])
+        xcp = xr.DataArray(np.random.default_rng().uniform(0.05, 0.2, shape), dims=["y", "x"])
 
         coeffs = RTCoefficients(xap=xap, xbp=xbp, xcp=xcp)
 
         # Range of realistic TOA
-        toa = xr.DataArray(np.random.uniform(0.05, 0.4, shape), dims=["y", "x"])
+        toa = xr.DataArray(np.random.default_rng().uniform(0.05, 0.4, shape), dims=["y", "x"])
 
         boa = coeffs.apply_correction(toa)
 

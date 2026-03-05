@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -16,10 +16,10 @@ from siac.cloud.mapping import (
 )
 from siac.cloud.mask import (
     _call_user_callable,
-    _extract_band,
     _external_classes,
-    _mean_group,
+    _extract_band,
     _group_band_names,
+    _mean_group,
     _prepare_rgbnir,
     _resample_classes,
     _resample_continuous,
@@ -28,6 +28,9 @@ from siac.cloud.mask import (
 )
 from siac.cloud.providers.omnicloudmask import OmniCloudMaskProvider
 from siac.core.types import SensorBand, SensorConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _sensor_config_with_duplicate_red() -> SensorConfig:
@@ -188,7 +191,7 @@ def test_build_cloud_classes_external_file_mode(monkeypatch: pytest.MonkeyPatch,
     external.write_text("x")
 
     raw = xr.DataArray(np.array([[8, 3], [1, 255]], dtype=np.int16), dims=["y", "x"])
-    monkeypatch.setattr("siac.cloud.mask.read_raster", lambda path: raw)
+    monkeypatch.setattr("siac.cloud.mask.read_raster", lambda _path: raw)
 
     out = build_cloud_classes(
         toa,
@@ -233,7 +236,7 @@ def test_omnicloud_provider_predictor_paths():
 
     # Predictor with custom labels requiring mapping.
     p_custom = OmniCloudMaskProvider(
-        predictor=lambda arr: np.array([[4, 9]], dtype=np.int16)
+        predictor=lambda _arr: np.array([[4, 9]], dtype=np.int16)
     )
     out_custom = p_custom.predict(
         red,
@@ -457,7 +460,7 @@ def test_external_classes_and_user_callable_fallbacks(monkeypatch: pytest.Monkey
     ref = _spatial_da(0.2, shape=(2, 2))
     calls = {"reproject": 0}
 
-    monkeypatch.setattr("siac.cloud.mask.read_raster", lambda path: raw)
+    monkeypatch.setattr("siac.cloud.mask.read_raster", lambda _path: raw)
 
     def _fake_reproject(src, target, resampling="nearest"):  # noqa: ANN001
         calls["reproject"] += 1
@@ -503,7 +506,7 @@ def test_build_cloud_classes_user_callable_shape_reproject_and_provider_error(
 
     monkeypatch.setattr(
         "siac.cloud.mask.reproject_match",
-        lambda src, target, resampling="nearest": xr.full_like(target, 1, dtype=np.int16),
+        lambda _src, target, **_kwargs: xr.full_like(target, 1, dtype=np.int16),
     )
 
     out = build_cloud_classes(

@@ -13,13 +13,13 @@ import pytest
 
 try:
     from siac.siac import (
+        _resolve_atmo_provider,
+        _resolve_corrector,
         _resolve_grid_assembler,
         _resolve_preprocessor,
-        _resolve_atmo_provider,
-        _resolve_surface_prior_provider,
-        _resolve_solver,
-        _resolve_corrector,
         _resolve_rt_model_for_pipeline,
+        _resolve_solver,
+        _resolve_surface_prior_provider,
     )
     _HAS_SIAC = True
 except ImportError:

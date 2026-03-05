@@ -160,7 +160,10 @@ class TestSentinel2Internals:
             return _da((6, 6), value=3500.0)
 
         monkeypatch.setattr("siac.satellite.sentinel2.read_raster", _fake_read_raster)
-        monkeypatch.setattr("siac.satellite.sentinel2.reproject_match", lambda src, tgt, resampling="bilinear": src)
+        monkeypatch.setattr(
+            "siac.satellite.sentinel2.reproject_match",
+            lambda src, _tgt, **_kwargs: src,
+        )
 
         # product + granule metadata files
         _write(
@@ -223,7 +226,7 @@ class TestSentinel2Internals:
 
         monkeypatch.setattr(
             "siac.satellite.sentinel2.build_cloud_classes",
-            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("other")),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("other")),
         )
         with pytest.raises(ValueError, match="other"):
             p.extract_cloud_mask(safe, toa=toa)

@@ -2,12 +2,12 @@
 Pytest configuration and fixtures for SIAC tests.
 """
 
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
-from datetime import datetime
-
 
 # =============================================================================
 # Path fixtures
@@ -100,9 +100,9 @@ def sample_brdf_weights() -> dict:
 
     # Typical vegetation BRDF parameters
     return {
-        "f0": np.random.uniform(0.02, 0.3, shape),  # Isotropic
-        "f1": np.random.uniform(0.01, 0.1, shape),  # Volumetric
-        "f2": np.random.uniform(0.005, 0.05, shape),  # Geometric
+        "f0": np.random.default_rng().uniform(0.02, 0.3, shape),  # Isotropic
+        "f1": np.random.default_rng().uniform(0.01, 0.1, shape),  # Volumetric
+        "f2": np.random.default_rng().uniform(0.005, 0.05, shape),  # Geometric
         "f0_unc": np.full(shape, 0.01),
         "f1_unc": np.full(shape, 0.005),
         "f2_unc": np.full(shape, 0.002),
@@ -122,7 +122,7 @@ def sample_toa() -> xr.Dataset:
     data_vars = {}
     for band in bands:
         # Realistic TOA reflectance values
-        toa = np.random.uniform(0.05, 0.4, shape).astype(np.float32)
+        toa = np.random.default_rng().uniform(0.05, 0.4, shape).astype(np.float32)
         data_vars[band] = xr.DataArray(
             toa,
             dims=["y", "x"],
@@ -144,16 +144,17 @@ def sample_toa() -> xr.Dataset:
 @pytest.fixture
 def sample_emulator_weights(tmp_path: Path) -> Path:
     """Create sample emulator weights file."""
+    rng = np.random.default_rng(42)
     hidden = 64
     input_dim = 7
     output_dim = 1
 
     # Random weights for testing
-    w1 = np.random.randn(input_dim, hidden).astype(np.float32) * 0.1
+    w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1
     b1 = np.zeros(hidden, dtype=np.float32)
-    w2 = np.random.randn(hidden, hidden).astype(np.float32) * 0.1
+    w2 = rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1
     b2 = np.zeros(hidden, dtype=np.float32)
-    w3 = np.random.randn(hidden, output_dim).astype(np.float32) * 0.1
+    w3 = rng.standard_normal((hidden, output_dim)).astype(np.float32) * 0.1
     b3 = np.zeros(output_dim, dtype=np.float32)
 
     path = tmp_path / "test_emulator.npz"
@@ -338,7 +339,7 @@ def mock_atmospheric_state():
 @pytest.fixture
 def mock_surface_prior():
     """Uniform SurfacePrior at 32x32."""
-    from siac.core.types import SurfacePrior, BRDFKernelWeights
+    from siac.core.types import BRDFKernelWeights, SurfacePrior
     shape = PIPELINE_SHAPE
     brdf = BRDFKernelWeights(
         f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
@@ -467,7 +468,13 @@ def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
 @pytest.fixture
 def cost_function_inputs():
     """Standard inputs for cost function tests."""
-    from siac.core.types import GeometryAngles, AtmosphericState, SurfacePrior, BRDFKernelWeights, SensorBand
+    from siac.core.types import (
+        AtmosphericState,
+        BRDFKernelWeights,
+        GeometryAngles,
+        SensorBand,
+        SurfacePrior,
+    )
 
     shape = (16, 16)
 

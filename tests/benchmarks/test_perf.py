@@ -23,7 +23,6 @@ from siac.core.types import (
 )
 from siac.grid.assembler import assemble_grids
 
-
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _build_large_obs(n: int = 256) -> ObservationBundle:

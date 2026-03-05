@@ -3,23 +3,23 @@ Unit tests for satellite preprocessors.
 """
 
 import threading
+
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
 
 from siac.satellite import (
-    get_preprocessor,
     detect_sensor,
-    register_preprocessor,
+    get_preprocessor,
     list_available_sensors,
+    register_preprocessor,
 )
 from siac.satellite.base import (
     BaseSatellitePreprocessor,
-    degrees_to_radians,
-    radians_to_degrees,
     apply_scale_offset,
     create_valid_mask,
+    degrees_to_radians,
+    radians_to_degrees,
 )
 
 

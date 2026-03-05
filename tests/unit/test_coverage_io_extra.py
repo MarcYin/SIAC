@@ -38,13 +38,13 @@ from siac.io.reprojection import (
 from siac.io.writers import (
     _compute_overview_levels,
     _prepare_for_write,
-    write_cog,
-    write_dataset,
-    write_zarr,
     write_auxiliary_products,
     write_boa_products,
+    write_cog,
+    write_dataset,
     write_netcdf,
     write_rgb_quicklook,
+    write_zarr,
 )
 
 
@@ -292,7 +292,7 @@ class TestWritersExtra:
         paths2 = write_dataset(ds, tmp_path / "out_ok", as_cog=False)
         assert "B02" in paths2
 
-        monkeypatch.setattr(xr.Dataset, "chunk", lambda self, chunks: self)
+        monkeypatch.setattr(xr.Dataset, "chunk", lambda self, _chunks: self)
         zarr_path = tmp_path / "chunked.zarr"
         write_zarr(ds[["B02"]], zarr_path, chunks={"y": 8, "x": 8})
         assert zarr_path.exists()
@@ -308,7 +308,7 @@ class TestWritersExtra:
         monkeypatch.setattr(
             xr.DataArray,
             "to_netcdf",
-            lambda self, path, encoding=None, **kwargs: captures.append(  # noqa: ANN001
+            lambda _self, path, encoding=None, **kwargs: captures.append(  # noqa: ANN001
                 {"path": path, "encoding": encoding, "kwargs": kwargs}
             ),
         )

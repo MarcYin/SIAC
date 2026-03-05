@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 import siac.io.gcs_sentinel2 as gcs_mod
 from siac.core.exceptions import DataNotFoundError
 from siac.io.s2_data_source import S2Product, S2Query
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _product(product_id: str, source_url: str = "") -> S2Product:

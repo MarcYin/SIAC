@@ -3,28 +3,28 @@ Unit tests for SIAC I/O module.
 """
 
 import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
 
 from siac.io.geometry import (
-    bounds_to_polygon,
-    polygon_to_bounds,
-    bounds_intersect,
-    bounds_contains,
-    bounds_intersection,
-    bounds_union,
     bounds_area,
-    load_aoi,
+    bounds_contains,
+    bounds_intersect,
+    bounds_intersection,
+    bounds_to_polygon,
+    bounds_union,
     create_grid_from_bounds,
+    load_aoi,
+    polygon_to_bounds,
 )
 from siac.io.reprojection import (
-    get_resolution,
-    get_bounds,
     compute_common_bounds,
+    get_bounds,
+    get_resolution,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -34,7 +34,7 @@ from siac.io.reprojection import (
 @pytest.fixture
 def sample_dataarray() -> xr.DataArray:
     """Create a sample DataArray with spatial coordinates."""
-    data = np.random.rand(100, 100).astype(np.float32)
+    data = np.random.default_rng(0).random((100, 100)).astype(np.float32)
 
     # Create coordinates (10m resolution, UTM-like)
     x = np.linspace(500000, 500990, 100)
@@ -92,7 +92,7 @@ def sample_geojson(tmp_path: Path) -> Path:
     }
 
     path = tmp_path / "aoi.geojson"
-    with open(path, "w") as f:
+    with path.open("w") as f:
         json.dump(geojson, f)
 
     return path
@@ -344,7 +344,7 @@ class TestReadWriteRoundtrip:
         self, sample_dataarray: xr.DataArray, tmp_path: Path
     ):
         """Write and read GeoTIFF should preserve data."""
-        from siac.io import write_raster, read_raster
+        from siac.io import read_raster, write_raster
 
         output_path = tmp_path / "test.tif"
 
@@ -370,7 +370,7 @@ class TestReadWriteRoundtrip:
         self, sample_dataarray: xr.DataArray, tmp_path: Path
     ):
         """Write and read COG should preserve data."""
-        from siac.io import write_cog, read_raster
+        from siac.io import read_raster, write_cog
 
         output_path = tmp_path / "test_cog.tif"
 
@@ -407,7 +407,7 @@ class TestReadWriteRoundtrip:
         self, sample_dataarray: xr.DataArray, tmp_path: Path
     ):
         """Write and read Zarr should preserve data."""
-        from siac.io import write_zarr, read_zarr_array
+        from siac.io import read_zarr_array, write_zarr
 
         output_path = tmp_path / "test.zarr"
 

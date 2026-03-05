@@ -7,10 +7,10 @@ import json
 import shutil
 import struct
 import sys
-from io import BytesIO
-from pathlib import Path
-from types import SimpleNamespace
 import zipfile
+from io import BytesIO
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -23,6 +23,9 @@ from siac.rt.lut.zarr_lut import (
     _ReadOnlyZipFileSystem,
     create_lut_from_py6s,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _geometry(shape: tuple[int, int] = (3, 3)) -> GeometryAngles:
@@ -189,11 +192,11 @@ class TestZarrLUTBackend:
                 raise RuntimeError("expected fallback")
             return dataset
 
-        monkeypatch.setattr(lut_backend, "as_local_path", lambda path: None)
+        monkeypatch.setattr(lut_backend, "as_local_path", lambda _path: None)
         monkeypatch.setattr(
             lut_backend,
             "build_lut_store",
-            lambda path, options: {"zarr.json": b"{}"},
+            lambda _path, _options: {"zarr.json": b"{}"},
         )
         monkeypatch.setattr(lut_backend.xr, "open_zarr", _fake_open_zarr)
 
@@ -558,8 +561,8 @@ class TestZarrLUTBackend:
                 self.root = "lut.zarr"
 
         sentinel_store = {"kind": "reference"}
-        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda path, opts: _FakeMapper())
-        monkeypatch.setattr("fsspec.get_mapper", lambda path, **kwargs: sentinel_store)
+        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda _path, _opts: _FakeMapper())
+        monkeypatch.setattr("fsspec.get_mapper", lambda _path, **_kwargs: sentinel_store)
 
         store = lut_store.build_lut_store("https://example.com/lut.zarr.zip", storage_options={})
         assert store == sentinel_store
@@ -1017,7 +1020,7 @@ class TestZipStoreUtilities:
         monkeypatch.setattr(
             zip_store,
             "_detect_zarr_prefix",
-            lambda fs: (_ for _ in ()).throw(ValueError("not stored (uncompressed)")),
+            lambda _fs: (_ for _ in ()).throw(ValueError("not stored (uncompressed)")),
         )
         with pytest.raises(ValueError):
             zip_store.build_readonly_zip_mapper(
@@ -1034,12 +1037,12 @@ class TestZipStoreUtilities:
                 self.path = path
 
         monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
-        monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda fs: "")
-        monkeypatch.setattr(
-            zip_store,
-            "FSMap",
-            lambda root, fs, check=False, create=False: SimpleNamespace(root=root, fs=fs),
-        )
+        monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda _fs: "")
+        def _fake_fsmap(root, fs, check=False, create=False):  # noqa: ANN001
+            _ = (check, create)
+            return SimpleNamespace(root=root, fs=fs)
+
+        monkeypatch.setattr(zip_store, "FSMap", _fake_fsmap)
 
         mapper = zip_store.build_readonly_zip_mapper(
             "https://example.com/lut.zip",
@@ -1214,7 +1217,7 @@ class TestZipStoreUtilities:
         monkeypatch.setattr(
             lut_store,
             "build_readonly_zip_mapper",
-            lambda path, options: (_ for _ in ()).throw(AssertionError("should not rebuild zip mapper")),
+            lambda _path, _options: (_ for _ in ()).throw(AssertionError("should not rebuild zip mapper")),
         )
         captured: dict[str, object] = {}
         monkeypatch.setattr(
@@ -1254,7 +1257,7 @@ class TestZipStoreUtilities:
                 self.root = "lut.zarr"
 
         sentinel = _FakeMapper()
-        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda path, options: sentinel)
+        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda _path, _options: sentinel)
 
         def _raise_reference(path: str, **kwargs):
             if path == "reference://":
@@ -1389,7 +1392,11 @@ class TestCreateLUTFromPy6S:
             Wavelength=_FakeWavelength,
         )
         monkeypatch.setitem(sys.modules, "Py6S", fake_module)
-        monkeypatch.setattr(create_mod.np, "logspace", lambda *args, **kwargs: np.array([0.2], dtype=np.float32))
+        monkeypatch.setattr(
+            create_mod.np,
+            "logspace",
+            lambda *_args, **_kwargs: np.array([0.2], dtype=np.float32),
+        )
 
         # Defaults path (aot_values/tcwv_values None) + maritime branch.
         create_lut_from_py6s(

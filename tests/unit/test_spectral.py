@@ -16,7 +16,6 @@ from siac.core.spectral import (
     sensor_to_reference,
 )
 
-
 # ── SpectralBandDescriptor ────────────────────────────────────────────
 
 class TestSpectralBandDescriptor:
@@ -71,7 +70,7 @@ class TestLoadReferenceRSR:
         """MODIS should return 7 bands with non-empty arrays."""
         rsr = load_reference_rsr("MODIS")
         assert len(rsr) == 7
-        for name, (wl, resp) in rsr.items():
+        for _name, (wl, resp) in rsr.items():
             assert len(wl) > 0
             assert len(resp) > 0
             assert resp.max() > 0
@@ -79,7 +78,7 @@ class TestLoadReferenceRSR:
     def test_load_modis_wavelengths_reasonable(self):
         """MODIS band wavelengths should be in ~400-2500 nm range."""
         rsr = load_reference_rsr("MODIS")
-        for name, (wl, _) in rsr.items():
+        for _name, (wl, _) in rsr.items():
             assert wl.min() >= 350.0
             assert wl.max() <= 2500.0
 
@@ -156,7 +155,7 @@ class TestReferenceToSensor:
     def test_output_shape(self):
         """Output should have n_target_bands as first dimension."""
         bands = _make_test_sensor_bands()
-        ref_vals = np.random.rand(7, 4, 4)
+        ref_vals = np.random.default_rng(0).random((7, 4, 4))
         result = reference_to_sensor(ref_vals, bands)
         assert result.shape[0] == 3
         assert result.shape[1:] == (4, 4)

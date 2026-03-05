@@ -202,7 +202,7 @@ class TestEarthAccessCatalog:
         monkeypatch.setattr(
             uncached_catalog,
             "validate_product",
-            lambda key, *, count=20: ProductValidationResult(
+            lambda key, *, _count=20: ProductValidationResult(
                 key=key,
                 dataset_count=2,
                 discovered_short_names=("DISCOVERED",),

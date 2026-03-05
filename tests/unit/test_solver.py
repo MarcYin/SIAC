@@ -6,14 +6,14 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.core.types import AtmosphericState
 from siac.solver.cost import (
     CostFunction,
     CostFunctionConfig,
-    compute_laplacian_eigenvalues,
     apply_smoothness_filter,
+    compute_laplacian_eigenvalues,
 )
-from siac.solver.multigrid import MultiGridSolver, MultiGridConfig
-from siac.core.types import AtmosphericState
+from siac.solver.multigrid import MultiGridConfig, MultiGridSolver
 
 
 class TestLaplacianEigenvalues:
@@ -54,7 +54,7 @@ class TestSmoothnessFilter:
 
     def test_identity_gamma_zero(self):
         """With gamma=0, output should equal input."""
-        x = np.random.randn(20, 20)
+        x = np.random.default_rng(0).standard_normal((20, 20))
         lambda_vals = compute_laplacian_eigenvalues(20, 20)
 
         x_smooth = apply_smoothness_filter(x, gamma=0, lambda_vals=lambda_vals)
@@ -78,7 +78,7 @@ class TestSmoothnessFilter:
 
     def test_preserves_mean(self):
         """Mean should be approximately preserved."""
-        x = np.random.randn(20, 20) + 5.0
+        x = np.random.default_rng(1).standard_normal((20, 20)) + 5.0
         lambda_vals = compute_laplacian_eigenvalues(20, 20)
 
         x_smooth = apply_smoothness_filter(x, gamma=2.0, lambda_vals=lambda_vals)
@@ -161,7 +161,7 @@ class TestMultiGridSolver:
         """Field resampling should work."""
         solver = MultiGridSolver()
 
-        field = np.random.randn(100, 100)
+        field = np.random.default_rng(2).standard_normal((100, 100))
         resampled = solver._resample_field(field, (50, 50))
 
         assert resampled.shape == (50, 50)
@@ -170,7 +170,7 @@ class TestMultiGridSolver:
         """Same-size resampling should return identical array."""
         solver = MultiGridSolver()
 
-        field = np.random.randn(64, 64)
+        field = np.random.default_rng(3).standard_normal((64, 64))
         resampled = solver._resample_field(field, (64, 64))
 
         np.testing.assert_array_equal(resampled, field)
@@ -181,7 +181,6 @@ class TestProtocolValidation:
 
     def test_cost_function_invalid_rt_model(self, cost_function_inputs):
         """CostFunction should reject non-RTModelBackend objects."""
-        from siac.solver.cost import CostFunction
 
         with pytest.raises(TypeError, match="rt_model must implement RTModelBackend"):
             CostFunction(
@@ -202,7 +201,7 @@ class TestProtocolValidation:
         toa = xr.DataArray(np.full((3, *shape), 0.2), dims=["band", "y", "x"])
         cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
 
-        from siac.core.types import GeometryAngles, AtmosphericState, SurfacePrior, BRDFKernelWeights, SensorBand
+        from siac.core.types import BRDFKernelWeights, GeometryAngles, SensorBand, SurfacePrior
 
         geometry = GeometryAngles(
             sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -298,7 +297,6 @@ class TestCostFunctionGradient:
         geometry = GeometryAngles(sza=sza, saa=saa, vza=vza, vaa=vaa)
 
         # Atmospheric state
-        from siac.core.types import AtmosphericState
         atmo_prior = AtmosphericState(
             aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
             tcwv=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
@@ -320,13 +318,13 @@ class TestCostFunctionGradient:
         # Just test the smoothness part directly
         from scipy.fftpack import dct, idct
 
-        aot = np.random.randn(*shape) * 0.1 + 0.15
+        aot = np.random.default_rng(4).standard_normal(shape) * 0.1 + 0.15
         lambda_vals = compute_laplacian_eigenvalues(shape[1], shape[0])
 
         # Analytical gradient
         gamma = config.aot_gamma
         aot_dct = dct(dct(aot, axis=0, norm="ortho"), axis=1, norm="ortho")
-        j_smooth = 0.5 * gamma**2 * np.sum(lambda_vals * aot_dct**2)
+        0.5 * gamma**2 * np.sum(lambda_vals * aot_dct**2)
         dj_dct = gamma**2 * lambda_vals * aot_dct
         dj_aot = idct(idct(dj_dct, axis=1, norm="ortho"), axis=0, norm="ortho")
 

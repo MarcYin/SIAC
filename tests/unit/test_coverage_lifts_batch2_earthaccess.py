@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from siac.io.earthaccess_source import EarthAccessSource
@@ -117,7 +116,7 @@ def test_earthaccess_source_typeerror_login_and_bounds_transform(monkeypatch):
 
     monkeypatch.setattr(
         "siac.io.earthaccess_source.Transformer.from_crs",
-        lambda crs_from, crs_to, always_xy=True: _FakeTransformer(),
+        lambda *_args, **_kwargs: _FakeTransformer(),
     )
     b = EarthAccessSource.normalize_bounds_to_wgs84((0.0, 0.0, 1.0, 1.0), "EPSG:3857")
     assert b == (1.0, 2.0, 2.0, 3.0)
@@ -208,7 +207,7 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
 
     auth = SimpleNamespace(
         has_credentials=lambda provider: provider == "cds",
-        get_credentials=lambda provider: SimpleNamespace(key="abc:123"),
+        get_credentials=lambda _provider: SimpleNamespace(key="abc:123"),
     )
     p_auth = CAMSProvider(tmp_path, auth=auth)
     out = p_auth._download_cams_file(datetime(2024, 1, 2))
@@ -232,7 +231,7 @@ def test_cams_load_data_download_missing_path(monkeypatch, tmp_path: Path):
 
     downloaded = tmp_path / "CAMS_2024-01-01.nc"
 
-    monkeypatch.setattr(p, "_download_cams_file", lambda t: downloaded)
-    monkeypatch.setattr(p, "_load_from_explicit_path", lambda path: "dataset")
+    monkeypatch.setattr(p, "_download_cams_file", lambda _t: downloaded)
+    monkeypatch.setattr(p, "_load_from_explicit_path", lambda _path: "dataset")
 
     assert p._load_cams_data(datetime(2024, 1, 1)) == "dataset"

@@ -3,7 +3,6 @@ Layer 2 — Validation functions for pipeline contract outputs.
 """
 
 import dataclasses
-from datetime import datetime
 
 import numpy as np
 import pytest
@@ -15,7 +14,6 @@ from siac.core.validation import (
     _validate_solver_input_bundle,
     _validate_surface_prior,
 )
-
 
 # ── _validate_observation_bundle ──────────────────────────────────────
 

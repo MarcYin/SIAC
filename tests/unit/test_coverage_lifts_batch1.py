@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -19,20 +19,20 @@ from siac.core.protocols import (
     SurfacePriorDeriver,
 )
 from siac.core.types import (
+    SENTINEL2A_CONFIG,
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
-    ObservationBundle,
     RTCoefficients,
-    SENTINEL2A_CONFIG,
     SensorBand,
-    SolverInputBundle,
     SurfacePrior,
 )
 from siac.core.validation import _spatial_shape
 from siac.satellite.base import BaseSatellitePreprocessor, detect_sensor, resample_angles_to_data
 from siac.solver.cost import CostFunction, CostFunctionConfig, create_sparse_laplacian
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ------------------------------
 # protocol line execution
@@ -148,12 +148,14 @@ def _geom(shape=(3, 3)) -> GeometryAngles:
 
 
 def _atmo(shape=(3, 3)) -> AtmosphericState:
-    da = lambda v: xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
+    def da(v):
+        return xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
     return AtmosphericState(aot=da(0.15), tcwv=da(2.0), tco3=da(0.3), aot_unc=da(0.05), tcwv_unc=da(0.3), tco3_unc=da(0.03), elevation=da(0.1))
 
 
 def _surface(shape=(3, 3)) -> SurfacePrior:
-    da = lambda v: xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
+    def da(v):
+        return xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
     kernels = BRDFKernelWeights(f0=da(0.1), f1=da(0.05), f2=da(0.02), f0_unc=da(0.01), f1_unc=da(0.01), f2_unc=da(0.01))
     return SurfacePrior(boa=da(0.2), boa_unc=da(0.1), kernels=kernels, mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]))
 

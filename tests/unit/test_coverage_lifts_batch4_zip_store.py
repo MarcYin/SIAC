@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 
 import siac.rt.lut.http_zip_store as zip_store
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _Resp:
@@ -173,14 +176,22 @@ def test_build_s3_fs_and_mapper_validation_paths(monkeypatch):
         zip_store.build_readonly_zip_mapper("https://example.com/lut.zip", {"foo": 1})
 
     # s3 branch + mapper build path.
-    monkeypatch.setattr(zip_store, "_build_s3_filesystem", lambda options: "fake-base")
+    monkeypatch.setattr(zip_store, "_build_s3_filesystem", lambda _options: "fake-base")
     monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
-    monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda zfs: "")
-    monkeypatch.setattr(zip_store, "FSMap", lambda root, fs, check=False, create=False: {"root": root, "fs": fs})
+    monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda _zfs: "")
+    def _fake_fsmap(root, fs, check=False, create=False):  # noqa: ANN001
+        _ = (check, create)
+        return {"root": root, "fs": fs}
+
+    monkeypatch.setattr(zip_store, "FSMap", _fake_fsmap)
     m = zip_store.build_readonly_zip_mapper("s3://bucket/key.zip", {})
     assert m["root"] == ""
 
     # ValueError passthrough path (message does not match compressed marker).
-    monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda zfs: (_ for _ in ()).throw(ValueError("other parse error")))
+    monkeypatch.setattr(
+        zip_store,
+        "_detect_zarr_prefix",
+        lambda _zfs: (_ for _ in ()).throw(ValueError("other parse error")),
+    )
     with pytest.raises(ValueError, match="other parse error"):
         zip_store.build_readonly_zip_mapper("/tmp/lut.zip", {})

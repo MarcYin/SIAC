@@ -15,7 +15,6 @@ from siac.core.auth import (
 )
 from siac.core.exceptions import AuthenticationError
 
-
 # ── 1. set/get roundtrip ────────────────────────────────────────────
 
 class TestCredentialSetGet:
@@ -130,7 +129,7 @@ class TestFromConfig:
         rc_file = tmp_path / ".cdsapirc"
         rc_file.write_text("key: ignored")
         monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr("siac.core.auth.Path.read_text", lambda self: (_ for _ in ()).throw(OSError("nope")))
+        monkeypatch.setattr("siac.core.auth.Path.read_text", lambda _self: (_ for _ in ()).throw(OSError("nope")))
 
         mgr = CredentialManager.from_config(None)
         assert mgr.has_credentials("cds") is False
@@ -299,7 +298,7 @@ class TestCDSETokenExchange:
 
         monkeypatch.setattr(
             "siac.core.auth.requests.post",
-            lambda *args, **kwargs: _Resp({"access_token": "abc", "expires_in": 123}),
+            lambda *_args, **_kwargs: _Resp({"access_token": "abc", "expires_in": 123}),
         )
         token, exp = _cdse_token_exchange("u", "p")
         assert token == "abc"
@@ -307,7 +306,7 @@ class TestCDSETokenExchange:
 
         monkeypatch.setattr(
             "siac.core.auth.requests.post",
-            lambda *args, **kwargs: _Resp({"expires_in": 123}),
+            lambda *_args, **_kwargs: _Resp({"expires_in": 123}),
         )
         with pytest.raises(AuthenticationError, match="access_token"):
             _cdse_token_exchange("u", "p")

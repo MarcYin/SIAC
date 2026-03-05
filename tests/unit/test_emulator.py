@@ -2,12 +2,12 @@
 Unit tests for neural network emulator.
 """
 
+
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
 
-from siac.core.types import AtmosphericState, GeometryAngles, RTCoefficients, SensorBand
+from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
 
 
 class TestBandEmulator:
@@ -16,21 +16,21 @@ class TestBandEmulator:
     @pytest.fixture
     def mock_weights(self):
         """Create mock neural network weights."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         hidden = 64
         input_dim = 7
 
         # Two hidden layers + output
         hidden_layers = [
-            [np.random.randn(input_dim, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
              np.zeros(hidden, dtype=np.float32)],
-            [np.random.randn(hidden, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
              np.zeros(hidden, dtype=np.float32)],
         ]
 
         # Three output heads (xap, xbp, xcp)
         output_layers = [
-            [np.random.randn(hidden, 1).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
              np.zeros(1, dtype=np.float32)]
             for _ in range(3)
         ]
@@ -45,7 +45,7 @@ class TestBandEmulator:
         emulator = _BandEmulator(hidden_layers, output_layers, use_rust=False)
 
         # Sample input
-        x = np.random.randn(10, 7).astype(np.float32)
+        x = np.random.default_rng(0).standard_normal((10, 7)).astype(np.float32)
 
         outputs, jacobians = emulator.forward(x, compute_jacobian=False)
 
@@ -59,7 +59,7 @@ class TestBandEmulator:
         hidden_layers, output_layers = mock_weights
         emulator = _BandEmulator(hidden_layers, output_layers, use_rust=False)
 
-        x = np.random.randn(5, 7).astype(np.float32)
+        x = np.random.default_rng(1).standard_normal((5, 7)).astype(np.float32)
 
         outputs, jacobians = emulator.forward(x, compute_jacobian=True)
 
@@ -73,17 +73,17 @@ class TestBandEmulator:
 
         # Create small deterministic weights with positive biases
         # to ensure neurons are active (avoid ReLU discontinuities)
-        np.random.seed(123)
+        rng = np.random.default_rng(123)
         input_dim, hidden = 7, 16
 
         hidden_layers = [
-            [np.random.randn(input_dim, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
              np.ones(hidden, dtype=np.float32) * 0.5],  # Positive bias
-            [np.random.randn(hidden, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
              np.ones(hidden, dtype=np.float32) * 0.5],  # Positive bias
         ]
         output_layers = [
-            [np.random.randn(hidden, 1).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
              np.zeros(1, dtype=np.float32)]
             for _ in range(3)
         ]
@@ -122,19 +122,19 @@ class TestTwoLayerNNEmulator:
     @pytest.fixture
     def mock_emulator_dir(self, tmp_path):
         """Create mock emulator directory with test weights."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         hidden = 64
         input_dim = 7
 
         hidden_layers = [
-            [np.random.randn(input_dim, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
              np.zeros(hidden, dtype=np.float32)],
-            [np.random.randn(hidden, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
              np.zeros(hidden, dtype=np.float32)],
         ]
 
         output_layers = [
-            [np.random.randn(hidden, 1).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
              np.zeros(1, dtype=np.float32)]
         ]
 
@@ -184,20 +184,20 @@ class TestComputeCoefficientsMulti:
     @pytest.fixture
     def mock_emulator_dir(self, tmp_path):
         """Create mock emulator directory with test weights (3 output heads)."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         hidden = 64
         input_dim = 7
 
         hidden_layers = [
-            [np.random.randn(input_dim, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
              np.zeros(hidden, dtype=np.float32)],
-            [np.random.randn(hidden, hidden).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
              np.zeros(hidden, dtype=np.float32)],
         ]
 
         # Three output heads (xap, xbp, xcp)
         output_layers = [
-            [np.random.randn(hidden, 1).astype(np.float32) * 0.1,
+            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
              np.zeros(1, dtype=np.float32)]
             for _ in range(3)
         ]

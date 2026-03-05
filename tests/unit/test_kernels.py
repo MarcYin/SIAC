@@ -12,10 +12,10 @@ import xarray as xr
 
 from siac.priors.brdf.kernels import (
     BRDFKernels,
+    compute_black_sky_albedo,
     compute_kernels,
     compute_reflectance,
     compute_white_sky_albedo,
-    compute_black_sky_albedo,
 )
 
 
@@ -86,9 +86,9 @@ class TestBRDFKernels:
     def test_compute_batch(self, kernels):
         """Should handle batched inputs efficiently."""
         shape = (100, 100)
-        vza = np.random.uniform(0, 0.5, shape)
-        sza = np.random.uniform(0.2, 1.0, shape)
-        raa = np.random.uniform(0, np.pi, shape)
+        vza = np.random.default_rng().uniform(0, 0.5, shape)
+        sza = np.random.default_rng().uniform(0.2, 1.0, shape)
+        raa = np.random.default_rng().uniform(0, np.pi, shape)
 
         k_vol, k_geo = kernels.compute(vza, sza, raa)
 

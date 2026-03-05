@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import zipfile
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
-import zipfile
 
 import pytest
 import requests

@@ -13,7 +13,7 @@ import xarray as xr
 
 from siac.core.config import SIACConfig
 from siac.core.exceptions import DataNotFoundError
-from siac.core.types import AtmosphericState, CorrectionResult, GeometryAngles, SENTINEL2A_CONFIG
+from siac.core.types import SENTINEL2A_CONFIG, AtmosphericState, CorrectionResult, GeometryAngles
 from siac.io.s2_data_source import S2Query
 from siac.siac import (
     SIAC,
@@ -74,8 +74,8 @@ def _toa_dataset(shape: tuple[int, int] = (2, 2)) -> xr.Dataset:
 
 def test_siac_from_helpers(monkeypatch):
     cfg = SIACConfig(sensor="s2")
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
-    monkeypatch.setattr("siac.siac.SIACConfig.from_yaml", classmethod(lambda cls, path: cfg))
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.SIACConfig.from_yaml", classmethod(lambda _cls, _path: cfg))
 
     siac_from_yaml = SIAC.from_config("dummy.yaml")
     siac_default = SIAC.from_defaults(sensor="l8")
@@ -88,7 +88,7 @@ def test_siac_from_helpers(monkeypatch):
 
 def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
     cfg = SIACConfig(sensor="auto")
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
     siac_obj = SIAC(cfg)
 
     obs_time = datetime(2026, 1, 2, 3, 4, 5)
@@ -116,13 +116,13 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
         metadata={"ok": True},
     )
 
-    monkeypatch.setattr("siac.siac.detect_sensor", lambda path: "s2")
-    monkeypatch.setattr("siac.siac.get_preprocessor", lambda sensor: _FakePreprocessor())
-    monkeypatch.setattr(siac_obj, "_resolve_aoi", lambda toa: SimpleNamespace(get_bounds=lambda: (0, 0, 1, 1), crs="EPSG:4326"))
-    monkeypatch.setattr(siac_obj, "_get_atmospheric_prior", lambda aoi, md: atmo_prior)
-    monkeypatch.setattr(siac_obj, "_get_surface_prior", lambda aoi, geom, md: "surface-prior")
-    monkeypatch.setattr(siac_obj, "_get_rt_model", lambda sc: "rt")
-    monkeypatch.setattr(siac_obj, "_solve_atmosphere", lambda *args, **kwargs: solver_result)
+    monkeypatch.setattr("siac.siac.detect_sensor", lambda _path: "s2")
+    monkeypatch.setattr("siac.siac.get_preprocessor", lambda _sensor: _FakePreprocessor())
+    monkeypatch.setattr(siac_obj, "_resolve_aoi", lambda _toa: SimpleNamespace(get_bounds=lambda: (0, 0, 1, 1), crs="EPSG:4326"))
+    monkeypatch.setattr(siac_obj, "_get_atmospheric_prior", lambda _aoi, _md: atmo_prior)
+    monkeypatch.setattr(siac_obj, "_get_surface_prior", lambda _aoi, _geom, _md: "surface-prior")
+    monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
+    monkeypatch.setattr(siac_obj, "_solve_atmosphere", lambda *_args, **_kwargs: solver_result)
 
     class _FakeCorrector:
         def __init__(self, rt_model, sensor_config):
@@ -147,7 +147,7 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
 
 
 def test_resolve_aoi_branches(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
 
     cfg_bounds = SIACConfig(sensor="s2")
     cfg_bounds.aoi = [1.0, 2.0, 3.0, 4.0]
@@ -167,7 +167,7 @@ def test_resolve_aoi_branches(monkeypatch):
 
 
 def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
 
     calls = []
 
@@ -209,7 +209,7 @@ def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
 
 
 def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
 
     cfg = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
     siac_obj = SIAC(cfg)
@@ -248,11 +248,14 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
 
 
 def test_get_brdf_provider_other_branches(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
 
     cfg_vnp43 = SIACConfig(sensor="s2", brdf={"provider": "vnp43"})
     siac_vnp43 = SIAC(cfg_vnp43)
-    monkeypatch.setattr("siac.priors.brdf.vnp43_earthaccess.VNP43EarthAccessProvider", lambda cache_dir=None: "vnp")
+    monkeypatch.setattr(
+        "siac.priors.brdf.vnp43_earthaccess.VNP43EarthAccessProvider",
+        lambda **_kwargs: "vnp",
+    )
     assert siac_vnp43._get_brdf_provider() == "vnp"
 
     cfg_gee = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
@@ -270,7 +273,7 @@ def test_get_brdf_provider_other_branches(monkeypatch):
 
 
 def test_get_rt_model_branches(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
 
     sensor_config = SENTINEL2A_CONFIG
 
@@ -296,7 +299,7 @@ def test_get_rt_model_branches(monkeypatch):
 
     cfg_lut = SIACConfig(sensor="s2", rt_model={"backend": "lut", "lut_path": "/tmp/lut.zarr"})
     siac_lut = SIAC(cfg_lut)
-    monkeypatch.setattr("siac.siac.ZarrLUTBackend", lambda path, interpolation_method, storage_options: "lut-backend")
+    monkeypatch.setattr("siac.siac.ZarrLUTBackend", lambda *_args, **_kwargs: "lut-backend")
     assert siac_lut._get_rt_model(sensor_config) == "lut-backend"
 
     siac_lut._rt_model = "cached"
@@ -304,7 +307,7 @@ def test_get_rt_model_branches(monkeypatch):
 
 
 def test_solve_atmosphere_and_save_output(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
     cfg = SIACConfig(sensor="s2")
     siac_obj = SIAC(cfg)
 
@@ -441,14 +444,14 @@ def test_siac_process_uses_resolvers_and_injections(monkeypatch, tmp_path: Path)
     cfg = SIACConfig(sensor="s2")
     calls = {}
 
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda config: "auth")
-    monkeypatch.setattr("siac.siac._resolve_preprocessor", lambda config: "pp")
-    monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda config, auth=None: ("ap", auth))
-    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda config: "sp")
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: "auth")
+    monkeypatch.setattr("siac.siac._resolve_preprocessor", lambda _config: "pp")
+    monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _config, auth=None: ("ap", auth))
+    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _config: "sp")
     monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "ga")
-    monkeypatch.setattr("siac.siac._resolve_solver", lambda config: "sv")
-    monkeypatch.setattr("siac.siac._resolve_corrector", lambda config: "cr")
-    monkeypatch.setattr("siac.siac._resolve_rt_model_for_pipeline", lambda config, auth=None: ("rt", auth))
+    monkeypatch.setattr("siac.siac._resolve_solver", lambda _config: "sv")
+    monkeypatch.setattr("siac.siac._resolve_corrector", lambda _config: "cr")
+    monkeypatch.setattr("siac.siac._resolve_rt_model_for_pipeline", lambda _config, auth=None: ("rt", auth))
 
     def _fake_run_pipeline(input_path, aoi, config, **kwargs):
         calls.update(kwargs)
@@ -579,7 +582,7 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     obs = SimpleNamespace(toa=_toa_dataset(), geometry=geom, cloud_mask=inputs.cloud_mask, sensor_config=SENTINEL2A_CONFIG)
     assert correct_fn(obs, solved, "rt") == "corrected"
 
-    monkeypatch.setattr("siac.siac.TwoLayerNNEmulator", lambda **kwargs: "emu")
+    monkeypatch.setattr("siac.siac.TwoLayerNNEmulator", lambda **_kwargs: "emu")
     cfg_emu = SIACConfig(sensor="s2", rt_model={"backend": "emulator", "emulator_dir": "/tmp/e"})
     assert _resolve_rt_model_for_pipeline(cfg_emu) == "emu"
 
@@ -593,7 +596,7 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     monkeypatch.setattr("siac.siac.ZarrLUTBackend", _fake_lut)
     auth = SimpleNamespace(
         has_credentials=lambda provider: provider == "aws",
-        get_storage_options=lambda provider: {"key": "AK", "secret": "SK"},
+        get_storage_options=lambda _provider: {"key": "AK", "secret": "SK"},
     )
     out = _resolve_rt_model_for_pipeline(cfg, auth=auth)
     assert out == "lut"
