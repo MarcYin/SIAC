@@ -116,7 +116,7 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--cov=siac",
+    "--cov=python/siac",
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
     "--cov-report=xml:coverage.xml",
@@ -138,7 +138,7 @@ filterwarnings = [
 # coverage configuration
 # ============================================================================
 [tool.coverage.run]
-source = ["siac"]
+source = ["python/siac"]
 omit = [
     "*/tests/*",
     "*/_rust/*",
