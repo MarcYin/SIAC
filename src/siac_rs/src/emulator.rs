@@ -65,14 +65,14 @@ impl TwoLayerNN {
         x: PyReadonlyArray2<f32>,
         compute_jacobian: bool,
     ) -> PyResult<(
-        Bound<'py, PyArray2<f32>>,
-        Option<Bound<'py, PyArray2<f32>>>,
+        &'py PyArray2<f32>,
+        Option<&'py PyArray2<f32>>,
     )> {
         let x = x.as_array();
         let (output, jacobian) = self.forward(x, compute_jacobian);
 
-        let output_py = output.into_pyarray_bound(py);
-        let jacobian_py = jacobian.map(|j| j.into_pyarray_bound(py));
+        let output_py = output.into_pyarray(py);
+        let jacobian_py = jacobian.map(|j| j.into_pyarray(py));
 
         Ok((output_py, jacobian_py))
     }

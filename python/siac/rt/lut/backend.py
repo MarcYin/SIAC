@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,7 @@ class ZarrLUTBackend:
     )
     _DEFAULT_SURFACE_RHO1 = 0.15
     _DEFAULT_SURFACE_RHO2 = 0.5
+    _SPECTRAL_IO_MAX_RETRIES = 8
 
     def __init__(
         self,
@@ -59,10 +62,18 @@ class ZarrLUTBackend:
         self.interpolation_method = interpolation_method
         self.chunk_cache_size = chunk_cache_size
         self.storage_options = dict(storage_options or {})
+        self._scene_subset_logged = False
 
         # Lazy load the LUT
         self._lut: xr.Dataset | None = None
         self._lut_coords: dict[str, np.ndarray] = {}
+        self._cache_lock = threading.Lock()
+        self._spectral_scene_key: tuple[float, ...] | None = None
+        self._spectral_scene_subset: xr.Dataset | None = None
+        self._spectral_band_grid_cache: dict[
+            tuple[tuple[float, ...], tuple[str, float, float]],
+            tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray],
+        ] = {}
 
     @property
     def lut(self) -> xr.Dataset:
@@ -87,7 +98,7 @@ class ZarrLUTBackend:
                 self._lut = xr.open_zarr(
                     store=store,
                     consolidated=False,
-                    zarr_version=3,
+                    zarr_format=3,
                 )
             except Exception as e:
                 logger.warning(
@@ -110,10 +121,12 @@ class ZarrLUTBackend:
             self._lut_coords[dim] = coord.values
 
         logger.info(
-            f"LUT loaded with dimensions: "
-            f"SZA={len(self._lut_coords.get('sza', []))}, "
-            f"VZA={len(self._lut_coords.get('vza', []))}, "
-            f"AOT={len(self._lut_coords.get('aot', []))}"
+            "LUT index loaded (available axis sizes): SZA=%d, VZA=%d, RAA=%d, AOT=%d, TCWV=%d",
+            len(self._lut_coords.get("sza", [])),
+            len(self._lut_coords.get("vza", [])),
+            len(self._lut_coords.get("raa", [])),
+            len(self._lut_coords.get("aot", [])),
+            len(self._lut_coords.get("tcwv", [])),
         )
 
     @staticmethod
@@ -200,15 +213,15 @@ class ZarrLUTBackend:
             xbp = path_ref / trans_total
             xcp = sph_alb / np.maximum(trans_up, 1e-10)
         elif self._supports_spectral_lut():
-            xap, xbp, xcp = self._compute_coefficients_from_spectral_lut(
-                sza_deg,
-                vza_deg,
-                raa_deg,
-                aot,
-                tcwv,
-                atmo_state.tco3.values,
-                elevation,
-                band,
+            xap, xbp, xcp = self._compute_spectral_with_retry(
+                sza_deg=sza_deg,
+                vza_deg=vza_deg,
+                raa_deg=raa_deg,
+                aot=aot,
+                tcwv=tcwv,
+                tco3=atmo_state.tco3.values,
+                elevation=elevation,
+                band=band,
             )
         else:
             raise ValueError(
@@ -393,6 +406,33 @@ class ZarrLUTBackend:
 
         return coords
 
+    def _compute_spectral_with_retry(
+        self,
+        *,
+        sza_deg: np.ndarray,
+        vza_deg: np.ndarray,
+        raa_deg: np.ndarray,
+        aot: np.ndarray,
+        tcwv: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+        band: SensorBand,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute spectral coefficients with retry for transient remote LUT read failures."""
+        return self._run_with_transient_lut_io_retry(
+            lambda: self._compute_coefficients_from_spectral_lut(
+                sza_deg,
+                vza_deg,
+                raa_deg,
+                aot,
+                tcwv,
+                tco3,
+                elevation,
+                band,
+            ),
+            operation="read",
+        )
+
     @staticmethod
     def _interpolate_variable(
         var: xr.DataArray,
@@ -422,33 +462,53 @@ class ZarrLUTBackend:
         if "wavelength" not in self._lut_coords:
             raise ValueError("Spectral LUT must define a wavelength coordinate")
 
-        coords = self._build_point_coords(
-            sza=sza.ravel(),
-            vza=vza.ravel(),
-            raa=raa.ravel(),
+        scene_key, lut_scene = self._get_or_build_spectral_scene_subset(
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+        if not self._scene_subset_logged:
+            logger.info(
+                (
+                    "Scene LUT subset: sza=%.3f deg, vza=%.3f deg, raa=%.3f deg, "
+                    "ozone=[%.3f, %.3f], altitude=[%.3f, %.3f]"
+                ),
+                float(np.nanmean(sza)),
+                float(np.nanmean(vza)),
+                float(np.nanmean(raa)),
+                float(np.nanmin(np.asarray(tco3, dtype=np.float32))),
+                float(np.nanmax(np.asarray(tco3, dtype=np.float32))),
+                float(np.nanmin(np.asarray(elevation, dtype=np.float32))),
+                float(np.nanmax(np.asarray(elevation, dtype=np.float32))),
+            )
+            self._scene_subset_logged = True
+
+        target_shape = aot.shape
+        coords = self._build_aot_tcwv_point_coords(
+            lut_scene,
             aot=aot.ravel(),
             tcwv=tcwv.ravel(),
-            tco3=tco3.ravel(),
-            elevation=elevation.ravel(),
         )
-        weights = self._spectral_integration_weights(band)
+        toa_rho1_grid, toa_rho2_grid, eg_rho1_grid, eg_rho2_grid = self._get_or_build_spectral_band_grids(
+            scene_key,
+            lut_scene,
+            band,
+        )
 
-        toa_rho1 = self._weighted_spectral_mean(
-            self._interpolate_variable(self.lut["TOA_rho1"], coords, self.interpolation_method),
-            weights,
-        ).values.astype(np.float32)
-        toa_rho2 = self._weighted_spectral_mean(
-            self._interpolate_variable(self.lut["TOA_rho2"], coords, self.interpolation_method),
-            weights,
-        ).values.astype(np.float32)
-        eg_rho1 = self._weighted_spectral_mean(
-            self._interpolate_variable(self.lut["Eg_rho1"], coords, self.interpolation_method),
-            weights,
-        ).values.astype(np.float32)
-        eg_rho2 = self._weighted_spectral_mean(
-            self._interpolate_variable(self.lut["Eg_rho2"], coords, self.interpolation_method),
-            weights,
-        ).values.astype(np.float32)
+        toa_rho1 = self._interpolate_variable(toa_rho1_grid, coords, self.interpolation_method).values.astype(
+            np.float32
+        )
+        toa_rho2 = self._interpolate_variable(toa_rho2_grid, coords, self.interpolation_method).values.astype(
+            np.float32
+        )
+        eg_rho1 = self._interpolate_variable(eg_rho1_grid, coords, self.interpolation_method).values.astype(
+            np.float32
+        )
+        eg_rho2 = self._interpolate_variable(eg_rho2_grid, coords, self.interpolation_method).values.astype(
+            np.float32
+        )
 
         rho1, rho2 = self._spectral_reference_reflectances()
         eps = 1e-10
@@ -469,17 +529,298 @@ class ZarrLUTBackend:
         xcp = s_term
 
         return (
-            xap.reshape(sza.shape).astype(np.float32),
-            xbp.reshape(sza.shape).astype(np.float32),
-            xcp.reshape(sza.shape).astype(np.float32),
+            xap.reshape(target_shape).astype(np.float32),
+            xbp.reshape(target_shape).astype(np.float32),
+            xcp.reshape(target_shape).astype(np.float32),
         )
 
-    def _spectral_integration_weights(self, band: SensorBand) -> xr.DataArray:
+    @staticmethod
+    def _spectral_scene_cache_key(
+        *,
+        sza: np.ndarray,
+        vza: np.ndarray,
+        raa: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+    ) -> tuple[float, ...]:
+        """Build a stable scene cache key from summary geometry/atmosphere stats."""
+        return (
+            round(float(np.nanmean(sza)), 3),
+            round(float(np.nanmean(vza)), 3),
+            round(float(np.nanmean(raa)), 3),
+            round(float(np.nanmin(np.asarray(tco3, dtype=np.float32))), 3),
+            round(float(np.nanmax(np.asarray(tco3, dtype=np.float32))), 3),
+            round(float(np.nanmin(np.asarray(elevation, dtype=np.float32))), 3),
+            round(float(np.nanmax(np.asarray(elevation, dtype=np.float32))), 3),
+        )
+
+    @staticmethod
+    def _spectral_band_cache_key(band: SensorBand) -> tuple[str, float, float]:
+        """Build a stable per-band cache key for spectral compression grids."""
+        return (band.name, float(band.center_wavelength), float(band.bandwidth))
+
+    def _get_or_build_spectral_scene_subset(
+        self,
+        *,
+        sza: np.ndarray,
+        vza: np.ndarray,
+        raa: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+    ) -> tuple[tuple[float, ...], xr.Dataset]:
+        """Return cached scene LUT subset or build and cache it once."""
+        scene_key = self._spectral_scene_cache_key(
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+        with self._cache_lock:
+            if (
+                self._spectral_scene_key == scene_key
+                and self._spectral_scene_subset is not None
+            ):
+                return scene_key, self._spectral_scene_subset
+
+        subset = self._subset_spectral_lut_for_scene(
+            self.lut,
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+
+        with self._cache_lock:
+            if self._spectral_scene_key != scene_key:
+                self._spectral_scene_key = scene_key
+                self._spectral_scene_subset = subset
+                self._spectral_band_grid_cache.clear()
+                self._scene_subset_logged = False
+            if self._spectral_scene_subset is None:
+                self._spectral_scene_subset = subset
+            return scene_key, self._spectral_scene_subset
+
+    def _get_or_build_spectral_band_grids(
+        self,
+        scene_key: tuple[float, ...],
+        lut_scene: xr.Dataset,
+        band: SensorBand,
+    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+        """Return cached per-band spectral-compressed grids or build once."""
+        band_key = self._spectral_band_cache_key(band)
+        cache_key = (scene_key, band_key)
+
+        with self._cache_lock:
+            cached = self._spectral_band_grid_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        lut_band = self._subset_wavelength_for_band(lut_scene, band)
+        weights = self._spectral_integration_weights(band, lut_band)
+        grids = (
+            self._weighted_spectral_mean(lut_band["TOA_rho1"], weights),
+            self._weighted_spectral_mean(lut_band["TOA_rho2"], weights),
+            self._weighted_spectral_mean(lut_band["Eg_rho1"], weights),
+            self._weighted_spectral_mean(lut_band["Eg_rho2"], weights),
+        )
+
+        with self._cache_lock:
+            self._spectral_band_grid_cache[cache_key] = grids
+        return grids
+
+    def preload_scene_subset(
+        self,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand] | None = None,
+    ) -> None:
+        """
+        Preload LUT metadata and cache scene/band spectral subsets.
+
+        Intended for background execution while other modules are running.
+        """
+        self._run_with_transient_lut_io_retry(
+            lambda: self._preload_scene_subset_once(
+                geometry=geometry,
+                atmo_state=atmo_state,
+                bands=bands,
+            ),
+            operation="preload",
+        )
+
+    def _preload_scene_subset_once(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand] | None,
+    ) -> None:
+        """Populate scene-level spectral LUT caches once for the requested bands."""
+        # Ensure LUT metadata index is loaded exactly once.
+        _ = self.lut
+        if not self._supports_spectral_lut():
+            return
+
+        sza = np.rad2deg(geometry.sza.values)
+        vza = np.rad2deg(geometry.vza.values)
+        raa = np.abs(np.rad2deg(geometry.raa.values))
+        raa = np.where(raa > 180, 360 - raa, raa)
+        tco3 = atmo_state.tco3.values
+        elevation = atmo_state.elevation.values
+
+        scene_key, lut_scene = self._get_or_build_spectral_scene_subset(
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+        for band in bands or []:
+            self._get_or_build_spectral_band_grids(scene_key, lut_scene, band)
+
+    def _run_with_transient_lut_io_retry(
+        self,
+        fn: Any,
+        *,
+        operation: str,
+    ) -> Any:
+        """Retry transient remote LUT I/O for preload/read paths."""
+        max_attempts = max(1, int(self._SPECTRAL_IO_MAX_RETRIES))
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return fn()
+            except Exception as exc:
+                if attempt >= max_attempts or not self._is_transient_lut_io_error(exc):
+                    raise
+                logger.warning(
+                    "Transient LUT %s failure (%s); reloading and retrying (%d/%d).",
+                    operation,
+                    type(exc).__name__,
+                    attempt,
+                    max_attempts,
+                )
+                time.sleep(min(float(attempt), 5.0))
+                self._reload_lut()
+
+        raise RuntimeError(f"Failed to {operation} LUT data after retries")
+
+    def _subset_spectral_lut_for_scene(
+        self,
+        lut: xr.Dataset,
+        *,
+        sza: np.ndarray,
+        vza: np.ndarray,
+        raa: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+    ) -> xr.Dataset:
+        """Subset spectral LUT using scene-angle means and ozone/elevation ranges."""
+        out = lut
+
+        angle_means = {
+            "sza": float(np.nanmean(sza)),
+            "vza": float(np.nanmean(vza)),
+            "raa": float(np.nanmean(raa)),
+        }
+        for dim, value in angle_means.items():
+            if dim in out.coords:
+                out = out.sel({dim: value}, method="nearest")
+            if dim in out.dims and out.sizes.get(dim, 0) == 1:
+                out = out.squeeze(dim=dim, drop=True)
+
+        ranges = {
+            "ozone": (
+                float(np.nanmin(np.asarray(tco3, dtype=np.float32))),
+                float(np.nanmax(np.asarray(tco3, dtype=np.float32))),
+            ),
+            "altitude": (
+                float(np.nanmin(np.asarray(elevation, dtype=np.float32))),
+                float(np.nanmax(np.asarray(elevation, dtype=np.float32))),
+            ),
+        }
+        for dim, (vmin, vmax) in ranges.items():
+            if dim not in out.coords:
+                continue
+            axis = np.asarray(out.coords[dim].values, dtype=np.float32)
+            if axis.size == 0:
+                continue
+            lo = float(np.clip(min(vmin, vmax), float(np.nanmin(axis)), float(np.nanmax(axis))))
+            hi = float(np.clip(max(vmin, vmax), float(np.nanmin(axis)), float(np.nanmax(axis))))
+            subset = out.sel({dim: slice(lo, hi)})
+            if subset.sizes.get(dim, 0) == 0:
+                subset = out.sel({dim: (lo + hi) * 0.5}, method="nearest")
+            if dim in subset.dims and subset.sizes.get(dim, 1) > 1:
+                subset = subset.mean(dim=dim)
+            if dim in subset.dims and subset.sizes.get(dim, 0) == 1:
+                subset = subset.squeeze(dim=dim, drop=True)
+            out = subset
+
+        return out
+
+    @staticmethod
+    def _build_aot_tcwv_point_coords(
+        lut: xr.Dataset,
+        *,
+        aot: np.ndarray,
+        tcwv: np.ndarray,
+    ) -> dict[str, xr.DataArray]:
+        """Build point interpolation coordinates for variables solved per-pixel."""
+        coords = {
+            "aot": xr.DataArray(np.asarray(aot, dtype=np.float32), dims=["point"]),
+            "tcwv": xr.DataArray(np.asarray(tcwv, dtype=np.float32), dims=["point"]),
+        }
+        for name in ("aot", "tcwv"):
+            if name not in lut.coords:
+                continue
+            axis = np.asarray(lut.coords[name].values, dtype=np.float32)
+            if axis.size == 0:
+                continue
+            coords[name] = xr.DataArray(
+                np.clip(coords[name].values, float(np.nanmin(axis)), float(np.nanmax(axis))),
+                dims=["point"],
+            )
+        return coords
+
+    def _subset_wavelength_for_band(
+        self,
+        lut: xr.Dataset,
+        band: SensorBand,
+        sigma_factor: float = 4.0,
+    ) -> xr.Dataset:
+        """Trim spectral LUT to a narrow wavelength window around the target band."""
+        if "wavelength" not in lut.coords:
+            return lut
+
+        wl_axis = np.asarray(lut.coords["wavelength"].values, dtype=np.float32)
+        if wl_axis.size == 0:
+            return lut
+
+        sigma = max(float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))), 1e-6)
+        half_window = max(3.0, sigma_factor * sigma)
+        wl_min = float(np.nanmin(wl_axis))
+        wl_max = float(np.nanmax(wl_axis))
+        lo = float(np.clip(float(band.center_wavelength) - half_window, wl_min, wl_max))
+        hi = float(np.clip(float(band.center_wavelength) + half_window, wl_min, wl_max))
+
+        subset = lut.sel(wavelength=slice(min(lo, hi), max(lo, hi)))
+        if subset.sizes.get("wavelength", 0) == 0:
+            nearest_idx = int(np.argmin(np.abs(wl_axis - float(band.center_wavelength))))
+            subset = lut.isel(wavelength=slice(nearest_idx, nearest_idx + 1))
+        return subset
+
+    def _spectral_integration_weights(self, band: SensorBand, lut: xr.Dataset | None = None) -> xr.DataArray:
         """Build wavelength weights for spectral convolution (bandpass * optional solar spectrum)."""
+        source = lut if lut is not None else self.lut
+        if "wavelength" not in source.coords:
+            raise ValueError("Spectral LUT must define a wavelength coordinate")
+
+        wl_axis = np.asarray(source.coords["wavelength"].values, dtype=np.float32)
         wavelength = xr.DataArray(
-            np.asarray(self._lut_coords["wavelength"], dtype=np.float32),
+            wl_axis,
             dims=["wavelength"],
-            coords={"wavelength": self._lut_coords["wavelength"]},
+            coords={"wavelength": wl_axis},
         )
         sigma = max(
             float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))),
@@ -491,9 +832,9 @@ class ZarrLUTBackend:
         weights: xr.DataArray = bandpass
 
         for name in self._SOLAR_IRRADIANCE_NAMES:
-            if name not in self.lut:
+            if name not in source:
                 continue
-            solar = self.lut[name]
+            solar = source[name]
             if "wavelength" not in solar.dims:
                 continue
             extra_dims = [dim for dim in solar.dims if dim != "wavelength"]
@@ -527,6 +868,48 @@ class ZarrLUTBackend:
         rho1 = float(attrs.get("rho1", attrs.get("reference_reflectance_1", self._DEFAULT_SURFACE_RHO1)))
         rho2 = float(attrs.get("rho2", attrs.get("reference_reflectance_2", self._DEFAULT_SURFACE_RHO2)))
         return rho1, rho2
+
+    def _reload_lut(self) -> None:
+        """Drop cached handles and reopen LUT metadata/chunks lazily."""
+        self._lut = None
+        self._lut_coords = {}
+        self._scene_subset_logged = False
+        with self._cache_lock:
+            self._spectral_scene_key = None
+            self._spectral_scene_subset = None
+            self._spectral_band_grid_cache.clear()
+        _ = self.lut
+
+    @staticmethod
+    def _is_transient_lut_io_error(exc: Exception) -> bool:
+        """Return True for transient remote I/O errors that should be retried."""
+        probes = []
+        current: Exception | None = exc
+        for _ in range(10):
+            if current is None:
+                break
+            probes.append(current)
+            nxt = current.__cause__ if isinstance(current.__cause__, Exception) else None
+            if nxt is None and isinstance(current.__context__, Exception):
+                nxt = current.__context__
+            current = nxt
+
+        tokens = (
+            "referencenotreachable",
+            "server disconnected",
+            "serverdisconnectederror",
+            "connection reset",
+            "connection aborted",
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+        )
+        for err in probes:
+            name = type(err).__name__.lower()
+            text = str(err).lower()
+            if any(tok in name or tok in text for tok in tokens):
+                return True
+        return False
 
     def _supports_coefficient_lut(self) -> bool:
         """Check whether the loaded LUT exposes compact coefficient variables."""
@@ -664,7 +1047,7 @@ class ZarrLUTBackend:
 
     def supports_jacobian(self) -> bool:
         """Check if this backend supports Jacobian computation."""
-        return True  # Via numerical differentiation
+        return False
 
     @property
     def backend_name(self) -> str:

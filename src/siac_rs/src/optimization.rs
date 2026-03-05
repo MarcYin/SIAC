@@ -2,9 +2,13 @@
 //!
 //! Helper functions for the multi-grid L-BFGS-B solver used in aerosol retrieval.
 
-use ndarray::{Array2, ArrayView2};
-use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
+use ndarray::{Array2, Array4};
+use numpy::{
+    IntoPyArray, PyArray2, PyArray3, PyArray4, PyReadonlyArray1, PyReadonlyArray2,
+    PyReadonlyArray3, PyReadonlyArray4,
+};
 use pyo3::prelude::*;
+use pyo3::exceptions::PyValueError;
 use rayon::prelude::*;
 
 /// Remap high-resolution data to coarse grid by averaging
@@ -16,12 +20,12 @@ use rayon::prelude::*;
 /// # Returns
 /// Coarse-resolution array with averaged values
 #[pyfunction]
-fn remap_to_coarse_grid<'py>(
+pub fn remap_to_coarse_grid<'py>(
     py: Python<'py>,
     data: PyReadonlyArray2<f64>,
     coarse_rows: usize,
     coarse_cols: usize,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
+) -> PyResult<&'py PyArray2<f64>> {
     let data = data.as_array();
     let (high_rows, high_cols) = (data.shape()[0], data.shape()[1]);
 
@@ -51,7 +55,7 @@ fn remap_to_coarse_grid<'py>(
         }
     }
 
-    Ok(coarse.into_pyarray_bound(py))
+    Ok(coarse.into_pyarray(py))
 }
 
 /// Interpolate coarse grid to fine grid using bilinear interpolation
@@ -63,12 +67,12 @@ fn remap_to_coarse_grid<'py>(
 /// # Returns
 /// Fine-resolution array with interpolated values
 #[pyfunction]
-fn interpolate_to_fine_grid<'py>(
+pub fn interpolate_to_fine_grid<'py>(
     py: Python<'py>,
     coarse: PyReadonlyArray2<f64>,
     fine_rows: usize,
     fine_cols: usize,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
+) -> PyResult<&'py PyArray2<f64>> {
     let coarse = coarse.as_array();
     let (coarse_rows, coarse_cols) = (coarse.shape()[0], coarse.shape()[1]);
 
@@ -100,7 +104,7 @@ fn interpolate_to_fine_grid<'py>(
         }
     }
 
-    Ok(fine.into_pyarray_bound(py))
+    Ok(fine.into_pyarray(py))
 }
 
 /// Compute Laplacian difference matrix products for smoothness regularization
@@ -109,10 +113,10 @@ fn interpolate_to_fine_grid<'py>(
 /// difference matrix. This is used in the smoothness cost function:
 /// J_smooth = 0.5 * x^T @ (Dx^T @ Dx + Dy^T @ Dy) @ x / sigma^2
 #[pyfunction]
-fn apply_laplacian<'py>(
+pub fn apply_laplacian<'py>(
     py: Python<'py>,
     data: PyReadonlyArray2<f64>,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
+) -> PyResult<&'py PyArray2<f64>> {
     let data = data.as_array();
     let (rows, cols) = (data.shape()[0], data.shape()[1]);
 
@@ -164,7 +168,494 @@ fn apply_laplacian<'py>(
         }
     }
 
-    Ok(result.into_pyarray_bound(py))
+    Ok(result.into_pyarray(py))
+}
+
+/// Evaluate one grid-search candidate cost map from RT coefficients.
+///
+/// Computes per-pixel:
+/// J = J_obs + J_prior
+///
+/// with observation term aggregated over bands using provided spectral weights.
+#[pyfunction]
+pub fn evaluate_grid_search_candidate_cost<'py>(
+    py: Python<'py>,
+    toa: PyReadonlyArray3<f32>,
+    xap: PyReadonlyArray3<f32>,
+    xbp: PyReadonlyArray3<f32>,
+    xcp: PyReadonlyArray3<f32>,
+    boa_prior: PyReadonlyArray3<f32>,
+    boa_unc: PyReadonlyArray3<f32>,
+    band_weights: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+    aot_val: f32,
+    tcwv_val: f32,
+    aot_prior: PyReadonlyArray2<f32>,
+    tcwv_prior: PyReadonlyArray2<f32>,
+    aot_prior_unc: PyReadonlyArray2<f32>,
+    tcwv_prior_unc: PyReadonlyArray2<f32>,
+) -> PyResult<&'py PyArray2<f32>> {
+    let toa = toa.as_array();
+    let xap = xap.as_array();
+    let xbp = xbp.as_array();
+    let xcp = xcp.as_array();
+    let boa_prior = boa_prior.as_array();
+    let boa_unc = boa_unc.as_array();
+    let band_weights = band_weights.as_array();
+    let valid = valid_mask.as_array();
+    let aot_prior = aot_prior.as_array();
+    let tcwv_prior = tcwv_prior.as_array();
+    let aot_prior_unc = aot_prior_unc.as_array();
+    let tcwv_prior_unc = tcwv_prior_unc.as_array();
+
+    let toa_shape = toa.shape();
+    if toa_shape.len() != 3 {
+        return Err(PyValueError::new_err("toa must be 3D (band, y, x)"));
+    }
+    let (n_band, ny, nx) = (toa_shape[0], toa_shape[1], toa_shape[2]);
+
+    for (name, arr) in [
+        ("xap", xap.shape()),
+        ("xbp", xbp.shape()),
+        ("xcp", xcp.shape()),
+        ("boa_prior", boa_prior.shape()),
+        ("boa_unc", boa_unc.shape()),
+    ] {
+        if arr != [n_band, ny, nx] {
+            return Err(PyValueError::new_err(format!(
+                "{name} must have shape (band, y, x) matching toa"
+            )));
+        }
+    }
+    if band_weights.len() != n_band {
+        return Err(PyValueError::new_err("band_weights length must match toa.shape[0]"));
+    }
+    if valid.shape() != [ny, nx]
+        || aot_prior.shape() != [ny, nx]
+        || tcwv_prior.shape() != [ny, nx]
+        || aot_prior_unc.shape() != [ny, nx]
+        || tcwv_prior_unc.shape() != [ny, nx]
+    {
+        return Err(PyValueError::new_err("2D inputs must all match shape (y, x)"));
+    }
+
+    let mut cost = Array2::<f32>::zeros((ny, nx));
+
+    for ib in 0..n_band {
+        let band_w = band_weights[ib] as f64;
+        for iy in 0..ny {
+            for ix in 0..nx {
+                if !valid[[iy, ix]] {
+                    continue;
+                }
+
+                let unc = boa_unc[[ib, iy, ix]] as f64;
+                if !unc.is_finite() || unc <= 0.0 {
+                    continue;
+                }
+
+                let toa_v = toa[[ib, iy, ix]] as f64;
+                let xap_v = xap[[ib, iy, ix]] as f64;
+                let xbp_v = xbp[[ib, iy, ix]] as f64;
+                let xcp_v = xcp[[ib, iy, ix]] as f64;
+                let prior_v = boa_prior[[ib, iy, ix]] as f64;
+                if !toa_v.is_finite()
+                    || !xap_v.is_finite()
+                    || !xbp_v.is_finite()
+                    || !xcp_v.is_finite()
+                    || !prior_v.is_finite()
+                {
+                    continue;
+                }
+
+                let y = xap_v * toa_v - xbp_v;
+                let denom = 1.0 + xcp_v * y;
+                if !denom.is_finite() || denom.abs() < 1e-12 {
+                    continue;
+                }
+
+                let boa_model = y / denom;
+                let diff = boa_model - prior_v;
+                if !diff.is_finite() {
+                    continue;
+                }
+
+                let w = band_w / (unc * unc).max(1e-12);
+                if !w.is_finite() {
+                    continue;
+                }
+                let add = 0.5 * w * diff * diff;
+                if add.is_finite() {
+                    cost[[iy, ix]] += add as f32;
+                }
+            }
+        }
+    }
+
+    let aot_val = aot_val as f64;
+    let tcwv_val = tcwv_val as f64;
+    for iy in 0..ny {
+        for ix in 0..nx {
+            if !valid[[iy, ix]] {
+                continue;
+            }
+
+            let aot_p = aot_prior[[iy, ix]] as f64;
+            let tcwv_p = tcwv_prior[[iy, ix]] as f64;
+            let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
+            let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
+            if !aot_p.is_finite()
+                || !tcwv_p.is_finite()
+                || !aot_u.is_finite()
+                || !tcwv_u.is_finite()
+            {
+                continue;
+            }
+
+            let prior = 0.5
+                * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
+                    + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p)) / (tcwv_u * tcwv_u).max(1e-12));
+            if prior.is_finite() {
+                cost[[iy, ix]] += prior as f32;
+            }
+        }
+    }
+
+    Ok(cost.into_pyarray(py))
+}
+
+/// Evaluate full AOT/TCWV candidate-cost cube with Rust-controlled loops.
+///
+/// The `coeff_provider(aot, tcwv)` callback must return a tuple of
+/// `(xap, xbp, xcp)` arrays, each shaped `(band, y, x)` and `float32`.
+#[pyfunction]
+pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
+    py: Python<'py>,
+    coeff_provider: PyObject,
+    aot_axis: PyReadonlyArray1<f32>,
+    tcwv_axis: PyReadonlyArray1<f32>,
+    toa: PyReadonlyArray3<f32>,
+    boa_prior: PyReadonlyArray3<f32>,
+    boa_unc: PyReadonlyArray3<f32>,
+    band_weights: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+    aot_prior: PyReadonlyArray2<f32>,
+    tcwv_prior: PyReadonlyArray2<f32>,
+    aot_prior_unc: PyReadonlyArray2<f32>,
+    tcwv_prior_unc: PyReadonlyArray2<f32>,
+) -> PyResult<&'py PyArray4<f32>> {
+    let aot_axis = aot_axis.as_array();
+    let tcwv_axis = tcwv_axis.as_array();
+    let toa = toa.as_array();
+    let boa_prior = boa_prior.as_array();
+    let boa_unc = boa_unc.as_array();
+    let band_weights = band_weights.as_array();
+    let valid = valid_mask.as_array();
+    let aot_prior = aot_prior.as_array();
+    let tcwv_prior = tcwv_prior.as_array();
+    let aot_prior_unc = aot_prior_unc.as_array();
+    let tcwv_prior_unc = tcwv_prior_unc.as_array();
+
+    if aot_axis.is_empty() || tcwv_axis.is_empty() {
+        return Err(PyValueError::new_err("aot_axis and tcwv_axis must be non-empty"));
+    }
+
+    let toa_shape = toa.shape();
+    if toa_shape.len() != 3 {
+        return Err(PyValueError::new_err("toa must be 3D (band, y, x)"));
+    }
+    let (n_band, ny, nx) = (toa_shape[0], toa_shape[1], toa_shape[2]);
+
+    for (name, arr) in [
+        ("boa_prior", boa_prior.shape()),
+        ("boa_unc", boa_unc.shape()),
+    ] {
+        if arr != [n_band, ny, nx] {
+            return Err(PyValueError::new_err(format!(
+                "{name} must have shape (band, y, x) matching toa"
+            )));
+        }
+    }
+    if band_weights.len() != n_band {
+        return Err(PyValueError::new_err("band_weights length must match toa.shape[0]"));
+    }
+    if valid.shape() != [ny, nx]
+        || aot_prior.shape() != [ny, nx]
+        || tcwv_prior.shape() != [ny, nx]
+        || aot_prior_unc.shape() != [ny, nx]
+        || tcwv_prior_unc.shape() != [ny, nx]
+    {
+        return Err(PyValueError::new_err("2D inputs must all match shape (y, x)"));
+    }
+
+    let mut costs = Array4::<f32>::zeros((aot_axis.len(), tcwv_axis.len(), ny, nx));
+
+    for (ia, aot_val) in aot_axis.iter().enumerate() {
+        for (it, tcwv_val) in tcwv_axis.iter().enumerate() {
+            let returned = coeff_provider.call1(py, (*aot_val, *tcwv_val))?;
+            let (xap_obj, xbp_obj, xcp_obj): (&PyArray3<f32>, &PyArray3<f32>, &PyArray3<f32>) =
+                returned.extract(py)?;
+
+            let xap_ro = xap_obj.readonly();
+            let xbp_ro = xbp_obj.readonly();
+            let xcp_ro = xcp_obj.readonly();
+            let xap = xap_ro.as_array();
+            let xbp = xbp_ro.as_array();
+            let xcp = xcp_ro.as_array();
+
+            for (name, arr) in [
+                ("xap", xap.shape()),
+                ("xbp", xbp.shape()),
+                ("xcp", xcp.shape()),
+            ] {
+                if arr != [n_band, ny, nx] {
+                    return Err(PyValueError::new_err(format!(
+                        "coeff_provider returned {name} with invalid shape; expected (band, y, x) matching toa"
+                    )));
+                }
+            }
+
+            for ib in 0..n_band {
+                let band_w = band_weights[ib] as f64;
+                for iy in 0..ny {
+                    for ix in 0..nx {
+                        if !valid[[iy, ix]] {
+                            continue;
+                        }
+
+                        let unc = boa_unc[[ib, iy, ix]] as f64;
+                        if !unc.is_finite() || unc <= 0.0 {
+                            continue;
+                        }
+
+                        let toa_v = toa[[ib, iy, ix]] as f64;
+                        let xap_v = xap[[ib, iy, ix]] as f64;
+                        let xbp_v = xbp[[ib, iy, ix]] as f64;
+                        let xcp_v = xcp[[ib, iy, ix]] as f64;
+                        let prior_v = boa_prior[[ib, iy, ix]] as f64;
+                        if !toa_v.is_finite()
+                            || !xap_v.is_finite()
+                            || !xbp_v.is_finite()
+                            || !xcp_v.is_finite()
+                            || !prior_v.is_finite()
+                        {
+                            continue;
+                        }
+
+                        let y = xap_v * toa_v - xbp_v;
+                        let denom = 1.0 + xcp_v * y;
+                        if !denom.is_finite() || denom.abs() < 1e-12 {
+                            continue;
+                        }
+
+                        let boa_model = y / denom;
+                        let diff = boa_model - prior_v;
+                        if !diff.is_finite() {
+                            continue;
+                        }
+
+                        let w = band_w / (unc * unc).max(1e-12);
+                        if !w.is_finite() {
+                            continue;
+                        }
+                        let add = 0.5 * w * diff * diff;
+                        if add.is_finite() {
+                            costs[[ia, it, iy, ix]] += add as f32;
+                        }
+                    }
+                }
+            }
+
+            let aot_val = *aot_val as f64;
+            let tcwv_val = *tcwv_val as f64;
+            for iy in 0..ny {
+                for ix in 0..nx {
+                    if !valid[[iy, ix]] {
+                        continue;
+                    }
+
+                    let aot_p = aot_prior[[iy, ix]] as f64;
+                    let tcwv_p = tcwv_prior[[iy, ix]] as f64;
+                    let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
+                    let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
+                    if !aot_p.is_finite()
+                        || !tcwv_p.is_finite()
+                        || !aot_u.is_finite()
+                        || !tcwv_u.is_finite()
+                    {
+                        continue;
+                    }
+
+                    let prior = 0.5
+                        * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
+                            + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p)) / (tcwv_u * tcwv_u).max(1e-12));
+                    if prior.is_finite() {
+                        costs[[ia, it, iy, ix]] += prior as f32;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(costs.into_pyarray(py))
+}
+
+/// Refine per-pixel AOT/TCWV estimates from a discrete cost cube.
+///
+/// The routine finds the minimum over (aot, tcwv) candidates for each pixel,
+/// then performs a local quadratic Newton step using 3x3 finite differences
+/// around the minimum (when interior). Uncertainty is approximated from the
+/// inverse Hessian diagonal.
+#[pyfunction]
+pub fn quadratic_refine_grid_search<'py>(
+    py: Python<'py>,
+    costs: PyReadonlyArray4<f32>,
+    aot_axis: PyReadonlyArray1<f32>,
+    tcwv_axis: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+) -> PyResult<(
+    &'py PyArray2<f32>,
+    &'py PyArray2<f32>,
+    &'py PyArray2<f32>,
+    &'py PyArray2<f32>,
+)> {
+    let costs = costs.as_array();
+    let aot_axis = aot_axis.as_array();
+    let tcwv_axis = tcwv_axis.as_array();
+    let valid = valid_mask.as_array();
+
+    let shape = costs.shape();
+    let (n_aot, n_tcwv, ny, nx) = (shape[0], shape[1], shape[2], shape[3]);
+
+    if aot_axis.len() != n_aot {
+        return Err(PyValueError::new_err("aot_axis length must match costs.shape[0]"));
+    }
+    if tcwv_axis.len() != n_tcwv {
+        return Err(PyValueError::new_err("tcwv_axis length must match costs.shape[1]"));
+    }
+    if valid.shape() != [ny, nx] {
+        return Err(PyValueError::new_err("valid_mask shape must match costs.shape[2:4]"));
+    }
+
+    let mut aot_best = Array2::<f32>::zeros((ny, nx));
+    let mut tcwv_best = Array2::<f32>::zeros((ny, nx));
+    let mut aot_unc = Array2::<f32>::zeros((ny, nx));
+    let mut tcwv_unc = Array2::<f32>::zeros((ny, nx));
+
+    let da = if n_aot > 1 {
+        (aot_axis[1] - aot_axis[0]).abs().max(1e-6)
+    } else {
+        0.05
+    };
+    let dt = if n_tcwv > 1 {
+        (tcwv_axis[1] - tcwv_axis[0]).abs().max(1e-6)
+    } else {
+        0.2
+    };
+    aot_unc.fill(da);
+    tcwv_unc.fill(dt);
+
+    for iy in 0..ny {
+        for ix in 0..nx {
+            if !valid[[iy, ix]] {
+                continue;
+            }
+
+            // Discrete minimum.
+            let mut best_ia = 0usize;
+            let mut best_it = 0usize;
+            let mut best_cost = f32::INFINITY;
+            for ia in 0..n_aot {
+                for it in 0..n_tcwv {
+                    let c = costs[[ia, it, iy, ix]];
+                    if c.is_finite() && c < best_cost {
+                        best_cost = c;
+                        best_ia = ia;
+                        best_it = it;
+                    }
+                }
+            }
+
+            aot_best[[iy, ix]] = aot_axis[best_ia];
+            tcwv_best[[iy, ix]] = tcwv_axis[best_it];
+
+            // Need interior point for finite-difference Hessian.
+            if best_ia == 0 || best_ia + 1 >= n_aot || best_it == 0 || best_it + 1 >= n_tcwv {
+                continue;
+            }
+
+            let ia = best_ia;
+            let it = best_it;
+
+            let f00 = costs[[ia, it, iy, ix]] as f64;
+            let fxm = costs[[ia - 1, it, iy, ix]] as f64;
+            let fxp = costs[[ia + 1, it, iy, ix]] as f64;
+            let fym = costs[[ia, it - 1, iy, ix]] as f64;
+            let fyp = costs[[ia, it + 1, iy, ix]] as f64;
+            let fmm = costs[[ia - 1, it - 1, iy, ix]] as f64;
+            let fmp = costs[[ia - 1, it + 1, iy, ix]] as f64;
+            let fpm = costs[[ia + 1, it - 1, iy, ix]] as f64;
+            let fpp = costs[[ia + 1, it + 1, iy, ix]] as f64;
+
+            if !f00.is_finite()
+                || !fxm.is_finite()
+                || !fxp.is_finite()
+                || !fym.is_finite()
+                || !fyp.is_finite()
+                || !fmm.is_finite()
+                || !fmp.is_finite()
+                || !fpm.is_finite()
+                || !fpp.is_finite()
+            {
+                continue;
+            }
+
+            let da64 = da as f64;
+            let dt64 = dt as f64;
+            let dfdx = (fxp - fxm) / (2.0 * da64);
+            let dfdy = (fyp - fym) / (2.0 * dt64);
+            let d2fdx2 = (fxp - 2.0 * f00 + fxm) / (da64 * da64);
+            let d2fdy2 = (fyp - 2.0 * f00 + fym) / (dt64 * dt64);
+            let d2fdxdy = (fpp - fpm - fmp + fmm) / (4.0 * da64 * dt64);
+
+            let a = d2fdx2;
+            let b = d2fdxdy;
+            let c = d2fdy2;
+            let det = a * c - b * b;
+            if !(a > 1e-12 && c > 1e-12 && det > 1e-12) {
+                continue;
+            }
+
+            // Newton update x* = x0 - H^{-1} g for [aot, tcwv].
+            let delta_a = (c * dfdx - b * dfdy) / det;
+            let delta_t = (-b * dfdx + a * dfdy) / det;
+            let mut a_fit = (aot_axis[ia] as f64) - delta_a;
+            let mut t_fit = (tcwv_axis[it] as f64) - delta_t;
+
+            let a_lo = aot_axis[ia - 1] as f64;
+            let a_hi = aot_axis[ia + 1] as f64;
+            let t_lo = tcwv_axis[it - 1] as f64;
+            let t_hi = tcwv_axis[it + 1] as f64;
+            a_fit = a_fit.clamp(a_lo.min(a_hi), a_lo.max(a_hi));
+            t_fit = t_fit.clamp(t_lo.min(t_hi), t_lo.max(t_hi));
+
+            aot_best[[iy, ix]] = a_fit as f32;
+            tcwv_best[[iy, ix]] = t_fit as f32;
+
+            // Diagonal of inverse Hessian as variance proxy.
+            let var_a = (c / det).max(1e-12);
+            let var_t = (a / det).max(1e-12);
+            aot_unc[[iy, ix]] = var_a.sqrt() as f32;
+            tcwv_unc[[iy, ix]] = var_t.sqrt() as f32;
+        }
+    }
+
+    Ok((
+        aot_best.into_pyarray(py),
+        tcwv_best.into_pyarray(py),
+        aot_unc.into_pyarray(py),
+        tcwv_unc.into_pyarray(py),
+    ))
 }
 
 #[cfg(test)]

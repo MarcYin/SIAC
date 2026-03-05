@@ -51,7 +51,7 @@ impl RossThickLiSparse {
         vza: PyReadonlyArray2<f64>,
         sza: PyReadonlyArray2<f64>,
         raa: PyReadonlyArray2<f64>,
-    ) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    ) -> PyResult<(&'py PyArray2<f64>, &'py PyArray2<f64>)> {
         let vza = vza.as_array();
         let sza = sza.as_array();
         let raa = raa.as_array();
@@ -72,7 +72,7 @@ impl RossThickLiSparse {
                 *l = li_val;
             });
 
-        Ok((ross.into_pyarray_bound(py), li.into_pyarray_bound(py)))
+        Ok((ross.into_pyarray(py), li.into_pyarray(py)))
     }
 
     /// Compute kernels for 1D arrays (flattened pixels)
@@ -82,7 +82,7 @@ impl RossThickLiSparse {
         vza: PyReadonlyArray2<f64>,
         sza: PyReadonlyArray2<f64>,
         raa: PyReadonlyArray2<f64>,
-    ) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    ) -> PyResult<(&'py PyArray2<f64>, &'py PyArray2<f64>)> {
         self.compute(py, vza, sza, raa)
     }
 }

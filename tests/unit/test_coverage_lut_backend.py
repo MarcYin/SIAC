@@ -180,12 +180,12 @@ class TestZarrLUTBackend:
         calls: list[dict[str, object]] = []
         dataset = xr.Dataset(coords={"sza": [30.0], "vza": [10.0], "aot": [0.2]})
 
-        def _fake_open_zarr(*, store, consolidated, zarr_version=None):  # noqa: ANN001
+        def _fake_open_zarr(*, store, consolidated, zarr_format=None):  # noqa: ANN001
             calls.append(
                 {
                     "store": store,
                     "consolidated": consolidated,
-                    "zarr_version": zarr_version,
+                    "zarr_format": zarr_format,
                 }
             )
             if len(calls) < 3:
@@ -208,17 +208,17 @@ class TestZarrLUTBackend:
             {
                 "store": {"zarr.json": b"{}"},
                 "consolidated": False,
-                "zarr_version": 3,
+                "zarr_format": 3,
             },
             {
                 "store": {"zarr.json": b"{}"},
                 "consolidated": True,
-                "zarr_version": None,
+                "zarr_format": None,
             },
             {
                 "store": {"zarr.json": b"{}"},
                 "consolidated": False,
-                "zarr_version": None,
+                "zarr_format": None,
             },
         ]
         assert np.allclose(backend._lut_coords["sza"], [30.0])
@@ -241,7 +241,7 @@ class TestZarrLUTBackend:
         assert coeffs_lin.xap.shape == (3, 3)
         assert float(coeffs_lin.xap.mean()) > 0.0
         assert b_lin.backend_name == "lut"
-        assert b_lin.supports_jacobian()
+        assert not b_lin.supports_jacobian()
         assert b_lin.is_available_for_sensor("ANY", "ANY")
         assert b_lin.get_available_wavelengths().size == 2
 
@@ -406,6 +406,40 @@ class TestZarrLUTBackend:
 
         assert np.isfinite(coeffs.xap.values).all()
         np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
+
+    def test_spectral_scene_preload_reuses_subset_and_band_grids(self, tmp_path: Path, monkeypatch):
+        lut_path, _ = _write_small_spectral_lut(tmp_path / "lut_spectral_preload.zarr")
+        geom = _geometry((2, 2))
+        atmo = _atmo((2, 2))
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+        calls = {"scene_subset": 0, "band_subset": 0}
+
+        orig_scene_subset = backend._subset_spectral_lut_for_scene
+        orig_band_subset = backend._subset_wavelength_for_band
+
+        def _count_scene_subset(*args, **kwargs):  # noqa: ANN002, ANN003
+            calls["scene_subset"] += 1
+            return orig_scene_subset(*args, **kwargs)
+
+        def _count_band_subset(*args, **kwargs):  # noqa: ANN002, ANN003
+            calls["band_subset"] += 1
+            return orig_band_subset(*args, **kwargs)
+
+        monkeypatch.setattr(backend, "_subset_spectral_lut_for_scene", _count_scene_subset)
+        monkeypatch.setattr(backend, "_subset_wavelength_for_band", _count_band_subset)
+
+        backend.preload_scene_subset(geom, atmo, [band])
+        backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+        atmo_2 = atmo.with_updated_aot_tcwv(
+            aot=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"]),
+        )
+        backend.compute_coefficients(geom, atmo_2, band, compute_jacobian=False)
+
+        assert calls["scene_subset"] == 1
+        assert calls["band_subset"] == 1
 
     def test_unsupported_lut_representation_raises(self):
         backend = ZarrLUTBackend("unused.zarr")

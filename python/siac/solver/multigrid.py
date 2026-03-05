@@ -24,8 +24,14 @@ from typing import Any
 
 import numpy as np
 import xarray as xr
-from scipy import ndimage, optimize
+from scipy import optimize
 
+from siac._rust import (
+    evaluate_grid_search_cost_cube_with_provider,
+    interpolate_to_fine_grid,
+    quadratic_refine_grid_search,
+    remap_to_coarse_grid,
+)
 from siac.core.protocols import RTModelBackend
 from siac.core.types import (
     AtmosphericState,
@@ -36,15 +42,6 @@ from siac.core.types import (
 from siac.solver.cost import CostFunction, CostFunctionConfig
 
 logger = logging.getLogger(__name__)
-
-# Try to import Rust optimization functions
-try:
-    from siac._rust import interpolate_to_fine_grid, remap_to_coarse_grid
-    _HAS_RUST_OPT = True
-    logger.debug("Using Rust optimization functions")
-except ImportError:
-    _HAS_RUST_OPT = False
-    logger.debug("Rust optimization not available, using scipy fallback")
 
 
 @dataclass
@@ -75,6 +72,11 @@ class MultiGridConfig:
 
     # Convergence threshold for early stopping
     rel_tol: float = 1e-4
+
+    # Alternative solver path when RT Jacobians are unavailable.
+    use_grid_search_when_no_jacobian: bool = True
+    grid_search_aot_points: int = 11
+    grid_search_tcwv_points: int = 11
 
 
 @dataclass
@@ -149,20 +151,55 @@ class MultiGridSolver:
 
         # Create valid pixel mask (exclude clouds and invalid data)
         mask = self._create_mask(cloud_mask, toa, surface_prior)
-        n_valid = mask.sum()
+        n_valid = int(np.count_nonzero(mask.values))
         logger.info(f"Valid pixels: {n_valid} ({100*n_valid/mask.size:.1f}%)")
 
-        # Compute grid levels
-        grid_shapes = self._compute_grid_levels(full_shape)
+        if n_valid == 0:
+            logger.warning(
+                "No valid pixels after cloud/quality masking; "
+                "returning atmospheric prior as solver output."
+            )
+            template = cloud_mask
+            return SolverResult(
+                aot=xr.DataArray(atmo_prior.aot.values, dims=template.dims, coords=template.coords),
+                tcwv=xr.DataArray(atmo_prior.tcwv.values, dims=template.dims, coords=template.coords),
+                aot_unc=xr.DataArray(atmo_prior.aot_unc.values, dims=template.dims, coords=template.coords),
+                tcwv_unc=xr.DataArray(atmo_prior.tcwv_unc.values, dims=template.dims, coords=template.coords),
+                n_iterations=0,
+                final_cost=float("nan"),
+                success=False,
+                message="No valid pixels after cloud/quality masking",
+                level_history=[],
+            )
+
+        has_rt_jacobian = self._rt_model_supports_jacobian(rt_model)
+        use_grid_search = (
+            self.config.use_grid_search_when_no_jacobian and not has_rt_jacobian
+        )
+        if use_grid_search:
+            logger.info(
+                "RT backend does not provide Jacobians; using single-level "
+                "grid-search + quadratic-fit solver at full resolution."
+            )
+            grid_shapes = [full_shape]
+        else:
+            grid_shapes = self._compute_grid_levels(full_shape)
+
         logger.info(f"Grid levels: {grid_shapes}")
 
         # Initialize solution with prior
         aot = atmo_prior.aot.values.copy()
         tcwv = atmo_prior.tcwv.values.copy()
+        aot_unc_final = np.maximum(atmo_prior.aot_unc.values.copy(), 0.02)
+        tcwv_unc_final = np.maximum(atmo_prior.tcwv_unc.values.copy(), 0.1)
 
         # Track history
         level_history = []
         total_iterations = 0
+        final_cost = float("nan")
+        final_success = True
+        final_message = "ok"
+        cost_func_last: CostFunction | None = None
 
         # Multi-grid solve from coarse to fine
         for level, shape in enumerate(grid_shapes):
@@ -189,46 +226,85 @@ class MultiGridSolver:
             aot_level = self._resample_field(aot, shape)
             tcwv_level = self._resample_field(tcwv, shape)
 
-            # Create cost function
-            cost_func = CostFunction(
-                toa=toa_level,
-                surface_prior=surface_prior_level,
-                geometry=geometry_level,
-                atmo_prior=atmo_prior_level,
-                rt_model=rt_model,
-                bands=bands,
-                mask=mask_level,
-                config=cost_config,
-            )
+            if use_grid_search:
+                (
+                    aot_solved,
+                    tcwv_solved,
+                    aot_unc_level,
+                    tcwv_unc_level,
+                    level_diag,
+                ) = self._solve_level_grid_search(
+                    toa=toa_level,
+                    surface_prior=surface_prior_level,
+                    geometry=geometry_level,
+                    atmo_prior=atmo_prior_level,
+                    rt_model=rt_model,
+                    mask=mask_level,
+                    bands=bands,
+                    cost_config=cost_config,
+                )
+                level_iterations = int(level_diag["evaluations"])
+                level_cost = float(level_diag["cost"])
+                level_success = True
+                level_message = "grid-search"
+            else:
+                # Create cost function
+                cost_func = CostFunction(
+                    toa=toa_level,
+                    surface_prior=surface_prior_level,
+                    geometry=geometry_level,
+                    atmo_prior=atmo_prior_level,
+                    rt_model=rt_model,
+                    bands=bands,
+                    mask=mask_level,
+                    config=cost_config,
+                )
+                cost_func_last = cost_func
 
-            # Optimize at this level
-            aot_solved, tcwv_solved, result = self._optimize_level(
-                cost_func, aot_level, tcwv_level, level
-            )
+                # Optimize at this level
+                aot_solved, tcwv_solved, result = self._optimize_level(
+                    cost_func, aot_level, tcwv_level, level
+                )
+                level_iterations = int(result.nit)
+                level_cost = float(result.fun)
+                level_success = bool(result.success)
+                level_message = str(result.message)
 
             # Update solution
             aot = self._resample_field(aot_solved, full_shape)
             tcwv = self._resample_field(tcwv_solved, full_shape)
+            if use_grid_search:
+                aot_unc_final = self._resample_field(aot_unc_level, full_shape)
+                tcwv_unc_final = self._resample_field(tcwv_unc_level, full_shape)
 
             # Record history
             level_history.append({
                 "level": level,
                 "shape": shape,
-                "iterations": result.nit,
-                "cost": result.fun,
-                "success": result.success,
+                "iterations": level_iterations,
+                "cost": level_cost,
+                "success": level_success,
+                "method": "grid_search" if use_grid_search else "lbfgsb",
             })
 
-            total_iterations += result.nit
+            total_iterations += level_iterations
             logger.info(
-                f"Level {level} complete: iter={result.nit}, "
-                f"cost={result.fun:.2e}, success={result.success}"
+                f"Level {level} complete: iter={level_iterations}, "
+                f"cost={level_cost:.2e}, success={level_success}"
             )
+            final_cost = level_cost
+            final_success = level_success
+            final_message = level_message
 
         # Compute uncertainties
-        aot_unc, tcwv_unc = self._estimate_uncertainties(
-            aot, tcwv, atmo_prior, cost_func
-        )
+        if use_grid_search:
+            aot_unc, tcwv_unc = aot_unc_final, tcwv_unc_final
+        else:
+            if cost_func_last is None:
+                raise RuntimeError("Internal solver error: missing cost function for uncertainty estimation")
+            aot_unc, tcwv_unc = self._estimate_uncertainties(
+                aot, tcwv, atmo_prior, cost_func_last
+            )
 
         # Create result
         template = cloud_mask
@@ -238,9 +314,9 @@ class MultiGridSolver:
             aot_unc=xr.DataArray(aot_unc, dims=template.dims, coords=template.coords),
             tcwv_unc=xr.DataArray(tcwv_unc, dims=template.dims, coords=template.coords),
             n_iterations=total_iterations,
-            final_cost=level_history[-1]["cost"],
-            success=level_history[-1]["success"],
-            message=str(result.message),
+            final_cost=final_cost,
+            success=final_success,
+            message=final_message,
             level_history=level_history,
         )
 
@@ -249,6 +325,167 @@ class MultiGridSolver:
         )
 
         return result
+
+    @staticmethod
+    def _rt_model_supports_jacobian(rt_model: Any) -> bool:
+        """Return whether backend can provide per-pixel RT Jacobians."""
+        fn = getattr(rt_model, "supports_jacobian", None)
+        if callable(fn):
+            try:
+                return bool(fn())
+            except Exception:
+                return False
+        return False
+
+    @staticmethod
+    def _compute_band_weights(bands: list[SensorBand], power: float) -> np.ndarray:
+        """Compute normalized spectral weights used in observation cost."""
+        wavelengths = np.array([b.center_wavelength for b in bands], dtype=np.float32)
+        wl_um = np.maximum(wavelengths / 1000.0, 1e-6)
+        weights = wl_um ** power
+        total = float(np.sum(weights))
+        if total <= 0:
+            return np.full(len(bands), 1.0 / max(len(bands), 1), dtype=np.float32)
+        return (weights / total).astype(np.float32)
+
+    def _solve_level_grid_search(
+        self,
+        *,
+        toa: xr.DataArray,
+        surface_prior: SurfacePrior,
+        geometry: GeometryAngles,
+        atmo_prior: AtmosphericState,
+        rt_model: Any,
+        mask: xr.DataArray,
+        bands: list[SensorBand],
+        cost_config: CostFunctionConfig,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, float]]:
+        """
+        Solve one grid level via exhaustive AOT/TCWV candidates + local quadratic fit.
+
+        This path avoids Jacobian-based optimization and returns per-pixel
+        uncertainty from the fitted local Hessian.
+        """
+        shape = self._get_shape(mask)
+        valid_mask = mask.values.astype(bool)
+
+        n_aot = max(3, int(self.config.grid_search_aot_points))
+        n_tcwv = max(3, int(self.config.grid_search_tcwv_points))
+        aot_axis = np.linspace(
+            self.config.aot_bounds[0], self.config.aot_bounds[1], n_aot, dtype=np.float32
+        )
+        tcwv_axis = np.linspace(
+            self.config.tcwv_bounds[0], self.config.tcwv_bounds[1], n_tcwv, dtype=np.float32
+        )
+        band_weights = self._compute_band_weights(
+            bands, power=cost_config.band_weight_power
+        )
+
+        # Priors / uncertainties (with floors) for per-pixel prior term.
+        aot_prior = atmo_prior.aot.values.astype(np.float32)
+        tcwv_prior = atmo_prior.tcwv.values.astype(np.float32)
+        aot_prior_unc = np.maximum(atmo_prior.aot_unc.values.astype(np.float32), cost_config.min_aot_unc)
+        tcwv_prior_unc = np.maximum(atmo_prior.tcwv_unc.values.astype(np.float32), cost_config.min_tcwv_unc)
+
+        n_bands = len(bands)
+        toa_values = toa.values.astype(np.float32)
+        if toa_values.ndim == 2:
+            toa_values = toa_values[np.newaxis, ...]
+        if toa_values.shape != (n_bands, *shape):
+            raise ValueError(
+                f"TOA shape {toa_values.shape} incompatible with {n_bands} bands and grid {shape}"
+            )
+        toa_values = np.ascontiguousarray(toa_values, dtype=np.float32)
+
+        boa_prior = surface_prior.boa.values.astype(np.float32)
+        if boa_prior.ndim == 2:
+            boa_prior = np.broadcast_to(boa_prior, (n_bands, *shape))
+        if boa_prior.ndim != 3 or boa_prior.shape[-2:] != shape:
+            raise ValueError(
+                f"BOA prior shape {boa_prior.shape} incompatible with {n_bands} bands and grid {shape}"
+            )
+        if boa_prior.shape[0] < n_bands:
+            raise ValueError(
+                f"BOA prior has {boa_prior.shape[0]} bands, needs at least {n_bands}"
+            )
+        if boa_prior.shape[0] > n_bands:
+            boa_prior = boa_prior[:n_bands]
+        boa_prior = np.ascontiguousarray(boa_prior, dtype=np.float32)
+
+        boa_unc = np.maximum(surface_prior.boa_unc.values.astype(np.float32), cost_config.min_boa_unc)
+        if boa_unc.ndim == 2:
+            boa_unc = np.broadcast_to(boa_unc, (n_bands, *shape))
+        if boa_unc.ndim != 3 or boa_unc.shape[-2:] != shape:
+            raise ValueError(
+                f"BOA uncertainty shape {boa_unc.shape} incompatible with {n_bands} bands and grid {shape}"
+            )
+        if boa_unc.shape[0] < n_bands:
+            raise ValueError(
+                f"BOA uncertainty has {boa_unc.shape[0]} bands, needs at least {n_bands}"
+            )
+        if boa_unc.shape[0] > n_bands:
+            boa_unc = boa_unc[:n_bands]
+        boa_unc = np.ascontiguousarray(boa_unc, dtype=np.float32)
+
+        xap_stack = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
+        xbp_stack = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
+        xcp_stack = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
+
+        def _candidate_coeff_provider(
+            aot_val: float, tcwv_val: float
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            aot_field = xr.full_like(atmo_prior.aot, fill_value=float(aot_val), dtype=np.float32)
+            tcwv_field = xr.full_like(atmo_prior.tcwv, fill_value=float(tcwv_val), dtype=np.float32)
+            atmo_state = atmo_prior.with_updated_aot_tcwv(aot=aot_field, tcwv=tcwv_field)
+
+            for ib, band in enumerate(bands):
+                coeffs = rt_model.compute_coefficients(
+                    geometry, atmo_state, band, compute_jacobian=False
+                )
+                xap_stack[ib] = np.asarray(coeffs.xap.values, dtype=np.float32)
+                xbp_stack[ib] = np.asarray(coeffs.xbp.values, dtype=np.float32)
+                xcp_stack[ib] = np.asarray(coeffs.xcp.values, dtype=np.float32)
+            return xap_stack, xbp_stack, xcp_stack
+
+        costs = np.asarray(
+            evaluate_grid_search_cost_cube_with_provider(
+                _candidate_coeff_provider,
+                aot_axis.astype(np.float32, copy=False),
+                tcwv_axis.astype(np.float32, copy=False),
+                toa_values,
+                boa_prior,
+                boa_unc,
+                band_weights,
+                valid_mask.astype(bool, copy=False),
+                aot_prior,
+                tcwv_prior,
+                aot_prior_unc,
+                tcwv_prior_unc,
+            ),
+            dtype=np.float32,
+        )
+
+        aot_best, tcwv_best, aot_unc, tcwv_unc = quadratic_refine_grid_search(
+            costs.astype(np.float32, copy=False),
+            aot_axis.astype(np.float32, copy=False),
+            tcwv_axis.astype(np.float32, copy=False),
+            valid_mask.astype(bool, copy=False),
+        )
+        aot_best = np.asarray(aot_best, dtype=np.float32)
+        tcwv_best = np.asarray(tcwv_best, dtype=np.float32)
+        aot_unc = np.asarray(aot_unc, dtype=np.float32)
+        tcwv_unc = np.asarray(tcwv_unc, dtype=np.float32)
+
+        flat = costs.reshape(n_aot * n_tcwv, -1)
+        best_flat = np.argmin(flat, axis=0)
+        mean_cost = float(np.mean(flat[best_flat, np.arange(flat.shape[1])]))
+        return (
+            aot_best.astype(np.float32),
+            tcwv_best.astype(np.float32),
+            aot_unc.astype(np.float32),
+            tcwv_unc.astype(np.float32),
+            {"cost": mean_cost, "evaluations": float(n_aot * n_tcwv)},
+        )
 
     def _get_shape(self, arr: xr.DataArray) -> tuple[int, int]:
         """Get (ny, nx) shape from DataArray."""
@@ -274,7 +511,10 @@ class MultiGridSolver:
 
         # Valid surface prior
         if surface_prior.mask is not None:
-            valid = valid & surface_prior.mask.values
+            surface_mask = surface_prior.mask.values
+            if surface_mask.ndim == 3:
+                surface_mask = np.all(surface_mask, axis=0)
+            valid = valid & surface_mask
 
         return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
 
@@ -308,19 +548,10 @@ class MultiGridSolver:
         if field.shape == target_shape:
             return field
 
-        if _HAS_RUST_OPT:
-            data = np.ascontiguousarray(field, dtype=np.float64)
-            if target_shape[0] < field.shape[0]:
-                return np.asarray(remap_to_coarse_grid(data, target_shape[0], target_shape[1]))
-            else:
-                return np.asarray(interpolate_to_fine_grid(data, target_shape[0], target_shape[1]))
-
-        # Fallback: scipy zoom
-        zoom_factors = (
-            target_shape[0] / field.shape[0],
-            target_shape[1] / field.shape[1],
-        )
-        return ndimage.zoom(field, zoom_factors, order=1)
+        data = np.ascontiguousarray(field, dtype=np.float64)
+        if target_shape[0] < field.shape[0]:
+            return np.asarray(remap_to_coarse_grid(data, target_shape[0], target_shape[1]))
+        return np.asarray(interpolate_to_fine_grid(data, target_shape[0], target_shape[1]))
 
     def _resample_to_grid(
         self, data: xr.DataArray, shape: tuple[int, int]

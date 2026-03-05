@@ -446,6 +446,60 @@ class TestConcurrency:
         # If truly concurrent, should take ~0.3s not ~0.6s
         assert elapsed < 0.55, f"M2+M3 took {elapsed:.2f}s — expected < 0.55s (concurrent)"
 
+    def test_lut_preload_runs_in_parallel_with_m3(
+        self,
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        mock_solver_input_bundle,
+        mock_solved_atmosphere,
+    ):
+        def slow_m2(bounds, crs, obs_time, res):
+            time.sleep(0.2)
+            return mock_atmospheric_state
+
+        def slow_m3(bounds, crs, obs_time, sc, geom, res):
+            time.sleep(0.4)
+            return mock_surface_prior
+
+        def pp(path, aoi=None):
+            return mock_observation_bundle
+
+        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+            return mock_solver_input_bundle
+
+        def solve(inputs, cfg):
+            return mock_solved_atmosphere
+
+        def correct(obs, solved, rt):
+            return CorrectionResult(
+                boa=obs.toa, boa_unc=None, aot=solved.aot,
+                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+            )
+
+        calls: dict[str, object] = {"started": False, "n_bands": 0}
+
+        class _RTWithPreload:
+            def preload_scene_subset(self, geometry, atmo_state, bands):  # noqa: ANN001
+                calls["started"] = True
+                calls["n_bands"] = len(bands)
+                time.sleep(0.25)
+
+        t0 = time.monotonic()
+        run_pipeline(
+            Path("/fake"), None, None,
+            preprocessor=pp, atmo_provider=slow_m2,
+            surface_prior_provider=slow_m3, grid_assembler=assemble,
+            solver=solve, corrector=correct, rt_model=_RTWithPreload(),
+        )
+        elapsed = time.monotonic() - t0
+
+        assert calls["started"] is True
+        assert int(calls["n_bands"]) >= 1
+        # With preload started right after M2, total should stay close to max(M3, preload)
+        # rather than M3 + preload.
+        assert elapsed < 0.60, f"Elapsed {elapsed:.2f}s suggests LUT preload did not overlap M3."
+
     def test_run_pipeline_dispatches_backend(self, monkeypatch):
         calls = {}
 

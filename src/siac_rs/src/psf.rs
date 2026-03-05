@@ -45,10 +45,10 @@ impl PSFConvolver {
         &self,
         py: Python<'py>,
         image: PyReadonlyArray2<f64>,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    ) -> PyResult<&'py PyArray2<f64>> {
         let image = image.as_array();
         let result = self.dct_convolve(image);
-        Ok(result.into_pyarray_bound(py))
+        Ok(result.into_pyarray(py))
     }
 
     /// Get the Gaussian kernel in frequency domain
@@ -57,9 +57,9 @@ impl PSFConvolver {
         py: Python<'py>,
         height: usize,
         width: usize,
-    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    ) -> PyResult<&'py PyArray2<f64>> {
         let kernel = self.gaussian_dct_kernel(height, width);
-        Ok(kernel.into_pyarray_bound(py))
+        Ok(kernel.into_pyarray(py))
     }
 }
 

@@ -155,6 +155,42 @@ def _aerosol_resolution(config: Any) -> float:
     return 1000.0
 
 
+def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
+    """Mirror M4 band-selection logic for LUT preloading hints."""
+    bands = sensor_config.select_bands_in_range(400.0, 520.0)
+    if bands:
+        return list(bands)
+    return list(sensor_config.bands[:2])
+
+
+def _maybe_submit_lut_preload(
+    executor: Any,
+    rt_model: Any,
+    *,
+    obs: ObservationBundle,
+    atmo: AtmosphericState,
+    retries: int,
+) -> Any | None:
+    """Start LUT scene preload task when backend supports it."""
+    preload_fn = getattr(rt_model, "preload_scene_subset", None)
+    if not callable(preload_fn):
+        return None
+
+    bands = _select_solver_bands_for_preload(obs.sensor_config)
+    logger.info(
+        "Starting LUT preload in parallel (scene subset + %d band grid%s).",
+        len(bands),
+        "" if len(bands) == 1 else "s",
+    )
+    return executor.submit(
+        _call_with_retries,
+        preload_fn,
+        (obs.geometry, atmo, bands),
+        retries=retries,
+        stage_name="LUT preload",
+    )
+
+
 def _call_with_retries(
     fn: Callable[..., Any],
     args: tuple[Any, ...],
@@ -263,18 +299,43 @@ def _run_pipeline_thread(
             retries=retries,
             stage_name="M3",
         )
+        f_lut = None
         try:
             atmo = f_m2.result(timeout=timeout)
+            f_lut = _maybe_submit_lut_preload(
+                executor,
+                rt_model,
+                obs=obs,
+                atmo=atmo,
+                retries=retries,
+            )
             surface = f_m3.result(timeout=timeout)
+            if f_lut is not None:
+                try:
+                    f_lut.result(timeout=timeout)
+                except FuturesTimeoutError:
+                    logger.warning(
+                        "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
+                        float(timeout),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "LUT preload failed (%s); proceeding with on-demand LUT reads.",
+                        exc,
+                    )
         except FuturesTimeoutError as exc:
             f_m2.cancel()
             f_m3.cancel()
+            if f_lut is not None:
+                f_lut.cancel()
             raise TimeoutError(
                 f"M2/M3 timed out after {timeout:.1f}s (thread backend)"
             ) from exc
         except Exception:
             f_m2.cancel()
             f_m3.cancel()
+            if f_lut is not None:
+                f_lut.cancel()
             raise
 
     return _run_tail(
@@ -360,19 +421,47 @@ def _run_pipeline_dask(
                 retries=retries,
                 stage_name="M3",
             )
+            preload_future = None
+            preload_executor = ThreadPoolExecutor(max_workers=1)
             try:
                 atmo = f_m2.result(timeout=timeout)
+                preload_future = _maybe_submit_lut_preload(
+                    preload_executor,
+                    rt_model,
+                    obs=obs,
+                    atmo=atmo,
+                    retries=retries,
+                )
                 surface = f_m3.result(timeout=timeout)
+                if preload_future is not None:
+                    try:
+                        preload_future.result(timeout=timeout)
+                    except FuturesTimeoutError:
+                        logger.warning(
+                            "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
+                            float(timeout),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "LUT preload failed (%s); proceeding with on-demand LUT reads.",
+                            exc,
+                        )
             except DaskTimeoutError as exc:
                 f_m2.cancel()
                 f_m3.cancel()
+                if preload_future is not None:
+                    preload_future.cancel()
                 raise TimeoutError(
                     f"M2/M3 timed out after {timeout:.1f}s (dask backend)"
                 ) from exc
             except Exception:
                 f_m2.cancel()
                 f_m3.cancel()
+                if preload_future is not None:
+                    preload_future.cancel()
                 raise
+            finally:
+                preload_executor.shutdown(wait=False, cancel_futures=False)
 
     return _run_tail(
         obs,
