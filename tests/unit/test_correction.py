@@ -97,8 +97,8 @@ class TestAtmosphericCorrector:
 
         result = corrector.correct(toa, geometry, atmo_state, cloud_mask=cloud_mask)
 
-        # Mask should exclude cloudy pixels
-        assert (~result.cloud_mask.values[10:20, 10:20]).all()
+        # cloud_mask contract: True = cloudy (consistent with ObservationBundle)
+        assert result.cloud_mask.values[10:20, 10:20].all()
 
     def test_result_has_aot_tcwv(self, sample_inputs, mock_rt_model):
         """Result should include AOT and TCWV."""

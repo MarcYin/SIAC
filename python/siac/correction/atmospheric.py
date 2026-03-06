@@ -37,19 +37,28 @@ class AtmosphericCorrector:
                 continue
             coeffs = self.rt_model.compute_coefficients(geometry, atmo_state, band_spec, False)
             boa = coeffs.apply_correction(toa[band_name])
-            boa_vars[band_name] = boa.where((boa > 0) & (boa < 1.5))
+            boa_vars[band_name] = boa.where((boa > -0.05) & (boa < 1.5))
+
+        if not boa_vars:
+            raise ValueError(
+                "No bands in TOA dataset matched sensor_config bands. "
+                f"TOA vars: {list(toa.data_vars)}, "
+                f"sensor bands: {self.sensor_config.band_names}"
+            )
 
         boa_ds = xr.Dataset(boa_vars)
-        first = list(boa_vars.keys())[0]
-        mask = np.isfinite(boa_ds[first]) & (boa_ds[first] > 0)
+        # cloud_mask contract: True = cloudy/invalid, preserved from M1
         if cloud_mask is not None:
-            mask = mask & ~cloud_mask
+            final_cloud_mask = cloud_mask
+        else:
+            first = list(boa_vars.keys())[0]
+            final_cloud_mask = ~(np.isfinite(boa_ds[first]) & (boa_ds[first] > -0.05))
         elapsed = time.monotonic() - t0
         return CorrectionResult(
             boa=boa_ds,
             boa_unc=None,
             aot=atmo_state.aot,
             tcwv=atmo_state.tcwv,
-            cloud_mask=mask,
+            cloud_mask=final_cloud_mask,
             metadata={"processing_time_s": elapsed},
         )
