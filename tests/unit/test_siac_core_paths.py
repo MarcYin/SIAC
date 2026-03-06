@@ -122,8 +122,6 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
         def preprocess(self, input_path):
             return preprocess_result
 
-    solver_result = SimpleNamespace(aot=_da(0.2), tcwv=_da(2.3), aot_unc=_da(0.02), tcwv_unc=_da(0.25))
-    atmo_prior = _atmo_state()
     final_result = CorrectionResult(
         boa=_toa_dataset(),
         boa_unc=None,
@@ -136,31 +134,40 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("siac.siac.detect_sensor", lambda _path: "s2")
     monkeypatch.setattr("siac.siac.get_preprocessor", lambda _sensor: _FakePreprocessor())
     monkeypatch.setattr(siac_obj, "_resolve_aoi", lambda _toa: SimpleNamespace(get_bounds=lambda: (0, 0, 1, 1), crs="EPSG:4326"))
-    monkeypatch.setattr(siac_obj, "_get_atmospheric_prior", lambda _aoi, _md: atmo_prior)
-    monkeypatch.setattr(siac_obj, "_get_surface_prior", lambda _aoi, _geom, _md: "surface-prior")
     monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
-    monkeypatch.setattr(siac_obj, "_solve_atmosphere", lambda *_args, **_kwargs: solver_result)
 
-    class _FakeCorrector:
-        def __init__(self, rt_model, sensor_config):
-            self.rt_model = rt_model
-            self.sensor_config = sensor_config
+    # Mock the module-level resolvers that process() now calls
+    monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _cfg, auth=None: "atmo-provider")
+    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _cfg, auth=None: "surface-prior-provider")
+    monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "grid-assembler")
+    monkeypatch.setattr("siac.siac._resolve_solver", lambda _cfg: "solver")
+    monkeypatch.setattr("siac.siac._resolve_corrector", lambda _cfg: "corrector")
 
-        def correct(self, toa, geometry, solved_atmo, cloud_mask):
-            return final_result
+    # Mock run_pipeline to verify process() delegates to it
+    pipeline_calls = {}
+
+    def _fake_run_pipeline(input_path, aoi, config, **kwargs):
+        pipeline_calls["input_path"] = input_path
+        pipeline_calls["kwargs"] = kwargs
+        return final_result
+
+    monkeypatch.setattr("siac.siac.run_pipeline", _fake_run_pipeline)
 
     saved = {}
 
     def _fake_save(result, output_path):
         saved["path"] = Path(output_path)
 
-    monkeypatch.setattr("siac.siac.AtmosphericCorrector", _FakeCorrector)
     monkeypatch.setattr(siac_obj, "_save_output", _fake_save)
 
     result = siac_obj.process(tmp_path / "input.SAFE", output_path=tmp_path / "out")
 
     assert result is final_result
     assert saved["path"] == tmp_path / "out"
+    # Verify pipeline was called with resolved components
+    assert pipeline_calls["input_path"] == tmp_path / "input.SAFE"
+    assert pipeline_calls["kwargs"]["rt_model"] == "rt"
+    assert callable(pipeline_calls["kwargs"]["preprocessor"])
 
 
 def test_resolve_aoi_branches(monkeypatch):

@@ -100,6 +100,9 @@ class SIAC:
         """
         Run full atmospheric correction pipeline.
 
+        Delegates to :func:`run_pipeline` so that all pipeline
+        validations, concurrency backends, and retry logic apply.
+
         Args:
             input_path: Path to satellite data
             output_path: Optional output path (default: input_path/BOA/)
@@ -110,7 +113,7 @@ class SIAC:
         input_path = Path(input_path)
         logger.info(f"Processing: {input_path}")
 
-        # 1. Detect sensor and get preprocessor
+        # Detect sensor and build a PreprocessorFn that returns ObservationBundle
         sensor_id = self.config.sensor if self.config.sensor != "auto" else detect_sensor(input_path)
         preprocessor = get_preprocessor(sensor_id)
         if isinstance(getattr(preprocessor, "config", None), dict):
@@ -120,51 +123,45 @@ class SIAC:
             }
         sensor_config = preprocessor.sensor_config
 
-        # 2. Preprocess satellite data
-        logger.info("Preprocessing satellite data...")
-        preprocess_result = preprocessor.preprocess(input_path)
-        toa = preprocess_result["toa"]
-        geometry = preprocess_result["geometry"]
-        cloud_mask = preprocess_result["cloud_mask"]
-        metadata = preprocess_result["metadata"]
+        def _preprocessor_fn(path: Path, aoi=None) -> ObservationBundle:
+            raw = preprocessor.preprocess(path)
+            toa = raw["toa"]
+            first_var = list(toa.data_vars)[0]
+            resolved_aoi = aoi or self._resolve_aoi(toa)
+            return ObservationBundle(
+                toa=toa,
+                geometry=raw["geometry"],
+                cloud_mask=raw["cloud_mask"],
+                sensor_config=sensor_config,
+                metadata=raw["metadata"],
+                crs=str(resolved_aoi.crs),
+                bounds=resolved_aoi.get_bounds(),
+            )
 
-        # 3. Resolve AOI from config or TOA extent
-        aoi = self._resolve_aoi(toa)
-        logger.info(f"AOI resolved: bounds={aoi.get_bounds()}, crs={aoi.crs}")
-
-        # 4. Get atmospheric priors (now AOI-scoped)
-        logger.info("Fetching atmospheric priors...")
-        atmo_prior = self._get_atmospheric_prior(aoi, metadata)
-
-        # 5. Get surface prior from BRDF (now AOI-scoped)
-        logger.info("Computing surface prior...")
-        surface_prior = self._get_surface_prior(aoi, geometry, metadata)
-
-        # 6. Setup RT model
+        # Resolve remaining pipeline components
+        atmo_provider = _resolve_atmo_provider(self.config, auth=self._auth)
+        surface_prior_provider = _resolve_surface_prior_provider(self.config, auth=self._auth)
+        grid_assembler = _resolve_grid_assembler()
+        solver = _resolve_solver(self.config)
+        corrector = _resolve_corrector(self.config)
         rt_model = self._get_rt_model(sensor_config)
 
-        # 7. Solve for atmospheric parameters
-        logger.info("Solving for atmospheric parameters...")
-        solver_result = self._solve_atmosphere(
-            toa, surface_prior, geometry, atmo_prior, rt_model, cloud_mask, sensor_config
+        aoi = None  # let preprocessor resolve AOI internally
+
+        result = run_pipeline(
+            input_path,
+            aoi,
+            self.config,
+            preprocessor=_preprocessor_fn,
+            atmo_provider=atmo_provider,
+            surface_prior_provider=surface_prior_provider,
+            grid_assembler=grid_assembler,
+            solver=solver,
+            corrector=corrector,
+            rt_model=rt_model,
         )
 
-        # 8. Apply atmospheric correction
-        logger.info("Applying atmospheric correction...")
-        solved_atmo = atmo_prior.with_updated_aot_tcwv(
-            aot=solver_result.aot,
-            tcwv=solver_result.tcwv,
-            aot_unc=solver_result.aot_unc,
-            tcwv_unc=solver_result.tcwv_unc,
-        )
-
-        corrector = AtmosphericCorrector(rt_model, sensor_config)
-        result = corrector.correct(toa, geometry, solved_atmo, cloud_mask)
-        cloud_classes = preprocess_result.get("cloud_classes")
-        if cloud_classes is not None:
-            result.metadata["cloud_classes"] = cloud_classes
-
-        # 9. Save output if path provided
+        # Save output if path provided
         if output_path is not None:
             self._save_output(result, output_path)
 
@@ -595,12 +592,18 @@ def _resolve_surface_prior_provider(
     else:
         raise ValueError(f"Unknown BRDF provider for surface prior: {provider_name!r}")
 
-    # Default: BRDF-derived prior via kernel model
+    # Create provider and deriver once, then close over them
+    brdf_prov = provider_cls(
+        cache_dir=config.brdf.cache_dir,
+        source=_earthaccess_source_from_auth(auth),
+    )
+    deriver = KernelModelDeriver(
+        psf_sigma_x=config.surface_prior.psf_sigma_x,
+        psf_sigma_y=config.surface_prior.psf_sigma_y,
+        apply_psf=config.surface_prior.apply_psf,
+    )
+
     def _brdf_surface_prior(bounds, crs, obs_time, _sensor_config, geometry, resolution):
-        brdf_prov = provider_cls(
-            cache_dir=config.brdf.cache_dir,
-            source=_earthaccess_source_from_auth(auth),
-        )
         brdf_weights = brdf_prov.get_brdf_parameters(
             bounds=bounds,
             crs=crs,
@@ -608,11 +611,6 @@ def _resolve_surface_prior_provider(
             target_resolution=resolution,
             bands=list(range(1, 8)),
             temporal_window=config.brdf.temporal_window,
-        )
-        deriver = KernelModelDeriver(
-            psf_sigma_x=config.surface_prior.psf_sigma_x,
-            psf_sigma_y=config.surface_prior.psf_sigma_y,
-            apply_psf=config.surface_prior.apply_psf,
         )
         return deriver.compute_surface_prior(brdf_weights, geometry)
 
@@ -724,17 +722,43 @@ def _resample_field_to_template(field, template):
     )
 
 
+# Default sensor mapping for config.sensor -> (sensor_id, satellite_id)
+_SENSOR_DEFAULTS: dict[str, tuple[str, str]] = {
+    "s2": ("MSI", "S2A"),
+    "s2a": ("MSI", "S2A"),
+    "s2b": ("MSI", "S2B"),
+    "s2c": ("MSI", "S2C"),
+    "sentinel2": ("MSI", "S2A"),
+    "l8": ("OLI", "L8"),
+    "l9": ("OLI", "L9"),
+    "auto": ("MSI", "S2A"),  # fallback
+}
+
+
 def _resolve_rt_model_for_pipeline(
     config: SIACConfig,
     auth: CredentialManager | None = None,
+    *,
+    sensor_config: SensorConfig | None = None,
 ):
-    """Return an RT model instance from config."""
+    """Return an RT model instance from config.
+
+    Parameters
+    ----------
+    sensor_config : SensorConfig, optional
+        If provided, ``sensor_id`` and ``satellite_id`` are read from
+        the config.  Otherwise they are inferred from ``config.sensor``.
+    """
     rt_config = config.rt_model
+    if sensor_config is not None:
+        sid, satid = sensor_config.sensor_id, sensor_config.satellite_id
+    else:
+        sid, satid = _SENSOR_DEFAULTS.get(getattr(config, "sensor", None), ("MSI", "S2A"))
     if rt_config.backend == "emulator":
         return TwoLayerNNEmulator(
             emulator_dir=rt_config.emulator_dir,
-            sensor_id="MSI",
-            satellite_id="S2A",
+            sensor_id=sid,
+            satellite_id=satid,
         )
     if rt_config.backend == "lut" and rt_config.lut_path:
         storage_options = dict(rt_config.lut_storage_options)
