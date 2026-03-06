@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     import xarray as xr
 
-    from siac.io.s2_data_source import S2Query
+    from siac.io.s2_data_source import S2Product, S2Query
 
 
 def _earthaccess_source_from_auth(
@@ -126,7 +126,6 @@ class SIAC:
         def _preprocessor_fn(path: Path, aoi=None) -> ObservationBundle:
             raw = preprocessor.preprocess(path)
             toa = raw["toa"]
-            first_var = list(toa.data_vars)[0]
             resolved_aoi = aoi or self._resolve_aoi(toa)
             return ObservationBundle(
                 toa=toa,
@@ -443,7 +442,7 @@ def search_sentinel2(
     backend: str = "cdse",
     config: SIACConfig | None = None,
     auth: CredentialManager | None = None,
-):
+) -> list[S2Product]:
     """Convenience API to search Sentinel-2 products without downloading."""
     from siac.io.s2_data_source import S2Query, search_s2
 

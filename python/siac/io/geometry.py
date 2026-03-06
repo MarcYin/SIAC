@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -168,7 +169,7 @@ def _transform_geometry(
     """Transform geometry coordinates between CRS."""
     transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
 
-    def transform_coords(coords):
+    def transform_coords(coords: list[Any]) -> list[Any]:
         if isinstance(coords[0], (list, tuple)):
             return [transform_coords(c) for c in coords]
         else:
