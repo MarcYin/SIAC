@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from siac.core.srf import SpectralResponseFunction
-from siac.core.srf_repository import SRFRepository
+from siac.srf.repository import SRFRepository
+from siac.srf.types import SpectralResponseFunction
 
 
 def test_srf_from_tabulated_trims_normalizes_and_derives_metadata():

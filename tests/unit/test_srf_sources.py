@@ -8,22 +8,24 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 
-from siac.core.srf import SpectralResponseFunction
-from siac.core.srf_source_sentinel2 import (
+from siac.core.types import SENTINEL2C_CONFIG
+from siac.srf.builders import (
+    BandCharacterization,
+    build_sensor_config_from_band_characterization,
+)
+from siac.srf.catalog import list_known_srf_sources
+from siac.srf.loaders import (
+    load_sensor_config_from_local_srf_file,
+    load_sensor_config_from_remote_srf,
+    load_sensor_config_from_srf,
+)
+from siac.srf.sources.sentinel2 import (
     build_sentinel2_sensor_config,
     load_sentinel2_sensor_config,
     parse_sentinel2_srf_workbook,
     parse_sentiwiki_s2_srf_assets,
 )
-from siac.core.srf_sources import (
-    BandCharacterization,
-    build_sensor_config_from_band_characterization,
-    list_known_srf_sources,
-    load_sensor_config_from_local_srf_file,
-    load_sensor_config_from_remote_srf,
-    load_sensor_config_from_srf,
-)
-from siac.core.types import SENTINEL2C_CONFIG
+from siac.srf.types import SpectralResponseFunction
 
 
 def _xlsx_sheet_xml(satellite_id: str) -> str:
@@ -167,7 +169,7 @@ def test_parse_sentinel2_srf_workbook_extracts_platform_bands(tmp_path: Path):
 
 def test_build_sentinel2_sensor_config_attaches_real_srfs(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "siac.core.srf_source_sentinel2.load_sentinel2_srfs",
+        "siac.srf.sources.sentinel2.load_sentinel2_srfs",
         lambda **_kwargs: {
             "S2A": _all_band_srfs("S2A"),
             "S2B": _all_band_srfs("S2B"),
@@ -190,7 +192,7 @@ def test_load_sentinel2_sensor_config_has_no_builtin_fallback(monkeypatch: pytes
     def _boom(*_args, **_kwargs):
         raise RuntimeError("download failed")
 
-    monkeypatch.setattr("siac.core.srf_source_sentinel2.build_sentinel2_sensor_config", _boom)
+    monkeypatch.setattr("siac.srf.sources.sentinel2.build_sentinel2_sensor_config", _boom)
 
     with pytest.raises(RuntimeError, match="download failed"):
         load_sentinel2_sensor_config("S2C")
@@ -198,7 +200,7 @@ def test_load_sentinel2_sensor_config_has_no_builtin_fallback(monkeypatch: pytes
 
 def test_load_sensor_config_from_remote_srf_delegates_to_sentinel2_loader(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "siac.core.srf_sources.load_sentinel2_sensor_config",
+        "siac.srf.loaders.load_sentinel2_sensor_config",
         lambda satellite_id, **kwargs: (satellite_id, kwargs),
     )
 
@@ -214,7 +216,7 @@ def test_load_sensor_config_from_remote_srf_delegates_to_sentinel2_loader(monkey
 
 def test_load_sensor_config_from_local_srf_file_delegates_to_sentinel2_loader(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "siac.core.srf_sources.load_sentinel2_sensor_config",
+        "siac.srf.loaders.load_sentinel2_sensor_config",
         lambda satellite_id, **kwargs: (satellite_id, kwargs),
     )
 
@@ -237,7 +239,7 @@ def test_load_sensor_config_from_local_srf_file_delegates_to_sentinel2_loader(mo
 
 def test_load_sensor_config_from_srf_routes_to_local_loader(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "siac.core.srf_sources.load_sensor_config_from_local_srf_file",
+        "siac.srf.loaders.load_sensor_config_from_local_srf_file",
         lambda *args, **kwargs: (args, kwargs),
     )
 

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from siac.core.srf import SpectralResponseFunction
 from siac.core.types import SensorBand, SensorConfig
+from siac.srf.types import SpectralResponseFunction
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

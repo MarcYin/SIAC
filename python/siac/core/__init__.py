@@ -11,7 +11,6 @@ from siac.core.protocols import (
     SatellitePreprocessor,
     SurfacePriorDeriver,
 )
-from siac.core.srf import SpectralResponseFunction
 from siac.core.types import (
     AtmosphericState,
     BRDFKernelWeights,
@@ -49,7 +48,6 @@ __all__ = [
     "SolvedAtmosphere",
     "CorrectionResult",
     "AOI",
-    "SpectralResponseFunction",
     # Protocols
     "SatellitePreprocessor",
     "AtmosphericPriorProvider",

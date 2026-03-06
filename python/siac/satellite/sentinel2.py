@@ -18,7 +18,6 @@ import numpy as np
 import xarray as xr
 
 from siac.cloud import build_cloud_classes, classes_to_bool_mask
-from siac.core.srf_sources import load_sensor_config_from_srf
 from siac.core.types import (
     SENTINEL2A_CONFIG,
     GeometryAngles,
@@ -30,6 +29,7 @@ from siac.satellite.base import (
     degrees_to_radians,
     register_preprocessor,
 )
+from siac.srf.loaders import load_sensor_config_from_srf
 
 logger = logging.getLogger(__name__)
 

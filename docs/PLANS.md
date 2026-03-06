@@ -1478,6 +1478,11 @@ The design rule is:
 > **If an official SRF exists for a platform, SIAC should use that SRF as the primary spectral definition.**
 > Gaussian centre/FWHM is a fallback only for sensors without published SRFs.
 
+Package boundary rule:
+- `python/siac/core/` should only hold cross-cutting contracts and config
+- SRF domain code should live under `python/siac/srf/`
+- LUT-specific aligned-kernel logic should live under `python/siac/rt/lut/`
+
 #### 9.10.1 SRF Source Access Layer
 
 SIAC should not fetch ad hoc SRF files from arbitrary URLs during runtime.
@@ -1485,9 +1490,10 @@ Instead, it should have a small source registry that points to authoritative
 sensor-specific SRF publications.
 
 Implemented architecture direction:
-- `python/siac/core/srf_sources.py` should be the generic entry point and source inventory
+- `python/siac/srf/loaders.py` should be the generic SRF loading entry point
+- `python/siac/srf/catalog.py` should hold the authoritative source inventory
 - sensor-specific fetch/parser code should live in dedicated modules such as
-  `python/siac/core/srf_source_sentinel2.py`
+  `python/siac/srf/sources/sentinel2.py`
 - public loading APIs should be split by access path:
   - `load_sensor_config_from_remote_srf(...)`
   - `load_sensor_config_from_metadata_srf(...)`
@@ -1827,13 +1833,18 @@ Required tests:
 
 | File | Action | Description |
 |------|--------|-------------|
-| `python/siac/core/srf.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
-| `python/siac/core/srf_builders.py` | NEW | Shared builders for tabulated SRFs and metadata-derived band characterization |
-| `python/siac/core/srf_sources.py` | NEW | Generic SRF source catalog + remote/metadata/local load entry points |
-| `python/siac/core/srf_source_sentinel2.py` | NEW | Sentinel-2-specific remote workbook discovery + parser |
-| `python/siac/core/srf_sources.py` | NEW | SRF source manifest models and parsers |
-| `python/siac/core/srf_repository.py` | NEW | local repository API for runtime SRF lookup |
-| `python/siac/core/srf_kernel.py` | NEW | LUT-aligned SRF kernel builder and cache-key helpers |
+| `python/siac/srf/types.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
+| `python/siac/srf/builders.py` | NEW | Shared builders for tabulated SRFs and metadata-derived band characterization |
+| `python/siac/srf/catalog.py` | NEW | Generic SRF source catalog and source metadata |
+| `python/siac/srf/loaders.py` | NEW | Generic remote/metadata/local load entry points |
+| `python/siac/srf/sources/sentinel2.py` | NEW | Sentinel-2-specific remote workbook discovery + parser |
+| `python/siac/srf/sources/landsat.py` | NEW | Landsat SRF provider boundary |
+| `python/siac/srf/sources/planet.py` | NEW | PlanetScope / SuperDove SRF provider boundary |
+| `python/siac/srf/metadata/enmap.py` | NEW | EnMAP metadata-driven spectral characterization loader |
+| `python/siac/srf/metadata/emit.py` | NEW | EMIT metadata-driven spectral characterization loader |
+| `python/siac/srf/metadata/prisma.py` | NEW | PRISMA metadata-driven spectral characterization loader |
+| `python/siac/srf/repository.py` | NEW | local repository API for runtime SRF lookup |
+| `python/siac/rt/lut/srf_kernel.py` | NEW | LUT-aligned SRF kernel builder and cache-key helpers |
 | `python/siac/data/srf/` | NEW | versioned canonical SRF repository shipped with SIAC |
 | `tools/build_srf_repository.py` | NEW | build/update tool from official raw SRF sources |
 | `python/siac/core/spectral.py` | MODIFY | consume `SpectralResponseFunction` directly |

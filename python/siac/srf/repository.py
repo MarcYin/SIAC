@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from siac.core.srf import SpectralResponseFunction
+    from siac.srf.types import SpectralResponseFunction
 
 
 class SRFRepository:

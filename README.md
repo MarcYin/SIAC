@@ -118,6 +118,7 @@ output:
 ```
 siac/
 ├── core/           # Data types, protocols, configuration
+├── srf/            # Spectral response types, source catalogs, loaders
 ├── satellite/      # Sensor-specific preprocessors (S2, L8)
 ├── priors/
 │   ├── atmospheric/  # CAMS, MERRA-2, ERA5 providers
@@ -125,7 +126,7 @@ siac/
 │   └── surface/      # Surface prior derivation
 ├── rt/
 │   ├── emulator/     # Neural network emulators (fast)
-│   ├── lut/          # Look-up table backend (medium)
+│   ├── lut/          # Look-up table backend + LUT-specific SRF kernels
 │   └── direct/       # Py6S simulation (slow)
 ├── solver/         # Multi-grid L-BFGS-B optimization
 └── correction/     # TOA to BOA conversion

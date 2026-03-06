@@ -1,26 +1,11 @@
-"""Generic SRF source registry and load helpers."""
+"""Catalog of known official and user-supplied SRF sources."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-from siac.core.srf_builders import (
-    BandCharacterization,
-    build_sensor_config_from_band_characterization,
-    build_sensor_config_from_tabulated_srfs,
-)
-from siac.core.srf_source_sentinel2 import (
-    S2_DOCUMENTS_PAGE_URL,
-    S2_MISSION_PAGE_URL,
-    load_sentinel2_sensor_config,
-)
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from siac.core.types import SensorConfig
+from siac.srf.sources.sentinel2 import S2_DOCUMENTS_PAGE_URL, S2_MISSION_PAGE_URL
 
 SRFSourceAccess = Literal["remote", "metadata", "local"]
 SRFSpectralDefinition = Literal[
@@ -33,7 +18,7 @@ SRFImplementationStatus = Literal["implemented", "planned"]
 
 @dataclass(frozen=True)
 class KnownSRFSource:
-    """Catalog entry describing an official or user-supplied SRF source."""
+    """Catalog entry describing an SRF source and access pattern."""
 
     sensor_id: str
     satellite_id: str
@@ -46,7 +31,7 @@ class KnownSRFSource:
     notes: str = ""
 
 
-_KNOWN_SRF_SOURCES: tuple[KnownSRFSource, ...] = (
+KNOWN_SRF_SOURCES: tuple[KnownSRFSource, ...] = (
     KnownSRFSource(
         sensor_id="MSI",
         satellite_id="S2A",
@@ -265,139 +250,19 @@ def list_known_srf_sources(
     satellite_id: str | None = None,
 ) -> tuple[KnownSRFSource, ...]:
     """Return catalogued SRF sources known to SIAC."""
-    sources: Iterable[KnownSRFSource] = _KNOWN_SRF_SOURCES
+    sources = KNOWN_SRF_SOURCES
     if sensor_id is not None:
-        sources = (source for source in sources if source.sensor_id == sensor_id)
+        sources = tuple(source for source in sources if source.sensor_id == sensor_id)
     if satellite_id is not None:
-        sources = (source for source in sources if source.satellite_id == satellite_id)
+        sources = tuple(source for source in sources if source.satellite_id == satellite_id)
     return tuple(sources)
 
 
-def _raise_no_loader(
-    *,
-    sensor_id: str,
-    satellite_id: str,
-    access_kind: SRFSourceAccess,
-) -> None:
-    matches = list_known_srf_sources(sensor_id=sensor_id, satellite_id=satellite_id)
-    if matches:
-        hints = "; ".join(
-            f"{match.source_name} [{match.source_access}, {match.implementation_status}]"
-            for match in matches
-        )
-        raise NotImplementedError(
-            f"No {access_kind} SRF loader is implemented for {sensor_id}/{satellite_id}. "
-            f"Known source catalog entries: {hints}"
-        )
-    raise NotImplementedError(
-        f"No SRF source is catalogued for {sensor_id}/{satellite_id}."
-    )
-
-
-def load_sensor_config_from_remote_srf(
-    sensor_id: str,
-    satellite_id: str,
-    *,
-    cache_dir: str | Path | None = None,
-    refresh: bool = False,
-) -> SensorConfig:
-    """Load a SensorConfig from an official remote SRF source."""
-    if sensor_id == "MSI" and satellite_id in {"S2A", "S2B", "S2C"}:
-        return load_sentinel2_sensor_config(
-            satellite_id,
-            cache_dir=cache_dir,
-            refresh=refresh,
-        )
-    _raise_no_loader(
-        sensor_id=sensor_id,
-        satellite_id=satellite_id,
-        access_kind="remote",
-    )
-
-
-def load_sensor_config_from_local_srf_file(
-    sensor_id: str,
-    satellite_id: str,
-    local_path: str | Path,
-    *,
-    cache_dir: str | Path | None = None,
-    refresh: bool = False,
-) -> SensorConfig:
-    """Load a SensorConfig from a user-provided local SRF file."""
-    local_path = Path(local_path)
-    if sensor_id == "MSI" and satellite_id in {"S2A", "S2B", "S2C"}:
-        return load_sentinel2_sensor_config(
-            satellite_id,
-            cache_dir=cache_dir,
-            refresh=refresh,
-            workbook_path=local_path,
-        )
-    _raise_no_loader(
-        sensor_id=sensor_id,
-        satellite_id=satellite_id,
-        access_kind="local",
-    )
-
-
-def load_sensor_config_from_metadata_srf(
-    sensor_id: str,
-    satellite_id: str,
-    metadata_path: str | Path,
-    *,
-    cache_dir: str | Path | None = None,
-    refresh: bool = False,
-) -> SensorConfig:
-    """Load a SensorConfig from metadata-derived spectral characterization."""
-    del metadata_path, cache_dir, refresh
-    _raise_no_loader(
-        sensor_id=sensor_id,
-        satellite_id=satellite_id,
-        access_kind="metadata",
-    )
-
-
-def load_sensor_config_from_srf(
-    sensor_id: str,
-    satellite_id: str,
-    *,
-    cache_dir: str | Path | None = None,
-    refresh: bool = False,
-    metadata_path: str | Path | None = None,
-    local_path: str | Path | None = None,
-) -> SensorConfig:
-    """Load a SensorConfig using the best available SRF source for a platform."""
-    if local_path is not None:
-        return load_sensor_config_from_local_srf_file(
-            sensor_id,
-            satellite_id,
-            local_path,
-            cache_dir=cache_dir,
-            refresh=refresh,
-        )
-    if metadata_path is not None:
-        return load_sensor_config_from_metadata_srf(
-            sensor_id,
-            satellite_id,
-            metadata_path,
-            cache_dir=cache_dir,
-            refresh=refresh,
-        )
-    return load_sensor_config_from_remote_srf(
-        sensor_id,
-        satellite_id,
-        cache_dir=cache_dir,
-        refresh=refresh,
-    )
-
-
 __all__ = [
-    "BandCharacterization",
+    "KNOWN_SRF_SOURCES",
     "KnownSRFSource",
-    "build_sensor_config_from_band_characterization",
-    "build_sensor_config_from_tabulated_srfs",
+    "SRFImplementationStatus",
+    "SRFSourceAccess",
+    "SRFSpectralDefinition",
     "list_known_srf_sources",
-    "load_sensor_config_from_local_srf_file",
-    "load_sensor_config_from_metadata_srf",
-    "load_sensor_config_from_remote_srf",
-    "load_sensor_config_from_srf",
 ]

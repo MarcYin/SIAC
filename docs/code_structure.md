@@ -24,6 +24,24 @@ siac/
 │   ├── validation.py                # Contract validators (_validate_*)
 │   └── aoi.py                       # AOI (area of interest) handling
 │
+├── srf/                             # Spectral response function domain
+│   ├── __init__.py
+│   ├── types.py                     # SpectralResponseFunction
+│   ├── builders.py                  # Tabulated/metadata SRF -> SensorConfig builders
+│   ├── catalog.py                   # Known official SRF source inventory
+│   ├── loaders.py                   # Remote/local/metadata SRF loading entry points
+│   ├── repository.py                # Canonical SRF repository API
+│   ├── sources/
+│   │   ├── __init__.py
+│   │   ├── sentinel2.py             # Sentinel-2 official workbook loader
+│   │   ├── landsat.py               # Landsat provider boundary
+│   │   └── planet.py                # PlanetScope / SuperDove provider boundary
+│   └── metadata/
+│       ├── __init__.py
+│       ├── enmap.py                 # EnMAP metadata-driven SRF boundary
+│       ├── emit.py                  # EMIT metadata-driven SRF boundary
+│       └── prisma.py                # PRISMA metadata-driven SRF boundary
+│
 ├── satellite/                       # M1 — Satellite Preprocessors
 │   ├── __init__.py
 │   ├── base.py                      # BaseSatellitePreprocessor, registry
@@ -55,6 +73,7 @@ siac/
 │   │   ├── constants.py            # Default LUT URLs and coordinate constants
 │   │   ├── http_zip_store.py       # ReadOnlyZipFileSystem-style ZIP access (local/HTTP/S3)
 │   │   ├── store.py                # Local/remote/ZIP store resolution
+│   │   ├── srf_kernel.py           # LUT-aligned SRF kernel builder
 │   │   ├── backend.py              # ZarrLUTBackend interpolation engine
 │   │   ├── create.py               # LUT generation from Py6S
 │   │   └── zarr_lut.py             # Compatibility facade (re-exports)
