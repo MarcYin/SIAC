@@ -487,9 +487,9 @@ class SIACConfig(BaseSettings):
     """
 
     # Sensor selection
-    sensor: Literal["s2", "l8", "auto"] = Field(
+    sensor: Literal["s2", "l8", "l9", "auto"] = Field(
         default="auto",
-        description="Sensor type: 's2' (Sentinel-2), 'l8' (Landsat 8/9), or 'auto' (detect)",
+        description="Sensor type: 's2' (Sentinel-2), 'l8' (Landsat 8), 'l9' (Landsat 9), or 'auto' (detect)",
     )
 
     # Module configurations

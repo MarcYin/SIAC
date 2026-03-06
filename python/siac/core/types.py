@@ -240,7 +240,7 @@ class RTCoefficients:
         # dy/d_param = d_xap * toa - d_xbp
         # dboa/dy = 1/denom - xcp * y / denom^2 = (1 - xcp*y/denom) / denom
         #         = 1 / denom^2
-        1.0 / (denom**2)
+        # dboa_dy = 1 / denom^2 (used implicitly via quotient rule below)
 
         # Chain rule for each parameter
         # d_xap, d_xbp, d_xcp have shape (..., 2) for [aot, tcwv]
@@ -331,13 +331,13 @@ class SurfacePrior:
     Attributes:
         boa: Prior surface reflectance (BOA)
         boa_unc: Uncertainty in surface reflectance
-        kernels: BRDF kernel weights used to derive the prior
+        kernels: BRDF kernel weights used to derive the prior (optional)
         mask: Valid pixel mask (True = valid)
     """
 
     boa: xr.DataArray
     boa_unc: xr.DataArray
-    kernels: BRDFKernelWeights
+    kernels: BRDFKernelWeights | None
     mask: xr.DataArray
 
 
@@ -379,6 +379,29 @@ class SensorBand:
         """Whether this band carries a tabulated spectral response."""
         return self.srf_wavelengths_nm is not None and self.srf_response is not None
 
+    def gaussian_response(self, wavelengths_nm: np.ndarray) -> np.ndarray:
+        """Compute Gaussian spectral response at given wavelengths.
+
+        Uses the stored center wavelength and bandwidth (FWHM).
+        """
+        sigma = self.bandwidth / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+        return np.exp(-0.5 * ((wavelengths_nm - self.center_wavelength) / sigma) ** 2)
+
+    def effective_response(self, wavelengths_nm: np.ndarray) -> np.ndarray:
+        """Return the best available response function at given wavelengths.
+
+        If a tabulated SRF exists, interpolate it; otherwise use Gaussian.
+        """
+        if self.has_srf:
+            return np.interp(
+                wavelengths_nm,
+                self.srf_wavelengths_nm,
+                self.srf_response,
+                left=0.0,
+                right=0.0,
+            )
+        return self.gaussian_response(wavelengths_nm)
+
 
 @dataclass(frozen=True)
 class SensorConfig:
@@ -398,6 +421,23 @@ class SensorConfig:
     bands: tuple[SensorBand, ...]
     default_ref_scale: float = 1.0 / 10000.0
     default_ref_offset: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Validate invariants on construction."""
+        if not self.bands:
+            raise ValueError("SensorConfig must have at least one band.")
+        names = [b.name for b in self.bands]
+        if len(names) != len(set(names)):
+            dupes = [n for n in names if names.count(n) > 1]
+            raise ValueError(f"Duplicate band names in SensorConfig: {sorted(set(dupes))}")
+        indices = [b.band_index for b in self.bands]
+        if len(indices) != len(set(indices)):
+            raise ValueError("Duplicate band_index values in SensorConfig.")
+        for b in self.bands:
+            if b.center_wavelength <= 0:
+                raise ValueError(f"Band {b.name!r} has non-positive center_wavelength: {b.center_wavelength}")
+            if b.resolution <= 0:
+                raise ValueError(f"Band {b.name!r} has non-positive resolution: {b.resolution}")
 
     def get_band(self, name: str) -> SensorBand:
         """Get band specification by name."""
@@ -538,11 +578,53 @@ LANDSAT8_OLI_CONFIG = SensorConfig(
     default_ref_offset=-0.2,
 )
 
+# Sentinel-2C carries the same MSI instrument; centre wavelengths match S2A.
+SENTINEL2C_CONFIG = SensorConfig(
+    sensor_id="MSI",
+    satellite_id="S2C",
+    bands=(
+        SensorBand("B01", 443.0, 20.0, 60.0, 0),   # Coastal aerosol
+        SensorBand("B02", 490.0, 65.0, 10.0, 1),   # Blue
+        SensorBand("B03", 560.0, 35.0, 10.0, 2),   # Green
+        SensorBand("B04", 665.0, 30.0, 10.0, 3),   # Red
+        SensorBand("B05", 705.0, 15.0, 20.0, 4),   # Red edge 1
+        SensorBand("B06", 740.0, 15.0, 20.0, 5),   # Red edge 2
+        SensorBand("B07", 783.0, 20.0, 20.0, 6),   # Red edge 3
+        SensorBand("B08", 842.0, 115.0, 10.0, 7),  # NIR
+        SensorBand("B8A", 865.0, 20.0, 20.0, 8),   # NIR narrow
+        SensorBand("B09", 945.0, 20.0, 60.0, 9),   # Water vapor
+        SensorBand("B10", 1375.0, 30.0, 60.0, 10), # Cirrus
+        SensorBand("B11", 1610.0, 90.0, 20.0, 11), # SWIR 1
+        SensorBand("B12", 2190.0, 180.0, 20.0, 12), # SWIR 2
+    ),
+    default_ref_scale=1.0 / 10000.0,
+    default_ref_offset=0.0,
+)
+
+# Landsat-9 OLI-2 has nearly identical band specifications to Landsat-8 OLI.
+LANDSAT9_OLI2_CONFIG = SensorConfig(
+    sensor_id="OLI",
+    satellite_id="L9",
+    bands=(
+        SensorBand("B1", 443.0, 16.0, 30.0, 0),    # Coastal aerosol
+        SensorBand("B2", 482.0, 60.0, 30.0, 1),    # Blue
+        SensorBand("B3", 561.5, 57.0, 30.0, 2),    # Green
+        SensorBand("B4", 654.5, 37.0, 30.0, 3),    # Red
+        SensorBand("B5", 865.0, 28.0, 30.0, 4),    # NIR
+        SensorBand("B6", 1608.5, 85.0, 30.0, 5),   # SWIR 1
+        SensorBand("B7", 2200.5, 187.0, 30.0, 6),  # SWIR 2
+    ),
+    default_ref_scale=2.75e-5,
+    default_ref_offset=-0.2,
+)
+
 # Sensor registry for lookup
 SENSOR_CONFIGS: dict[tuple[str, str], SensorConfig] = {
     ("MSI", "S2A"): SENTINEL2A_CONFIG,
     ("MSI", "S2B"): SENTINEL2B_CONFIG,
+    ("MSI", "S2C"): SENTINEL2C_CONFIG,
     ("OLI", "L8"): LANDSAT8_OLI_CONFIG,
+    ("OLI", "L9"): LANDSAT9_OLI2_CONFIG,
 }
 
 
