@@ -1484,6 +1484,18 @@ SIAC should not fetch ad hoc SRF files from arbitrary URLs during runtime.
 Instead, it should have a small source registry that points to authoritative
 sensor-specific SRF publications.
 
+Implemented architecture direction:
+- `python/siac/core/srf_sources.py` should be the generic entry point and source inventory
+- sensor-specific fetch/parser code should live in dedicated modules such as
+  `python/siac/core/srf_source_sentinel2.py`
+- public loading APIs should be split by access path:
+  - `load_sensor_config_from_remote_srf(...)`
+  - `load_sensor_config_from_metadata_srf(...)`
+  - `load_sensor_config_from_local_srf_file(...)`
+- metadata-driven sensors should build a `SensorConfig` from per-band
+  centre-wavelength / FWHM metadata through a shared builder, rather than
+  pretending they all have one mission-wide tabulated RSR workbook
+
 Planned source families:
 
 | Family | Typical source | Platforms |
@@ -1496,6 +1508,39 @@ Planned source families:
 Sentinel-2 source note:
 - the authoritative landing page is [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission)
 - the Sentinel-2 parser should resolve the linked `Sentinel-2 Spectral Response Functions (S2-SRF)` document from that page / its linked documents page, rather than pinning a brittle attachment URL in code
+
+Cross-sensor source inventory currently identified:
+
+| Sensor / platform | Access pattern | Spectral definition | Official source |
+|------------------|----------------|---------------------|-----------------|
+| `MSI / S2A` | remote official file | tabulated RSR | [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission) -> [S2 documents SRF section](https://sentiwiki.copernicus.eu/web/s2-documents?inheritRedirect=true#S2Documents-SPECTRALRESPONSEFUNCTIONS) |
+| `MSI / S2B` | remote official file | tabulated RSR | same as `S2A` |
+| `MSI / S2C` | remote official file | tabulated RSR | same as `S2A` |
+| `OLI / L8` | remote catalog / export | tabulated RSR | [USGS Landsat Spectral Characteristics Viewer](https://landsat.usgs.gov/spectral-characteristics-viewer) |
+| `OLI-2 / L9` | remote catalog / export | tabulated RSR | [USGS Landsat Spectral Characteristics Viewer](https://landsat.usgs.gov/spectral-characteristics-viewer) |
+| `MODIS / Terra` | remote official table | tabulated RSR | [NASA Ocean Color RSR tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
+| `MODIS / Aqua` | remote official table | tabulated RSR | [NASA Ocean Color RSR tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
+| `VIIRS / SNPP` | remote official table | tabulated RSR | [NASA Ocean Color RSR tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
+| `VIIRS / NOAA-20` | remote official monitoring page | tabulated / ancillary files | [NOAA STAR ICVS VIIRS N20](https://www.star.nesdis.noaa.gov/icvs/status_N20_VIIRS.php) |
+| `VIIRS / NOAA-21` | remote official monitoring page | tabulated / ancillary files | [NOAA STAR ICVS VIIRS N21](https://www.star.nesdis.noaa.gov/icvs/status_N21_VIIRS.php) |
+| `OLCI / S3A` | remote official document set | tabulated RSR | SentiWiki Sentinel-3 OLCI instrument performance documents |
+| `OLCI / S3B` | remote official document set | tabulated RSR | SentiWiki Sentinel-3 OLCI instrument performance documents |
+| `SLSTR / S3A` | remote official document set | tabulated RSR | SentiWiki Sentinel-3 SLSTR instrument performance documents |
+| `PRISMA` | scene product metadata | metadata band characterization | [ASI PRISMA mission](https://www.asi.it/en/earth-science/prisma/) |
+| `EnMAP` | scene product metadata | metadata band characterization | [EnMAP L1/L2 product specification](https://www.enmap.org/data/doc/EN-PCV-ICD-2009-2_HSI_Product_Specification_Level1_Level2.pdf) |
+| `EMIT` | scene product metadata | metadata band characterization | [EMIT L2A reflectance ATBD](https://lpdaac.usgs.gov/documents/2147/EMIT_L2A-RFL_ATBD_V1.pdf) |
+| `PlanetScope / PS2` | remote official file | tabulated RSR | [Planet RSR access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-) |
+| `PlanetScope / PS2.SD` | remote official file | tabulated RSR | [Planet RSR access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-) |
+| `PlanetScope / PSB.SD` | remote official file | tabulated RSR | [Planet RSR access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-) |
+
+Design rule from that inventory:
+- remote tabulated SRFs and metadata-derived band characterizations are not the
+  same class of source and must not share one parser path
+- a source registry should tell the runtime whether to fetch a remote file,
+  parse product metadata, or expect a user-supplied local file
+- hyperspectral missions such as `PRISMA`, `EnMAP`, and `EMIT` should be
+  treated as metadata-driven first, unless a stable official tabulated RSR file
+  is verified later
 
 Planned source manifest contract:
 
@@ -1783,6 +1828,9 @@ Required tests:
 | File | Action | Description |
 |------|--------|-------------|
 | `python/siac/core/srf.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
+| `python/siac/core/srf_builders.py` | NEW | Shared builders for tabulated SRFs and metadata-derived band characterization |
+| `python/siac/core/srf_sources.py` | NEW | Generic SRF source catalog + remote/metadata/local load entry points |
+| `python/siac/core/srf_source_sentinel2.py` | NEW | Sentinel-2-specific remote workbook discovery + parser |
 | `python/siac/core/srf_sources.py` | NEW | SRF source manifest models and parsers |
 | `python/siac/core/srf_repository.py` | NEW | local repository API for runtime SRF lookup |
 | `python/siac/core/srf_kernel.py` | NEW | LUT-aligned SRF kernel builder and cache-key helpers |

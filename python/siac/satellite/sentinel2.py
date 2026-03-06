@@ -18,9 +18,9 @@ import numpy as np
 import xarray as xr
 
 from siac.cloud import build_cloud_classes, classes_to_bool_mask
+from siac.core.srf_sources import load_sensor_config_from_srf
 from siac.core.types import (
     SENTINEL2A_CONFIG,
-    SENTINEL2B_CONFIG,
     GeometryAngles,
     SensorConfig,
 )
@@ -67,10 +67,15 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     @property
     def sensor_config(self) -> SensorConfig:
-        """Return sensor configuration based on satellite (S2A or S2B)."""
-        if self._satellite_id == "S2B":
-            return SENTINEL2B_CONFIG
-        return SENTINEL2A_CONFIG
+        """Return sensor configuration based on satellite platform."""
+        if self._satellite_id is None:
+            return SENTINEL2A_CONFIG
+        return load_sensor_config_from_srf(
+            "MSI",
+            self._satellite_id,
+            cache_dir=self.config.get("srf_cache_dir"),
+            refresh=bool(self.config.get("refresh_srf", False)),
+        )
 
     def load_toa(self, input_path: str | Path) -> xr.Dataset:
         """Load TOA reflectance from Sentinel-2 SAFE directory."""
@@ -296,12 +301,14 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         else:
             self._granule_path = granule_dirs[0]
 
-        # Detect satellite (S2A or S2B)
+        # Detect satellite platform.
         safe_name = input_path.name
         if "S2A" in safe_name:
             self._satellite_id = "S2A"
         elif "S2B" in safe_name:
             self._satellite_id = "S2B"
+        elif "S2C" in safe_name:
+            self._satellite_id = "S2C"
         else:
             # Try to detect from metadata
             self._satellite_id = "S2A"  # Default

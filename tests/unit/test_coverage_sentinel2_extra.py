@@ -49,6 +49,11 @@ class TestSentinel2Internals:
         p2._resolve_paths(safe_b)
         assert p2.sensor_config.satellite_id == "S2B"
 
+        p25 = Sentinel2Preprocessor()
+        safe_c = _safe_tree(tmp_path, "S2C_DEMO.SAFE")
+        p25._resolve_paths(safe_c)
+        assert p25.sensor_config.satellite_id == "S2C"
+
         p3 = Sentinel2Preprocessor()
         aws = tmp_path / "aws_s2"
         aws.mkdir()
@@ -61,6 +66,34 @@ class TestSentinel2Internals:
         bad.mkdir()
         with pytest.raises(FileNotFoundError):
             p4._resolve_paths(bad)
+
+    def test_sensor_config_uses_real_srf_loader(self, monkeypatch: pytest.MonkeyPatch):
+        p = Sentinel2Preprocessor(config={"srf_cache_dir": "/tmp/srf-cache", "refresh_srf": True})
+        p._satellite_id = "S2C"
+
+        class _Cfg:
+            satellite_id = "S2C"
+
+        seen: dict[str, object] = {}
+
+        def _load(sensor_id: str, satellite_id: str, *, cache_dir=None, refresh=False):
+            seen["sensor_id"] = sensor_id
+            seen["satellite_id"] = satellite_id
+            seen["cache_dir"] = cache_dir
+            seen["refresh"] = refresh
+            return _Cfg() if satellite_id == "S2C" else None
+
+        monkeypatch.setattr(
+            "siac.satellite.sentinel2.load_sensor_config_from_srf",
+            _load,
+        )
+        assert p.sensor_config.satellite_id == "S2C"
+        assert seen == {
+            "sensor_id": "MSI",
+            "satellite_id": "S2C",
+            "cache_dir": "/tmp/srf-cache",
+            "refresh": True,
+        }
 
     def test_metadata_parsers_and_finders(self, tmp_path: Path):
         p = Sentinel2Preprocessor()
