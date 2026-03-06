@@ -3,21 +3,29 @@ Contract validation functions for SIAC pipeline module outputs.
 
 Each function validates one module's output contract before it is passed
 downstream. These are called automatically by the pipeline orchestrator.
+
+All validators raise :class:`~siac.core.exceptions.ValidationError` rather
+than ``assert`` so they cannot be silenced by ``python -O``.
 """
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from siac.core.exceptions import ValidationError
 
 if TYPE_CHECKING:
     import xarray as xr
 
     from siac.core.types import (
         AtmosphericState,
+        CorrectionResult,
         ObservationBundle,
+        SolvedAtmosphere,
         SolverInputBundle,
         SurfacePrior,
     )
@@ -38,87 +46,139 @@ def _validate_observation_bundle(obs: ObservationBundle) -> None:
     """Validate M1 output before passing to M4.
 
     Raises:
-        AssertionError: If any validation rule is violated.
+        ValidationError: If any validation rule is violated.
     """
-    # metadata must include observation_time as datetime
-    assert "observation_time" in obs.metadata, (
-        "metadata must include 'observation_time'"
-    )
-    assert isinstance(obs.metadata["observation_time"], datetime), (
-        f"metadata['observation_time'] must be a datetime, "
-        f"got {type(obs.metadata['observation_time']).__name__}"
-    )
+    if "observation_time" not in obs.metadata:
+        raise ValidationError("metadata must include 'observation_time'")
+    if not isinstance(obs.metadata["observation_time"], datetime):
+        raise ValidationError(
+            f"metadata['observation_time'] must be a datetime, "
+            f"got {type(obs.metadata['observation_time']).__name__}"
+        )
 
-    # toa must have at least one band variable and spatial dimensions
-    assert len(obs.toa.data_vars) > 0, "toa must have at least one band variable"
-    assert obs.toa.sizes, "toa must have spatial dimensions"
+    if len(obs.toa.data_vars) == 0:
+        raise ValidationError("toa must have at least one band variable")
+    if not obs.toa.sizes:
+        raise ValidationError("toa must have spatial dimensions")
 
-    # cloud_mask must match toa spatial shape
     toa_shape = _spatial_shape(obs.toa)
     cloud_shape = obs.cloud_mask.shape
-    assert cloud_shape == toa_shape, (
-        f"cloud_mask shape {cloud_shape} must match TOA spatial shape {toa_shape}"
-    )
+    if cloud_shape != toa_shape:
+        raise ValidationError(
+            f"cloud_mask shape {cloud_shape} must match TOA spatial shape {toa_shape}"
+        )
 
-    # bounds must be a 4-tuple of floats
-    assert len(obs.bounds) == 4, f"bounds must have 4 elements, got {len(obs.bounds)}"
+    if len(obs.bounds) != 4:
+        raise ValidationError(f"bounds must have 4 elements, got {len(obs.bounds)}")
 
-    # crs must be a non-empty string
-    assert isinstance(obs.crs, str) and len(obs.crs) > 0, "crs must be a non-empty string"
+    if not isinstance(obs.crs, str) or len(obs.crs) == 0:
+        raise ValidationError("crs must be a non-empty string")
+
+    # geometry arrays must be broadcastable to toa spatial dimensions
+    for angle_name in ("sza", "saa", "vza", "vaa"):
+        angle = getattr(obs.geometry, angle_name)
+        try:
+            np.broadcast_shapes(angle.shape, toa_shape)
+        except ValueError:
+            raise ValidationError(
+                f"geometry.{angle_name} shape {angle.shape} must be "
+                f"broadcastable to TOA spatial shape {toa_shape}"
+            )
 
 
 def _validate_atmospheric_state(atmo: AtmosphericState) -> None:
     """Validate M2 output before passing to M4.
 
     Raises:
-        AssertionError: If any validation rule is violated.
+        ValidationError: If any validation rule is violated.
     """
-    # Uncertainty arrays must be non-negative
     for name, field_val in [
         ("aot_unc", atmo.aot_unc),
         ("tcwv_unc", atmo.tcwv_unc),
         ("tco3_unc", atmo.tco3_unc),
     ]:
         vals = field_val.values
-        assert (vals[np.isfinite(vals)] >= 0).all(), (
-            f"{name} uncertainties must be non-negative"
-        )
+        if not (vals[np.isfinite(vals)] >= 0).all():
+            raise ValidationError(f"{name} uncertainties must be non-negative")
 
 
 def _validate_surface_prior(prior: SurfacePrior) -> None:
     """Validate M3 output before passing to M4.
 
     Raises:
-        AssertionError: If any validation rule is violated.
+        ValidationError: If any validation rule is violated.
     """
-    # boa and boa_unc must have matching shapes
-    assert prior.boa.shape == prior.boa_unc.shape, (
-        f"boa shape {prior.boa.shape} must match boa_unc shape {prior.boa_unc.shape}"
-    )
+    if prior.boa.shape != prior.boa_unc.shape:
+        raise ValidationError(
+            f"boa shape {prior.boa.shape} must match boa_unc shape {prior.boa_unc.shape}"
+        )
 
-    # mask must be broadcastable to boa spatial dimensions
     try:
         np.broadcast_shapes(prior.mask.shape, prior.boa.shape[-2:])
-    except ValueError as e:
-        raise AssertionError(
+    except ValueError:
+        raise ValidationError(
             f"mask shape {prior.mask.shape} must be broadcastable to "
             f"boa spatial shape {prior.boa.shape[-2:]}"
-        ) from e
+        )
 
 
 def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
     """Validate M4 output before passing to M5.
 
     Raises:
-        AssertionError: If any validation rule is violated.
+        ValidationError: If any validation rule is violated.
     """
-    # bands must be a subset of sensor_config.bands
     config_bands = {b.name for b in sib.sensor_config.bands}
     solver_bands = {b.name for b in sib.bands}
-    assert solver_bands <= config_bands, (
-        f"Solver bands {solver_bands - config_bands} not in sensor_config"
-    )
+    if not solver_bands <= config_bands:
+        raise ValidationError(
+            f"Solver bands {solver_bands - config_bands} not in sensor_config"
+        )
 
-    # Resolution metadata must be positive
-    assert sib.aux_resolution_m > 0, "aux_resolution_m must be positive"
-    assert sib.aerosol_resolution_m > 0, "aerosol_resolution_m must be positive"
+    if sib.aux_resolution_m <= 0:
+        raise ValidationError("aux_resolution_m must be positive")
+    if sib.aerosol_resolution_m <= 0:
+        raise ValidationError("aerosol_resolution_m must be positive")
+
+
+def _validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
+    """Validate M5 output before passing to M6.
+
+    Raises:
+        ValidationError: If any validation rule is violated.
+    """
+    if not isinstance(solved.converged, bool):
+        raise ValidationError("converged must be a boolean")
+    if not isinstance(solved.n_iterations, int):
+        raise ValidationError("n_iterations must be an int")
+    if not isinstance(solved.cost_final, (int, float)):
+        raise ValidationError("cost_final must be numeric")
+    if solved.n_iterations < 0:
+        raise ValidationError("n_iterations must be non-negative")
+
+    aot_vals = solved.aot.values
+    if not (aot_vals[np.isfinite(aot_vals)] >= 0).all():
+        raise ValidationError("solved AOT must be non-negative")
+
+    tcwv_vals = solved.tcwv.values
+    if not (tcwv_vals[np.isfinite(tcwv_vals)] >= 0).all():
+        raise ValidationError("solved TCWV must be non-negative")
+
+
+def _validate_correction_result(result: CorrectionResult) -> None:
+    """Validate M6 output before returning to user.
+
+    Raises:
+        ValidationError: If any validation rule is violated.
+    """
+    if len(result.boa.data_vars) == 0:
+        raise ValidationError("BOA must have at least one band variable")
+    if not isinstance(result.metadata, dict):
+        raise ValidationError("metadata must be a dictionary")
+    # processing_time_s is recommended but not mandatory for custom correctors
+    if "processing_time_s" not in result.metadata:
+        warnings.warn(
+            "CorrectionResult.metadata missing 'processing_time_s'; "
+            "consider including it for diagnostics",
+            stacklevel=2,
+        )

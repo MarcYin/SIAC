@@ -49,3 +49,9 @@ class AuthenticationError(SIACError):
     """Credentials missing or authentication failed for a data provider."""
 
     pass
+
+
+class PreprocessingError(SIACError):
+    """Error during satellite data preprocessing."""
+
+    pass

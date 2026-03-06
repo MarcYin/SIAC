@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.core.exceptions import ValidationError
 from siac.core.types import (
     SENTINEL2A_CONFIG,
     AtmosphericState,
@@ -329,7 +330,7 @@ class TestPipelineValidation:
         def bad_pp(path, aoi=None):
             return bad_obs
 
-        with pytest.raises(AssertionError, match="observation_time"):
+        with pytest.raises(ValidationError, match="observation_time"):
             run_pipeline(
                 Path("/fake"), None, None,
                 preprocessor=bad_pp,
@@ -362,7 +363,7 @@ class TestPipelineValidation:
         def bad_m2(bounds, crs, obs_time, res):
             return bad_atmo
 
-        with pytest.raises(AssertionError, match="non-negative"):
+        with pytest.raises(ValidationError, match="non-negative"):
             run_pipeline(
                 Path("/fake"), None, None,
                 preprocessor=mock_preprocessor,

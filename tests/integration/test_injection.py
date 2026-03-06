@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from siac.core.exceptions import ValidationError
 from siac.core.types import (
     CorrectionResult,
 )
@@ -168,7 +169,7 @@ class TestContractViolationByCustomProvider:
         def bad_pp(path, aoi=None):
             return bad_obs
 
-        with pytest.raises(AssertionError, match="observation_time"):
+        with pytest.raises(ValidationError, match="observation_time"):
             run_pipeline(
                 Path("/fake"), None, None,
                 preprocessor=bad_pp,
