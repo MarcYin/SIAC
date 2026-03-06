@@ -126,7 +126,6 @@ class SIAC:
         def _preprocessor_fn(path: Path, aoi=None) -> ObservationBundle:
             raw = preprocessor.preprocess(path)
             toa = raw["toa"]
-            first_var = list(toa.data_vars)[0]
             resolved_aoi = aoi or self._resolve_aoi(toa)
             return ObservationBundle(
                 toa=toa,
@@ -196,6 +195,7 @@ class SIAC:
                     temporal_interp=self.config.atmo_prior.temporal_interpolation == "linear",
                     download_missing=self.config.atmo_prior.download_missing,
                     auth=self._auth,
+                    cache_dir=self.config.atmo_prior.cache_dir,
                 )
             elif provider_name == "merra2":
                 from siac.priors.atmospheric.merra2 import MERRA2Provider
@@ -219,6 +219,7 @@ class SIAC:
                     temporal_interp=self.config.atmo_prior.temporal_interpolation == "linear",
                     download_missing=self.config.atmo_prior.download_missing,
                     auth=self._auth,
+                    cache_dir=self.config.atmo_prior.cache_dir,
                 )
 
         # Get bounds and CRS from AOI
@@ -557,6 +558,7 @@ def _resolve_atmo_provider(
             temporal_interp=config.atmo_prior.temporal_interpolation == "linear",
             download_missing=config.atmo_prior.download_missing,
             auth=auth,
+            cache_dir=config.atmo_prior.cache_dir,
         )
         return provider.get_prior
     if provider_name == "merra2":

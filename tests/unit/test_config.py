@@ -66,6 +66,18 @@ class TestSIACConfig:
         assert config.execution.max_workers == 8
         assert config.execution.retries == 1
 
+    def test_atmo_prior_remote_url_is_preserved(self):
+        config = SIACConfig(
+            sensor="s2",
+            atmo_prior={
+                "provider": "cams",
+                "data_path": "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
+            },
+        )
+
+        assert isinstance(config.atmo_prior.data_path, str)
+        assert config.atmo_prior.data_path == "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/"
+
     def test_config_to_yaml(self, tmp_path: Path):
         """Config should serialize to YAML."""
         config = SIACConfig(

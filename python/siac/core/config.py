@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -51,9 +52,9 @@ class AtmoPriorConfig(BaseModel):
             "'mcd19' (Earthaccess AOD-focused), 'era5', or 'user'"
         ),
     )
-    data_path: Path | None = Field(
+    data_path: str | Path | None = Field(
         default=None,
-        description="Path to atmospheric data directory or files",
+        description="Path or HTTP URL to atmospheric data directory or files",
     )
     cache_dir: Path | None = Field(
         default=None,
@@ -81,6 +82,21 @@ class AtmoPriorConfig(BaseModel):
         default=None,
         description="Path to user-provided TCO3 array (GeoTIFF)",
     )
+
+    @field_validator("data_path", mode="before")
+    @classmethod
+    def normalize_data_path(cls, value: Any) -> str | Path | None:
+        """Preserve remote URLs and normalize local paths."""
+        if value is None or isinstance(value, Path):
+            return value
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        if urlparse(text).scheme.lower() in {"http", "https"}:
+            return text
+        return Path(text).expanduser()
 
     @model_validator(mode="after")
     def validate_user_provider(self) -> AtmoPriorConfig:

@@ -242,6 +242,36 @@ def test_cams_download_missing_credentials_branch(monkeypatch, tmp_path: Path):
     assert p._download_cams_file(datetime(2024, 1, 4)) is None
 
 
+def test_cams_download_uses_cache_dir_for_remote_source(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class _FakeReq:
+        def download(self, path):
+            captured["download_path"] = path
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def retrieve(self, dataset, request):
+            captured["dataset"] = dataset
+            captured["request"] = request
+            return _FakeReq()
+
+    monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=_FakeClient))
+
+    auth = CredentialManager()
+    auth.set_credentials("cds", key="abc:123")
+    provider = CAMSProvider(
+        "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
+        auth=auth,
+        cache_dir=tmp_path / "cams-cache",
+    )
+    out = provider._download_cams_file(datetime(2024, 1, 5))
+    assert out == tmp_path / "cams-cache" / "CAMS_2024-01-05.nc"
+    assert captured["download_path"] == str(out)
+
+
 def test_cams_load_data_download_missing_path(monkeypatch, tmp_path: Path):
     p = CAMSProvider(tmp_path / "missing_dir", download_missing=True)
 

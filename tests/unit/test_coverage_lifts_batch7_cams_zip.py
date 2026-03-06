@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 import xarray as xr
+from pyproj import Transformer
 
 from siac.core.auth import CredentialManager
 from siac.priors.atmospheric.cams import CAMSProvider
@@ -102,6 +103,143 @@ def test_cams_source_and_load_branch_paths(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr(p_download, "_download_cams_file", lambda _obs_time: downloaded)
     monkeypatch.setattr(p_download, "_load_from_explicit_path", lambda _path: "loaded")
     assert p_download._load_cams_data(datetime(2024, 1, 1)) == "loaded"
+
+
+def test_cams_remote_base_and_remote_file_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cached = tmp_path / "cached"
+    cached.write_text("x")
+    seen: list[str] = []
+
+    remote_base = CAMSProvider(
+        "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
+        cache_dir=tmp_path / "cache",
+    )
+
+    def _cache_for_base(url: str) -> Path:
+        seen.append(url)
+        if url.endswith("2024-01-01.nc"):
+            return cached
+        raise FileNotFoundError(url)
+
+    monkeypatch.setattr(remote_base, "_cache_remote_file", _cache_for_base)
+    monkeypatch.setattr(remote_base, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name)
+    loaded = remote_base._load_cams_data(datetime(2024, 1, 1))
+    assert loaded == "2024-01-01.nc"
+    assert seen == ["https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-01.nc"]
+
+    remote_file = CAMSProvider(
+        "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-02.nc",
+        cache_dir=tmp_path / "cache",
+    )
+    monkeypatch.setattr(remote_file, "_cache_remote_file", lambda _url: cached)
+    monkeypatch.setattr(remote_file, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name)
+    assert remote_file._load_cams_data(datetime(2024, 1, 2)) == "2024-01-02.nc"
+
+
+def test_cams_remote_missing_can_fallback_to_download(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    remote = CAMSProvider(
+        "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
+        download_missing=True,
+        cache_dir=tmp_path / "cache",
+    )
+    downloaded = tmp_path / "cache" / "CAMS_2024-01-01.nc"
+
+    monkeypatch.setattr(remote, "_cache_remote_file", lambda _url: (_ for _ in ()).throw(FileNotFoundError("missing")))
+    monkeypatch.setattr(remote, "_download_cams_file", lambda _obs_time: downloaded)
+    monkeypatch.setattr(remote, "_load_from_explicit_path", lambda path: "downloaded" if path == downloaded else None)
+
+    assert remote._load_cams_data(datetime(2024, 1, 1)) == "downloaded"
+
+
+def test_cams_extract_supports_forecast_style_time_axes(tmp_path: Path) -> None:
+    provider = CAMSProvider(tmp_path, temporal_interp=False)
+    ds = xr.Dataset(
+        {
+            "aod550": xr.DataArray(
+                np.array(
+                    [
+                        [[[0.2], [0.2], [0.2]]],
+                        [[[0.4], [0.4], [0.4]]],
+                    ],
+                    dtype=np.float32,
+                ),
+                dims=["forecast_period", "forecast_reference_time", "latitude", "longitude"],
+                coords={
+                    "forecast_period": np.array([0, 3], dtype="timedelta64[h]"),
+                    "forecast_reference_time": [np.datetime64("2024-01-01T00:00:00")],
+                    "valid_time": (
+                        ("forecast_reference_time", "forecast_period"),
+                        np.array(
+                            [[
+                                np.datetime64("2024-01-01T00:00:00"),
+                                np.datetime64("2024-01-01T03:00:00"),
+                            ]],
+                        ),
+                    ),
+                    "latitude": [1.0, 0.0, -1.0],
+                    "longitude": [0.0],
+                },
+            )
+        }
+    )
+
+    out = provider._extract_variable(
+        ds,
+        "aod550",
+        (0.0, -1.0, 1.0, 1.0),
+        "EPSG:4326",
+        1.0,
+        datetime(2024, 1, 1, 1),
+    )
+
+    assert out.ndim == 2
+    assert out.dims == ("latitude", "longitude")
+    assert float(out.mean()) == pytest.approx(0.2)
+
+
+def test_cams_extract_transforms_projected_bounds(tmp_path: Path) -> None:
+    provider = CAMSProvider(tmp_path)
+    ds = xr.Dataset(
+        {
+            "aod550": xr.DataArray(
+                np.array(
+                    [
+                        [0.1, 0.2, 0.3],
+                        [0.4, 0.5, 0.6],
+                        [0.7, 0.8, 0.9],
+                    ],
+                    dtype=np.float32,
+                ),
+                dims=["latitude", "longitude"],
+                coords={
+                    "latitude": [17.0, 16.6, 16.2],
+                    "longitude": [117.0, 117.4, 117.8],
+                },
+            )
+        }
+    )
+
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32650", always_xy=True)
+    west, south = transformer.transform(117.3, 16.3)
+    east, north = transformer.transform(117.7, 16.7)
+    out = provider._extract_variable(
+        ds,
+        "aod550",
+        (west, south, east, north),
+        "EPSG:32650",
+        10.0,
+        datetime(2024, 1, 1),
+    )
+
+    assert out.dims == ("latitude", "longitude")
+    assert out.shape == (1, 1)
+    assert float(out.values[0, 0]) == pytest.approx(0.5)
 
 
 

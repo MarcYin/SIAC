@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import numpy as np
 import xarray as xr
@@ -40,6 +41,7 @@ class CAMSProvider:
     _NETCDF_SUFFIXES = {".nc", ".nc4"}
     _TIFF_SUFFIXES = {".tif", ".tiff"}
     _REQUIRED_VARIABLES = ("aod550", "tcwv", "gtco3")
+    _DEFAULT_REMOTE_CACHE_DIR = Path.home() / ".cache" / "siac" / "cams"
     _TIFF_VARIABLE_ALIASES = {
         "aod550": "aod550",
         "aot": "aod550",
@@ -82,11 +84,13 @@ class CAMSProvider:
         temporal_interp: bool = True,
         download_missing: bool = False,
         auth: CredentialManager | None = None,
+        cache_dir: str | Path | None = None,
     ):
-        self.data_dir = Path(data_dir)
+        self.data_dir = self._normalize_data_source(data_dir)
         self.temporal_interp = temporal_interp
         self.download_missing = download_missing
         self._auth = auth
+        self.cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else None
 
     @property
     def source_name(self) -> str:
@@ -135,18 +139,30 @@ class CAMSProvider:
         if direct is not None:
             return direct
 
-        if not self.data_dir.exists():
+        if self._is_remote_source(self.data_dir):
+            remote = self._load_from_remote_base(str(self.data_dir), obs_time)
+            if remote is not None:
+                return remote
             if self.download_missing:
-                if self.data_dir.suffix:
-                    self.data_dir.parent.mkdir(parents=True, exist_ok=True)
+                downloaded_file = self._download_cams_file(obs_time)
+                if downloaded_file is not None:
+                    return self._load_from_explicit_path(downloaded_file)
+            return None
+
+        data_dir = self._require_local_data_dir()
+
+        if not data_dir.exists():
+            if self.download_missing:
+                if data_dir.suffix:
+                    data_dir.parent.mkdir(parents=True, exist_ok=True)
                 else:
-                    self.data_dir.mkdir(parents=True, exist_ok=True)
+                    data_dir.mkdir(parents=True, exist_ok=True)
             else:
-                logger.warning(f"CAMS path does not exist: {self.data_dir}")
+                logger.warning(f"CAMS path does not exist: {data_dir}")
                 return None
 
-        if self.data_dir.exists() and not self.data_dir.is_dir():
-            logger.warning(f"CAMS path is not a directory: {self.data_dir}")
+        if data_dir.exists() and not data_dir.is_dir():
+            logger.warning(f"CAMS path is not a directory: {data_dir}")
             return None
 
         date_str = obs_time.strftime("%Y%m%d")
@@ -165,7 +181,7 @@ class CAMSProvider:
         ]
 
         for pattern in patterns:
-            files = list(self.data_dir.glob(pattern))
+            files = list(data_dir.glob(pattern))
             if files:
                 try:
                     return xr.open_mfdataset(files, combine="by_coords")
@@ -201,6 +217,7 @@ class CAMSProvider:
         var = data[var_name]
         if "band" in var.dims and var.sizes["band"] == 1:
             var = var.squeeze("band", drop=True)
+        var = self._standardize_temporal_dims(var, obs_time)
 
         # Temporal interpolation
         if "time" in var.dims and self.temporal_interp:
@@ -211,9 +228,61 @@ class CAMSProvider:
         # Spatial subset and regrid (simplified)
         xmin, ymin, xmax, ymax = bounds
         if "latitude" in var.dims:
-            var = var.sel(latitude=slice(ymax, ymin), longitude=slice(xmin, xmax))
+            if crs and str(crs).upper() != "EPSG:4326":
+                from siac.io.reprojection import transform_bounds
+
+                xmin, ymin, xmax, ymax = transform_bounds(bounds, crs, "EPSG:4326")
+
+            xmin, xmax = sorted((float(xmin), float(xmax)))
+            ymin, ymax = sorted((float(ymin), float(ymax)))
+
+            latitude_vals = var.coords["latitude"].values
+            lat_descending = bool(latitude_vals[0] > latitude_vals[-1])
+            lat_slice = slice(ymax, ymin) if lat_descending else slice(ymin, ymax)
+
+            longitude_vals = var.coords["longitude"].values
+            if float(np.nanmin(longitude_vals)) >= 0.0 and xmax <= 180.0:
+                xmin = xmin % 360.0
+                xmax = xmax % 360.0
+            lon_descending = bool(longitude_vals[0] > longitude_vals[-1])
+            lon_slice = slice(xmax, xmin) if lon_descending else slice(xmin, xmax)
+
+            var = var.sel(latitude=lat_slice, longitude=lon_slice)
 
         return var
+
+    def _standardize_temporal_dims(self, var: xr.DataArray, obs_time: datetime) -> xr.DataArray:
+        """Normalize forecast-style CAMS time axes to a simple ``time`` axis."""
+        if "forecast_reference_time" in var.dims:
+            if var.sizes["forecast_reference_time"] == 1:
+                var = var.squeeze("forecast_reference_time", drop=True)
+            else:
+                var = var.sel(forecast_reference_time=np.datetime64(obs_time), method="nearest")
+
+        if "forecast_period" not in var.dims:
+            return var
+
+        valid_time = var.coords.get("valid_time")
+        if valid_time is None:
+            return var
+
+        if "forecast_reference_time" in valid_time.dims:
+            if valid_time.sizes.get("forecast_reference_time", 0) == 1:
+                valid_time = valid_time.squeeze("forecast_reference_time", drop=True)
+            else:
+                valid_time = valid_time.sel(
+                    forecast_reference_time=np.datetime64(obs_time),
+                    method="nearest",
+                )
+
+        if valid_time.ndim != 1 or valid_time.dims != ("forecast_period",):
+            return var
+
+        return (
+            var.assign_coords(time=("forecast_period", valid_time.values))
+            .swap_dims({"forecast_period": "time"})
+            .drop_vars("forecast_period", errors="ignore")
+        )
 
     def _create_default_array(self, bounds: tuple, _crs: str, resolution: float, value: float) -> xr.DataArray:
         """Create default array with constant value."""
@@ -236,25 +305,127 @@ class CAMSProvider:
             elevation=xr.zeros_like(aot)
         )
 
-    def _load_from_explicit_path(self, path: Path) -> xr.Dataset | None:
-        """Load CAMS data when the configured path points directly to a file."""
+    @classmethod
+    def _normalize_data_source(cls, value: str | Path) -> str | Path:
+        """Keep remote URLs as strings and normalize local paths."""
+        if isinstance(value, Path):
+            return value.expanduser()
+
+        source = str(value).strip()
+        if cls._is_remote_source(source):
+            return source
+        return Path(source).expanduser()
+
+    @staticmethod
+    def _is_remote_source(value: str | Path) -> bool:
+        if isinstance(value, Path):
+            return False
+        scheme = urlparse(str(value)).scheme.lower()
+        return scheme in {"http", "https"}
+
+    @staticmethod
+    def _source_suffix(value: str | Path) -> str:
+        if isinstance(value, Path):
+            return value.suffix.lower()
+        return Path(urlparse(str(value)).path).suffix.lower()
+
+    def _require_local_data_dir(self) -> Path:
+        if isinstance(self.data_dir, Path):
+            return self.data_dir
+        raise TypeError("Local CAMS path requested for a remote CAMS source.")
+
+    def _remote_cache_root(self) -> Path:
+        cache_root = self.cache_dir or self._DEFAULT_REMOTE_CACHE_DIR
+        cache_root.mkdir(parents=True, exist_ok=True)
+        return cache_root
+
+    def _remote_candidate_urls(self, base_url: str, obs_time: datetime) -> list[str]:
+        base = base_url.rstrip("/")
+        date_compact = obs_time.strftime("%Y%m%d")
+        iso_date = obs_time.strftime("%Y-%m-%d")
+        return [
+            f"{base}/{iso_date}.nc",
+            f"{base}/{iso_date}.nc4",
+            f"{base}/CAMS_{iso_date}.nc",
+            f"{base}/CAMS_{iso_date}.nc4",
+            f"{base}/cams_{date_compact}.nc",
+            f"{base}/cams_{date_compact}.nc4",
+            f"{base}/cams_nrt_{date_compact}.nc",
+            f"{base}/cams_nrt_{date_compact}.nc4",
+        ]
+
+    def _load_from_explicit_path(self, path: str | Path) -> xr.Dataset | None:
+        """Load CAMS data when the configured source points directly to a file."""
+        if self._is_remote_source(path):
+            if self._source_suffix(path) not in self._NETCDF_SUFFIXES | self._TIFF_SUFFIXES:
+                return None
+            return self._load_from_remote_url(str(path))
+        return self._load_from_local_explicit_path(Path(path))
+
+    def _load_from_local_explicit_path(
+        self,
+        path: Path,
+        *,
+        source_name: str | None = None,
+    ) -> xr.Dataset | None:
+        """Load CAMS data from a local NetCDF or GeoTIFF file."""
         if not path.exists() or not path.is_file():
             return None
 
-        suffix = path.suffix.lower()
+        suffix = self._source_suffix(source_name or path)
 
         if suffix in self._NETCDF_SUFFIXES:
             try:
                 return xr.open_dataset(path)
             except Exception as e:
-                logger.warning(f"Failed to open CAMS NetCDF file {path}: {e}")
+                origin = source_name or str(path)
+                logger.warning(f"Failed to open CAMS NetCDF file {origin}: {e}")
                 return None
 
         if suffix in self._TIFF_SUFFIXES:
-            return self._load_tif_dataset(path)
+            return self._load_tif_dataset(path, source_name=source_name)
 
-        logger.warning(f"Unsupported CAMS file extension: {path}")
+        logger.warning(f"Unsupported CAMS file extension: {source_name or path}")
         return None
+
+    def _load_from_remote_base(self, base_url: str, obs_time: datetime) -> xr.Dataset | None:
+        for url in self._remote_candidate_urls(base_url, obs_time):
+            dataset = self._load_from_remote_url(url, missing_ok=True)
+            if dataset is not None:
+                return dataset
+        return None
+
+    def _cache_remote_file(self, url: str) -> Path:
+        import fsspec
+
+        local_path = fsspec.open_local(
+            f"simplecache::{url}",
+            simplecache={"cache_storage": str(self._remote_cache_root())},
+        )
+        return Path(local_path)
+
+    def _load_from_remote_url(self, url: str, *, missing_ok: bool = False) -> xr.Dataset | None:
+        suffix = self._source_suffix(url)
+        if suffix not in self._NETCDF_SUFFIXES and suffix not in self._TIFF_SUFFIXES:
+            if not missing_ok:
+                logger.warning(f"Unsupported CAMS remote file extension: {url}")
+            return None
+
+        try:
+            local_path = self._cache_remote_file(url)
+        except FileNotFoundError:
+            if not missing_ok:
+                logger.warning(f"CAMS remote file not found: {url}")
+            return None
+        except Exception as exc:
+            log = logger.debug if missing_ok else logger.warning
+            log(f"Failed to cache remote CAMS file {url}: {exc}")
+            return None
+
+        return self._load_from_local_explicit_path(
+            local_path,
+            source_name=Path(urlparse(url).path).name,
+        )
 
     def _load_cams_tif_group(self, date_str: str, iso_date: str) -> xr.Dataset | None:
         """Load CAMS variables from GeoTIFF files in a directory."""
@@ -267,7 +438,7 @@ class CAMSProvider:
 
         for pattern in patterns:
             files = sorted(
-                p for p in self.data_dir.glob(pattern)
+                p for p in self._require_local_data_dir().glob(pattern)
                 if p.is_file() and p.suffix.lower() in self._TIFF_SUFFIXES
             )
             if not files:
@@ -289,20 +460,21 @@ class CAMSProvider:
 
         return merged
 
-    def _load_tif_dataset(self, path: Path) -> xr.Dataset | None:
+    def _load_tif_dataset(self, path: Path, *, source_name: str | None = None) -> xr.Dataset | None:
         """Open a CAMS GeoTIFF and map bands/files to CAMS variable names."""
         try:
             da = xr.open_dataarray(path, engine="rasterio")
         except Exception as e:
-            logger.warning(f"Failed to open CAMS GeoTIFF {path}: {e}")
+            origin = source_name or str(path)
+            logger.warning(f"Failed to open CAMS GeoTIFF {origin}: {e}")
             return None
 
         if "band" in da.dims and da.sizes["band"] > 1:
             return self._dataset_from_multiband_tif(da)
 
-        variable = self._infer_variable_name(path.name)
+        variable = self._infer_variable_name(source_name or path.name)
         if variable is None:
-            logger.warning(f"Could not infer CAMS variable from GeoTIFF name: {path.name}")
+            logger.warning(f"Could not infer CAMS variable from GeoTIFF name: {source_name or path.name}")
             return None
 
         if "band" in da.dims and da.sizes["band"] == 1:
@@ -360,7 +532,12 @@ class CAMSProvider:
             logger.warning("cdsapi is not installed; cannot auto-download CAMS data")
             return None
 
-        output_dir = self.data_dir if self.data_dir.is_dir() else self.data_dir.parent
+        if isinstance(self.data_dir, Path) and self.data_dir.is_dir():
+            output_dir = self.data_dir
+        elif isinstance(self.data_dir, Path):
+            output_dir = self.data_dir.parent
+        else:
+            output_dir = self._remote_cache_root()
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"CAMS_{obs_time:%Y-%m-%d}.nc"
         date_range = obs_time.strftime("%Y-%m-%d/%Y-%m-%d")

@@ -137,8 +137,16 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
 
     # Mock the module-level resolvers that process() now calls
-    monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _cfg, auth=None: "atmo-provider")
-    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _cfg, auth=None: "surface-prior-provider")
+    def _fake_atmo_provider(_cfg, auth=None):
+        _ = auth
+        return "atmo-provider"
+
+    def _fake_surface_provider(_cfg, auth=None):
+        _ = auth
+        return "surface-prior-provider"
+
+    monkeypatch.setattr("siac.siac._resolve_atmo_provider", _fake_atmo_provider)
+    monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", _fake_surface_provider)
     monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "grid-assembler")
     monkeypatch.setattr("siac.siac._resolve_solver", lambda _cfg: "solver")
     monkeypatch.setattr("siac.siac._resolve_corrector", lambda _cfg: "corrector")
@@ -205,13 +213,22 @@ def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
     fake_aoi = SimpleNamespace(get_bounds=lambda: (1.0, 2.0, 3.0, 4.0), crs="EPSG:4326")
     metadata = {"observation_time": datetime(2026, 1, 1, 0, 0, 0)}
 
-    cfg_cams = SIACConfig(sensor="s2", atmo_prior={"provider": "cams", "data_path": "/tmp/cams"})
+    cfg_cams = SIACConfig(
+        sensor="s2",
+        atmo_prior={
+            "provider": "cams",
+            "data_path": "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
+            "cache_dir": "/tmp/cams-cache",
+        },
+    )
     siac_cams = SIAC(cfg_cams)
     monkeypatch.setattr("siac.siac.CAMSProvider", _FakeProvider)
     out_cams = siac_cams._get_atmospheric_prior(fake_aoi, metadata)
     assert out_cams[0] == (1.0, 2.0, 3.0, 4.0)
     assert out_cams[1] == "EPSG:4326"
     assert calls[0][1]["download_missing"] is True
+    assert calls[0][0][0] == "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/"
+    assert str(calls[0][1]["cache_dir"]) == "/tmp/cams-cache"
 
     cfg_merra = SIACConfig(sensor="s2", atmo_prior={"provider": "merra2", "cache_dir": "/tmp/cache"})
     siac_merra = SIAC(cfg_merra)
@@ -535,6 +552,7 @@ def test_resolve_preprocessor_and_atmo_provider_branches(monkeypatch):
     atmo_fn = _resolve_atmo_provider(cfg, auth="auth")
     assert atmo_fn((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 1), 1000.0)[3] == 1000.0
     assert calls[0][1]["download_missing"] is True
+    assert calls[0][1]["cache_dir"] is None
 
     cfg_merra = SIACConfig(sensor="s2", atmo_prior={"provider": "merra2", "cache_dir": "/tmp/cache"})
     monkeypatch.setattr("siac.priors.atmospheric.merra2.MERRA2Provider", _FakeProvider)

@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 import xarray as xr
@@ -89,11 +90,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cams-dir",
-        type=Path,
         default=None,
         help=(
-            "Directory containing CAMS files. If omitted, uses "
-            "<cache-dir>/cams and falls back to provider defaults when empty."
+            "Directory, file path, or HTTP base/file URL for CAMS data. "
+            "If omitted, uses <cache-dir>/cams and falls back to provider defaults when empty."
         ),
     )
     parser.add_argument(
@@ -306,13 +306,20 @@ def _build_observation_bundle(
 
 
 def _build_config(args: argparse.Namespace) -> SIACConfig:
-    cams_dir = args.cams_dir if args.cams_dir is not None else args.cache_dir / "cams"
-    cams_dir.mkdir(parents=True, exist_ok=True)
+    cams_dir: str | Path = args.cams_dir if args.cams_dir is not None else args.cache_dir / "cams"
+    if isinstance(cams_dir, str):
+        scheme = urlparse(cams_dir).scheme.lower()
+        if scheme not in {"http", "https"}:
+            cams_dir = Path(cams_dir).expanduser()
+    if isinstance(cams_dir, Path):
+        cams_dir.mkdir(parents=True, exist_ok=True)
     args.cache_dir.mkdir(parents=True, exist_ok=True)
+    cams_cache_dir = args.cache_dir / "cams-cache"
+    cams_cache_dir.mkdir(parents=True, exist_ok=True)
 
     return SIACConfig(
         sensor="s2",
-        atmo_prior={"provider": "cams", "data_path": cams_dir},
+        atmo_prior={"provider": "cams", "data_path": cams_dir, "cache_dir": cams_cache_dir},
         brdf={"provider": "mcd43"},
         rt_model={"backend": "lut", "lut_path": args.lut_path},
         solver={"aerosol_resolution": args.aerosol_resolution},
