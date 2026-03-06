@@ -111,7 +111,6 @@ To keep LUT code maintainable, the Zarr LUT backend is separated by concern:
 - `siac.rt.lut.http_zip_store`: ReadOnlyZipFileSystem-style ZIP access for local/HTTP/S3 LUT archives
 - `siac.rt.lut.create`: LUT generation utilities (`create_lut_from_py6s`)
 - `siac.rt.lut.constants`: default public LUT URL and LUT coordinate constants
-- `siac.rt.lut.zarr_lut`: compatibility facade that re-exports the public API
 
 ### 2.4 Key Design Rule
 
@@ -1464,6 +1463,339 @@ Planned files:
 | `tests/integration/test_injection.py` | NEW | Custom provider injection + bad-provider rejection tests |
 | `tests/integration/test_orchestration.py` | NEW | Pipeline happy-path, validation-integration, concurrency tests |
 
+### 9.10 Spectral Response Function (SRF) Rollout Plan
+
+The current Gaussian centre/FWHM approximation is not sufficient once SIAC
+needs to distinguish between satellite platforms such as `S2A`, `S2B`, `S2C`,
+`L8`, and `L9`. The runtime needs a proper SRF plan with three separate layers:
+
+1. **Source access**: how SIAC locates authoritative SRF publications
+2. **Canonicalization**: how different vendor formats are converted into one SIAC format
+3. **Runtime consumption**: how LUT, emulator, and prior code use the canonical SRF
+
+The design rule is:
+
+> **If an official SRF exists for a platform, SIAC should use that SRF as the primary spectral definition.**
+> Gaussian centre/FWHM is a fallback only for sensors without published SRFs.
+
+#### 9.10.1 SRF Source Access Layer
+
+SIAC should not fetch ad hoc SRF files from arbitrary URLs during runtime.
+Instead, it should have a small source registry that points to authoritative
+sensor-specific SRF publications.
+
+Planned source families:
+
+| Family | Typical source | Platforms |
+|--------|----------------|-----------|
+| ESA / Copernicus | Sentinel-2 SRF tables | `S2A`, `S2B`, `S2C` |
+| USGS / NASA | Landsat RSR tables | `L8`, `L9` |
+| NASA / NOAA | MODIS / VIIRS reference RSR | prior reference basis |
+| User-local | CSV / TSV / NetCDF provided by user | custom sensors |
+
+Sentinel-2 source note:
+- the authoritative landing page is [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission)
+- the Sentinel-2 parser should resolve the linked `Sentinel-2 Spectral Response Functions (S2-SRF)` document from that page / its linked documents page, rather than pinning a brittle attachment URL in code
+
+Planned source manifest contract:
+
+```python
+@dataclass(frozen=True)
+class SRFSourceSpec:
+    source_id: str
+    sensor_id: str
+    satellite_id: str
+    version: str
+    source_url: str | None
+    local_path: Path | None
+    file_format: str          # "csv", "xlsx", "txt", "nc", ...
+    parser_name: str
+    checksum_sha256: str | None
+    licence: str | None
+```
+
+Rules:
+- only official or user-explicit sources are allowed
+- the manifest must pin version and checksum where possible
+- remote access is a build/update task, not a runtime dependency
+- runtime code reads from a local SRF repository generated from the manifest
+
+#### 9.10.2 Canonical SIAC SRF Format
+
+Raw SRF publications come in different file layouts, wavelength units, and band
+names. SIAC needs one canonical in-memory format for all sensors.
+
+Planned canonical object:
+
+```python
+@dataclass(frozen=True)
+class SpectralResponseFunction:
+    sensor_id: str
+    satellite_id: str
+    band_name: str
+    wavelengths_nm: np.ndarray
+    response: np.ndarray
+    response_raw: np.ndarray | None = None
+    source_id: str | None = None
+    source_version: str | None = None
+    source_url: str | None = None
+    centre_wavelength_nm: float | None = None
+    effective_wavelength_nm: float | None = None
+    fwhm_nm: float | None = None
+```
+
+Canonicalization rules:
+- `wavelengths_nm` is strictly ascending and stored in nanometres
+- `response` is dimensionless, non-negative, finite, and **area-normalized**
+- `response_raw` optionally preserves the published relative-response values
+- `centre_wavelength_nm`, `effective_wavelength_nm`, and `fwhm_nm` are derived diagnostics, not the authoritative definition
+- band identity is always `(sensor_id, satellite_id, band_name)`, not just `band_name`
+
+The runtime should integrate with `response`, not with `response_raw`.
+Area-normalized response is the correct form for spectral convolution:
+
+$$
+\int R(\lambda)\,d\lambda = 1
+$$
+
+This avoids ambiguity around peak-normalized curves from vendor files.
+
+#### 9.10.3 Raw Source Conversion Pipeline
+
+Each raw SRF family should have a dedicated converter that maps its native file
+format into `SpectralResponseFunction`.
+
+Planned conversion stages:
+
+1. load vendor file with a source-specific parser
+2. map vendor band labels to SIAC canonical band names
+3. convert wavelength units to nanometres
+4. sort wavelengths and drop duplicates
+5. clip tiny negative numerical artefacts to zero
+6. preserve the published response as `response_raw`
+7. compute normalized `response`
+8. derive `effective_wavelength_nm`, `centre_wavelength_nm`, and `fwhm_nm`
+9. validate and store in the local SRF repository
+
+Planned converters:
+
+| Converter | Input families | Notes |
+|----------|----------------|-------|
+| `parse_esa_s2_srf(...)` | Sentinel-2 ESA SRF tables | source is the SentiWiki `S2 Mission` page and its linked `S2-SRF` document; distinguish `S2A`, `S2B`, `S2C` explicitly |
+| `parse_usgs_landsat_rsr(...)` | Landsat 8/9 RSR files | keep `L8` and `L9` separate |
+| `parse_reference_rsr(...)` | MODIS / VIIRS RSR tables | used by surface-prior projection |
+| `parse_user_srf(...)` | user CSV / TSV / NetCDF | requires explicit metadata mapping |
+
+#### 9.10.4 Local SRF Repository
+
+Runtime code should not know about raw vendor files. It should resolve SRFs
+from a local SIAC repository.
+
+Planned repository responsibilities:
+- load SRF by `(sensor_id, satellite_id, band_name)`
+- expose all bands for a platform
+- return provenance metadata with each SRF
+- cache interpolation of SRFs onto the active LUT wavelength grid
+
+Planned API:
+
+```python
+class SRFRepository:
+    def get_band_srf(
+        self,
+        sensor_id: str,
+        satellite_id: str,
+        band_name: str,
+    ) -> SpectralResponseFunction: ...
+
+    def get_sensor_srfs(
+        self,
+        sensor_id: str,
+        satellite_id: str,
+    ) -> dict[str, SpectralResponseFunction]: ...
+```
+
+Storage choice:
+- authoritative local store should be versioned and testable
+- actual on-disk format can be `zarr`, `netcdf`, or `npz`
+- the repository API is the stable boundary; storage format is not
+
+#### 9.10.5 SRF Storage Policy for LUT Usage
+
+The SRF is used by the dense spectral LUT backend, so the storage policy must
+be designed around LUT convolution rather than around plotting convenience.
+
+The decision is:
+
+> **Do not store the authoritative SRF on the LUT wavelength grid.**
+> Store the canonical SRF in a sensor-native form, then derive a LUT-aligned
+> kernel for the active LUT grid and cache that derived kernel.
+
+This avoids coupling SRF content to one LUT version or wavelength spacing.
+Different LUT products may use different wavelength axes, so storing the
+authoritative SRF on the LUT grid would duplicate data and make SRFs depend on
+the current LUT implementation.
+
+##### Canonical SRF storage
+
+Canonical SRFs should be stored only over their real spectral support:
+
+- start at the first wavelength where the published response becomes non-zero
+- end at the last wavelength where the published response is non-zero
+- preserve one explicit zero-valued boundary sample on each side if the source
+  format provides it, or synthesize equivalent boundary zeros during conversion
+- do **not** pad the canonical SRF over the full LUT wavelength domain
+
+This means the canonical object is compact and physically meaningful. The
+authoritative SRF is the band support, not a large mostly-zero vector.
+
+##### Derived LUT-aligned kernel
+
+For actual convolution, the runtime should build a derived SRF kernel on the
+active LUT wavelength axis:
+
+```python
+@dataclass(frozen=True)
+class AlignedSRFKernel:
+    sensor_id: str
+    satellite_id: str
+    band_name: str
+    lut_id: str
+    wavelength_axis_hash: str
+    start_index: int
+    end_index: int
+    wavelengths_nm: np.ndarray
+    response_on_lut: np.ndarray
+    solar_weighted_response_on_lut: np.ndarray | None = None
+```
+
+Design rules:
+- `wavelengths_nm` must be a slice of the LUT wavelength coordinate
+- `response_on_lut` is the canonical SRF interpolated onto the LUT axis
+- only the support slice should be stored, not the full zero-padded LUT axis
+- `start_index:end_index` maps the support slice back into the parent LUT axis
+- `solar_weighted_response_on_lut` is optional and only valid for LUT terms that
+  require irradiance-weighted convolution
+
+This gives the backend a structured SRF representation without making the SRF
+repository depend on LUT layout.
+
+##### Wavelength spacing policy
+
+The canonical SRF should keep the source publication's effective sampling after
+cleanup. SIAC should **not** force all sensors onto a universal SRF spacing such
+as 1 nm, and should **not** force canonical SRFs onto the LUT spacing.
+
+Instead:
+- the LUT remains authoritative for convolution spacing during runtime
+- the SRF remains authoritative for the band shape in the repository
+- interpolation bridges the two only when a specific LUT is active
+
+If a vendor SRF is extremely coarse or irregular, the converter may densify it
+as a controlled preprocessing step, but that is a source-family parser detail,
+not a global storage rule.
+
+##### Support window for LUT subsetting
+
+LUT wavelength subsetting for a band should be driven by the tabulated SRF
+support, not by Gaussian sigma rules.
+
+Planned rule:
+- find the SRF support bounds from the canonical SRF
+- map them onto the LUT wavelength axis
+- expand the selected LUT slice by one wavelength sample on each side when
+  available, so numerical integration at the support edge remains stable
+- interpolate the SRF only on that slice
+
+This replaces the current "centre wavelength ± sigma window" approximation for
+platforms that have a real SRF.
+
+##### Persisted artifacts
+
+Only the canonical SRF repository is authoritative.
+Derived LUT-aligned kernels are cache artifacts.
+
+Allowed persistence options for derived kernels:
+- in-memory cache keyed by `(lut_id, wavelength_axis_hash, sensor_id, satellite_id, band_name)`
+- optional on-disk cache for expensive public LUTs
+
+If on-disk caching is added, it must be versioned by LUT identity. A cached
+`S2A B08` kernel for one LUT wavelength axis must not be reused for another LUT
+with different spacing or bounds.
+
+#### 9.10.6 Runtime Integration Rules
+
+`SensorConfig` and `ObservationBundle` must carry the actual platform identity
+used to resolve SRFs. This means Sentinel-2 processing must stop collapsing
+unknown platforms to `S2A`.
+
+Required runtime changes:
+- `SensorConfig` should reference canonical SRFs by platform-specific key
+- `Sentinel2Preprocessor` must resolve `S2A`, `S2B`, and `S2C` explicitly
+- Landsat paths must keep `L8` and `L9` distinct
+- `SpectralBandDescriptor` should treat tabulated SRF as first-class, not optional decoration
+- LUT spectral convolution must use the tabulated SRF when available
+- emulator and prior-projection code should use derived spectral metadata from the SRF repository, not hand-written constants
+
+Interpolation policy:
+- canonical SRFs remain in their native tabulated form
+- at runtime they are interpolated onto the active LUT wavelength axis
+- interpolation is cached per `(lut_id, platform, band, wavelength_axis)`
+- Gaussian fallback is only allowed when the repository has no SRF for that platform
+
+#### 9.10.7 Expected SRF Design by Sensor Family
+
+Platform specificity must be represented at the right level:
+
+| Sensor family | Required SRF identity | Notes |
+|--------------|------------------------|-------|
+| Sentinel-2 MSI | `(MSI, S2A, band)`, `(MSI, S2B, band)`, `(MSI, S2C, band)` | platform-specific SRFs are required |
+| Landsat OLI | `(OLI, L8, band)`, `(OLI, L9, band)` | platform-specific RSRs are required |
+| MODIS / VIIRS reference | reference-sensor band id | used for prior-space mapping |
+| Custom sensors | `(sensor_id, satellite_id, band)` | supplied by user manifest |
+
+Detector-level SRFs are out of scope for the first implementation.
+The first stable unit is **platform-level band SRF**. If detector-specific SRFs
+are needed later, they should extend the key with an optional detector id
+without changing the platform-level API.
+
+#### 9.10.8 Validation and Test Plan
+
+SRF handling needs both parser tests and physics tests.
+
+Required tests:
+
+| Layer | Test | Assert |
+|------|------|--------|
+| unit | source manifest validation | bad parser / checksum config is rejected |
+| unit | raw parser per source family | correct band count and provenance extracted |
+| unit | normalization | `response >= 0`, finite, area integrates to `≈ 1` |
+| unit | wavelength cleanup | sorted ascending, duplicates removed |
+| unit | derived diagnostics | effective wavelength and FWHM are finite |
+| unit | repository lookup | correct platform-specific SRF returned |
+| unit | LUT-kernel build | support slice and aligned weights are correct |
+| integration | Sentinel-2 platform split | `S2A`, `S2B`, `S2C` resolve different SRFs |
+| integration | LUT convolution | tabulated SRF path is used when SRF exists |
+| regression | fallback control | Gaussian path only used for sensors without SRF |
+
+#### 9.10.9 Planned Files
+
+| File | Action | Description |
+|------|--------|-------------|
+| `python/siac/core/srf.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
+| `python/siac/core/srf_sources.py` | NEW | SRF source manifest models and parsers |
+| `python/siac/core/srf_repository.py` | NEW | local repository API for runtime SRF lookup |
+| `python/siac/core/srf_kernel.py` | NEW | LUT-aligned SRF kernel builder and cache-key helpers |
+| `python/siac/data/srf/` | NEW | versioned canonical SRF repository shipped with SIAC |
+| `tools/build_srf_repository.py` | NEW | build/update tool from official raw SRF sources |
+| `python/siac/core/spectral.py` | MODIFY | consume `SpectralResponseFunction` directly |
+| `python/siac/core/types.py` | MODIFY | make band identity platform-specific and SRF-aware |
+| `python/siac/satellite/sentinel2.py` | MODIFY | resolve `S2A` / `S2B` / `S2C` explicitly |
+| `python/siac/rt/lut/backend.py` | MODIFY | interpolate and use tabulated SRFs in convolution |
+| `tests/unit/test_srf.py` | NEW | SRF parsing, normalization, repository tests |
+| `tests/unit/test_srf_kernel.py` | NEW | LUT-grid alignment and support-window tests |
+| `tests/integration/test_srf_runtime.py` | NEW | end-to-end platform-specific SRF usage |
+
 ---
 
 ## 10. Pluggable Data Providers (Atmosphere / BRDF / Surface Prior)
@@ -1562,7 +1894,19 @@ class MyRTBackend:
 
 ## 11. Centralised Authentication
 
-SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA Earthdata, GCS). Rather than handling credentials independently in each module, a single **`CredentialManager`** (`siac.core.auth`) acts as a thread-safe credential registry.
+SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA Earthdata, GCS). The authentication layer is split into two responsibilities:
+
+1. **Credential store / precedence resolution**
+   - a single **`CredentialManager`** (`siac.core.auth`) owns credential loading from config, environment variables, and external files
+   - it stores raw credentials only and acts as a factory for provider-specific auth adapters
+2. **Provider-specific authentication adapters**
+   - small source-specific helpers translate raw credentials into the exact shape needed by that provider:
+     - OAuth token exchange for CDSE
+     - `cdsapi.Client(...)` kwargs and external-config detection for CDS
+     - `storage_options` for AWS/GCS
+     - temporary environment activation and `EarthAccessSource` construction for Earthdata
+
+This keeps secret discovery centralised while preventing provider-specific auth behavior from leaking into orchestration and provider modules.
 
 ### Key types
 
@@ -1570,7 +1914,12 @@ SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA 
 |---|---|---|
 | `CredentialSpec` | `core/auth.py` | Frozen `(key, secret)` pair |
 | `OAuthToken` | `core/auth.py` | Cached bearer token with monotonic expiry |
-| `CredentialManager` | `core/auth.py` | Registry + factory + token cache |
+| `CredentialManager` | `core/auth.py` | Secret registry + factory for auth adapters |
+| `CDSEAuth` | `core/auth.py` | CDSE OAuth2 token cache and bearer-header helper |
+| `CDSAuth` | `core/auth.py` | CDS client kwargs + external credential detection |
+| `AWSAuth` | `core/auth.py` | S3 / fsspec storage option builder |
+| `GCSAuth` | `core/auth.py` | GCS / fsspec storage option builder |
+| `EarthdataAuth` | `core/auth.py` | Earthdata env activation + `EarthAccessSource` factory |
 | `CredentialConfig` | `core/config.py` | Pydantic model for config-file credentials |
 | `AuthenticationError` | `core/exceptions.py` | Raised on missing/failed auth |
 
@@ -1579,6 +1928,8 @@ SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA 
 1. `SIACConfig.credentials` fields (programmatic / YAML)
 2. `SIAC_*` environment variables
 3. External config files (`~/.cdsapirc`)
+
+The store remains the single place that resolves precedence. Adapters must not reimplement config/env parsing, except where a provider also has a standard external fallback that is intentionally outside SIAC's secret store contract.
 
 ### Env-var mapping
 
@@ -1592,13 +1943,33 @@ SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA 
 
 AWS also falls back to standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
 
+### Adapter contracts
+
+Adapters expose typed operations instead of generic `(key, secret)` plumbing:
+
+- `CDSEAuth.get_token()` / `authorization_header()`
+- `CDSAuth.client_kwargs()` / `has_any_credentials()`
+- `AWSAuth.storage_options()`
+- `GCSAuth.storage_options()`
+- `EarthdataAuth.activate_environment()` / `build_earthaccess_source()`
+
+Provider modules and backends should depend on those typed operations, not on direct `get_credentials()` branching.
+
 ### Integration points
 
 - **`SIAC.__init__`** creates `self._auth = CredentialManager.from_config(config)`
 - **`siac_process()`** accepts optional `auth` kwarg; defaults to `from_config`
-- **`CopernicusDataspaceBackend`** accepts optional `auth` for CDSE OAuth2
-- **`CAMSProvider`** accepts optional `auth` for CDS API key injection
-- **`_resolve_rt_model_for_pipeline`** injects AWS credentials into `storage_options` for S3 LUT paths
+- **`CopernicusDataspaceBackend`** uses `CDSEAuth` for OAuth2 bearer tokens
+- **`CAMSProvider`** uses `CDSAuth` for `cdsapi` client kwargs and credential detection
+- **`EarthAccessSource`** is built through `EarthdataAuth`
+- **`_resolve_rt_model_for_pipeline`** uses `AWSAuth` to inject S3 `storage_options` for LUT paths
+
+### Guardrails
+
+- `CredentialManager` may cache raw credentials and provider adapters, but only provider adapters own provider-specific behavior
+- token exchange must not be embedded in search/download backends directly
+- provider modules should not parse SIAC environment variables themselves
+- provider modules may still honor provider-native external configs when that is part of the underlying client contract (for example `~/.cdsapirc`)
 
 ## 12. Earthaccess Rollout Plan (Pre-Implementation)
 

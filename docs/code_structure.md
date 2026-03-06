@@ -235,7 +235,6 @@ siac.rt.lut.backend
       └── siac.rt.lut.http_zip_store
 
 siac.rt.lut.create                   ← leaf (Py6S optional)
-siac.rt.lut.zarr_lut                 ← compatibility re-export facade
 
 siac.core.aoi
  ├── siac.io.geometry                   ← leaf

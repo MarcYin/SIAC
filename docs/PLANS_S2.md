@@ -334,6 +334,10 @@ Sentinel-2 MSI has 13 bands across three native resolutions. The following
 `SpectralBandDescriptor` definitions map S2 into the core plan's sensor-agnostic
 spectral model (see [Core Plan §9.2](PLANS.md#92-spectral-band-descriptor)).
 
+Authoritative SRF source:
+- [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission)
+- the implementation should follow the linked `Sentinel-2 Spectral Response Functions (S2-SRF)` document from that page / its linked documents page, rather than hard-coding a transient attachment URL
+
 ### S2A/S2B Band Table
 
 | Band | Name | Centre λ (nm) S2A | Centre λ (nm) S2B | FWHM (nm) | Resolution (m) | Spectral Region | Role in SIAC |
@@ -364,7 +368,8 @@ def build_s2_sensor_config(satellite_id: str = "S2A") -> SensorConfig:
     Construct SensorConfig for Sentinel-2 MSI.
 
     Uses actual S2A/S2B centre wavelengths and FWHMs. Full SRFs can
-    optionally be loaded from ESA's published spectral response files.
+    optionally be loaded from the official SentiWiki `S2 Mission` page and its
+    linked `Sentinel-2 Spectral Response Functions (S2-SRF)` document.
     """
     # S2A wavelengths shown; S2B has slightly shifted centres
     bands = (
