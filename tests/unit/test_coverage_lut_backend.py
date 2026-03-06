@@ -17,12 +17,8 @@ import pytest
 import xarray as xr
 
 from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
-from siac.rt.lut.zarr_lut import (
-    ZarrLUTBackend,
-    _HTTPRangeFileSystem,
-    _ReadOnlyZipFileSystem,
-    create_lut_from_py6s,
-)
+from siac.rt.lut import ZarrLUTBackend, create_lut_from_py6s
+from siac.rt.lut.http_zip_store import _HTTPRangeFileSystem, _ReadOnlyZipFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1222,57 +1218,6 @@ class TestZipStoreUtilities:
         assert payload["version"] == 1
         assert payload["refs"][".zgroup"] == ["https://example.com/lut.zarr.zip", 11, 17]
         assert payload["refs"]["arr/0"] == ["https://example.com/lut.zarr.zip", 42, 3]
-
-    def test_remote_zip_migrates_legacy_httprange_reference_json(self, monkeypatch, tmp_path: Path):
-        import siac.rt.lut.store as lut_store
-
-        reference_json = lut_store._reference_json_path(
-            "https://example.com/lut.zarr.zip",
-            lut_store._ReferenceOptions(
-                refresh=False,
-                reference_json=None,
-                cache_dir=tmp_path,
-            ),
-        )
-        reference_json.parent.mkdir(parents=True, exist_ok=True)
-        reference_json.write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "refs": {
-                        ".zgroup": ["httprange://https://example.com/lut.zarr.zip", 11, 17],
-                        "arr/0": ["httprange://https://example.com/lut.zarr.zip", 42, 3],
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        monkeypatch.setattr(
-            lut_store,
-            "build_readonly_zip_mapper",
-            lambda _path, _options: (_ for _ in ()).throw(AssertionError("should not rebuild zip mapper")),
-        )
-        captured: dict[str, object] = {}
-        monkeypatch.setattr(
-            "fsspec.get_mapper",
-            lambda path, **kwargs: captured.update({"path": path, "kwargs": kwargs}) or {"kind": "reference"},
-        )
-
-        out = lut_store.build_lut_store(
-            "https://example.com/lut.zarr.zip",
-            {"timeout": 5.0, "reference_cache_dir": str(tmp_path)},
-        )
-        assert out == {"kind": "reference"}
-        assert captured["path"] == "reference://"
-        assert captured["kwargs"]["remote_protocol"] == "https"
-        refs = captured["kwargs"]["fo"]["refs"]
-        assert refs[".zgroup"][0] == "https://example.com/lut.zarr.zip"
-        assert refs["arr/0"][0] == "https://example.com/lut.zarr.zip"
-
-        rewritten = json.loads(reference_json.read_text(encoding="utf-8"))
-        assert rewritten["refs"][".zgroup"][0] == "https://example.com/lut.zarr.zip"
-        assert rewritten["refs"]["arr/0"][0] == "https://example.com/lut.zarr.zip"
 
     def test_remote_zip_reference_mapper_failure_raises(self, monkeypatch, tmp_path: Path):
         import siac.rt.lut.store as lut_store

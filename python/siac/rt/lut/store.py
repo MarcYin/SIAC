@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 _ZARR_MARKER_KEYS = (".zgroup", ".zattrs", ".zmetadata", "zarr.json")
 _DEFAULT_REFERENCE_CACHE_DIR = Path.home() / ".cache" / "siac" / "lut_refs"
-_LEGACY_REFERENCE_SCHEME = "httprange://"
 
 
 @dataclass(frozen=True)
@@ -156,33 +155,6 @@ def _is_valid_reference_document(document: dict[str, Any]) -> bool:
     return any(marker in refs for marker in _ZARR_MARKER_KEYS)
 
 
-def _normalize_legacy_reference_document(document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Rewrite cached legacy `httprange://` targets to plain URLs."""
-    refs = document.get("refs")
-    if not isinstance(refs, dict) or not refs:
-        return document, False
-
-    changed = False
-    normalized_refs: dict[str, Any] = {}
-    for key, value in refs.items():
-        if isinstance(value, list) and value and isinstance(value[0], str) and value[0].startswith(_LEGACY_REFERENCE_SCHEME):
-            normalized_refs[key] = [value[0][len(_LEGACY_REFERENCE_SCHEME) :], *value[1:]]
-            changed = True
-            continue
-        if isinstance(value, str) and value.startswith(_LEGACY_REFERENCE_SCHEME):
-            normalized_refs[key] = value[len(_LEGACY_REFERENCE_SCHEME) :]
-            changed = True
-            continue
-        normalized_refs[key] = value
-
-    if not changed:
-        return document, False
-
-    normalized_document = dict(document)
-    normalized_document["refs"] = normalized_refs
-    return normalized_document, True
-
-
 def _reference_json_path(path: str, reference_options: _ReferenceOptions) -> Path:
     if reference_options.reference_json is not None:
         return reference_options.reference_json
@@ -255,9 +227,6 @@ def _build_remote_zip_reference_mapper(path: str, storage_options: dict[str, Any
         try:
             document = _load_reference_document(reference_path)
             if _is_valid_reference_document(document):
-                document, changed = _normalize_legacy_reference_document(document)
-                if changed:
-                    _write_reference_document(reference_path, document)
                 return _open_reference_mapper(
                     path,
                     storage_options,

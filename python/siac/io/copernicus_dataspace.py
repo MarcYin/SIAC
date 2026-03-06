@@ -361,9 +361,8 @@ class CopernicusDataspaceBackend:
         """Resolve auth header, preferring explicit keys over auth manager."""
         if self._access_key or self._secret_key:
             return _resolve_auth_header(self._access_key, self._secret_key)
-        if self._auth is not None and self._auth.has_credentials("cdse"):
-            token = self._auth.get_cdse_token()
-            return {"Authorization": f"Bearer {token}"}
+        if self._auth is not None and self._auth.cdse().has_credentials():
+            return self._auth.cdse().authorization_header()
         return {}
 
     def search(self, query: S2Query) -> list[S2Product]:
@@ -374,8 +373,8 @@ class CopernicusDataspaceBackend:
             not self._access_key
             and not self._secret_key
             and self._auth is not None
-            and self._auth.has_credentials("cdse")
+            and self._auth.cdse().has_credentials()
         ):
-            token = self._auth.get_cdse_token()
+            token = self._auth.cdse().get_token()
             return download_cdse(product, dest_dir, access_key=token)
         return download_cdse(product, dest_dir, self._access_key, self._secret_key)

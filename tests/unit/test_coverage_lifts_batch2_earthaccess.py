@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from siac.core.auth import CredentialManager
 from siac.io.earthaccess_source import EarthAccessSource
 from siac.priors.atmospheric.cams import CAMSProvider
 from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider
@@ -207,10 +208,8 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
     fake_mod = SimpleNamespace(Client=_FakeClient)
     monkeypatch.setitem(sys.modules, "cdsapi", fake_mod)
 
-    auth = SimpleNamespace(
-        has_credentials=lambda provider: provider == "cds",
-        get_credentials=lambda _provider: SimpleNamespace(key="abc:123"),
-    )
+    auth = CredentialManager()
+    auth.set_credentials("cds", key="abc:123")
     p_auth = CAMSProvider(tmp_path, auth=auth)
     out = p_auth._download_cams_file(datetime(2024, 1, 2))
     assert out is not None
@@ -239,7 +238,7 @@ def test_cams_download_missing_credentials_branch(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr("siac.priors.atmospheric.cams.Path", _HomePath)
 
-    p = CAMSProvider(tmp_path, auth=SimpleNamespace(has_credentials=lambda _provider: False))
+    p = CAMSProvider(tmp_path, auth=CredentialManager())
     assert p._download_cams_file(datetime(2024, 1, 4)) is None
 
 

@@ -8,8 +8,8 @@ token caching is included for OAuth2-based providers (CDSE).
 Usage::
 
     auth = CredentialManager.from_config(config)
-    token = auth.get_cdse_token()
-    opts  = auth.get_storage_options("aws")
+    token = auth.cdse().get_token()
+    opts  = auth.aws().storage_options()
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -78,15 +79,205 @@ class OAuthToken:
     expires_at: float = 0.0  # time.monotonic() deadline
 
 
+class _ProviderAuthBase:
+    """Small adapter base for provider-specific auth helpers."""
+
+    provider: str = ""
+
+    def __init__(self, manager: CredentialManager) -> None:
+        self._manager = manager
+
+    def has_credentials(self) -> bool:
+        return self._manager.has_credentials(self.provider)
+
+    def get_credentials(self) -> CredentialSpec:
+        return self._manager.get_credentials(self.provider)
+
+
+class CDSEAuth(_ProviderAuthBase):
+    """CDSE OAuth2 token cache and bearer-header helper."""
+
+    provider = "cdse"
+
+    def get_token(self, margin_seconds: float = 60) -> str:
+        """Return a valid CDSE bearer token, refreshing if necessary."""
+        now = time.monotonic()
+
+        with self._manager._lock:
+            cached = self._manager._oauth_tokens.get("cdse")
+            if cached is not None and cached.expires_at - now > margin_seconds:
+                return cached.access_token
+
+        cred = self.get_credentials()
+        if not cred.key or not cred.secret:
+            raise AuthenticationError(
+                "CDSE credentials require both username (key) and password (secret)."
+            )
+
+        access_token, expires_in = _cdse_token_exchange(cred.key, cred.secret)
+        new_token = OAuthToken(
+            access_token=access_token,
+            expires_at=time.monotonic() + expires_in,
+        )
+
+        with self._manager._lock:
+            existing = self._manager._oauth_tokens.get("cdse")
+            if existing is not None and existing.expires_at > new_token.expires_at:
+                return existing.access_token
+            self._manager._oauth_tokens["cdse"] = new_token
+
+        return new_token.access_token
+
+    def authorization_header(self, margin_seconds: float = 60) -> dict[str, str]:
+        """Return a bearer Authorization header."""
+        return {"Authorization": f"Bearer {self.get_token(margin_seconds=margin_seconds)}"}
+
+
+class CDSAuth(_ProviderAuthBase):
+    """CDS API auth helper for cdsapi clients."""
+
+    provider = "cds"
+
+    def has_external_credentials(self) -> bool:
+        """Return whether provider-native CDS credentials are available."""
+        return bool(os.getenv("CDSAPI_KEY")) or Path.home().joinpath(".cdsapirc").exists()
+
+    def has_any_credentials(self) -> bool:
+        """Return True when either SIAC-managed or native CDS credentials exist."""
+        return self.has_credentials() or self.has_external_credentials()
+
+    def client_kwargs(self) -> dict[str, str]:
+        """Return kwargs suitable for ``cdsapi.Client(...)``."""
+        if not self.has_credentials():
+            return {}
+        cred = self.get_credentials()
+        kwargs: dict[str, str] = {}
+        if cred.key:
+            kwargs["key"] = cred.key
+        return kwargs
+
+    def make_client(self, **kwargs: Any) -> Any:
+        """Create a configured cdsapi client."""
+        if not self.has_any_credentials():
+            raise AuthenticationError(
+                "CDS credentials are not configured; set SIAC_CDS_API_KEY or ~/.cdsapirc."
+            )
+        try:
+            import cdsapi  # type: ignore[import-not-found]
+        except Exception as exc:  # pragma: no cover - env-dependent
+            raise AuthenticationError("cdsapi is not installed.") from exc
+
+        client_kwargs = self.client_kwargs()
+        client_kwargs.update(kwargs)
+        return cdsapi.Client(**client_kwargs)
+
+
+class AWSAuth(_ProviderAuthBase):
+    """AWS/S3 storage-option helper."""
+
+    provider = "aws"
+
+    def storage_options(self) -> dict[str, Any]:
+        """Return fsspec-compatible S3 storage options."""
+        cred = self.get_credentials()
+        opts: dict[str, Any] = {}
+        if cred.key:
+            opts["key"] = cred.key
+        if cred.secret:
+            opts["secret"] = cred.secret
+        return opts
+
+
+class GCSAuth(_ProviderAuthBase):
+    """GCS storage-option helper."""
+
+    provider = "gcs"
+
+    def storage_options(self) -> dict[str, Any]:
+        """Return fsspec-compatible GCS storage options."""
+        cred = self.get_credentials()
+        opts: dict[str, Any] = {}
+        if cred.key:
+            opts["token"] = cred.key
+        return opts
+
+
+class EarthdataAuth(_ProviderAuthBase):
+    """Earthdata helper for earthaccess environment activation and source construction."""
+
+    provider = "earthdata"
+
+    def _complete_credentials(self) -> CredentialSpec | None:
+        if not self.has_credentials():
+            return None
+        cred = self.get_credentials()
+        if cred.key and cred.secret:
+            return cred
+        raise AuthenticationError(
+            "Earthdata credentials require both username (key) and password (secret)."
+        )
+
+    @contextmanager
+    def activate_environment(self) -> Any:
+        """Temporarily expose Earthdata credentials via EARTHDATA_* env vars."""
+        cred = self._complete_credentials()
+        if cred is None:
+            yield
+            return
+
+        previous_username = os.environ.get("EARTHDATA_USERNAME")
+        previous_password = os.environ.get("EARTHDATA_PASSWORD")
+        os.environ["EARTHDATA_USERNAME"] = cred.key or ""
+        os.environ["EARTHDATA_PASSWORD"] = cred.secret or ""
+        try:
+            yield
+        finally:
+            if previous_username is None:
+                os.environ.pop("EARTHDATA_USERNAME", None)
+            else:
+                os.environ["EARTHDATA_USERNAME"] = previous_username
+
+            if previous_password is None:
+                os.environ.pop("EARTHDATA_PASSWORD", None)
+            else:
+                os.environ["EARTHDATA_PASSWORD"] = previous_password
+
+    def source_kwargs(self, *, provider: str | None = None) -> dict[str, Any]:
+        """Return kwargs for constructing ``EarthAccessSource``."""
+        kwargs: dict[str, Any] = {"provider": provider}
+        cred = self._complete_credentials()
+        if cred is not None:
+            kwargs.update(
+                earthdata_username=cred.key,
+                earthdata_password=cred.secret,
+                login_strategy="environment",
+                persist=False,
+            )
+        return kwargs
+
+    def build_earthaccess_source(self, *, provider: str | None = None, **kwargs: Any) -> Any:
+        """Build an ``EarthAccessSource`` configured for Earthdata access."""
+        from siac.io.earthaccess_source import EarthAccessSource
+
+        source_kwargs = self.source_kwargs(provider=provider)
+        source_kwargs.update(kwargs)
+        return EarthAccessSource(**source_kwargs)
+
+
 # ── CredentialManager ────────────────────────────────────────────────
 
 class CredentialManager:
-    """Thread-safe credential registry for all SIAC data providers."""
+    """Thread-safe secret registry and auth-adapter factory for SIAC data providers."""
 
     def __init__(self) -> None:
         self._credentials: dict[str, CredentialSpec] = {}
         self._oauth_tokens: dict[str, OAuthToken] = {}
         self._lock = threading.Lock()
+        self._cdse_auth = CDSEAuth(self)
+        self._cds_auth = CDSAuth(self)
+        self._aws_auth = AWSAuth(self)
+        self._gcs_auth = GCSAuth(self)
+        self._earthdata_auth = EarthdataAuth(self)
 
     # ── public API ───────────────────────────────────────────────────
 
@@ -115,68 +306,22 @@ class CredentialManager:
         with self._lock:
             return provider in self._credentials
 
-    # ── CDSE OAuth2 token (cached, auto-refresh) ────────────────────
+    # ── typed provider adapters ──────────────────────────────────────
 
-    def get_cdse_token(self, margin_seconds: float = 60) -> str:
-        """Return a valid CDSE bearer token, refreshing if necessary.
+    def cdse(self) -> CDSEAuth:
+        return self._cdse_auth
 
-        Uses double-check locking: the lock protects dict reads/writes
-        only — the HTTP call is made outside the lock so it cannot block
-        other providers.
-        """
-        now = time.monotonic()
+    def cds(self) -> CDSAuth:
+        return self._cds_auth
 
-        # Fast path (no lock on the HTTP call)
-        with self._lock:
-            cached = self._oauth_tokens.get("cdse")
-            if cached is not None and cached.expires_at - now > margin_seconds:
-                return cached.access_token
+    def aws(self) -> AWSAuth:
+        return self._aws_auth
 
-        # Slow path — fetch a new token (outside lock)
-        cred = self.get_credentials("cdse")
-        if not cred.key or not cred.secret:
-            raise AuthenticationError(
-                "CDSE credentials require both username (key) and password (secret)."
-            )
+    def gcs(self) -> GCSAuth:
+        return self._gcs_auth
 
-        access_token, expires_in = _cdse_token_exchange(cred.key, cred.secret)
-        new_token = OAuthToken(
-            access_token=access_token,
-            expires_at=time.monotonic() + expires_in,
-        )
-
-        with self._lock:
-            # Double-check: another thread may have refreshed in the meantime
-            existing = self._oauth_tokens.get("cdse")
-            if existing is not None and existing.expires_at > new_token.expires_at:
-                return existing.access_token
-            self._oauth_tokens["cdse"] = new_token
-
-        return new_token.access_token
-
-    # ── fsspec storage_options helpers ────────────────────────────────
-
-    def get_storage_options(self, provider: str) -> dict[str, Any]:
-        """Produce an fsspec-compatible ``storage_options`` dict."""
-        cred = self.get_credentials(provider)
-
-        if provider == "aws":
-            opts: dict[str, Any] = {}
-            if cred.key:
-                opts["key"] = cred.key
-            if cred.secret:
-                opts["secret"] = cred.secret
-            return opts
-
-        if provider == "gcs":
-            opts = {}
-            if cred.key:
-                opts["token"] = cred.key
-            return opts
-
-        raise AuthenticationError(
-            f"get_storage_options() is not supported for provider {provider!r}."
-        )
+    def earthdata(self) -> EarthdataAuth:
+        return self._earthdata_auth
 
     # ── Factory ──────────────────────────────────────────────────────
 

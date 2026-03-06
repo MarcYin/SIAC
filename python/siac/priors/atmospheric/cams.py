@@ -8,19 +8,17 @@ Fetches atmospheric parameters (AOT, TCWV, TCO3) from ECMWF CAMS
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
+from siac.core.auth import CredentialManager
 from siac.core.types import AtmosphericState
 
 if TYPE_CHECKING:
     from datetime import datetime
-
-    from siac.core.auth import CredentialManager
 
 logger = logging.getLogger(__name__)
 
@@ -377,14 +375,11 @@ class CAMSProvider:
             "leadtime_hour": self._CDS_LEAD_TIMES,
         }
 
-        client_kwargs: dict[str, str] = {}
-        if self._auth is not None and self._auth.has_credentials("cds"):
-            cds_cred = self._auth.get_credentials("cds")
-            if cds_cred.key:
-                client_kwargs["key"] = cds_cred.key
+        cds_auth = self._auth.cds() if self._auth is not None else CredentialManager().cds()
+        client_kwargs = cds_auth.client_kwargs()
+        has_any_credentials = cds_auth.has_any_credentials()
 
-        has_external_cds_config = bool(os.getenv("CDSAPI_KEY")) or Path.home().joinpath(".cdsapirc").exists()
-        if not client_kwargs and not has_external_cds_config:
+        if not has_any_credentials:
             logger.warning("CDS credentials are not configured; cannot auto-download CAMS data")
             return None
 

@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.core.auth import CredentialManager
 from siac.priors.atmospheric.cams import CAMSProvider
 from siac.rt.lut import http_zip_store as zip_store
 
@@ -220,10 +221,8 @@ def test_cams_download_auth_key_missing_branch(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=_FakeClient))
 
-    auth = SimpleNamespace(
-        has_credentials=lambda provider: provider == "cds",
-        get_credentials=lambda _provider: SimpleNamespace(key=""),
-    )
+    auth = CredentialManager()
+    auth.set_credentials("cds", key="")
     p = CAMSProvider(tmp_path, auth=auth)
     out = p._download_cams_file(datetime(2024, 1, 2))
     assert out is not None

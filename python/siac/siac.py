@@ -58,16 +58,9 @@ def _earthaccess_source_from_auth(
     provider: str | None = None,
 ) -> EarthAccessSource:
     """Build an Earthaccess source that can authenticate non-interactively when creds exist."""
-    kwargs: dict[str, Any] = {"provider": provider}
-    if auth is not None and hasattr(auth, "has_credentials") and auth.has_credentials("earthdata"):
-        cred = auth.get_credentials("earthdata")
-        kwargs.update(
-            earthdata_username=cred.key,
-            earthdata_password=cred.secret,
-            login_strategy="environment",
-            persist=False,
-        )
-    return EarthAccessSource(**kwargs)
+    if auth is None:
+        return EarthAccessSource(provider=provider)
+    return auth.earthdata().build_earthaccess_source(provider=provider)
 
 
 class SIAC:
@@ -748,11 +741,11 @@ def _resolve_rt_model_for_pipeline(
         # Inject AWS credentials if not already present
         if (
             auth is not None
-            and auth.has_credentials("aws")
+            and auth.aws().has_credentials()
             and "key" not in storage_options
             and str(rt_config.lut_path).startswith("s3://")
         ):
-            storage_options.update(auth.get_storage_options("aws"))
+            storage_options.update(auth.aws().storage_options())
         return ZarrLUTBackend(
             rt_config.lut_path,
             interpolation_method=rt_config.lut_interpolation,

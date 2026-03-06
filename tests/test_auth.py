@@ -8,8 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from siac.core.auth import (
+    AWSAuth,
+    CDSAuth,
+    CDSEAuth,
     CredentialManager,
     CredentialSpec,
+    EarthdataAuth,
+    GCSAuth,
     OAuthToken,
     _cdse_token_exchange,
 )
@@ -149,8 +154,8 @@ class TestCDSEToken:
         mock_exchange.return_value = ("tok123", 3600)
         mgr = self._make_mgr_with_cdse_creds()
 
-        t1 = mgr.get_cdse_token()
-        t2 = mgr.get_cdse_token()
+        t1 = mgr.cdse().get_token()
+        t2 = mgr.cdse().get_token()
 
         assert t1 == "tok123"
         assert t2 == "tok123"
@@ -169,8 +174,8 @@ class TestCDSEToken:
         mock_exchange.side_effect = [("tok1", 300), ("tok2", 300)]
 
         mgr = self._make_mgr_with_cdse_creds()
-        t1 = mgr.get_cdse_token()
-        t2 = mgr.get_cdse_token()
+        t1 = mgr.cdse().get_token()
+        t2 = mgr.cdse().get_token()
 
         assert t1 == "tok1"
         assert t2 == "tok2"
@@ -186,7 +191,7 @@ class TestCDSEToken:
 
         def _get():
             try:
-                results.append(mgr.get_cdse_token())
+                results.append(mgr.cdse().get_token())
             except Exception as exc:
                 errors.append(exc)
 
@@ -202,13 +207,13 @@ class TestCDSEToken:
     def test_missing_cdse_creds_raises(self):
         mgr = CredentialManager()
         with pytest.raises(AuthenticationError, match="cdse"):
-            mgr.get_cdse_token()
+            mgr.cdse().get_token()
 
     def test_incomplete_cdse_creds_raises(self):
         mgr = CredentialManager()
         mgr.set_credentials("cdse", key="user", secret=None)
         with pytest.raises(AuthenticationError, match="username.*password|password.*username"):
-            mgr.get_cdse_token()
+            mgr.cdse().get_token()
 
     @patch("siac.core.auth._cdse_token_exchange")
     @patch("siac.core.auth.time")
@@ -220,30 +225,29 @@ class TestCDSEToken:
         mock_time.monotonic = MagicMock(side_effect=[950.0, 950.0])
         mock_exchange.return_value = ("fresh", 1)  # expires_at=951
 
-        token = mgr.get_cdse_token()
+        token = mgr.cdse().get_token()
         assert token == "existing"
 
 
-# ── 4. get_storage_options ───────────────────────────────────────────
+# ── 4. storage adapter helpers ───────────────────────────────────────
 
 class TestStorageOptions:
     def test_aws_storage_options(self):
         mgr = CredentialManager()
         mgr.set_credentials("aws", key="AK", secret="SK")
-        opts = mgr.get_storage_options("aws")
-        assert opts == {"key": "AK", "secret": "SK"}
+        assert isinstance(mgr.aws(), AWSAuth)
+        assert mgr.aws().storage_options() == {"key": "AK", "secret": "SK"}
 
     def test_gcs_storage_options(self):
         mgr = CredentialManager()
         mgr.set_credentials("gcs", key="/path/to/creds.json")
-        opts = mgr.get_storage_options("gcs")
-        assert opts == {"token": "/path/to/creds.json"}
+        assert isinstance(mgr.gcs(), GCSAuth)
+        assert mgr.gcs().storage_options() == {"token": "/path/to/creds.json"}
 
-    def test_unsupported_provider_raises(self):
+    def test_unsupported_provider_adapter_requires_credentials(self):
         mgr = CredentialManager()
-        mgr.set_credentials("cdse", key="u", secret="p")
-        with pytest.raises(AuthenticationError, match="not supported"):
-            mgr.get_storage_options("cdse")
+        with pytest.raises(AuthenticationError, match="No credentials registered"):
+            mgr.aws().storage_options()
 
 
 # ── 5. CredentialSpec immutability ───────────────────────────────────
@@ -253,6 +257,48 @@ class TestCredentialSpec:
         cs = CredentialSpec(key="k", secret="s")
         with pytest.raises(AttributeError):
             cs.key = "new"  # type: ignore[misc]
+
+
+class TestProviderAdapters:
+    def test_cdse_adapter_roundtrip(self):
+        mgr = CredentialManager()
+        assert isinstance(mgr.cdse(), CDSEAuth)
+
+    def test_cds_adapter_detects_external_config(self, monkeypatch, tmp_path):
+        mgr = CredentialManager()
+        monkeypatch.setenv("CDSAPI_KEY", "env-key")
+        assert isinstance(mgr.cds(), CDSAuth)
+        assert mgr.cds().has_external_credentials() is True
+        assert mgr.cds().has_any_credentials() is True
+
+        monkeypatch.delenv("CDSAPI_KEY", raising=False)
+        rc_file = tmp_path / ".cdsapirc"
+        rc_file.write_text("key: rc-key\n")
+        monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
+        assert mgr.cds().has_external_credentials() is True
+
+    def test_cds_adapter_client_kwargs_from_store(self):
+        mgr = CredentialManager()
+        mgr.set_credentials("cds", key="store-key")
+        assert mgr.cds().client_kwargs() == {"key": "store-key"}
+
+    def test_earthdata_adapter_builds_earthaccess_source(self):
+        mgr = CredentialManager()
+        mgr.set_credentials("earthdata", key="user", secret="pass")
+        assert isinstance(mgr.earthdata(), EarthdataAuth)
+
+        source = mgr.earthdata().build_earthaccess_source(provider="LPDAAC_ECS")
+        assert source.provider == "LPDAAC_ECS"
+        assert source.earthdata_username == "user"
+        assert source.earthdata_password == "pass"
+        assert source.login_strategy == "environment"
+        assert source.persist is False
+
+    def test_earthdata_adapter_incomplete_credentials_raise(self):
+        mgr = CredentialManager()
+        mgr.set_credentials("earthdata", key="user", secret=None)
+        with pytest.raises(AuthenticationError, match="Earthdata credentials require"):
+            mgr.earthdata().build_earthaccess_source()
 
 
 # ── 6. CDSE backend integration (mock) ──────────────────────────────
@@ -273,7 +319,7 @@ class TestCDSEBackendWithAuth:
         assert header == {"Authorization": "Bearer mgr_token"}
 
     def test_backend_explicit_keys_take_priority(self):
-        """Explicit access_key/secret_key still work (backward compat)."""
+        """Explicit access_key/secret_key still take priority when supplied."""
         from siac.io.copernicus_dataspace import CopernicusDataspaceBackend
 
         mgr = CredentialManager()  # no CDSE creds

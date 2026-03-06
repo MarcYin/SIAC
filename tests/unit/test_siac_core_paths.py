@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.core.auth import CredentialManager
 from siac.core.config import SIACConfig
 from siac.core.exceptions import DataNotFoundError
 from siac.core.types import SENTINEL2A_CONFIG, AtmosphericState, CorrectionResult, GeometryAngles
@@ -72,9 +73,25 @@ def _toa_dataset(shape: tuple[int, int] = (2, 2)) -> xr.Dataset:
     )
 
 
+def _empty_auth() -> CredentialManager:
+    return CredentialManager()
+
+
+def _earthdata_auth() -> CredentialManager:
+    auth = CredentialManager()
+    auth.set_credentials("earthdata", key="u", secret="p")
+    return auth
+
+
+def _aws_auth() -> CredentialManager:
+    auth = CredentialManager()
+    auth.set_credentials("aws", key="AK", secret="SK")
+    return auth
+
+
 def test_siac_from_helpers(monkeypatch):
     cfg = SIACConfig(sensor="s2")
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
     monkeypatch.setattr("siac.siac.SIACConfig.from_yaml", classmethod(lambda _cls, _path: cfg))
 
     siac_from_yaml = SIAC.from_config("dummy.yaml")
@@ -88,7 +105,7 @@ def test_siac_from_helpers(monkeypatch):
 
 def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
     cfg = SIACConfig(sensor="auto")
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
     siac_obj = SIAC(cfg)
 
     obs_time = datetime(2026, 1, 2, 3, 4, 5)
@@ -147,7 +164,7 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
 
 
 def test_resolve_aoi_branches(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
 
     cfg_bounds = SIACConfig(sensor="s2")
     cfg_bounds.aoi = [1.0, 2.0, 3.0, 4.0]
@@ -167,11 +184,7 @@ def test_resolve_aoi_branches(monkeypatch):
 
 
 def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
-    fake_auth = SimpleNamespace(
-        has_credentials=lambda provider: provider == "earthdata",
-        get_credentials=lambda _provider: SimpleNamespace(key="u", secret="p"),
-    )
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: fake_auth)
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _earthdata_auth())
 
     calls = []
 
@@ -215,11 +228,7 @@ def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
 
 
 def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
-    fake_auth = SimpleNamespace(
-        has_credentials=lambda provider: provider == "earthdata",
-        get_credentials=lambda _provider: SimpleNamespace(key="u", secret="p"),
-    )
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: fake_auth)
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _earthdata_auth())
 
     cfg = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
     siac_obj = SIAC(cfg)
@@ -260,7 +269,7 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
 
 
 def test_get_brdf_provider_other_branches(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
 
     cfg_vnp43 = SIACConfig(sensor="s2", brdf={"provider": "vnp43"})
     siac_vnp43 = SIAC(cfg_vnp43)
@@ -285,7 +294,7 @@ def test_get_brdf_provider_other_branches(monkeypatch):
 
 
 def test_get_rt_model_branches(monkeypatch):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
 
     sensor_config = SENTINEL2A_CONFIG
 
@@ -319,7 +328,7 @@ def test_get_rt_model_branches(monkeypatch):
 
 
 def test_solve_atmosphere_and_save_output(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: SimpleNamespace())
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
     cfg = SIACConfig(sensor="s2")
     siac_obj = SIAC(cfg)
 
@@ -547,11 +556,7 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeBRDFProvider)
     monkeypatch.setattr("siac.siac.KernelModelDeriver", _FakeDeriver)
 
-    auth = SimpleNamespace(
-        has_credentials=lambda provider: provider == "earthdata",
-        get_credentials=lambda _provider: SimpleNamespace(key="u", secret="p"),
-    )
-    surf_fn = _resolve_surface_prior_provider(cfg, auth=auth)
+    surf_fn = _resolve_surface_prior_provider(cfg, auth=_earthdata_auth())
     geom = _geometry()
     assert surf_fn((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 2), SENTINEL2A_CONFIG, geom, 500.0)[0] == "weights"
 
@@ -619,11 +624,7 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
         return "lut"
 
     monkeypatch.setattr("siac.siac.ZarrLUTBackend", _fake_lut)
-    auth = SimpleNamespace(
-        has_credentials=lambda provider: provider == "aws",
-        get_storage_options=lambda _provider: {"key": "AK", "secret": "SK"},
-    )
-    out = _resolve_rt_model_for_pipeline(cfg, auth=auth)
+    out = _resolve_rt_model_for_pipeline(cfg, auth=_aws_auth())
     assert out == "lut"
     assert captured["path"] == "s3://bucket/lut"
     assert captured["storage"]["key"] == "AK"
