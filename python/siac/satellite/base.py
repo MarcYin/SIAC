@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import xarray as xr
 
     from siac.core.types import GeometryAngles, ObservationBundle, SensorConfig
@@ -305,7 +307,9 @@ def resample_angles_to_data(
 _SENSOR_REGISTRY: dict[str, type[BaseSatellitePreprocessor]] = {}
 
 
-def register_preprocessor(sensor_id: str):
+def register_preprocessor(
+    sensor_id: str,
+) -> Callable[[type[BaseSatellitePreprocessor]], type[BaseSatellitePreprocessor]]:
     """
     Decorator to register a preprocessor class.
 
@@ -318,7 +322,7 @@ def register_preprocessor(sensor_id: str):
             ...
     """
 
-    def decorator(cls: type[BaseSatellitePreprocessor]):
+    def decorator(cls: type[BaseSatellitePreprocessor]) -> type[BaseSatellitePreprocessor]:
         _SENSOR_REGISTRY[sensor_id.lower()] = cls
         return cls
 

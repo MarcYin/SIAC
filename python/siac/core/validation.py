@@ -79,11 +79,11 @@ def _validate_observation_bundle(obs: ObservationBundle) -> None:
         angle = getattr(obs.geometry, angle_name)
         try:
             np.broadcast_shapes(angle.shape, toa_shape)
-        except ValueError:
+        except ValueError as err:
             raise ValidationError(
                 f"geometry.{angle_name} shape {angle.shape} must be "
                 f"broadcastable to TOA spatial shape {toa_shape}"
-            )
+            ) from err
 
 
 def _validate_atmospheric_state(atmo: AtmosphericState) -> None:
@@ -115,11 +115,11 @@ def _validate_surface_prior(prior: SurfacePrior) -> None:
 
     try:
         np.broadcast_shapes(prior.mask.shape, prior.boa.shape[-2:])
-    except ValueError:
+    except ValueError as err:
         raise ValidationError(
             f"mask shape {prior.mask.shape} must be broadcastable to "
             f"boa spatial shape {prior.boa.shape[-2:]}"
-        )
+        ) from err
 
 
 def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
