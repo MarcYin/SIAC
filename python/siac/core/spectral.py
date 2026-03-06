@@ -3,6 +3,7 @@ Sensor-agnostic spectral model for SIAC.
 
 Provides:
 - ``SpectralBandDescriptor``: band definition with Gaussian or full SRF
+  (deprecated – prefer ``SensorBand`` from ``siac.core.types``)
 - ``sensor_to_reference()``: convolve sensor reflectance to a reference basis
 - ``reference_to_sensor()``: project reference-basis reflectance back to sensor bands
 - ``load_reference_rsr()``: load tabulated spectral response functions
@@ -12,10 +13,13 @@ See PLANS.md §9 for design rationale.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from siac.core.types import SensorBand
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -51,6 +55,10 @@ _MODIS_LAND_BANDS = (
 class SpectralBandDescriptor:
     """Description of a single spectral band.
 
+    .. deprecated::
+        Use :class:`siac.core.types.SensorBand` instead, which now carries
+        ``gaussian_response()`` and ``effective_response()`` methods.
+
     Supports two modes:
     1. **Gaussian approximation** (multispectral): center wavelength + FWHM
     2. **Full SRF** (hyperspectral / precision): tabulated (wavelength, response)
@@ -62,6 +70,13 @@ class SpectralBandDescriptor:
     resolution_m: float
     srf_wavelengths_nm: NDArray[np.floating] | None = None
     srf_response: NDArray[np.floating] | None = None
+
+    def __post_init__(self) -> None:
+        warnings.warn(
+            "SpectralBandDescriptor is deprecated; use siac.core.types.SensorBand instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     @property
     def has_srf(self) -> bool:
@@ -95,6 +110,18 @@ class SpectralBandDescriptor:
                 right=0.0,
             )
         return self.gaussian_response(wavelengths_nm)
+
+    def to_sensor_band(self, band_index: int = 0) -> SensorBand:
+        """Convert to a :class:`SensorBand` instance."""
+        return SensorBand(
+            name=self.name,
+            center_wavelength=self.center_wavelength_nm,
+            bandwidth=self.fwhm_nm,
+            resolution=self.resolution_m,
+            band_index=band_index,
+            srf_wavelengths_nm=self.srf_wavelengths_nm,
+            srf_response=self.srf_response,
+        )
 
 
 # ── Reference RSR loading ─────────────────────────────────────────────
@@ -134,7 +161,7 @@ def load_reference_rsr(
 # ── Spectral convolution functions ────────────────────────────────────
 
 def _build_conversion_matrix(
-    sensor_bands: Sequence[SpectralBandDescriptor],
+    sensor_bands: Sequence[SpectralBandDescriptor] | Sequence[SensorBand],
     ref_bands: dict[str, tuple[NDArray, NDArray]],
     common_wl: NDArray | None = None,
 ) -> tuple[NDArray, list[str]]:
@@ -181,7 +208,7 @@ def _build_conversion_matrix(
 
 def sensor_to_reference(
     sensor_reflectance: xr.Dataset,
-    sensor_bands: Sequence[SpectralBandDescriptor],
+    sensor_bands: Sequence[SpectralBandDescriptor] | Sequence[SensorBand],
     reference_sensor: str = "MODIS",
 ) -> NDArray:
     """Convolve sensor-band reflectance to a reference-sensor basis.
@@ -214,7 +241,7 @@ def sensor_to_reference(
 
 def reference_to_sensor(
     ref_reflectance: NDArray,
-    target_bands: Sequence[SpectralBandDescriptor],
+    target_bands: Sequence[SpectralBandDescriptor] | Sequence[SensorBand],
     reference_sensor: str = "MODIS",
 ) -> NDArray:
     """Project reference-basis reflectance back to sensor bands.
