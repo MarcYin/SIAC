@@ -20,14 +20,11 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +72,17 @@ def _sanitize_netcdf_array(data: xr.DataArray) -> xr.DataArray:
         for key in ("_FillValue", "missing_value", "fill_value"):
             out.attrs.pop(key, None)
     return out
+
+
+def _netcdf_base_encoding(data: xr.DataArray) -> dict[str, Any]:
+    """Preserve NetCDF-relevant metadata from an xarray variable encoding."""
+    encoding: dict[str, Any] = {}
+    grid_mapping = data.encoding.get("grid_mapping")
+    if grid_mapping is None and "spatial_ref" in data.coords:
+        grid_mapping = "spatial_ref"
+    if grid_mapping is not None:
+        encoding["grid_mapping"] = grid_mapping
+    return encoding
 
 
 # =============================================================================
@@ -144,7 +152,6 @@ def write_cog(
     compression: Literal["deflate", "lzw", "zstd", "none"] = "deflate",
     dtype: str | None = None,
     nodata: float | int | None = None,
-    overviews: Sequence[int] | None = None,
     overview_resampling: str = "average",
     blocksize: int = 512,
     **kwargs: Any,
@@ -161,8 +168,6 @@ def write_cog(
         compression: Compression algorithm
         dtype: Output data type
         nodata: NoData value
-        overviews: Retained for API compatibility. The GDAL COG driver manages
-            overview generation automatically, so explicit levels are ignored.
         overview_resampling: Resampling method for overviews
         blocksize: Block size for tiling
         **kwargs: Additional arguments passed to rioxarray
@@ -184,10 +189,6 @@ def write_cog(
         **COG_COMPRESSION_SETTINGS.get(compression, {}),
         **kwargs,
     }
-
-    # The GDAL COG driver chooses overview levels automatically and rejects
-    # GTiff-style OVERVIEWS / OVERVIEW_LEVEL creation options.
-    _ = overviews
 
     # Write using rioxarray
     data.rio.to_raster(str(path), **write_kwargs)
@@ -346,7 +347,8 @@ def write_netcdf(
     encoding: dict[str, dict[str, Any]] = {}
     if isinstance(payload, xr.Dataset):
         for name, var in payload.data_vars.items():
-            var_encoding = dict(effective_compression)
+            var_encoding = _netcdf_base_encoding(var)
+            var_encoding.update(effective_compression)
             fill_value = _netcdf_fill_value(var)
             if fill_value is not _NETCDF_DEFAULT:
                 var_encoding["_FillValue"] = fill_value
@@ -355,7 +357,8 @@ def write_netcdf(
             encoding[name] = {"_FillValue": None}
     else:
         var_name = payload.name or "data"
-        var_encoding = dict(effective_compression)
+        var_encoding = _netcdf_base_encoding(payload)
+        var_encoding.update(effective_compression)
         fill_value = _netcdf_fill_value(payload)
         if fill_value is not _NETCDF_DEFAULT:
             var_encoding["_FillValue"] = fill_value

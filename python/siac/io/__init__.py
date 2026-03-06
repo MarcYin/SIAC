@@ -85,6 +85,7 @@ from siac.io.s2_data_source import (
     search_s2,
     select_best_product,
 )
+from siac.io.stac import build_stac_item, write_stac_item
 from siac.io.writers import (
     write_auxiliary_products,
     write_boa_products,
@@ -118,6 +119,8 @@ __all__ = [
     "write_boa_products",
     "write_auxiliary_products",
     "write_rgb_quicklook",
+    "build_stac_item",
+    "write_stac_item",
     # Reprojection
     "reproject_to_crs",
     "reproject_match",

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
 
+from siac.core.types import (
+    SENTINEL2A_CONFIG,
+    CorrectionResult,
+    GeometryAngles,
+    ObservationBundle,
+)
 from siac.io.readers import (
     check_rasters_aligned,
     get_raster_info,
@@ -35,6 +43,7 @@ from siac.io.reprojection import (
     resample_to_shape,
     transform_points,
 )
+from siac.io.stac import build_stac_item, write_stac_item
 from siac.io.writers import (
     _compute_overview_levels,
     _prepare_for_write,
@@ -227,6 +236,103 @@ class TestWritersExtra:
         levels = _compute_overview_levels(_make_da((2048, 2048)))
         assert levels and levels[0] == 2
 
+    def test_build_and_write_stac_item(self, tmp_path: Path):
+        template = _make_da((16, 16))
+        toa = xr.Dataset({"B02": template.copy(), "B08": (template + 0.1).rename("B08")})
+        geometry = GeometryAngles(
+            sza=xr.full_like(template, np.deg2rad(30.0)),
+            saa=xr.full_like(template, np.deg2rad(150.0)),
+            vza=xr.full_like(template, np.deg2rad(5.0)),
+            vaa=xr.full_like(template, np.deg2rad(60.0)),
+        )
+        cloud_mask = xr.DataArray(
+            np.zeros((16, 16), dtype=bool),
+            dims=["y", "x"],
+            coords={"y": template.coords["y"], "x": template.coords["x"]},
+        )
+        cloud_mask.values[:4, :8] = True
+        obs = ObservationBundle(
+            toa=toa,
+            geometry=geometry,
+            cloud_mask=cloud_mask,
+            sensor_config=SENTINEL2A_CONFIG,
+            metadata={
+                "observation_time": datetime(2026, 1, 2, 2, 41, 21),
+                "satellite": "S2A",
+                "sensor": "MSI",
+                "tile_id": "T50QLD",
+                "processing_baseline": "N0511",
+            },
+            crs="EPSG:32632",
+            bounds=tuple(map(float, template.rio.bounds())),
+        )
+        result = CorrectionResult(
+            boa=xr.Dataset({"B02": template.copy(), "B08": (template + 0.1).rename("B08")}),
+            boa_unc=None,
+            aot=xr.full_like(template, 0.12),
+            tcwv=xr.full_like(template, 1.8),
+            cloud_mask=xr.full_like(template, True, dtype=bool),
+            metadata={"processing_time_s": 12.5},
+        )
+
+        boa_dir = tmp_path / "boa"
+        boa_dir.mkdir()
+        boa_assets = {"B02": boa_dir / "B02.tif", "B08": boa_dir / "B08.tif"}
+        for path in boa_assets.values():
+            path.write_bytes(b"boa")
+        atmosphere_path = tmp_path / "atmosphere.nc"
+        atmosphere_path.write_bytes(b"netcdf")
+        qa_dir = tmp_path / "qa"
+        qa_dir.mkdir()
+        qa_assets = {"cloud_mask": qa_dir / "cloud_mask.tif"}
+        qa_assets["cloud_mask"].write_bytes(b"mask")
+        summary_path = tmp_path / "run_summary.json"
+        summary_path.write_text("{}", encoding="utf-8")
+
+        item = build_stac_item(
+            obs,
+            result,
+            output_dir=tmp_path,
+            boa_assets=boa_assets,
+            atmosphere_asset=atmosphere_path,
+            qa_assets=qa_assets,
+            summary_asset=summary_path,
+            input_href=tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
+        )
+
+        assert item["stac_version"] == "1.0.0"
+        assert item["id"] == tmp_path.name
+        assert item["properties"]["platform"] == "sentinel-2c"
+        assert item["properties"]["constellation"] == "sentinel-2"
+        assert item["properties"]["instruments"] == ["msi"]
+        assert item["properties"]["siac:satellite"] == "S2C"
+        assert item["properties"]["eo:cloud_cover"] == pytest.approx(12.5)
+        assert item["properties"]["view:sun_elevation"] == pytest.approx(60.0)
+        assert item["properties"]["view:sun_azimuth"] == pytest.approx(150.0)
+        assert item["properties"]["view:off_nadir"] == pytest.approx(5.0)
+        assert item["properties"]["proj:epsg"] == 32632
+        assert item["assets"]["B02"]["href"] == "boa/B02.tif"
+        assert item["assets"]["B02"]["eo:bands"][0]["common_name"] == "blue"
+        assert item["assets"]["atmosphere"]["href"] == "atmosphere.nc"
+        assert item["assets"]["cloud-mask"]["href"] == "qa/cloud_mask.tif"
+        assert item["assets"]["summary"]["href"] == "run_summary.json"
+        assert item["links"][0]["href"] == "item.json"
+        assert item["links"][1]["rel"] == "derived_from"
+
+        item_path = write_stac_item(
+            obs,
+            result,
+            output_dir=tmp_path,
+            boa_assets=boa_assets,
+            atmosphere_asset=atmosphere_path,
+            qa_assets=qa_assets,
+            summary_asset=summary_path,
+            input_href=tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
+        )
+        assert item_path.exists()
+        written = json.loads(item_path.read_text(encoding="utf-8"))
+        assert written["assets"]["B08"]["eo:bands"][0]["name"] == "B08"
+
     def test_write_netcdf_and_siac_product_writers(self, tmp_path: Path):
         da = _make_da((16, 16))
         ds = xr.Dataset(
@@ -326,14 +432,35 @@ class TestWritersExtra:
             Path(path).write_bytes(b"x")
 
         monkeypatch.setattr(type(da.rio), "to_raster", _fake_to_raster, raising=False)
-        out = write_cog(da, tmp_path / "x.tif", overviews=[2, 4], compression="deflate")
+        out = write_cog(da, tmp_path / "x.tif", compression="deflate")
         assert out.exists()
         assert cog_calls
         assert cog_calls[-1]["driver"] == "COG"
         assert cog_calls[-1]["compress"] == "deflate"
         assert cog_calls[-1]["level"] == 6
-        assert "overviews" not in cog_calls[-1]
         assert "zlevel" not in cog_calls[-1]
+
+    def test_write_netcdf_preserves_grid_mapping_encoding(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        spatial = _make_da((8, 8))
+        ds = xr.Dataset({"aot": spatial.rename("aot")}).rio.write_crs("EPSG:32632")
+        ds["aot"].encoding.clear()
+        captures: list[dict[str, object]] = []
+
+        monkeypatch.setattr(
+            xr.Dataset,
+            "to_netcdf",
+            lambda _self, path, encoding=None, **kwargs: captures.append(  # noqa: ANN001
+                {"path": path, "encoding": encoding, "kwargs": kwargs}
+            ),
+        )
+
+        write_netcdf(ds, tmp_path / "grid.nc", compression=None)
+        assert captures
+        assert captures[-1]["encoding"]["aot"]["grid_mapping"] == "spatial_ref"
 
     def test_write_netcdf_rejects_scipy_and_missing_supported_engines(
         self,

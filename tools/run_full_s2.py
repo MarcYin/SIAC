@@ -18,6 +18,7 @@ from siac.core.aoi import AOI
 from siac.core.config import DEFAULT_LUT_URL, SIACConfig
 from siac.core.types import GeometryAngles, ObservationBundle, SensorConfig
 from siac.io import reproject_match
+from siac.io.stac import write_stac_item
 from siac.io.writers import write_dataset, write_netcdf
 from siac.satellite.sentinel2 import Sentinel2Preprocessor
 from siac.siac import resolve_s2_input, siac_process
@@ -361,10 +362,13 @@ def main() -> int:
 
     cloud_cfg = cfg.cloud_mask.model_dump(exclude={"user_callable"})
     pp = Sentinel2Preprocessor(config={"cloud_mask": cloud_cfg})
+    obs_capture: dict[str, ObservationBundle] = {}
 
     def _preprocess(path: Path, runtime_aoi: AOI | None = None) -> ObservationBundle:
         raw = pp.preprocess(path)
-        return _build_observation_bundle(raw, pp.sensor_config, runtime_aoi)
+        obs = _build_observation_bundle(raw, pp.sensor_config, runtime_aoi)
+        obs_capture["obs"] = obs
+        return obs
 
     logger.info("Starting SIAC full pipeline run")
     result = siac_process(
@@ -411,6 +415,24 @@ def main() -> int:
         "tcwv_mean": float(result.tcwv.mean(skipna=True).values),
     }
     summary_path = output_dir / "run_summary.json"
+    summary["stac_item_file"] = str(output_dir / "item.json")
+    summary_path.write_text(json.dumps(summary, indent=2))
+
+    obs = obs_capture.get("obs")
+    if obs is None:
+        raise RuntimeError("Observation bundle was not captured during preprocessing; cannot write STAC item.")
+    item_path = write_stac_item(
+        obs,
+        result,
+        output_dir=output_dir,
+        boa_assets=boa_paths,
+        atmosphere_asset=atmo_path,
+        qa_assets=qa_paths,
+        summary_asset=summary_path,
+        input_href=input_path,
+        item_id=output_dir.name,
+    )
+    summary["stac_item_file"] = str(item_path)
     summary_path.write_text(json.dumps(summary, indent=2))
 
     print(json.dumps(summary, indent=2))
