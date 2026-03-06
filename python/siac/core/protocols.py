@@ -27,6 +27,8 @@ if TYPE_CHECKING:
         RTCoefficients,
         SensorBand,
         SensorConfig,
+        SolvedAtmosphere,
+        SolverInputBundle,
         SurfacePrior,
     )
 
@@ -377,14 +379,8 @@ class AerosolSolver(Protocol):
 
     def solve(
         self,
-        toa: xr.DataArray,
-        surface_prior: SurfacePrior,
-        geometry: GeometryAngles,
-        atmo_prior: AtmosphericState,
-        rt_model: RTModelBackend,
-        cloud_mask: xr.DataArray,
-        solver_config: dict,
-    ) -> AtmosphericState:
+        inputs: SolverInputBundle,
+    ) -> SolvedAtmosphere:
         """
         Solve for atmospheric parameters (AOT, TCWV).
 
@@ -397,22 +393,13 @@ class AerosolSolver(Protocol):
             J_smooth = γ_aot * ||∇aot||² + γ_tcwv * ||∇tcwv||²
 
         Args:
-            toa: Top-of-atmosphere reflectance
-            surface_prior: Surface reflectance prior from BRDF
-            geometry: Viewing geometry
-            atmo_prior: Prior atmospheric state from CAMS/MERRA-2
-            rt_model: Radiative transfer model backend
-            cloud_mask: Boolean mask (True = cloudy)
-            solver_config: Configuration dictionary with:
-                - aot_gamma: Smoothness weight for AOT
-                - tcwv_gamma: Smoothness weight for TCWV
-                - aot_bounds: (min, max) bounds for AOT
-                - tcwv_bounds: (min, max) bounds for TCWV
-                - max_iterations: Maximum optimizer iterations
-                - aerosol_resolution: Grid resolution for solving (m)
+            inputs: SolverInputBundle containing all data needed for solving:
+                TOA reflectance, surface prior, geometry, atmospheric prior,
+                RT model, cloud mask, band selection, and grid metadata.
 
         Returns:
-            AtmosphericState with solved AOT, TCWV and uncertainties.
+            SolvedAtmosphere with solved AOT, TCWV, uncertainties, and
+            diagnostics (converged, n_iterations, cost_final).
         """
         ...
 

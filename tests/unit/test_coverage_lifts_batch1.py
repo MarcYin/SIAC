@@ -61,7 +61,7 @@ def test_protocol_method_stubs_execute_lines():
     assert RTModelBackend.backend_name.fget(object()) is None
     assert RTModelBackend.is_available_for_sensor(object(), "MSI", "S2A") is None
 
-    assert AerosolSolver.solve(object(), object(), object(), object(), object(), object(), object(), {}) is None
+    assert AerosolSolver.solve(object(), object()) is None
 
     assert OutputWriter.write_boa(object(), xr.Dataset(), "/tmp/out", "EPSG:4326", (0, 1, 0, 0, 0, -1)) is None
     assert OutputWriter.write_auxiliary(
