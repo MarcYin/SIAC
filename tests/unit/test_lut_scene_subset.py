@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
@@ -98,6 +99,29 @@ def test_subset_wavelength_for_band_trims_lut():
     assert subset.sizes["wavelength"] < lut.sizes["wavelength"]
 
 
+def test_subset_wavelength_for_band_uses_tabulated_srf_support():
+    backend = ZarrLUTBackend("dummy")
+    lut = _spectral_lut().assign_coords(
+        wavelength=np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32)
+    )
+    band = SensorBand(
+        name="B02",
+        center_wavelength=460.0,
+        bandwidth=80.0,
+        resolution=10.0,
+        band_index=1,
+        srf_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+        srf_response=np.array([0.0, 0.5, 1.0, 0.5, 0.0], dtype=np.float32),
+    )
+
+    subset = backend._subset_wavelength_for_band(lut, band)
+
+    np.testing.assert_allclose(
+        subset.coords["wavelength"].values,
+        np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+    )
+
+
 def test_compute_coefficients_spectral_interpolates_after_wavelength_collapse(monkeypatch):
     backend = ZarrLUTBackend("dummy")
     lut = _spectral_lut()
@@ -138,6 +162,31 @@ def test_compute_coefficients_spectral_interpolates_after_wavelength_collapse(mo
     assert xcp.shape == aot.shape
     assert calls
     assert all("wavelength" not in dims for dims in calls)
+
+
+def test_spectral_integration_weights_use_tabulated_srf_over_gaussian():
+    backend = ZarrLUTBackend("dummy")
+    lut = xr.Dataset(
+        coords={
+            "wavelength": np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+        }
+    )
+    band = SensorBand(
+        name="B02",
+        center_wavelength=460.0,
+        bandwidth=200.0,
+        resolution=10.0,
+        band_index=1,
+        srf_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+        srf_response=np.array([0.0, 0.5, 1.0, 0.5, 0.0], dtype=np.float32),
+    )
+
+    weights = backend._spectral_integration_weights(band, lut)
+
+    assert weights.dims == ("wavelength",)
+    assert float(weights.sel(wavelength=440.0).values) == pytest.approx(0.0)
+    assert float(weights.sel(wavelength=480.0).values) == pytest.approx(0.0)
+    assert float(weights.sel(wavelength=460.0).values) > float(weights.sel(wavelength=450.0).values)
 
 
 def test_compute_coefficients_retries_transient_lut_io(monkeypatch):

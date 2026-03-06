@@ -357,6 +357,8 @@ class SensorBand:
         bandwidth: Full-width half-maximum in nanometers
         resolution: Native spatial resolution in meters
         band_index: Zero-based index in data arrays
+        srf_wavelengths_nm: Optional tabulated SRF wavelengths in nanometers
+        srf_response: Optional tabulated SRF response
     """
 
     name: str
@@ -364,11 +366,18 @@ class SensorBand:
     bandwidth: float  # nm
     resolution: float  # meters
     band_index: int
+    srf_wavelengths_nm: np.ndarray | None = None
+    srf_response: np.ndarray | None = None
 
     @property
     def wavelength_um(self) -> float:
         """Center wavelength in micrometers."""
         return self.center_wavelength / 1000.0
+
+    @property
+    def has_srf(self) -> bool:
+        """Whether this band carries a tabulated spectral response."""
+        return self.srf_wavelengths_nm is not None and self.srf_response is not None
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from siac.core.srf import SpectralResponseFunction
+from siac.core.srf_kernel import build_aligned_srf_kernel
 from siac.core.types import AtmosphericState, GeometryAngles, RTCoefficients, SensorBand
 from siac.rt.lut.store import as_local_path, build_lut_store
 
@@ -797,6 +799,15 @@ class ZarrLUTBackend:
         if wl_axis.size == 0:
             return lut
 
+        if band.has_srf:
+            kernel = build_aligned_srf_kernel(
+                self._band_srf(band),
+                lut_wavelengths_nm=wl_axis,
+                lut_id=self.lut_path,
+                support_padding=1,
+            )
+            return lut.isel(wavelength=slice(kernel.start_index, kernel.end_index))
+
         sigma = max(float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))), 1e-6)
         half_window = max(3.0, sigma_factor * sigma)
         wl_min = float(np.nanmin(wl_axis))
@@ -822,6 +833,36 @@ class ZarrLUTBackend:
             dims=["wavelength"],
             coords={"wavelength": wl_axis},
         )
+        if band.has_srf:
+            solar_values = None
+            for name in self._SOLAR_IRRADIANCE_NAMES:
+                if name not in source:
+                    continue
+                solar = source[name]
+                if "wavelength" not in solar.dims:
+                    continue
+                extra_dims = [dim for dim in solar.dims if dim != "wavelength"]
+                if extra_dims:
+                    solar = solar.mean(dim=extra_dims)
+                solar_values = np.asarray(solar.values, dtype=np.float32)
+                break
+
+            kernel = build_aligned_srf_kernel(
+                self._band_srf(band),
+                lut_wavelengths_nm=wl_axis,
+                lut_id=self.lut_path,
+                solar_irradiance=solar_values,
+                support_padding=0,
+            )
+            weights = kernel.solar_weighted_response_on_lut
+            if weights is None:
+                weights = kernel.response_on_lut
+            return xr.DataArray(
+                weights,
+                dims=["wavelength"],
+                coords={"wavelength": kernel.wavelengths_nm},
+            )
+
         sigma = max(
             float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))),
             1e-6,
@@ -844,6 +885,19 @@ class ZarrLUTBackend:
             break
 
         return weights
+
+    @staticmethod
+    def _band_srf(band: SensorBand) -> SpectralResponseFunction:
+        """Build a canonical SRF object from a band-carried tabulated response."""
+        if not band.has_srf:
+            raise ValueError(f"Band {band.name!r} does not define a tabulated SRF")
+        return SpectralResponseFunction.from_tabulated(
+            sensor_id="UNKNOWN",
+            satellite_id="UNKNOWN",
+            band_name=band.name,
+            wavelengths_nm=np.asarray(band.srf_wavelengths_nm, dtype=np.float32),
+            response=np.asarray(band.srf_response, dtype=np.float32),
+        )
 
     @staticmethod
     def _weighted_spectral_mean(data: xr.DataArray, weights: xr.DataArray) -> xr.DataArray:
