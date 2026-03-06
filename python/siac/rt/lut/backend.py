@@ -857,10 +857,12 @@ class ZarrLUTBackend:
             weights = kernel.solar_weighted_response_on_lut
             if weights is None:
                 weights = kernel.response_on_lut
+            full_weights = np.zeros_like(wl_axis, dtype=np.float32)
+            full_weights[kernel.start_index:kernel.end_index] = weights
             return xr.DataArray(
-                weights,
+                full_weights,
                 dims=["wavelength"],
-                coords={"wavelength": kernel.wavelengths_nm},
+                coords={"wavelength": wl_axis},
             )
 
         sigma = max(
@@ -905,7 +907,7 @@ class ZarrLUTBackend:
         if "wavelength" not in data.dims:
             return data
 
-        local_weights = weights.sel(wavelength=data["wavelength"])
+        local_weights = weights.reindex(wavelength=data["wavelength"], fill_value=0.0)
         if data.sizes["wavelength"] == 1:
             numerator = (data * local_weights).isel(wavelength=0, drop=True)
             denominator = local_weights.isel(wavelength=0, drop=True)

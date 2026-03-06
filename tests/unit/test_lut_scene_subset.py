@@ -168,7 +168,7 @@ def test_spectral_integration_weights_use_tabulated_srf_over_gaussian():
     backend = ZarrLUTBackend("dummy")
     lut = xr.Dataset(
         coords={
-            "wavelength": np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+            "wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
         }
     )
     band = SensorBand(
@@ -184,9 +184,36 @@ def test_spectral_integration_weights_use_tabulated_srf_over_gaussian():
     weights = backend._spectral_integration_weights(band, lut)
 
     assert weights.dims == ("wavelength",)
+    np.testing.assert_allclose(
+        weights.coords["wavelength"].values,
+        np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+    )
+    assert float(weights.sel(wavelength=430.0).values) == pytest.approx(0.0)
     assert float(weights.sel(wavelength=440.0).values) == pytest.approx(0.0)
     assert float(weights.sel(wavelength=480.0).values) == pytest.approx(0.0)
+    assert float(weights.sel(wavelength=490.0).values) == pytest.approx(0.0)
     assert float(weights.sel(wavelength=460.0).values) > float(weights.sel(wavelength=450.0).values)
+
+
+def test_weighted_spectral_mean_zero_fills_missing_srf_support():
+    data = xr.DataArray(
+        np.array([10.0, 1.0, 2.0, 4.0, 2.0, 1.0, 9.0], dtype=np.float32),
+        dims=("wavelength",),
+        coords={
+            "wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+        },
+    )
+    weights = xr.DataArray(
+        np.array([0.0, 0.0, 0.25, 0.5, 0.25, 0.0, 0.0], dtype=np.float32),
+        dims=("wavelength",),
+        coords={
+            "wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+        },
+    )
+
+    result = ZarrLUTBackend._weighted_spectral_mean(data, weights)
+
+    assert float(result.values) == pytest.approx(3.0)
 
 
 def test_compute_coefficients_retries_transient_lut_io(monkeypatch):
