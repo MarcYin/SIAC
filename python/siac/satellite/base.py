@@ -19,7 +19,7 @@ import numpy as np
 if TYPE_CHECKING:
     import xarray as xr
 
-    from siac.core.types import GeometryAngles, SensorConfig
+    from siac.core.types import GeometryAngles, ObservationBundle, SensorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +166,39 @@ class BaseSatellitePreprocessor(ABC):
         if accepts_toa:
             return self.extract_cloud_mask(input_path, toa=toa)
         return self.extract_cloud_mask(input_path)
+
+    def to_observation_bundle(
+        self,
+        input_path: str | Path,
+        *,
+        bounds: tuple[float, float, float, float],
+        crs: str = "EPSG:4326",
+    ) -> ObservationBundle:
+        """Run preprocessing and return an :class:`ObservationBundle`.
+
+        This is a convenience wrapper around :meth:`preprocess` that
+        directly produces the pipeline's M1 contract type.
+
+        Args:
+            input_path: Path to satellite data.
+            bounds: Spatial bounds as (west, south, east, north).
+            crs: Coordinate reference system string.
+
+        Returns:
+            A fully populated :class:`ObservationBundle`.
+        """
+        from siac.core.types import ObservationBundle
+
+        raw = self.preprocess(input_path)
+        return ObservationBundle(
+            toa=raw["toa"],
+            geometry=raw["geometry"],
+            cloud_mask=raw["cloud_mask"],
+            sensor_config=self.sensor_config,
+            metadata=raw["metadata"],
+            crs=crs,
+            bounds=bounds,
+        )
 
 
 # =============================================================================
