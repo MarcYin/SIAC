@@ -603,7 +603,17 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
 
     surf_fn = _resolve_surface_prior_provider(cfg, auth=_earthdata_auth())
     geom = _geometry()
-    assert surf_fn((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 2), SENTINEL2A_CONFIG, geom, 500.0)[0] == "weights"
+    obs = SimpleNamespace(
+        bounds=(0, 0, 1, 1),
+        crs="EPSG:4326",
+        metadata={"observation_time": datetime(2026, 1, 2)},
+        sensor_config=SENTINEL2A_CONFIG,
+        geometry=geom,
+        toa=_toa_dataset(),
+        cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"]),
+    )
+    assert getattr(surf_fn, "requires_atmo_prior", False) is False
+    assert surf_fn(obs, None, "rt", 500.0)[0] == "weights"
 
     cfg_whittaker = SIACConfig(
         sensor="s2",
@@ -627,7 +637,49 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     monkeypatch.setattr("siac.siac.BRDFWhittakerDeriver", _FakeWhittakerDeriver)
 
     surf_whittaker = _resolve_surface_prior_provider(cfg_whittaker, auth=_earthdata_auth())
-    assert surf_whittaker((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 2), SENTINEL2A_CONFIG, geom, 500.0)[0] == "temporal-weights"
+    assert getattr(surf_whittaker, "requires_atmo_prior", False) is False
+    assert surf_whittaker(obs, None, "rt", 500.0)[0] == "temporal-weights"
+
+    cfg_monthly = SIACConfig(
+        sensor="s2",
+        brdf={"provider": "mcd43"},
+        surface_prior={"method": "monthly_database"},
+        rt_model={"backend": "lut", "lut_path": "s3://bucket/lut"},
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_build_monthly_database(*, observation, brdf_provider, resolution, geometry, visible_bands, query_bands):
+        captured["observation"] = observation
+        captured["provider"] = brdf_provider
+        captured["resolution"] = resolution
+        captured["geometry"] = geometry
+        captured["visible_bands"] = tuple(visible_bands)
+        captured["query_bands"] = tuple(query_bands)
+        return "monthly-db"
+
+    def _fake_query_surface_prior(*, observation, atmo_prior, rt_model, database, query_band_names, visible_band_names, k_neighbors):
+        captured["query_observation"] = observation
+        captured["atmo_prior"] = atmo_prior
+        captured["rt_model"] = rt_model
+        captured["database"] = database
+        captured["query_band_names"] = tuple(query_band_names)
+        captured["visible_band_names"] = tuple(visible_band_names)
+        captured["k_neighbors"] = k_neighbors
+        return SimpleNamespace(
+            mask=xr.DataArray(np.ones((2, 2), dtype=bool), dims=["y", "x"]),
+        )
+
+    monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeBRDFProvider)
+    monkeypatch.setattr("siac.siac.build_monthly_surface_prior_database", _fake_build_monthly_database)
+    monkeypatch.setattr("siac.siac.query_surface_prior_from_monthly_database", _fake_query_surface_prior)
+
+    surf_monthly = _resolve_surface_prior_provider(cfg_monthly, auth=_earthdata_auth())
+    assert getattr(surf_monthly, "requires_atmo_prior", False) is True
+    monthly_out = surf_monthly(obs, _atmo_state(), "rt", 500.0)
+    assert monthly_out.mask.shape == (2, 2)
+    assert captured["database"] == "monthly-db"
+    assert captured["atmo_prior"].aot.shape == (2, 2)
 
     cfg_bad_brdf = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
     cfg_bad_brdf.brdf.provider = "unknown"

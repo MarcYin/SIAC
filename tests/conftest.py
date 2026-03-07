@@ -423,9 +423,11 @@ def mock_atmo_provider(mock_atmospheric_state):
 
 @pytest.fixture
 def mock_surface_prior_provider(mock_surface_prior):
-    """(bounds, crs, time, sensor_config, geometry, res) -> SurfacePrior."""
-    def _get_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+    """(observation, atmo_prior|None, rt_model, res) -> SurfacePrior."""
+    def _get_surface_prior(observation, atmo_prior, rt_model, resolution):
+        _ = (observation, atmo_prior, rt_model, resolution)
         return mock_surface_prior
+    _get_surface_prior.requires_atmo_prior = False
     return _get_surface_prior
 
 

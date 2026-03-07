@@ -522,6 +522,32 @@ SurfacePriorFn = Callable[
 
 **Why geometry is an input**: the surface prior depends on viewing geometry when derived from BRDF kernels. Pre-built stores may ignore this argument.
 
+**Planned BRDF-prior routes**:
+
+1. **Time-local BRDF smoothing route**:
+   - Forward-model surface reflectance from BRDF parameters for the target sensor geometry over a
+     `±16 d` window around the sensing time.
+   - Use the Rust Whittaker smoother from `whitsmooth_rust_repo` on the simulated reflectance time
+     series to gap-fill missing days and produce a smooth estimate at the sensing date, with
+     uncertainty from residual spread and QA.
+   - This is the route closest to the current SIAC paper Appendix A workflow and is the default
+     for dynamic per-scene BRDF priors.
+   - Spectral mapping is still required in this route whenever the BRDF-source SRF basis differs
+     from the target-sensor SRF basis.
+
+2. **Historical monthly best-pixel composite + spectral-mapping route**:
+   - Build monthly best-pixel composites of BRDF-simulated reflectance for the scene month and
+     adjacent months (`m-1`, `m`, `m+1`) over the previous 5 years, i.e. 15 monthly composites.
+   - Pixel selection inside each monthly composite must be driven by BRDF quality so the retained
+     BRDF parameters and forward-modelled reflectance come from the best available observation for
+     that month, not from a temporal median.
+   - Use target-sensor NIR+SWIR observations to query a database built from those 15 monthly
+     composites and retrieve the most appropriate visible-reflectance prior for the scene.
+   - All MODIS/VIIRS BRDF values remain defined in the MODIS/VIIRS spectral basis; target-sensor
+     SWIR/NIR matching must therefore use a spectral-mapping step rather than nearest-band lookup.
+   - For Sentinel-2 in particular, SWIR mapping to MODIS/VIIRS must follow the spectral-mapping
+     approach described in SIAC Appendix D, not a simple centre-wavelength substitution.
+
 **Built-in providers are small classes** (same rationale as M2 — they hold
 configured paths):
 
@@ -558,6 +584,10 @@ siac_process(config, input_path, surface_prior_provider=my_prior)
 |------|------|--------|
 | `test_brdf_provider_returns_surface_prior` | `BRDFDerivedPriorProvider(tmp_dir).get_surface_prior(...)` | Returns `SurfacePrior` with `boa`, `boa_unc`, `mask` |
 | `test_brdf_provider_geometry_used` | Compare output with different geometry angles | BRDF-derived prior varies with geometry |
+| `test_brdf_whittaker_route_uses_pm16d_window` | Mock BRDF time series over ±16 d | Only local window used; smoother output at sensing date |
+| `test_brdf_monthly_composite_route_uses_15_candidates` | Scene month `m` over 5 years | Uses `(m-1,m,m+1)` for each year = 15 monthly candidates |
+| `test_brdf_monthly_route_uses_swir_nir_query` | Provide target NIR/SWIR observations | Composite ranking/query depends on target SWIR/NIR |
+| `test_brdf_monthly_route_requires_spectral_mapping` | Sentinel-2 SWIR + MODIS/VIIRS basis | Uses Appendix-D mapping path, not nearest-band substitution |
 | `test_prebuilt_store_returns_surface_prior` | `PrebuiltPriorStore(zarr_path).get_surface_prior(...)` | Returns valid `SurfacePrior` |
 | `test_prebuilt_store_ignores_geometry` | Same store, different geometry | Output unchanged |
 | `test_surface_prior_aoi_scoped` | Check spatial extent | Covers requested bounds |
@@ -1407,6 +1437,60 @@ The store can be built from multiple sources:
 - **High-resolution composites** (sensor-specific; e.g. Sentinel-2 L2A; 10–20 m)
 - **Blended** (recommended): use global BRDF as base and add high-resolution structure where available
 
+#### 9.6.3 BRDF Prior Usage: Two Operational Routes
+
+The BRDF prior should be treated as two distinct operational routes, both of
+which return the same `SurfacePrior` contract.
+
+**Route A: time-local Whittaker-smoothed BRDF prior**
+
+- Inputs:
+  - BRDF kernel parameters (`f_iso`, `f_vol`, `f_geo`) from `MCD43A1`, `VNP43MA1`, or equivalent
+  - target-scene illumination/view geometry
+  - valid samples in a `±16 d` window around the sensing date
+- Process:
+  1. forward-simulate BRDF reflectance for each available day in the `±16 d` window using the
+     target-scene angles
+  2. mask poor-quality days/pixels with product QA
+  3. apply the Rust Whittaker smoother per band/pixel to gap-fill and smooth the time series
+  4. if source and target SRFs differ, run spectral mapping from the BRDF source basis to the
+     target-sensor basis
+  5. evaluate the smoothed signal at the sensing date to obtain the BRDF prior mean
+  6. derive uncertainty from QA, residual spread, smoother diagnostics, and spectral-mapping error
+- Role:
+  - default dynamic BRDF prior for atmospheric retrieval
+  - closest to the current SIAC observational-prior construction
+
+**Route B: historical monthly best-pixel composite + SWIR/NIR query**
+
+- Inputs:
+  - monthly best-pixel composites of BRDF-simulated reflectance
+  - months `(m-1, m, m+1)` for each of the previous 5 years (15 monthly composites total)
+  - target-scene NIR+SWIR reflectance from the target sensor
+- Process:
+  1. precompute monthly best-pixel composites in the MODIS/VIIRS BRDF spectral basis, choosing the
+     monthly pixel from the best BRDF quality rather than by median compositing
+  2. for a target scene, gather the 15 monthly composites for `(m-1, m, m+1)` across the previous
+     5 years
+  3. if source and target SRFs differ, use spectral mapping to compare target-scene NIR+SWIR
+     observations with the MODIS/VIIRS BRDF basis
+  4. build or load a database whose query key contains:
+     - NIR
+     - SWIR-1
+     - SWIR-2
+     - the median summary derived from the 15 monthly composites
+  5. apply a first-pass atmospheric correction with prior atmospheric parameters to the target
+     scene, then use the corrected NIR/SWIR query vector to retrieve the visible reflectance
+     estimate from the database
+  6. return visible/NIR/SWIR prior reflectance and uncertainty for the retrieved candidate, and
+     feed the visible prior into the AOD solve
+- Role:
+  - climatological/historical fallback route when the local time series is weak, cloudy, or sparse
+  - route for stable prior stores built offline as a searchable 15-month BRDF-composite database
+
+The planner should treat Route A and Route B as first-class provider strategies,
+not as minor implementation options inside one opaque class.
+
 **Tests** (`tests/unit/test_prior_store.py`):
 
 | # | Test | Assert |
@@ -1416,21 +1500,74 @@ The store can be built from multiple sources:
 | 3 | AOI crop produces smaller spatial extent | output shape ≤ input shape |
 | 4 | Spectral projection (reference → sensor) | output has correct number of sensor bands |
 | 5 | Loader returns valid `SurfacePrior` | passes `validate_surface_prior()` |
+| 6 | Monthly composite builder produces 15 best-pixel composites | `(m-1,m,m+1)` over 5 years present and no temporal-median composite is used |
+| 7 | Monthly composite builder respects BRDF quality | best-quality BRDF pixel is selected for each month |
+| 8 | Monthly database query responds to NIR + two SWIR bands | retrieved visible prior changes with the corrected query bands |
+| 9 | Monthly database feature summary is stable | median summary over the 15 monthly composites is computed consistently |
 
-### 9.7 Optional Runtime Refinement (SWIR/NIR Query)
+### 9.7 Spectral Mapping for BRDF Composite Usage
+
+Spectral mapping is required for **both Route A and Route B** whenever the BRDF
+source basis and the target-sensor SRFs are not the same. Route B simply makes
+that requirement more obvious because the query is performed in NIR/SWIR.
+
+The required rule is:
+
+> **Do not map Sentinel-2/Landsat SWIR bands to MODIS/VIIRS BRDF bands by nearest wavelength alone.**
+> Use the Appendix D SIAC spectral-mapping workflow whenever source and target SRFs differ.
+
+Per SIAC Appendix D, the planned runtime/offline mapping should:
+
+1. use the MODIS/VIIRS reflectance basis and MODIS/VIIRS SRFs as the reference basis
+2. search a hyperspectral reflectance library for spectra consistent with the reference-basis reflectance
+3. reconstruct a 1 nm reflectance estimate from the selected neighbours
+4. convolve the reconstructed spectrum with both:
+   - MODIS/VIIRS SRFs
+   - target-sensor SRFs
+5. carry the mapping uncertainty from the neighbour dispersion / reconstruction error
+
+Explicit exception:
+
+- **Hyperspectral → multispectral** projection does **not** require an external hyperspectral
+  library/database when the source sensor already measures the spectrum densely enough in wavelength.
+  In that case, multispectral simulation can be done directly by convolving the hyperspectral
+  reflectance with the target multispectral SRFs.
+- The external-library / Appendix-D reconstruction route is required when translating between
+  multispectral bases, e.g. MODIS/VIIRS BRDF basis to Sentinel-2 or Landsat.
+
+This is especially important for:
+- Sentinel-2 SWIR bands (`B11`, `B12`)
+- Landsat OLI SWIR bands
+- any target sensor whose NIR/SWIR SRFs differ materially from MODIS/VIIRS band passes
+
+The spectral-mapping output is not only a visible-band helper. It is also the
+bridge that lets target-sensor SWIR/NIR observations query a MODIS/VIIRS BRDF
+composite database consistently, including the Route-B database keyed by NIR,
+two SWIR bands, and the median summary from the 15 monthly composites.
+
+### 9.8 Optional Runtime Refinement (SWIR/NIR Query)
 
 Optional refinement uses aerosol-insensitive NIR/SWIR bands to query the prior store and update the visible prediction.
+In the BRDF-composite route, this query must happen in the MODIS/VIIRS reference basis via the Appendix-D spectral mapping.
 This is most useful where climatology is stale or the sensor is hyperspectral.
 
 High-level steps:
-1. select query bands by wavelength (NIR+SWIR)
+1. select query bands by wavelength (`NIR`, `SWIR-1`, `SWIR-2`)
 2. apply first-pass correction using prior atmosphere
-3. convolve into reference space
-4. approximate nearest-neighbour lookup (e.g. FAISS IVF)
-5. project predicted visible bands back to sensor space
-6. **return `SurfacePrior`** — the output contract is unchanged regardless of method
+3. if source and target SRFs differ, map target reflectance into the BRDF source basis using
+   Appendix-D spectral mapping; if the source is hyperspectral and the target is multispectral,
+   use direct SRF convolution instead
+4. form the Route-B database query key from:
+   - corrected `NIR`
+   - corrected `SWIR-1`
+   - corrected `SWIR-2`
+   - the median summary derived from the 15 monthly composites
+5. query/select the monthly composite or prior-store candidate
+6. use the retrieved candidate to estimate visible surface reflectance per pixel for the AOD solve
+7. project predicted visible bands back to sensor space
+8. **return `SurfacePrior`** — the output contract is unchanged regardless of method
 
-### 9.8 Comparison of Prior Approaches
+### 9.9 Comparison of Prior Approaches
 
 | Aspect | Pre-built climatological prior | Runtime SWIR/NIR refinement |
 |--------|-------------------------------|----------------------------|
@@ -1440,7 +1577,7 @@ High-level steps:
 | Output contract | `SurfacePrior` | `SurfacePrior` (same) |
 | Recommended | Default | Optional accuracy mode |
 
-### 9.9 Planned Architecture + Config Integration
+### 9.10 Planned Architecture + Config Integration
 
 Planned files:
 
@@ -1453,13 +1590,21 @@ Planned files:
 | `python/siac/siac.py` | MODIFY | `siac_process()` convenience entry point + `_resolve_*` helpers that construct provider instances |
 | `python/siac/priors/surface/prior_store.py` | NEW | `PrebuiltPriorStore` class → returns `SurfacePrior` |
 | `python/siac/priors/surface/build_prior.py` | NEW | Offline builder tool |
+| `python/siac/priors/surface/brdf_whittaker.py` | NEW | Route A: `±16 d` BRDF prior using `whitsmooth_rust_repo` |
+| `python/siac/priors/surface/brdf_monthly_composite.py` | NEW | Route B: monthly best-pixel BRDF composites over 5-year history |
+| `python/siac/priors/surface/brdf_monthly_database.py` | NEW | Route B database builder/query for 15 monthly composites keyed by NIR + two SWIR bands + median summary |
 | `python/siac/priors/surface/swir_refine.py` | NEW | Optional runtime refinement → returns `SurfacePrior` |
+| `python/siac/priors/surface/spectral_mapping.py` | NEW | SRF-dependent mapping layer: Appendix-D reconstruction for multispectral↔multispectral, direct convolution for hyperspectral→multispectral |
 | `python/siac/grid/assembler.py` | NEW | `assemble_grids()` function → returns `SolverInputBundle` |
 | `python/siac/core/config.py` | MODIFY | Surface prior store path + refinement flags |
 | `tests/unit/test_spectral.py` | NEW | `SpectralBandDescriptor`, `SensorConfig` selection, spectral convolution tests |
 | `tests/unit/test_contracts.py` | NEW | All contract type construction + validation function tests |
 | `tests/unit/test_grid_assembler.py` | NEW | `assemble_grids()` unit tests |
 | `tests/unit/test_prior_store.py` | NEW | Prior store tile selection, DOY interpolation, spectral projection |
+| `tests/unit/test_brdf_whittaker.py` | NEW | Route A Whittaker gap-filling and sensing-date evaluation via Rust smoother |
+| `tests/unit/test_brdf_monthly_composite.py` | NEW | Route B 15-month best-pixel composite logic and BRDF-quality selection |
+| `tests/unit/test_brdf_monthly_database.py` | NEW | Route B database build/query with NIR + two SWIR bands + median-summary key |
+| `tests/unit/test_spectral_mapping.py` | NEW | Appendix-D mapping for differing multispectral SRFs and direct hyperspectral→multispectral convolution |
 | `tests/integration/test_injection.py` | NEW | Custom provider injection + bad-provider rejection tests |
 | `tests/integration/test_orchestration.py` | NEW | Pipeline happy-path, validation-integration, concurrency tests |
 

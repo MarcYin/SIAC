@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--surface-prior-method",
-        choices=("kernel_model", "whittaker"),
+        choices=("kernel_model", "whittaker", "monthly_database"),
         default="kernel_model",
         help="Surface-prior derivation route to use during M3.",
     )

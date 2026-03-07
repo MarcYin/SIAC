@@ -227,8 +227,8 @@ def test_run_pipeline_thread_timeout_raises(
         time.sleep(0.05)
         return mock_atmospheric_state
 
-    def slow_surface(bounds: Any, crs: str, obs_time: Any, sc: Any, geom: Any, res: float) -> Any:
-        _ = (bounds, crs, obs_time, sc, geom, res)
+    def slow_surface(obs: Any, atmo_prior: Any, rt_model: Any, res: float) -> Any:
+        _ = (obs, atmo_prior, rt_model, res)
         time.sleep(0.05)
         return mock_surface_prior
 

@@ -40,6 +40,11 @@ from siac.pipeline import (
 from siac.priors.atmospheric import CAMSProvider
 from siac.priors.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.priors.surface.kernel_model import KernelModelDeriver
+from siac.priors.surface.swir_refine import (
+    build_monthly_surface_prior_database,
+    query_surface_prior_from_monthly_database,
+    resample_geometry_for_surface_prior,
+)
 from siac.rt.emulator import TwoLayerNNEmulator
 from siac.rt.lut import ZarrLUTBackend
 from siac.satellite import detect_sensor, get_preprocessor
@@ -73,6 +78,36 @@ def _select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]
     if not bands:
         bands = list(sensor_config.bands[:2])
     return bands
+
+
+def _select_visible_surface_prior_bands(sensor_config: SensorConfig) -> list[Any]:
+    """Visible bands used as the Route-B retrieval target."""
+    bands = [band for band in sensor_config.bands if 400.0 <= band.center_wavelength < 700.0]
+    if bands:
+        return bands
+    return list(sensor_config.bands[: min(3, len(sensor_config.bands))])
+
+
+def _select_route_b_query_bands(sensor_config: SensorConfig) -> list[Any]:
+    """Return NIR, SWIR-1, SWIR-2 bands for Route-B database queries."""
+    preferred_by_sensor = {
+        "MSI": ("B08", "B11", "B12"),
+        "OLI": ("B5", "B6", "B7"),
+    }
+    preferred_names = preferred_by_sensor.get(sensor_config.sensor_id, ())
+    selected = [band for name in preferred_names for band in sensor_config.bands if band.name == name]
+    if len(selected) == 3:
+        return selected
+
+    targets = (860.0, 1610.0, 2200.0)
+    remaining = list(sensor_config.bands)
+    resolved: list[Any] = []
+    for target in targets:
+        candidates = [band for band in remaining if band.center_wavelength >= 700.0] or remaining
+        match = min(candidates, key=lambda band: abs(band.center_wavelength - target))
+        resolved.append(match)
+        remaining = [band for band in remaining if band.name != match.name]
+    return resolved
 
 
 class SIAC:
@@ -262,6 +297,11 @@ class SIAC:
         bands = _select_surface_prior_bands(metadata.get("sensor_config"))
 
         method = getattr(self.config.surface_prior, "method", "kernel_model")
+        if method == "monthly_database":
+            raise RuntimeError(
+                "Route-B monthly-database surface priors require the full ObservationBundle "
+                "and are only available through the main pipeline."
+            )
         if method == "whittaker":
             brdf_weights = brdf_provider.get_temporal_brdf_parameters(
                 bounds=bounds,
@@ -650,6 +690,11 @@ def _resolve_surface_prior_provider(
         source=_earthaccess_source_from_auth(auth),
     )
     method = getattr(config.surface_prior, "method", "kernel_model")
+    fallback_deriver = KernelModelDeriver(
+        psf_sigma_x=config.surface_prior.psf_sigma_x,
+        psf_sigma_y=config.surface_prior.psf_sigma_y,
+        apply_psf=config.surface_prior.apply_psf,
+    )
     if method == "whittaker":
         deriver = BRDFWhittakerDeriver(
             temporal_lambda=config.surface_prior.whittaker_lambda,
@@ -658,36 +703,86 @@ def _resolve_surface_prior_provider(
             apply_psf=config.surface_prior.apply_psf,
         )
 
-        def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+        def _brdf_surface_prior(observation, atmo_prior, rt_model, resolution):
+            _ = (atmo_prior, rt_model)
             brdf_weights = brdf_prov.get_temporal_brdf_parameters(
-                bounds=bounds,
-                crs=crs,
-                obs_time=obs_time,
+                bounds=observation.bounds,
+                crs=observation.crs,
+                obs_time=observation.metadata["observation_time"],
                 target_resolution=resolution,
-                bands=_select_surface_prior_bands(sensor_config),
+                bands=_select_surface_prior_bands(observation.sensor_config),
                 temporal_window=config.brdf.temporal_window,
             )
-            return deriver.compute_surface_prior(brdf_weights, geometry, obs_time=obs_time)
+            return deriver.compute_surface_prior(
+                brdf_weights,
+                observation.geometry,
+                obs_time=observation.metadata["observation_time"],
+            )
 
+        _brdf_surface_prior.requires_atmo_prior = False
         return _brdf_surface_prior
 
-    deriver = KernelModelDeriver(
-        psf_sigma_x=config.surface_prior.psf_sigma_x,
-        psf_sigma_y=config.surface_prior.psf_sigma_y,
-        apply_psf=config.surface_prior.apply_psf,
-    )
+    if method == "monthly_database":
+        def _monthly_surface_prior(observation, atmo_prior, rt_model, resolution):
+            if atmo_prior is None:
+                raise ValueError("Route-B monthly_database surface prior requires an atmospheric prior")
 
-    def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+            visible_bands = _select_visible_surface_prior_bands(observation.sensor_config)
+            query_bands = _select_route_b_query_bands(observation.sensor_config)
+            target_geometry = resample_geometry_for_surface_prior(
+                observation,
+                resolution=resolution,
+            )
+            database = build_monthly_surface_prior_database(
+                observation=observation,
+                brdf_provider=brdf_prov,
+                resolution=resolution,
+                geometry=target_geometry,
+                visible_bands=visible_bands,
+                query_bands=query_bands,
+            )
+            prior = query_surface_prior_from_monthly_database(
+                observation=observation,
+                atmo_prior=atmo_prior,
+                rt_model=rt_model,
+                database=database,
+                query_band_names=tuple(band.name for band in query_bands),
+                visible_band_names=tuple(band.name for band in visible_bands),
+                k_neighbors=3,
+            )
+            if bool(np.asarray(prior.mask.values).any()):
+                return prior
+
+            logger.warning(
+                "Route-B monthly database produced no valid surface-prior pixels; "
+                "falling back to kernel-model BRDF priors."
+            )
+            brdf_weights = brdf_prov.get_brdf_parameters(
+                bounds=observation.bounds,
+                crs=observation.crs,
+                obs_time=observation.metadata["observation_time"],
+                target_resolution=resolution,
+                bands=visible_bands,
+                temporal_window=config.brdf.temporal_window,
+            )
+            return fallback_deriver.compute_surface_prior(brdf_weights, target_geometry)
+
+        _monthly_surface_prior.requires_atmo_prior = True
+        return _monthly_surface_prior
+
+    def _brdf_surface_prior(observation, atmo_prior, rt_model, resolution):
+        _ = (atmo_prior, rt_model)
         brdf_weights = brdf_prov.get_brdf_parameters(
-            bounds=bounds,
-            crs=crs,
-            obs_time=obs_time,
+            bounds=observation.bounds,
+            crs=observation.crs,
+            obs_time=observation.metadata["observation_time"],
             target_resolution=resolution,
-            bands=_select_surface_prior_bands(sensor_config),
+            bands=_select_surface_prior_bands(observation.sensor_config),
             temporal_window=config.brdf.temporal_window,
         )
-        return deriver.compute_surface_prior(brdf_weights, geometry)
+        return fallback_deriver.compute_surface_prior(brdf_weights, observation.geometry)
 
+    _brdf_surface_prior.requires_atmo_prior = False
     return _brdf_surface_prior
 
 

@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 from siac.core.types import (
     AtmosphericState,
     CorrectionResult,
-    GeometryAngles,
     ObservationBundle,
     SensorConfig,
     SolvedAtmosphere,
@@ -53,10 +52,7 @@ AtmoPriorFn = Callable[
 ]
 
 # M3 surface prior provider
-SurfacePriorFn = Callable[
-    [tuple[float, float, float, float], str, datetime, SensorConfig, GeometryAngles, float],
-    SurfacePrior,
-]
+SurfacePriorFn = Callable[[ObservationBundle, AtmosphericState | None, Any, float], SurfacePrior]
 
 # M4 grid assembler
 GridAssemblerFn = Callable[
@@ -195,6 +191,11 @@ def _maybe_submit_lut_preload(
     )
 
 
+def _surface_prior_requires_atmo(provider: SurfacePriorFn) -> bool:
+    """Return whether the surface-prior provider depends on the M2 result."""
+    return bool(getattr(provider, "requires_atmo_prior", False))
+
+
 def _call_with_retries(
     fn: Callable[..., Any],
     args: tuple[Any, ...],
@@ -298,7 +299,7 @@ def _run_pipeline_thread(
 
     timeout = settings["stage_timeout_s"]
     retries = settings["retries"]
-    logger.info("M2+M3: Fetching atmospheric & surface priors...")
+    requires_atmo = _surface_prior_requires_atmo(surface_prior_provider)
     with ThreadPoolExecutor(max_workers=settings["max_workers"]) as executor:
         f_m2 = executor.submit(
             _call_with_retries,
@@ -307,16 +308,30 @@ def _run_pipeline_thread(
             retries=retries,
             stage_name="M2",
         )
-        f_m3 = executor.submit(
-            _call_with_retries,
-            surface_prior_provider,
-            (bounds, crs, obs_time, obs.sensor_config, obs.geometry, resolution),
-            retries=retries,
-            stage_name="M3",
-        )
+        f_m3 = None
+        if not requires_atmo:
+            logger.info("M2+M3: Fetching atmospheric & surface priors...")
+            f_m3 = executor.submit(
+                _call_with_retries,
+                surface_prior_provider,
+                (obs, None, rt_model, resolution),
+                retries=retries,
+                stage_name="M3",
+            )
+        else:
+            logger.info("M2: Fetching atmospheric prior...")
         f_lut = None
         try:
             atmo = f_m2.result(timeout=timeout)
+            if f_m3 is None:
+                logger.info("M3: Deriving surface prior from observation + atmospheric prior...")
+                f_m3 = executor.submit(
+                    _call_with_retries,
+                    surface_prior_provider,
+                    (obs, atmo, rt_model, resolution),
+                    retries=retries,
+                    stage_name="M3",
+                )
             f_lut = _maybe_submit_lut_preload(
                 executor,
                 rt_model,
@@ -344,11 +359,12 @@ def _run_pipeline_thread(
             if f_lut is not None:
                 f_lut.cancel()
             raise TimeoutError(
-                f"M2/M3 timed out after {timeout:.1f}s (thread backend)"
+                f"M2/M3 timed out after {float(timeout):.1f}s (thread backend)"
             ) from exc
         except Exception:
             f_m2.cancel()
-            f_m3.cancel()
+            if f_m3 is not None:
+                f_m3.cancel()
             if f_lut is not None:
                 f_lut.cancel()
             raise
@@ -421,7 +437,7 @@ def _run_pipeline_dask(
                 preprocessor=preprocessor,
             )
 
-            logger.info("M2+M3: Fetching atmospheric & surface priors...")
+            requires_atmo = _surface_prior_requires_atmo(surface_prior_provider)
             f_m2 = client.submit(
                 _call_with_retries,
                 atmo_provider,
@@ -429,17 +445,31 @@ def _run_pipeline_dask(
                 retries=retries,
                 stage_name="M2",
             )
-            f_m3 = client.submit(
-                _call_with_retries,
-                surface_prior_provider,
-                (bounds, crs, obs_time, obs.sensor_config, obs.geometry, resolution),
-                retries=retries,
-                stage_name="M3",
-            )
+            f_m3 = None
+            if not requires_atmo:
+                logger.info("M2+M3: Fetching atmospheric & surface priors...")
+                f_m3 = client.submit(
+                    _call_with_retries,
+                    surface_prior_provider,
+                    (obs, None, rt_model, resolution),
+                    retries=retries,
+                    stage_name="M3",
+                )
+            else:
+                logger.info("M2: Fetching atmospheric prior...")
             preload_future = None
             preload_executor = ThreadPoolExecutor(max_workers=1)
             try:
                 atmo = f_m2.result(timeout=timeout)
+                if f_m3 is None:
+                    logger.info("M3: Deriving surface prior from observation + atmospheric prior...")
+                    f_m3 = client.submit(
+                        _call_with_retries,
+                        surface_prior_provider,
+                        (obs, atmo, rt_model, resolution),
+                        retries=retries,
+                        stage_name="M3",
+                    )
                 preload_future = _maybe_submit_lut_preload(
                     preload_executor,
                     rt_model,
@@ -463,15 +493,17 @@ def _run_pipeline_dask(
                         )
             except DaskTimeoutError as exc:
                 f_m2.cancel()
-                f_m3.cancel()
+                if f_m3 is not None:
+                    f_m3.cancel()
                 if preload_future is not None:
                     preload_future.cancel()
                 raise TimeoutError(
-                    f"M2/M3 timed out after {timeout:.1f}s (dask backend)"
+                    f"M2/M3 timed out after {float(timeout):.1f}s (dask backend)"
                 ) from exc
             except Exception:
                 f_m2.cancel()
-                f_m3.cancel()
+                if f_m3 is not None:
+                    f_m3.cancel()
                 if preload_future is not None:
                     preload_future.cancel()
                 raise

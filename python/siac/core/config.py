@@ -153,7 +153,7 @@ class BRDFConfig(BaseModel):
 class SurfacePriorConfig(BaseModel):
     """Configuration for surface prior derivation from BRDF."""
 
-    method: Literal["kernel_model", "whittaker", "neural", "direct"] = Field(
+    method: Literal["kernel_model", "whittaker", "monthly_database", "neural", "direct"] = Field(
         default="kernel_model",
         description="Surface prior derivation method",
     )

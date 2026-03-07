@@ -209,7 +209,8 @@ class TestRunPipeline:
             call_counts["m2"] += 1
             return mock_atmospheric_state
 
-        def surf(bounds, crs, obs_time, sc, geom, res):
+        def surf(obs, atmo_prior, rt_model, res):
+            _ = (obs, atmo_prior, rt_model, res)
             call_counts["m3"] += 1
             return mock_surface_prior
 
@@ -256,7 +257,8 @@ class TestRunPipeline:
             order.append("m2")
             return mock_atmospheric_state
 
-        def surf(bounds, crs, obs_time, sc, geom, res):
+        def surf(obs, atmo_prior, rt_model, res):
+            _ = (obs, atmo_prior, rt_model, res)
             order.append("m3")
             return mock_surface_prior
 
@@ -417,7 +419,8 @@ class TestConcurrency:
             time.sleep(0.3)
             return mock_atmospheric_state
 
-        def slow_m3(bounds, crs, obs_time, sc, geom, res):
+        def slow_m3(obs, atmo_prior, rt_model, res):
+            _ = (obs, atmo_prior, rt_model, res)
             time.sleep(0.3)
             return mock_surface_prior
 
@@ -459,7 +462,8 @@ class TestConcurrency:
             time.sleep(0.2)
             return mock_atmospheric_state
 
-        def slow_m3(bounds, crs, obs_time, sc, geom, res):
+        def slow_m3(obs, atmo_prior, rt_model, res):
+            _ = (obs, atmo_prior, rt_model, res)
             time.sleep(0.4)
             return mock_surface_prior
 
@@ -500,6 +504,67 @@ class TestConcurrency:
         # With preload started right after M2, total should stay close to max(M3, preload)
         # rather than M3 + preload.
         assert elapsed < 0.60, f"Elapsed {elapsed:.2f}s suggests LUT preload did not overlap M3."
+
+    def test_route_b_surface_prior_waits_for_m2_but_overlaps_lut_preload(
+        self,
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        mock_solver_input_bundle,
+        mock_solved_atmosphere,
+    ):
+        def slow_m2(bounds, crs, obs_time, res):
+            _ = (bounds, crs, obs_time, res)
+            time.sleep(0.2)
+            return mock_atmospheric_state
+
+        calls: dict[str, object] = {"atmo_seen": None, "started": False}
+
+        def route_b_surface(obs, atmo_prior, rt_model, res):
+            _ = (obs, rt_model, res)
+            calls["atmo_seen"] = atmo_prior
+            time.sleep(0.4)
+            return mock_surface_prior
+
+        route_b_surface.requires_atmo_prior = True
+
+        def pp(path, aoi=None):
+            _ = (path, aoi)
+            return mock_observation_bundle
+
+        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+            _ = (obs, at, sp, rt, aux_res, aero_res)
+            return mock_solver_input_bundle
+
+        def solve(inputs, cfg):
+            _ = (inputs, cfg)
+            return mock_solved_atmosphere
+
+        def correct(obs, solved, rt):
+            _ = (rt,)
+            return CorrectionResult(
+                boa=obs.toa, boa_unc=None, aot=solved.aot,
+                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+            )
+
+        class _RTWithPreload:
+            def preload_scene_subset(self, geometry, atmo_state, bands):  # noqa: ANN001
+                _ = (geometry, atmo_state, bands)
+                calls["started"] = True
+                time.sleep(0.25)
+
+        t0 = time.monotonic()
+        run_pipeline(
+            Path("/fake"), None, None,
+            preprocessor=pp, atmo_provider=slow_m2,
+            surface_prior_provider=route_b_surface, grid_assembler=assemble,
+            solver=solve, corrector=correct, rt_model=_RTWithPreload(),
+        )
+        elapsed = time.monotonic() - t0
+
+        assert calls["atmo_seen"] is mock_atmospheric_state
+        assert calls["started"] is True
+        assert elapsed < 0.72, f"Elapsed {elapsed:.2f}s suggests Route-B M3 did not overlap LUT preload."
 
     def test_run_pipeline_dispatches_backend(self, monkeypatch):
         calls = {}
