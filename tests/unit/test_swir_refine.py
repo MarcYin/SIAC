@@ -312,7 +312,7 @@ def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty
         reflectance_unc=xr.DataArray(reflectance_unc, dims=["time", "band", "y", "x"], coords=coords),
     )
 
-    _reflectance, quality = _forward_model_monthly_reflectance(
+    _reflectance, quality, _reflectance_unc = _forward_model_monthly_reflectance(
         weights,
         geometry=_geometry((1, 1)),
         year=2024,
@@ -324,3 +324,78 @@ def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty
         np.array([0.0302367, 0.09], dtype=np.float32),
         rtol=1e-5,
     )
+
+
+def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis() -> None:
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((1, 1), 0.1, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((1, 1), 0.1, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((1, 1), 0.4, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((1, 1), 0.3, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((1, 1), 0.2, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((1, 1)),
+        cloud_mask=xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"]),
+        sensor_config=_sensor_config(),
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 1.0, 1.0),
+    )
+
+    source_bands = (
+        SensorBand("Band3", 469.0, 20.0, 500.0, 0),
+        SensorBand("Band4", 555.0, 20.0, 500.0, 1),
+        SensorBand("Band2", 858.5, 35.0, 500.0, 2),
+        SensorBand("Band6", 1640.0, 24.0, 500.0, 3),
+        SensorBand("Band7", 2130.0, 50.0, 500.0, 4),
+    )
+
+    class _MappedSourceBRDFProvider:
+        def __init__(self) -> None:
+            self.source_bands = source_bands
+
+        def get_temporal_brdf_parameters_batch(self, **kwargs):
+            outputs = []
+            assert tuple(band.name for band in kwargs["bands"]) == tuple(band.name for band in source_bands)
+            for sample_dates in kwargs["sample_date_sets"]:
+                sample_dates = tuple(sample_dates)
+                coords = {
+                    "time": np.array([np.datetime64(dt.date(), "D") for dt in sample_dates]),
+                    "band": [band.name for band in source_bands],
+                    "y": [0],
+                    "x": [0],
+                }
+                base = np.array([0.08, 0.12, 0.42, 0.30, 0.22], dtype=np.float32).reshape(1, 5, 1, 1)
+                data = np.repeat(base, len(sample_dates), axis=0)
+                unc = np.full_like(data, 0.02)
+                outputs.append(
+                    BRDFKernelWeights(
+                        f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                    )
+                )
+            return outputs
+
+    sensor_config = _sensor_config()
+    visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
+    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    database = build_monthly_surface_prior_database(
+        observation=obs,
+        brdf_provider=_MappedSourceBRDFProvider(),
+        resolution=500.0,
+        geometry=_geometry((1, 1)),
+        visible_bands=visible_bands,
+        query_bands=query_bands,
+    )
+
+    assert database.query_band_names == ("B08", "B11", "B12")
+    assert database.visible_band_names == ("B02", "B03")
+    assert np.isfinite(database.entries_features).all()
+    assert np.isfinite(database.entries_visible).all()

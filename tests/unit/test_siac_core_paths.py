@@ -268,6 +268,7 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
         def __init__(self, cache_dir=None, source=None):
             self.cache_dir = cache_dir
             self.source = source
+            self.source_bands = [SENTINEL2A_CONFIG.get_band("B01"), SENTINEL2A_CONFIG.get_band("B02")]
 
         def get_brdf_parameters(self, **kwargs):
             provider_calls.append(kwargs)
@@ -277,8 +278,8 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-        def compute_surface_prior(self, weights, geometry):
-            return (weights, geometry)
+        def compute_surface_prior(self, weights, geometry, **kwargs):
+            return (weights, geometry, kwargs)
 
     monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeBRDFProvider)
     monkeypatch.setattr("siac.siac.KernelModelDeriver", _FakeDeriver)
@@ -587,6 +588,7 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
         def __init__(self, cache_dir=None, source=None):
             self.cache_dir = cache_dir
             self.source = source
+            self.source_bands = [SENTINEL2A_CONFIG.get_band("B02"), SENTINEL2A_CONFIG.get_band("B03")]
 
         def get_brdf_parameters(self, **kwargs):
             return "weights"
@@ -595,8 +597,8 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def compute_surface_prior(self, brdf_weights, geometry):
-            return (brdf_weights, geometry)
+        def compute_surface_prior(self, brdf_weights, geometry, **kwargs):
+            return (brdf_weights, geometry, kwargs)
 
     monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeBRDFProvider)
     monkeypatch.setattr("siac.siac.KernelModelDeriver", _FakeDeriver)
@@ -630,8 +632,8 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def compute_surface_prior(self, brdf_weights, geometry, obs_time=None):
-            return (brdf_weights, geometry, obs_time)
+        def compute_surface_prior(self, brdf_weights, geometry, obs_time=None, **kwargs):
+            return (brdf_weights, geometry, obs_time, kwargs)
 
     monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeTemporalBRDFProvider)
     monkeypatch.setattr("siac.siac.BRDFWhittakerDeriver", _FakeWhittakerDeriver)

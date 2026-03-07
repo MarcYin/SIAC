@@ -113,6 +113,15 @@ def test_mcd19_provider_returns_default_prior_without_probe():
 
 def test_mcd43_provider_returns_default_weights_without_probe():
     provider = MCD43EarthAccessProvider(probe_earthdata=False)
+    assert [band.name for band in provider.source_bands] == [
+        "Band1",
+        "Band2",
+        "Band3",
+        "Band4",
+        "Band5",
+        "Band6",
+        "Band7",
+    ]
     weights = provider.get_brdf_parameters(
         bounds=(0.0, 0.0, 1000.0, 1000.0),
         crs="EPSG:4326",
