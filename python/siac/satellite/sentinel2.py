@@ -92,7 +92,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 cache_dir=self.config.get("srf_cache_dir"),
                 refresh=bool(self.config.get("refresh_srf", False)),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - intentionally broad: any failure (network, I/O, parse) should fall back gracefully
             fallback = _S2_FALLBACK_CONFIGS.get(self._satellite_id, SENTINEL2A_CONFIG)
             logger.warning(
                 "Could not load SRF for %s (network or cache unavailable); "

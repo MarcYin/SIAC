@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -429,8 +430,12 @@ def _init_rust_nn(
     b2: np.ndarray,
     w3: np.ndarray,
     b3: np.ndarray,
-) -> object:
-    """Lazily import the Rust NN and construct it; defers the hard dependency to first use."""
+) -> Any:
+    """Lazily import the Rust NN and construct it; defers the hard dependency to first use.
+
+    Returns a ``siac._rust.TwoLayerNN`` instance.  The return type is declared
+    as ``Any`` because the Rust type is not available at static-analysis time.
+    """
     from siac._rust import TwoLayerNN as _RustNN  # noqa: PLC0415 - lazy; siac._rust is optional at import time
 
     return _RustNN(w1, b1, w2, b2, w3, b3)
