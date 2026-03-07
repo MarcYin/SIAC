@@ -61,11 +61,9 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             k_vol,
             k_geo,
         ).transpose("time", "band", "y", "x")
-        reflectance_unc = np.sqrt(
-            brdf_weights.f0_unc**2
-            + (k_vol * brdf_weights.f1_unc) ** 2
-            + (k_geo * brdf_weights.f2_unc) ** 2
-        ).transpose("time", "band", "y", "x")
+        reflectance_unc = brdf_weights.compute_reflectance_uncertainty(k_vol, k_geo).transpose(
+            "time", "band", "y", "x"
+        )
 
         reflectance_values = np.asarray(reflectance.values, dtype=np.float32)
         unc_values = np.asarray(reflectance_unc.values, dtype=np.float32)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -27,11 +28,11 @@ from siac.priors.surface.brdf_monthly_database import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from datetime import datetime
 
 
 _HISTORY_YEARS = 5
 _HISTORY_MONTH_OFFSETS = (-1, 0, 1)
+_WEEKLY_STEP_DAYS = 7
 
 
 def build_monthly_surface_prior_database(
@@ -49,18 +50,31 @@ def build_monthly_surface_prior_database(
 
     required_bands = _deduplicate_bands([*visible_bands, *query_bands])
     obs_time = observation.metadata["observation_time"]
-    composites = []
-    for year, month in _iter_history_months(obs_time):
-        center_time = _month_center_datetime(year, month, obs_time)
-        temporal_window = max(1, calendar.monthrange(year, month)[1] // 2 + 1)
-        temporal_weights = brdf_provider.get_temporal_brdf_parameters(
-            bounds=observation.bounds,
-            crs=observation.crs,
-            obs_time=center_time,
-            target_resolution=resolution,
-            bands=required_bands,
-            temporal_window=temporal_window,
+    month_specs = [
+        (
+            year,
+            month,
+            _month_center_datetime(year, month, obs_time),
+            max(1, calendar.monthrange(year, month)[1] // 2 + 1),
+            _weekly_sample_dates(year, month),
         )
+        for year, month in _iter_history_months(obs_time)
+    ]
+    temporal_weights_list = brdf_provider.get_temporal_brdf_parameters_batch(
+        bounds=observation.bounds,
+        crs=observation.crs,
+        obs_times=[spec[2] for spec in month_specs],
+        target_resolution=resolution,
+        bands=required_bands,
+        temporal_windows=[spec[3] for spec in month_specs],
+        sample_date_sets=[spec[4] for spec in month_specs],
+    )
+    composites = []
+    for (year, month, _center_time, _temporal_window, _sample_dates), temporal_weights in zip(
+        month_specs,
+        temporal_weights_list,
+        strict=True,
+    ):
         reflectance, quality = _forward_model_monthly_reflectance(
             temporal_weights,
             geometry=geometry,
@@ -102,11 +116,12 @@ def query_surface_prior_from_monthly_database(
     if visible_band_names is not None and tuple(visible_band_names) != expected_visible:
         raise ValueError("visible_band_names must match the database visible-band ordering")
 
+    aligned_atmo = _resample_atmo_to_observation_grid(observation, atmo_prior)
     corrector = AtmosphericCorrector(rt_model, observation.sensor_config)
     correction = corrector.correct(
         observation.toa,
         observation.geometry,
-        atmo_prior,
+        aligned_atmo,
         cloud_mask=observation.cloud_mask,
     )
 
@@ -181,6 +196,14 @@ def _month_center_datetime(year: int, month: int, template_time: datetime) -> da
     return template_time.replace(year=year, month=month, day=center_day)
 
 
+def _weekly_sample_dates(year: int, month: int) -> tuple[datetime, ...]:
+    n_days = calendar.monthrange(year, month)[1]
+    days = list(range(1, n_days + 1, _WEEKLY_STEP_DAYS))
+    if days[-1] != n_days and (n_days - days[-1]) >= (_WEEKLY_STEP_DAYS // 2):
+        days.append(n_days)
+    return tuple(datetime(year, month, day) for day in days)
+
+
 def _forward_model_monthly_reflectance(
     temporal_weights: BRDFKernelWeights,
     *,
@@ -234,6 +257,29 @@ def _native_observation_resolution(observation: ObservationBundle) -> float:
     if not available:
         return 10.0
     return float(min(available.values()))
+
+
+def _observation_shape(observation: ObservationBundle) -> tuple[int, int]:
+    first_var = next(iter(observation.toa.data_vars))
+    return tuple(int(size) for size in observation.toa[first_var].shape)
+
+
+def _resample_atmo_to_observation_grid(
+    observation: ObservationBundle,
+    atmo_prior: AtmosphericState,
+) -> AtmosphericState:
+    target_shape = _observation_shape(observation)
+    if atmo_prior.aot.shape == target_shape:
+        return atmo_prior
+    return AtmosphericState(
+        aot=_resample_da(atmo_prior.aot, target_shape, "bilinear"),
+        tcwv=_resample_da(atmo_prior.tcwv, target_shape, "bilinear"),
+        tco3=_resample_da(atmo_prior.tco3, target_shape, "bilinear"),
+        aot_unc=_resample_da(atmo_prior.aot_unc, target_shape, "bilinear"),
+        tcwv_unc=_resample_da(atmo_prior.tcwv_unc, target_shape, "bilinear"),
+        tco3_unc=_resample_da(atmo_prior.tco3_unc, target_shape, "bilinear"),
+        elevation=_resample_da(atmo_prior.elevation, target_shape, "bilinear"),
+    )
 
 
 def _resample_dataset(

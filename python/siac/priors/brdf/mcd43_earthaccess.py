@@ -28,9 +28,92 @@ from siac.priors.earthdata_common import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from datetime import datetime
+    from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
+
+_BEST_QA_REFLECTANCE_UNCERTAINTY = 0.015
+_QA_UNCERTAINTY_POWER = 1.6
+
+
+def _granule_day(granule: object) -> np.datetime64 | None:
+    """Best-effort extraction of a daily timestamp from an Earthaccess granule object."""
+    render_dict = getattr(granule, "render_dict", None)
+    if render_dict is not None:
+        meta = render_dict.get("meta", {})
+        umm = render_dict.get("umm", {})
+    elif isinstance(granule, dict):
+        meta = granule.get("meta", {})
+        umm = granule.get("umm", {})
+    else:
+        meta = {}
+        umm = {}
+
+    candidates: list[str] = []
+    temporal = umm.get("TemporalExtent", {}) if isinstance(umm, dict) else {}
+    if isinstance(temporal, dict):
+        range_dt = temporal.get("RangeDateTime", {})
+        if isinstance(range_dt, dict):
+            for key in ("BeginningDateTime", "EndingDateTime"):
+                value = range_dt.get(key)
+                if isinstance(value, str):
+                    candidates.append(value)
+        single_dt = temporal.get("SingleDateTime")
+        if isinstance(single_dt, str):
+            candidates.append(single_dt)
+
+    if isinstance(umm, dict):
+        for key in ("GranuleUR", "ProducerGranuleId"):
+            value = umm.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+    if isinstance(meta, dict):
+        for key in ("native-id", "producer-granule-id"):
+            value = meta.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+
+    for value in candidates:
+        try:
+            return np.datetime64(value[:10], "D")
+        except Exception:
+            pass
+        try:
+            return np.datetime64(parse_granule_date(Path(value)).date(), "D")
+        except Exception:
+            continue
+    return None
+
+
+def _granule_key(granule: object) -> str:
+    """Best-effort stable key for deduplicating Earthaccess granules."""
+    render_dict = getattr(granule, "render_dict", None)
+    if render_dict is not None:
+        meta = render_dict.get("meta", {})
+        umm = render_dict.get("umm", {})
+    elif isinstance(granule, dict):
+        meta = granule.get("meta", {})
+        umm = granule.get("umm", {})
+    else:
+        meta = {}
+        umm = {}
+
+    candidates: list[str] = []
+    if isinstance(umm, dict):
+        for key in ("GranuleUR", "ProducerGranuleId"):
+            value = umm.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+    if isinstance(meta, dict):
+        for key in ("native-id", "producer-granule-id", "concept-id"):
+            value = meta.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+
+    for value in candidates:
+        if value:
+            return value
+    return repr(granule)
 
 
 class _EarthAccessBRDFProvider:
@@ -116,6 +199,7 @@ class _EarthAccessBRDFProvider:
         target_resolution: float,
         bands: Sequence[int] | Sequence[SensorBand],
         temporal_window: int = 16,
+        sample_dates: Sequence[date | datetime | np.datetime64] | None = None,
     ) -> BRDFKernelWeights:
         """Return temporal BRDF kernel weights with dims ``(time, band, y, x)``."""
         if target_resolution <= 0:
@@ -124,10 +208,16 @@ class _EarthAccessBRDFProvider:
             raise ValueError("bands must be a non-empty sequence")
 
         requested = self._resolve_requested_bands(list(bands))
-        time_axis = self._time_axis(obs_time, temporal_window)
+        time_axis = self._coerce_sample_time_axis(sample_dates) if sample_dates is not None else self._time_axis(obs_time, temporal_window)
 
         if self.probe_earthdata:
-            paths = self._download_granules(bounds, crs, obs_time, temporal_window)
+            paths = self._download_granules(
+                bounds,
+                crs,
+                obs_time,
+                temporal_window,
+                sample_dates=time_axis,
+            )
             if paths:
                 try:
                     return self._load_temporal_from_granules(
@@ -151,6 +241,91 @@ class _EarthAccessBRDFProvider:
             [coord for coord, _band in requested],
             time_axis,
         )
+
+    def get_temporal_brdf_parameters_batch(
+        self,
+        *,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        obs_times: Sequence[datetime],
+        target_resolution: float,
+        bands: Sequence[int] | Sequence[SensorBand],
+        temporal_windows: Sequence[int],
+        sample_date_sets: Sequence[Sequence[date | datetime | np.datetime64] | None],
+    ) -> list[BRDFKernelWeights]:
+        """Return multiple temporal BRDF stacks after one batched download."""
+        if target_resolution <= 0:
+            raise ValueError(f"target_resolution must be > 0, got {target_resolution}")
+        if not bands:
+            raise ValueError("bands must be a non-empty sequence")
+        if not (len(obs_times) == len(temporal_windows) == len(sample_date_sets)):
+            raise ValueError("obs_times, temporal_windows, and sample_date_sets must have the same length")
+
+        requested = self._resolve_requested_bands(list(bands))
+        request_specs: list[tuple[datetime, np.ndarray]] = []
+        for obs_time, temporal_window, sample_dates in zip(obs_times, temporal_windows, sample_date_sets, strict=True):
+            time_axis = (
+                self._coerce_sample_time_axis(sample_dates)
+                if sample_dates is not None
+                else self._time_axis(obs_time, temporal_window)
+            )
+            request_specs.append((obs_time, time_axis))
+
+        if self.probe_earthdata:
+            downloaded = self._download_granules_batch(
+                bounds=bounds,
+                crs=crs,
+                request_specs=request_specs,
+                temporal_windows=list(temporal_windows),
+            )
+            if downloaded:
+                outputs: list[BRDFKernelWeights] = []
+                try:
+                    for obs_time, time_axis in request_specs:
+                        paths = self._select_candidate_paths(
+                            downloaded,
+                            obs_time,
+                            bounds,
+                            crs,
+                            sample_dates=time_axis,
+                        )
+                        if paths:
+                            outputs.append(
+                                self._load_temporal_from_granules(
+                                    paths,
+                                    requested=requested,
+                                    bounds=bounds,
+                                    crs=crs,
+                                    target_resolution=target_resolution,
+                                    time_axis=time_axis,
+                                )
+                            )
+                        else:
+                            outputs.append(
+                                self._default_temporal_weights(
+                                    bounds,
+                                    target_resolution,
+                                    [coord for coord, _band in requested],
+                                    time_axis,
+                                )
+                            )
+                    return outputs
+                except Exception as exc:  # pragma: no cover - external/system dependent
+                    logger.warning(
+                        "%s batched temporal BRDF granule parsing failed; using defaults (%s)",
+                        self._source_name,
+                        exc,
+                    )
+
+        return [
+            self._default_temporal_weights(
+                bounds,
+                target_resolution,
+                [coord for coord, _band in requested],
+                time_axis,
+            )
+            for _obs_time, time_axis in request_specs
+        ]
 
     def _resolve_requested_bands(
         self,
@@ -184,9 +359,10 @@ class _EarthAccessBRDFProvider:
         crs: str,
         obs_time: datetime,
         temporal_window: int,
+        sample_dates: np.ndarray | None = None,
     ) -> list[Path]:
         short_name = self.short_name or self.catalog.resolve_short_name(self.product_key)
-        temporal = EarthAccessSource.temporal_window(obs_time, temporal_window)
+        temporal = self._temporal_search_window(obs_time, temporal_window, sample_dates)
         granules = self.source.search_granules(
             short_name=short_name,
             bounds=bounds,
@@ -202,9 +378,92 @@ class _EarthAccessBRDFProvider:
             )
             return []
 
+        if sample_dates is not None:
+            granules = self._filter_granules_to_sample_dates(granules, sample_dates)
+            if not granules:
+                logger.warning(
+                    "%s granule probe returned no sampled results for AOI/time window",
+                    self._source_name,
+                )
+                return []
+
         dest = self.cache_dir or Path.home() / ".cache" / "siac" / "earthdata" / short_name
         downloaded = self.source.download_granules(granules, dest)
-        return self._select_candidate_paths(downloaded, obs_time, bounds, crs)
+        return self._select_candidate_paths(
+            downloaded,
+            obs_time,
+            bounds,
+            crs,
+            sample_dates=sample_dates,
+        )
+
+    def _download_granules_batch(
+        self,
+        *,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        request_specs: Sequence[tuple[datetime, np.ndarray]],
+        temporal_windows: Sequence[int],
+    ) -> list[Path]:
+        short_name = self.short_name or self.catalog.resolve_short_name(self.product_key)
+        unique_granules: dict[str, object] = {}
+        for start_day, end_day, sample_dates in self._merge_search_batches(request_specs, temporal_windows):
+            temporal = (
+                f"{str(start_day)}T00:00:00Z",
+                f"{str(end_day)}T23:59:59Z",
+            )
+            granules = self.source.search_granules(
+                short_name=short_name,
+                bounds=bounds,
+                crs=crs,
+                temporal=temporal,
+                provider=self.provider,
+                count=self.max_granules,
+            )
+            if not granules:
+                continue
+            granules = self._filter_granules_to_sample_dates(granules, sample_dates)
+            for granule in granules:
+                unique_granules[_granule_key(granule)] = granule
+
+        if not unique_granules:
+            logger.warning(
+                "%s batched granule probe returned no sampled results for AOI/time windows",
+                self._source_name,
+            )
+            return []
+
+        dest = self.cache_dir or Path.home() / ".cache" / "siac" / "earthdata" / short_name
+        return self.source.download_granules(list(unique_granules.values()), dest)
+
+    @staticmethod
+    def _merge_search_batches(
+        request_specs: Sequence[tuple[datetime, np.ndarray]],
+        temporal_windows: Sequence[int],
+    ) -> list[tuple[np.datetime64, np.datetime64, np.ndarray]]:
+        windows: list[tuple[np.datetime64, np.datetime64, np.ndarray]] = []
+        for (obs_time, sample_dates), temporal_window in zip(request_specs, temporal_windows, strict=True):
+            temporal = EarthAccessSource.temporal_window(obs_time, temporal_window)
+            start_day = np.datetime64(temporal[0][:10], "D")
+            end_day = np.datetime64(temporal[1][:10], "D")
+            windows.append((start_day, end_day, sample_dates))
+
+        windows.sort(key=lambda item: item[0])
+        batches: list[tuple[np.datetime64, np.datetime64, np.ndarray]] = []
+        for start_day, end_day, sample_dates in windows:
+            if not batches:
+                batches.append((start_day, end_day, sample_dates))
+                continue
+
+            prev_start, prev_end, prev_sample_dates = batches[-1]
+            if start_day <= (prev_end + np.timedelta64(1, "D")):
+                merged_start = min(prev_start, start_day)
+                merged_end = max(prev_end, end_day)
+                merged_sample_dates = np.unique(np.concatenate([prev_sample_dates, sample_dates])).astype("datetime64[D]")
+                batches[-1] = (merged_start, merged_end, merged_sample_dates)
+            else:
+                batches.append((start_day, end_day, sample_dates))
+        return batches
 
     @staticmethod
     def _select_candidate_paths(
@@ -212,14 +471,23 @@ class _EarthAccessBRDFProvider:
         obs_time: datetime,
         bounds: tuple[float, float, float, float],
         crs: str,
+        sample_dates: np.ndarray | None = None,
     ) -> list[Path]:
         if not paths:
             return []
 
+        sample_day_set = None
+        if sample_dates is not None:
+            sample_day_set = {np.datetime64(day, "D") for day in sample_dates.tolist()}
+
         selected: list[tuple[tuple[int, int], float, str, Path]] = []
         for path in paths:
             try:
-                delta = abs((parse_granule_date(path) - obs_time).total_seconds())
+                granule_dt = parse_granule_date(path)
+                granule_day = np.datetime64(granule_dt.date(), "D")
+                if sample_day_set is not None and granule_day not in sample_day_set:
+                    continue
+                delta = abs((granule_dt - obs_time).total_seconds())
                 intersects = granule_intersects_bounds(path, bounds=bounds, crs=crs)
             except Exception:
                 return paths
@@ -250,6 +518,7 @@ class _EarthAccessBRDFProvider:
         f0_unc_list: list[xr.DataArray] = []
         f1_unc_list: list[xr.DataArray] = []
         f2_unc_list: list[xr.DataArray] = []
+        reflectance_unc_list: list[xr.DataArray] = []
 
         for band_coord, product_band in requested:
             param_tiles: list[tuple[xr.DataArray, xr.DataArray, xr.DataArray]] = []
@@ -302,6 +571,7 @@ class _EarthAccessBRDFProvider:
             f0_unc_list.append(unc.expand_dims(band=[band_coord]))
             f1_unc_list.append((unc * 1.1).expand_dims(band=[band_coord]))
             f2_unc_list.append((unc * 1.1).expand_dims(band=[band_coord]))
+            reflectance_unc_list.append(unc.expand_dims(band=[band_coord]))
 
         return BRDFKernelWeights(
             f0=xr.concat(f0_list, dim="band").transpose("band", "y", "x"),
@@ -310,6 +580,7 @@ class _EarthAccessBRDFProvider:
             f0_unc=xr.concat(f0_unc_list, dim="band").transpose("band", "y", "x"),
             f1_unc=xr.concat(f1_unc_list, dim="band").transpose("band", "y", "x"),
             f2_unc=xr.concat(f2_unc_list, dim="band").transpose("band", "y", "x"),
+            reflectance_unc=xr.concat(reflectance_unc_list, dim="band").transpose("band", "y", "x"),
         )
 
     @staticmethod
@@ -354,12 +625,59 @@ class _EarthAccessBRDFProvider:
         )
 
     @staticmethod
+    def _coerce_sample_time_axis(
+        sample_dates: Sequence[date | datetime | np.datetime64],
+    ) -> np.ndarray:
+        if not sample_dates:
+            raise ValueError("sample_dates must not be empty")
+        return np.unique(
+            np.array(
+                [
+                    np.datetime64(
+                        value.date() if hasattr(value, "date") else value,
+                        "D",
+                    )
+                    for value in sample_dates
+                ],
+                dtype="datetime64[D]",
+            )
+        )
+
+    @staticmethod
+    def _temporal_search_window(
+        obs_time: datetime,
+        temporal_window: int,
+        sample_dates: np.ndarray | None,
+    ) -> tuple[str, str]:
+        if sample_dates is None or sample_dates.size == 0:
+            return EarthAccessSource.temporal_window(obs_time, temporal_window)
+        start = f"{str(sample_dates.min())}T00:00:00Z"
+        end = f"{str(sample_dates.max())}T23:59:59Z"
+        return (start, end)
+
+    @staticmethod
+    def _filter_granules_to_sample_dates(
+        granules: list[object],
+        sample_dates: np.ndarray,
+    ) -> list[object]:
+        sample_day_set = {np.datetime64(day, "D") for day in sample_dates.tolist()}
+        filtered: list[object] = []
+        for granule in granules:
+            granule_day = _granule_day(granule)
+            if granule_day is None or granule_day in sample_day_set:
+                filtered.append(granule)
+        return filtered
+
+    @staticmethod
     def _qa_to_uncertainty(qa: xr.DataArray) -> xr.DataArray:
         qa_values = qa.values.astype(np.float32)
-        unc = np.full(qa_values.shape, 0.08, dtype=np.float32)
-        unc = np.where(qa_values == 0, 0.03, unc)
-        unc = np.where(qa_values == 1, 0.05, unc)
-        unc = np.where(np.isfinite(qa_values), unc, np.nan)
+        unc = np.full(qa_values.shape, np.nan, dtype=np.float32)
+        valid = np.isfinite(qa_values) & (qa_values >= 0.0)
+        unc = np.where(
+            valid,
+            _BEST_QA_REFLECTANCE_UNCERTAINTY * np.power(qa_values + 1.0, _QA_UNCERTAINTY_POWER),
+            unc,
+        )
         return xr.DataArray(unc, dims=qa.dims, coords=qa.coords)
 
     def _empty_spatial_array(
@@ -422,6 +740,7 @@ class _EarthAccessBRDFProvider:
             f0_unc=_repeat(base.f0_unc),
             f1_unc=_repeat(base.f1_unc),
             f2_unc=_repeat(base.f2_unc),
+            reflectance_unc=_repeat(base.reflectance_unc) if base.reflectance_unc is not None else None,
         )
 
     def _load_temporal_from_granules(
@@ -452,6 +771,7 @@ class _EarthAccessBRDFProvider:
         f0_unc_list: list[xr.DataArray] = []
         f1_unc_list: list[xr.DataArray] = []
         f2_unc_list: list[xr.DataArray] = []
+        reflectance_unc_list: list[xr.DataArray] = []
 
         for band_coord, product_band in requested:
             band_f0_days: list[xr.DataArray] = []
@@ -460,6 +780,7 @@ class _EarthAccessBRDFProvider:
             band_f0_unc_days: list[xr.DataArray] = []
             band_f1_unc_days: list[xr.DataArray] = []
             band_f2_unc_days: list[xr.DataArray] = []
+            band_reflectance_unc_days: list[xr.DataArray] = []
 
             for day in time_axis:
                 day_paths = grouped_paths.get(day, [])
@@ -472,6 +793,7 @@ class _EarthAccessBRDFProvider:
                     band_f0_unc_days.append(unc.expand_dims(time=[day]))
                     band_f1_unc_days.append(unc.expand_dims(time=[day]))
                     band_f2_unc_days.append(unc.expand_dims(time=[day]))
+                    band_reflectance_unc_days.append(unc.expand_dims(time=[day]))
                     continue
 
                 param_tiles: list[tuple[xr.DataArray, xr.DataArray, xr.DataArray]] = []
@@ -524,6 +846,7 @@ class _EarthAccessBRDFProvider:
                 band_f0_unc_days.append(unc.expand_dims(time=[day]))
                 band_f1_unc_days.append((unc * 1.1).expand_dims(time=[day]))
                 band_f2_unc_days.append((unc * 1.1).expand_dims(time=[day]))
+                band_reflectance_unc_days.append(unc.expand_dims(time=[day]))
 
             f0_list.append(xr.concat(band_f0_days, dim="time").expand_dims(band=[band_coord]))
             f1_list.append(xr.concat(band_f1_days, dim="time").expand_dims(band=[band_coord]))
@@ -531,6 +854,7 @@ class _EarthAccessBRDFProvider:
             f0_unc_list.append(xr.concat(band_f0_unc_days, dim="time").expand_dims(band=[band_coord]))
             f1_unc_list.append(xr.concat(band_f1_unc_days, dim="time").expand_dims(band=[band_coord]))
             f2_unc_list.append(xr.concat(band_f2_unc_days, dim="time").expand_dims(band=[band_coord]))
+            reflectance_unc_list.append(xr.concat(band_reflectance_unc_days, dim="time").expand_dims(band=[band_coord]))
 
         temporal = BRDFKernelWeights(
             f0=xr.concat(f0_list, dim="band").transpose("time", "band", "y", "x"),
@@ -539,6 +863,7 @@ class _EarthAccessBRDFProvider:
             f0_unc=xr.concat(f0_unc_list, dim="band").transpose("time", "band", "y", "x"),
             f1_unc=xr.concat(f1_unc_list, dim="band").transpose("time", "band", "y", "x"),
             f2_unc=xr.concat(f2_unc_list, dim="band").transpose("time", "band", "y", "x"),
+            reflectance_unc=xr.concat(reflectance_unc_list, dim="band").transpose("time", "band", "y", "x"),
         )
         if np.isfinite(temporal.f0.values).any():
             return temporal
@@ -603,6 +928,7 @@ class _EarthAccessBRDFProvider:
             f0_unc=xr.full_like(f0, 0.03),
             f1_unc=xr.full_like(f1, 0.02),
             f2_unc=xr.full_like(f2, 0.02),
+            reflectance_unc=xr.full_like(f0, 0.08),
         )
 
 

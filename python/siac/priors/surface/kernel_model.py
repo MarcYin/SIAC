@@ -186,15 +186,7 @@ class KernelModelDeriver:
 
         Propagates BRDF parameter uncertainties through the kernel model.
         """
-        # Variance from each component
-        var_f0 = brdf_weights.f0_unc ** 2
-        var_f1 = (k_vol * brdf_weights.f1_unc) ** 2
-        var_f2 = (k_geo * brdf_weights.f2_unc) ** 2
-
-        # Total variance
-        var_total = var_f0 + var_f1 + var_f2
-
-        return np.sqrt(var_total)
+        return brdf_weights.compute_reflectance_uncertainty(k_vol, k_geo)
 
     def _apply_psf(
         self,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from siac.core.types import SensorBand
 from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
@@ -23,6 +24,7 @@ class _StubEarthAccessSource:
     def __init__(self, downloaded_paths: list[Path]):
         self.downloaded_paths = downloaded_paths
         self.search_calls: list[dict] = []
+        self.download_calls: list[list[object]] = []
 
     def search_granules(self, **kwargs):
         self.search_calls.append(kwargs)
@@ -30,7 +32,41 @@ class _StubEarthAccessSource:
 
     def download_granules(self, granules, dest_dir):
         _ = granules, dest_dir
+        self.download_calls.append(list(granules))
         return list(self.downloaded_paths)
+
+
+def _fake_granule(day: int) -> dict[str, object]:
+    native_id = f"MCD43A1.A202400{day}.h29v07.061.fake.hdf"
+    return {
+        "meta": {"native-id": native_id},
+        "umm": {
+            "GranuleUR": native_id,
+            "TemporalExtent": {
+                "RangeDateTime": {
+                    "BeginningDateTime": f"2024-01-{day:02d}T00:00:00.000Z",
+                    "EndingDateTime": f"2024-01-{day:02d}T23:59:59.999Z",
+                }
+            },
+        },
+    }
+
+
+def _fake_granule_date(year: int, month: int, day: int) -> dict[str, object]:
+    dt = datetime(year, month, day)
+    native_id = f"MCD43A1.A{dt.strftime('%Y%j')}.h29v07.061.fake.hdf"
+    return {
+        "meta": {"native-id": native_id},
+        "umm": {
+            "GranuleUR": native_id,
+            "TemporalExtent": {
+                "RangeDateTime": {
+                    "BeginningDateTime": f"{dt.strftime('%Y-%m-%d')}T00:00:00.000Z",
+                    "EndingDateTime": f"{dt.strftime('%Y-%m-%d')}T23:59:59.999Z",
+                }
+            },
+        },
+    }
 
 
 def _full_tile_bounds(h_index: int, v_index: int, shape: tuple[int, int]) -> tuple[float, float, float, float]:
@@ -151,6 +187,201 @@ def test_mcd43_provider_returns_temporal_kernel_stack(monkeypatch):
     assert float(weights.f0.isel(time=0).mean()) == pytest.approx(0.1)
     assert np.isnan(weights.f0.isel(time=1).values).all()
     assert float(weights.f0.isel(time=2).mean()) == pytest.approx(0.3)
+
+
+def test_mcd43_provider_filters_temporal_granules_to_sample_dates(monkeypatch):
+    source = _StubEarthAccessSource([])
+    granules = [_fake_granule(day) for day in (1, 2, 8, 9)]
+
+    def _search_granules(**kwargs):
+        source.search_calls.append(kwargs)
+        return list(granules)
+
+    def _download_granules(selected_granules, dest_dir):
+        _ = dest_dir
+        source.download_calls.append(list(selected_granules))
+        return [
+            Path("/tmp") / granule["meta"]["native-id"]  # type: ignore[index]
+            for granule in selected_granules
+        ]
+
+    source.search_granules = _search_granules  # type: ignore[method-assign]
+    source.download_granules = _download_granules  # type: ignore[method-assign]
+
+    provider = MCD43EarthAccessProvider(
+        source=source,
+        probe_earthdata=True,
+    )
+
+    def _fake_read_dataset(path, dataset_name):
+        shape = (4, 4)
+        day_value = int(str(path).split(".A202400")[1][:1]) * 100
+        params = {
+            "BRDF_Albedo_Parameters_Band3": np.dstack(
+                [np.full(shape, day_value), np.full(shape, 50), np.full(shape, 20)]
+            ).astype(np.int16),
+        }
+        if dataset_name in params:
+            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+        if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
+            return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
+        raise KeyError(dataset_name)
+
+    monkeypatch.setattr(MCD43EarthAccessProvider, "_read_dataset", staticmethod(_fake_read_dataset))
+
+    bounds = _full_tile_bounds(29, 7, (4, 4))
+    resolution = (bounds[2] - bounds[0]) / 4.0
+    sample_dates = [datetime(2024, 1, 1), datetime(2024, 1, 8)]
+    weights = provider.get_temporal_brdf_parameters(
+        bounds=bounds,
+        crs=MODLAND_SINUSOIDAL_CRS,
+        obs_time=datetime(2024, 1, 4, 12, 0, 0),
+        target_resolution=resolution,
+        bands=[SensorBand("B02", 490.0, 65.0, 10.0, 1)],
+        temporal_window=10,
+        sample_dates=sample_dates,
+    )
+
+    assert len(source.download_calls) == 1
+    downloaded_ids = [
+        granule["meta"]["native-id"]  # type: ignore[index]
+        for granule in source.download_calls[0]
+    ]
+    assert downloaded_ids == [
+        "MCD43A1.A2024001.h29v07.061.fake.hdf",
+        "MCD43A1.A2024008.h29v07.061.fake.hdf",
+    ]
+    assert list(weights.f0.coords["time"].values) == [
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-08"),
+    ]
+
+
+def test_mcd43_provider_maps_qa_to_reflectance_uncertainty() -> None:
+    qa = xr.DataArray(
+        np.array([[0.0, 1.0, 2.0]], dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": [0], "x": [0, 1, 2]},
+    )
+
+    unc = MCD43EarthAccessProvider._qa_to_uncertainty(qa)
+
+    np.testing.assert_allclose(
+        unc.values[0],
+        np.array(
+            [
+                0.015,
+                0.015 * (2.0**1.6),
+                0.015 * (3.0**1.6),
+            ],
+            dtype=np.float32,
+        ),
+        rtol=1e-6,
+    )
+
+
+def test_mcd43_provider_batches_monthly_downloads_into_one_call(monkeypatch):
+    source = _StubEarthAccessSource([])
+
+    january = [_fake_granule_date(2024, 1, day) for day in (1, 8)]
+    february = [_fake_granule_date(2024, 2, day) for day in (1, 8)]
+
+    def _search_granules(**kwargs):
+        source.search_calls.append(kwargs)
+        start = kwargs["temporal"][0]
+        if start.startswith("2023-12"):
+            return list(january)
+        if start.startswith("2024-01"):
+            return list(february)
+        return []
+
+    def _download_granules(selected_granules, dest_dir):
+        _ = dest_dir
+        source.download_calls.append(list(selected_granules))
+        return [
+            Path("/tmp") / granule["meta"]["native-id"]  # type: ignore[index]
+            for granule in selected_granules
+        ]
+
+    source.search_granules = _search_granules  # type: ignore[method-assign]
+    source.download_granules = _download_granules  # type: ignore[method-assign]
+
+    provider = MCD43EarthAccessProvider(source=source, probe_earthdata=True)
+
+    def _fake_read_dataset(path, dataset_name):
+        shape = (4, 4)
+        params = {
+            "BRDF_Albedo_Parameters_Band3": np.dstack(
+                [np.full(shape, 100), np.full(shape, 50), np.full(shape, 20)]
+            ).astype(np.int16),
+        }
+        if dataset_name in params:
+            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+        if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
+            return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
+        raise KeyError(dataset_name)
+
+    monkeypatch.setattr(MCD43EarthAccessProvider, "_read_dataset", staticmethod(_fake_read_dataset))
+
+    bounds = _full_tile_bounds(29, 7, (4, 4))
+    resolution = (bounds[2] - bounds[0]) / 4.0
+    outputs = provider.get_temporal_brdf_parameters_batch(
+        bounds=bounds,
+        crs=MODLAND_SINUSOIDAL_CRS,
+        obs_times=[datetime(2024, 1, 4, 12, 0, 0), datetime(2024, 2, 4, 12, 0, 0)],
+        target_resolution=resolution,
+        bands=[SensorBand("B02", 490.0, 65.0, 10.0, 1)],
+        temporal_windows=[10, 10],
+        sample_date_sets=[
+            [datetime(2024, 1, 1), datetime(2024, 1, 8)],
+            [datetime(2024, 2, 1), datetime(2024, 2, 8)],
+        ],
+    )
+
+    assert len(source.search_calls) == 2
+    assert len(source.download_calls) == 1
+    assert len(source.download_calls[0]) == 4
+    assert len(outputs) == 2
+    assert list(outputs[0].f0.coords["time"].values) == [
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-08"),
+    ]
+    assert list(outputs[1].f0.coords["time"].values) == [
+        np.datetime64("2024-02-01"),
+        np.datetime64("2024-02-08"),
+    ]
+
+
+def test_mcd43_provider_merges_contiguous_routeb_search_windows() -> None:
+    batches = MCD43EarthAccessProvider._merge_search_batches(
+        [
+            (datetime(2023, 12, 16, 12, 0, 0), np.array(["2023-12-01", "2023-12-08"], dtype="datetime64[D]")),
+            (datetime(2024, 1, 16, 12, 0, 0), np.array(["2024-01-01", "2024-01-08"], dtype="datetime64[D]")),
+            (datetime(2024, 2, 15, 12, 0, 0), np.array(["2024-02-01", "2024-02-08"], dtype="datetime64[D]")),
+            (datetime(2022, 12, 16, 12, 0, 0), np.array(["2022-12-01", "2022-12-08"], dtype="datetime64[D]")),
+        ],
+        [16, 16, 15, 16],
+    )
+
+    assert len(batches) == 2
+    first = batches[0]
+    assert first[0] == np.datetime64("2022-11-30")
+    assert first[1] == np.datetime64("2023-01-01")
+    second = batches[1]
+    assert second[0] == np.datetime64("2023-11-30")
+    assert second[1] == np.datetime64("2024-03-01")
+    assert list(first[2]) == [
+        np.datetime64("2022-12-01"),
+        np.datetime64("2022-12-08"),
+    ]
+    assert list(second[2]) == [
+        np.datetime64("2023-12-01"),
+        np.datetime64("2023-12-08"),
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-08"),
+        np.datetime64("2024-02-01"),
+        np.datetime64("2024-02-08"),
+    ]
 
 
 def test_mcd43_provider_parses_real_kernel_fields(monkeypatch):

@@ -280,6 +280,8 @@ class BRDFKernelWeights:
         f0_unc: Uncertainty in f0
         f1_unc: Uncertainty in f1
         f2_unc: Uncertainty in f2
+        reflectance_unc: Optional direct uncertainty in simulated surface reflectance.
+            When present, this takes precedence over coefficient propagation.
     """
 
     f0: xr.DataArray  # Shape: (n_bands, y, x) or (y, x)
@@ -288,6 +290,7 @@ class BRDFKernelWeights:
     f0_unc: xr.DataArray
     f1_unc: xr.DataArray
     f2_unc: xr.DataArray
+    reflectance_unc: xr.DataArray | None = None
 
     def compute_reflectance(
         self, k_vol: xr.DataArray, k_geo: xr.DataArray
@@ -313,6 +316,8 @@ class BRDFKernelWeights:
         Assumes kernel uncertainties are negligible compared to
         coefficient uncertainties.
         """
+        if self.reflectance_unc is not None:
+            return self.reflectance_unc
         var = (
             self.f0_unc**2
             + (k_vol * self.f1_unc) ** 2
