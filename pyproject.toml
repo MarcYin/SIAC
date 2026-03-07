@@ -76,9 +76,6 @@ dev = [
     "ruff>=0.2.0",
     "pre-commit>=3.6.0",
 ]
-earthaccess = [
-    "earthaccess>=0.11.0",
-]
 gee = [
     "earthengine-api>=0.1.390",
 ]
@@ -91,7 +88,7 @@ docs = [
     "myst-parser>=2.0.0",
 ]
 all = [
-    "siac[dev,earthaccess,gee,py6s,docs]",
+    "siac[dev,gee,py6s,docs]",
 ]
 
 [project.urls]

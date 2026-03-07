@@ -22,9 +22,6 @@ A modular, extensible framework for atmospheric correction of satellite imagery.
 # From PyPI (when released)
 pip install siac
 
-# Enable NASA Earthdata access (earthaccess integration)
-pip install "siac[earthaccess]"
-
 # Development installation
 git clone https://github.com/MarcYin/SIAC.git
 cd SIAC/siac_v2
@@ -33,6 +30,27 @@ pip install -e ".[dev]"
 # Build Rust extensions
 maturin develop --release
 ```
+
+Remote-auth setup follows provider-native conventions:
+
+- Earthdata / earthaccess: `EARTHDATA_USERNAME`, `EARTHDATA_PASSWORD`
+- CDS API: `CDSAPI_KEY` or `~/.cdsapirc`
+- AWS/S3: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+- GCS: `GOOGLE_APPLICATION_CREDENTIALS`
+- CDSE: `SIAC_CDSE_USERNAME`, `SIAC_CDSE_PASSWORD`, or `~/.cdserc`
+
+Recommended CDSE file-based setup for non-interactive runs:
+
+```bash
+cat > ~/.cdserc <<'EOF'
+username=your_cdse_username
+password=your_cdse_password
+EOF
+chmod 600 ~/.cdserc
+```
+
+For CDSE object-store datasets, SIAC can mint temporary S3 credentials from the
+same CDSE username/password and use them against `s3://eodata/...`.
 
 ## Quick Start
 

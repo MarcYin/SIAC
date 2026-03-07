@@ -26,12 +26,25 @@ class _FakeEarthAccessModule:
     def search_datasets(self, **kwargs):
         self.search_datasets_calls.append(kwargs)
         if kwargs.get("short_name") == "MCD43A1":
-            return [{"short_name": "MCD43A1"}]
-        return [{"umm": {"ShortName": "MCD19A2"}}]
+            out = [{"short_name": "MCD43A1"}]
+        else:
+            out = [{"umm": {"ShortName": "MCD19A2"}}]
+        count = kwargs.get("count")
+        if count == 0:
+            return []
+        if isinstance(count, int) and count > 0:
+            return out[:count]
+        return out
 
     def search_data(self, **kwargs):
         self.search_data_calls.append(kwargs)
-        return [{"id": "g1"}, {"id": "g2"}]
+        out = [{"id": "g1"}, {"id": "g2"}]
+        count = kwargs.get("count")
+        if count == 0:
+            return []
+        if isinstance(count, int) and count > 0:
+            return out[:count]
+        return out
 
     def open(self, granules):
         self.open_calls.append(list(granules))
@@ -70,6 +83,7 @@ class TestEarthAccessSource:
         kwargs = fake_earthaccess.search_datasets_calls[-1]
         assert kwargs["short_name"] == "MCD43A1"
         assert kwargs["provider"] == "LPDAAC_ECS"
+        assert kwargs["count"] == 1
 
     def test_search_granules_formats_bbox_and_temporal(self, fake_earthaccess):
         src = EarthAccessSource()
@@ -86,6 +100,14 @@ class TestEarthAccessSource:
         assert kwargs["short_name"] == "MCD43A1"
         assert kwargs["bounding_box"] == (10.0, 20.0, 11.0, 21.0)
         assert kwargs["temporal"] == ("2024-01-01T00:00:00", "2024-01-03T00:00:00")
+        assert kwargs["count"] == 1
+
+    def test_search_count_zero_returns_early(self, fake_earthaccess):
+        src = EarthAccessSource()
+        assert src.search_datasets(short_name="MCD43A1", count=0) == []
+        assert src.search_granules(short_name="MCD43A1", count=0) == []
+        assert fake_earthaccess.search_datasets_calls == []
+        assert fake_earthaccess.search_data_calls == []
 
     def test_open_and_download(self, fake_earthaccess, tmp_path: Path):
         src = EarthAccessSource()
@@ -93,6 +115,7 @@ class TestEarthAccessSource:
         assert opened == ["opened:2"]
         assert src.is_authenticated is True
         assert fake_earthaccess.login_calls == 1
+        assert fake_earthaccess.last_login_kwargs == {"strategy": "all", "persist": False}
 
         out = src.download_granules([{"id": "a"}], tmp_path / "cache")
         assert len(out) == 1

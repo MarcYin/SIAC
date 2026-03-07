@@ -1985,8 +1985,8 @@ This keeps secret discovery centralised while preventing provider-specific auth 
 ### Credential resolution order (in `from_config`)
 
 1. `SIACConfig.credentials` fields (programmatic / YAML)
-2. `SIAC_*` environment variables
-3. External config files (`~/.cdsapirc`)
+2. Provider-native environment variables
+3. External config files (`~/.cdserc`, `~/.cdsapirc`)
 
 The store remains the single place that resolves precedence. Adapters must not reimplement config/env parsing, except where a provider also has a standard external fallback that is intentionally outside SIAC's secret store contract.
 
@@ -1995,18 +1995,28 @@ The store remains the single place that resolves precedence. Adapters must not r
 | Provider | Key env var | Secret env var |
 |---|---|---|
 | CDSE | `SIAC_CDSE_USERNAME` | `SIAC_CDSE_PASSWORD` |
-| CDS API | `SIAC_CDS_API_KEY` | — |
-| AWS/S3 | `SIAC_AWS_ACCESS_KEY_ID` | `SIAC_AWS_SECRET_ACCESS_KEY` |
-| Earthdata | `SIAC_EARTHDATA_USERNAME` | `SIAC_EARTHDATA_PASSWORD` |
-| GCS | `SIAC_GCS_CREDENTIALS_FILE` | — |
+| CDS API | `CDSAPI_KEY` | — |
+| AWS/S3 | `AWS_ACCESS_KEY_ID` | `AWS_SECRET_ACCESS_KEY` |
+| Earthdata | `EARTHDATA_USERNAME` | `EARTHDATA_PASSWORD` |
+| GCS | `GOOGLE_APPLICATION_CREDENTIALS` | — |
 
-AWS also falls back to standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
+`CDSE` keeps SIAC-scoped variables because it does not have a stable de facto standard comparable to the other providers.
+The same adapter should also mint temporary S3 credentials for `s3://eodata/...`
+access so CDSE catalogue and object-store usage stay under one auth boundary.
+
+### External credential files
+
+| Provider | File | Notes |
+|---|---|---|
+| CDSE | `~/.cdserc` | Simple `username=...` and `password=...` pairs; parsed as a low-priority fallback for non-interactive runs |
+| CDS API | `~/.cdsapirc` | Native CDS API configuration; parsed as a low-priority fallback |
 
 ### Adapter contracts
 
 Adapters expose typed operations instead of generic `(key, secret)` plumbing:
 
 - `CDSEAuth.get_token()` / `authorization_header()`
+- `CDSEAuth.create_temporary_s3_credentials()` / `temporary_s3_credentials()`
 - `CDSAuth.client_kwargs()` / `has_any_credentials()`
 - `AWSAuth.storage_options()`
 - `GCSAuth.storage_options()`

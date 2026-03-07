@@ -67,10 +67,16 @@ class EarthAccessSource:
         use_env_credentials = bool(self.earthdata_username and self.earthdata_password)
         if use_env_credentials:
             kwargs.setdefault("strategy", "environment")
-        if self.login_strategy is not None:
+        elif self.login_strategy is not None:
             kwargs.setdefault("strategy", self.login_strategy)
+        else:
+            # Match the documented earthaccess flow explicitly instead of relying
+            # on version-dependent library defaults.
+            kwargs.setdefault("strategy", "all")
         if self.persist is not None:
             kwargs.setdefault("persist", self.persist)
+        else:
+            kwargs.setdefault("persist", False)
 
         with self._temporary_environment_credentials():
             try:
@@ -165,10 +171,13 @@ class EarthAccessSource:
         if provider_name is not None:
             query["provider"] = provider_name
 
-        datasets = list(ea.search_datasets(**query))
-        if count is None:
-            return datasets
-        return datasets[: max(0, int(count))]
+        if count is not None:
+            limit = int(count)
+            if limit == 0:
+                return []
+            query["count"] = -1 if limit < 0 else limit
+
+        return list(ea.search_datasets(**query))
 
     def search_granules(
         self,
@@ -213,10 +222,13 @@ class EarthAccessSource:
         if provider_name is not None:
             query["provider"] = provider_name
 
-        granules = list(ea.search_data(**query))
-        if count is None:
-            return granules
-        return granules[: max(0, int(count))]
+        if count is not None:
+            limit = int(count)
+            if limit == 0:
+                return []
+            query["count"] = -1 if limit < 0 else limit
+
+        return list(ea.search_data(**query))
 
     def open_granules(self, granules: list[Any]) -> Any:
         """Open granules through earthaccess data access helper."""

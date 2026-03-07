@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import threading
 import time
 from contextlib import contextmanager
@@ -37,20 +38,20 @@ _CDSE_TOKEN_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
     "protocol/openid-connect/token"
 )
+_CDSE_S3_CREDENTIALS_URL = "https://s3-keys-manager.cloudferro.com/api/user/credentials"
+_CDSE_S3_ENDPOINT_URL = "https://eodata.dataspace.copernicus.eu"
+_CDSE_S3_BUCKET = "eodata"
 
 # ── Env-var mapping ──────────────────────────────────────────────────
 
+# Prefer provider-native environment conventions wherever they exist.
 _ENV_MAP: dict[str, tuple[str, str | None]] = {
     "cdse": ("SIAC_CDSE_USERNAME", "SIAC_CDSE_PASSWORD"),
-    "cds": ("SIAC_CDS_API_KEY", None),
-    "aws": ("SIAC_AWS_ACCESS_KEY_ID", "SIAC_AWS_SECRET_ACCESS_KEY"),
-    "earthdata": ("SIAC_EARTHDATA_USERNAME", "SIAC_EARTHDATA_PASSWORD"),
-    "gcs": ("SIAC_GCS_CREDENTIALS_FILE", None),
+    "cds": ("CDSAPI_KEY", None),
+    "aws": ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+    "earthdata": ("EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"),
+    "gcs": ("GOOGLE_APPLICATION_CREDENTIALS", None),
 }
-
-# AWS also falls back to standard boto3 env vars
-_AWS_FALLBACK_KEY = "AWS_ACCESS_KEY_ID"
-_AWS_FALLBACK_SECRET = "AWS_SECRET_ACCESS_KEY"
 
 
 # ── Data classes ─────────────────────────────────────────────────────
@@ -77,6 +78,24 @@ class OAuthToken:
 
     access_token: str = ""
     expires_at: float = 0.0  # time.monotonic() deadline
+
+
+@dataclass(frozen=True)
+class CDSES3Credentials:
+    """Temporary S3 credentials minted from a CDSE bearer token."""
+
+    access_key_id: str
+    secret_access_key: str
+    endpoint_url: str = _CDSE_S3_ENDPOINT_URL
+    bucket: str = _CDSE_S3_BUCKET
+
+    def storage_options(self) -> dict[str, Any]:
+        """Return fsspec/s3fs-compatible storage options."""
+        return {
+            "key": self.access_key_id,
+            "secret": self.secret_access_key,
+            "client_kwargs": {"endpoint_url": self.endpoint_url},
+        }
 
 
 class _ProviderAuthBase:
@@ -132,6 +151,82 @@ class CDSEAuth(_ProviderAuthBase):
         """Return a bearer Authorization header."""
         return {"Authorization": f"Bearer {self.get_token(margin_seconds=margin_seconds)}"}
 
+    def create_temporary_s3_credentials(self, timeout: int = 60) -> CDSES3Credentials:
+        """Mint temporary S3 credentials from the current CDSE bearer token."""
+        resp = requests.post(
+            _CDSE_S3_CREDENTIALS_URL,
+            headers={
+                **self.authorization_header(),
+                "Accept": "application/json",
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        access_id = body.get("access_id")
+        secret = body.get("secret")
+        if not isinstance(access_id, str) or not access_id:
+            raise AuthenticationError("CDSE temporary S3 credential response missing access_id.")
+        if not isinstance(secret, str) or not secret:
+            raise AuthenticationError("CDSE temporary S3 credential response missing secret.")
+        return CDSES3Credentials(access_key_id=access_id, secret_access_key=secret)
+
+    def revoke_temporary_s3_credentials(self, access_key_id: str, timeout: int = 60) -> None:
+        """Delete temporary S3 credentials created via the CDSE key manager."""
+        resp = requests.delete(
+            f"{_CDSE_S3_CREDENTIALS_URL}/access_id/{access_key_id}",
+            headers={
+                **self.authorization_header(),
+                "Accept": "application/json",
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+
+    def wait_for_temporary_s3_credentials(
+        self,
+        credentials: CDSES3Credentials,
+        activation_delays: tuple[int, ...] = (0, 1, 2, 4),
+    ) -> None:
+        """Wait until temporary CDSE S3 credentials become usable."""
+        try:
+            import s3fs  # type: ignore[import-not-found]
+        except Exception as exc:  # pragma: no cover - env-dependent
+            raise AuthenticationError("s3fs is required to verify CDSE S3 credentials.") from exc
+
+        last_exc: Exception | None = None
+        for delay in activation_delays:
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                fs = s3fs.S3FileSystem(**credentials.storage_options())
+                fs.ls(credentials.bucket, detail=False)[:1]
+                return
+            except Exception as exc:  # pragma: no cover - network/system dependent
+                last_exc = exc
+
+        raise AuthenticationError("CDSE temporary S3 credentials did not become active.") from last_exc
+
+    @contextmanager
+    def temporary_s3_credentials(
+        self,
+        *,
+        timeout: int = 60,
+        activation_delays: tuple[int, ...] = (0, 1, 2, 4),
+        verify: bool = True,
+    ) -> Any:
+        """Yield temporary CDSE S3 credentials and revoke them on exit."""
+        credentials = self.create_temporary_s3_credentials(timeout=timeout)
+        try:
+            if verify:
+                self.wait_for_temporary_s3_credentials(
+                    credentials,
+                    activation_delays=activation_delays,
+                )
+            yield credentials
+        finally:
+            self.revoke_temporary_s3_credentials(credentials.access_key_id, timeout=timeout)
+
 
 class CDSAuth(_ProviderAuthBase):
     """CDS API auth helper for cdsapi clients."""
@@ -160,7 +255,7 @@ class CDSAuth(_ProviderAuthBase):
         """Create a configured cdsapi client."""
         if not self.has_any_credentials():
             raise AuthenticationError(
-                "CDS credentials are not configured; set SIAC_CDS_API_KEY or ~/.cdsapirc."
+                "CDS credentials are not configured; set CDSAPI_KEY or ~/.cdsapirc."
             )
         try:
             import cdsapi  # type: ignore[import-not-found]
@@ -244,7 +339,11 @@ class EarthdataAuth(_ProviderAuthBase):
 
     def source_kwargs(self, *, provider: str | None = None) -> dict[str, Any]:
         """Return kwargs for constructing ``EarthAccessSource``."""
-        kwargs: dict[str, Any] = {"provider": provider}
+        kwargs: dict[str, Any] = {
+            "provider": provider,
+            "login_strategy": "all",
+            "persist": False,
+        }
         cred = self._complete_credentials()
         if cred is not None:
             kwargs.update(
@@ -298,7 +397,8 @@ class CredentialManager:
         if cred is None:
             raise AuthenticationError(
                 f"No credentials registered for provider {provider!r}.  "
-                f"Call set_credentials() or set the appropriate SIAC_* env vars."
+                "Call set_credentials(), use config.credentials, or set the "
+                "provider environment variables / rc files."
             )
         return cred
 
@@ -330,8 +430,8 @@ class CredentialManager:
         """Build a ``CredentialManager`` by resolving credentials in priority order:
 
         1. ``config.credentials`` fields (if *config* is provided)
-        2. ``SIAC_*`` environment variables
-        3. External config files (``~/.cdsapirc`` for CDS)
+        2. Provider-native environment variables
+        3. External config files (``~/.cdserc`` and ``~/.cdsapirc``)
         """
         mgr = cls()
 
@@ -345,6 +445,7 @@ class CredentialManager:
         _load_from_env(mgr)
 
         # 3. External files (lowest priority)
+        _load_from_cdserc(mgr)
         _load_from_cdsapirc(mgr)
 
         return mgr
@@ -392,24 +493,77 @@ def _load_from_credential_config(mgr: CredentialManager, cred_cfg: Any) -> None:
 def _load_from_env(mgr: CredentialManager) -> None:
     """Fill gaps from environment variables."""
     for provider, (key_var, secret_var) in _ENV_MAP.items():
-        if mgr.has_credentials(provider):
-            continue
         key_val = os.environ.get(key_var)
         secret_val = os.environ.get(secret_var) if secret_var else None
-        if key_val:
-            mgr.set_credentials(provider, key=key_val, secret=secret_val)
+        if key_val is None and secret_val is None:
+            continue
 
-    # AWS standard fallback
-    if not mgr.has_credentials("aws"):
-        aws_key = os.environ.get(_AWS_FALLBACK_KEY)
-        aws_secret = os.environ.get(_AWS_FALLBACK_SECRET)
-        if aws_key:
-            mgr.set_credentials("aws", key=aws_key, secret=aws_secret)
+        _merge_credentials(mgr, provider, key=key_val, secret=secret_val)
+
+
+def _parse_simple_rc(path: Path) -> dict[str, str]:
+    """Parse a simple ``key=value`` or ``key: value`` rc file."""
+    data: dict[str, str] = {}
+    text = path.read_text()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+        elif ":" in line:
+            key, value = line.split(":", 1)
+        else:
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if not key or not value:
+            continue
+        try:
+            parsed = shlex.split(value, comments=False)
+        except ValueError:
+            parsed = [value]
+        if not parsed:
+            continue
+        data[key] = parsed[0]
+    return data
+
+
+def _load_from_cdserc(mgr: CredentialManager) -> None:
+    """Read ``~/.cdserc`` for CDSE username/password (lowest priority)."""
+    cred = mgr.get_credentials("cdse") if mgr.has_credentials("cdse") else CredentialSpec()
+    if cred.key and cred.secret:
+        return
+
+    rc_path = Path.home() / ".cdserc"
+    if not rc_path.exists():
+        return
+
+    try:
+        data = _parse_simple_rc(rc_path)
+    except OSError:
+        return
+
+    key = (
+        data.get("username")
+        or data.get("cdse_username")
+        or data.get("siac_cdse_username")
+        or data.get("access_key")
+    )
+    secret = (
+        data.get("password")
+        or data.get("cdse_password")
+        or data.get("siac_cdse_password")
+        or data.get("secret_key")
+    )
+    if key is None and secret is None:
+        return
+    _merge_credentials(mgr, "cdse", key=key, secret=secret)
 
 
 def _load_from_cdsapirc(mgr: CredentialManager) -> None:
     """Read ``~/.cdsapirc`` for CDS API key (lowest priority)."""
-    if mgr.has_credentials("cds"):
+    if mgr.has_credentials("cds") and mgr.get_credentials("cds").key:
         return
     rc_path = Path.home() / ".cdsapirc"
     if not rc_path.exists():
@@ -422,7 +576,7 @@ def _load_from_cdsapirc(mgr: CredentialManager) -> None:
                 if len(parts) == 2:
                     api_key = parts[1].strip()
                     if api_key:
-                        mgr.set_credentials("cds", key=api_key)
+                        _merge_credentials(mgr, "cds", key=api_key, secret=None)
                         return
     except OSError:
         pass
@@ -437,3 +591,21 @@ def _maybe_set(
     """Set credentials only if at least one value is non-None."""
     if key is not None or secret is not None:
         mgr.set_credentials(provider, key=key, secret=secret)
+
+
+def _merge_credentials(
+    mgr: CredentialManager,
+    provider: str,
+    *,
+    key: str | None,
+    secret: str | None,
+) -> None:
+    """Fill missing credential fields without overriding higher-priority values."""
+    if not mgr.has_credentials(provider):
+        mgr.set_credentials(provider, key=key, secret=secret)
+        return
+
+    existing = mgr.get_credentials(provider)
+    merged_key = existing.key if existing.key is not None else key
+    merged_secret = existing.secret if existing.secret is not None else secret
+    mgr.set_credentials(provider, key=merged_key, secret=merged_secret)

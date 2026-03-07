@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -72,8 +74,8 @@ class TestFromConfig:
         assert mgr.get_credentials("earthdata") == CredentialSpec(key="ed_u", secret="ed_p")
         assert mgr.get_credentials("gcs") == CredentialSpec(key="/tmp/gcs.json", secret=None)
 
-    def test_reads_env_vars(self, monkeypatch):
-        """Env vars are picked up when no config is provided."""
+    def test_reads_cdse_env_vars(self, monkeypatch):
+        """CDSE keeps using SIAC-scoped env vars because it has no native standard."""
         monkeypatch.setenv("SIAC_CDSE_USERNAME", "env_u")
         monkeypatch.setenv("SIAC_CDSE_PASSWORD", "env_p")
 
@@ -82,6 +84,51 @@ class TestFromConfig:
         cred = mgr.get_credentials("cdse")
         assert cred.key == "env_u"
         assert cred.secret == "env_p"
+
+    def test_cdserc_fallback(self, monkeypatch, tmp_path):
+        rc_file = tmp_path / ".cdserc"
+        rc_file.write_text("username=rc-user\npassword=rc-pass\n")
+        monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
+
+        mgr = CredentialManager.from_config(None)
+
+        assert mgr.get_credentials("cdse") == CredentialSpec(key="rc-user", secret="rc-pass")
+
+    def test_cdserc_accepts_siac_scoped_keys_and_quotes(self, monkeypatch, tmp_path):
+        rc_file = tmp_path / ".cdserc"
+        rc_file.write_text("SIAC_CDSE_USERNAME='rc-user'\nSIAC_CDSE_PASSWORD=\"rc-pass\"\n")
+        monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
+
+        mgr = CredentialManager.from_config(None)
+
+        assert mgr.get_credentials("cdse") == CredentialSpec(key="rc-user", secret="rc-pass")
+
+    def test_env_takes_priority_over_cdserc(self, monkeypatch, tmp_path):
+        rc_file = tmp_path / ".cdserc"
+        rc_file.write_text("username=rc-user\npassword=rc-pass\n")
+        monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
+        monkeypatch.setenv("SIAC_CDSE_USERNAME", "env-user")
+        monkeypatch.setenv("SIAC_CDSE_PASSWORD", "env-pass")
+
+        mgr = CredentialManager.from_config(None)
+
+        assert mgr.get_credentials("cdse") == CredentialSpec(key="env-user", secret="env-pass")
+
+    def test_reads_native_provider_env_vars(self, monkeypatch):
+        """Providers with native auth conventions use their standard env vars."""
+        monkeypatch.setenv("CDSAPI_KEY", "cds-env")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "aws-env-k")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-env-s")
+        monkeypatch.setenv("EARTHDATA_USERNAME", "earth-u")
+        monkeypatch.setenv("EARTHDATA_PASSWORD", "earth-p")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/gcs-native.json")
+
+        mgr = CredentialManager.from_config(None)
+
+        assert mgr.get_credentials("cds") == CredentialSpec(key="cds-env", secret=None)
+        assert mgr.get_credentials("aws") == CredentialSpec(key="aws-env-k", secret="aws-env-s")
+        assert mgr.get_credentials("earthdata") == CredentialSpec(key="earth-u", secret="earth-p")
+        assert mgr.get_credentials("gcs") == CredentialSpec(key="/tmp/gcs-native.json", secret=None)
 
     def test_config_takes_priority_over_env(self, monkeypatch):
         """Config fields win over env vars."""
@@ -107,8 +154,30 @@ class TestFromConfig:
         assert cred.key == "cfg_u"
         assert cred.secret == "cfg_p"
 
-    def test_aws_standard_fallback(self, monkeypatch):
-        """Standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are used as fallback."""
+    def test_config_credentials_are_completed_from_env(self, monkeypatch):
+        """Missing credential fields are filled from env without overriding config values."""
+        monkeypatch.setenv("EARTHDATA_USERNAME", "env-user")
+        monkeypatch.setenv("EARTHDATA_PASSWORD", "env-pass")
+
+        cred_cfg = MagicMock()
+        cred_cfg.cdse_username = None
+        cred_cfg.cdse_password = None
+        cred_cfg.cds_api_key = None
+        cred_cfg.aws_access_key_id = None
+        cred_cfg.aws_secret_access_key = None
+        cred_cfg.earthdata_username = "cfg-user"
+        cred_cfg.earthdata_password = None
+        cred_cfg.gcs_credentials_file = None
+
+        config = MagicMock()
+        config.credentials = cred_cfg
+
+        mgr = CredentialManager.from_config(config)
+
+        assert mgr.get_credentials("earthdata") == CredentialSpec(key="cfg-user", secret="env-pass")
+
+    def test_reads_native_aws_env_vars(self, monkeypatch):
+        """Standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are first-class."""
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "std_k")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "std_s")
 
@@ -138,6 +207,15 @@ class TestFromConfig:
 
         mgr = CredentialManager.from_config(None)
         assert mgr.has_credentials("cds") is False
+
+    def test_cdserc_read_error_is_ignored(self, monkeypatch, tmp_path):
+        rc_file = tmp_path / ".cdserc"
+        rc_file.write_text("username=ignored\npassword=ignored\n")
+        monkeypatch.setattr("siac.core.auth.Path.home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("siac.core.auth.Path.read_text", lambda _self: (_ for _ in ()).throw(OSError("nope")))
+
+        mgr = CredentialManager.from_config(None)
+        assert mgr.has_credentials("cdse") is False
 
 
 # ── 3. CDSE token caching ───────────────────────────────────────────
@@ -264,6 +342,95 @@ class TestProviderAdapters:
         mgr = CredentialManager()
         assert isinstance(mgr.cdse(), CDSEAuth)
 
+    @patch("siac.core.auth.requests.delete")
+    @patch("siac.core.auth.requests.post")
+    def test_cdse_temporary_s3_credentials_roundtrip(self, mock_post, mock_delete):
+        class _Resp:
+            def __init__(self, body):
+                self._body = body
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._body
+
+        mgr = CredentialManager()
+        mgr.set_credentials("cdse", key="user", secret="pass")
+        mgr._oauth_tokens["cdse"] = OAuthToken(access_token="tok", expires_at=999999.0)
+        mock_post.return_value = _Resp({"access_id": "ak", "secret": "sk"})
+        mock_delete.return_value = _Resp({})
+
+        creds = mgr.cdse().create_temporary_s3_credentials()
+        assert creds.access_key_id == "ak"
+        assert creds.secret_access_key == "sk"
+        assert creds.bucket == "eodata"
+        assert creds.storage_options()["key"] == "ak"
+
+        mgr.cdse().revoke_temporary_s3_credentials("ak")
+        assert mock_post.call_count == 1
+        assert mock_delete.call_count == 1
+
+    @patch("siac.core.auth.requests.delete")
+    @patch("siac.core.auth.requests.post")
+    def test_cdse_temporary_s3_context_verifies_with_retry(self, mock_post, mock_delete, monkeypatch):
+        class _Resp:
+            def __init__(self, body):
+                self._body = body
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._body
+
+        attempts = {"count": 0}
+
+        class _FakeS3FS:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def ls(self, path, detail=False):
+                attempts["count"] += 1
+                if attempts["count"] < 3:
+                    raise PermissionError("InvalidAccessKeyId")
+                return [f"{path}/ok"]
+
+        mgr = CredentialManager()
+        mgr.set_credentials("cdse", key="user", secret="pass")
+        mgr._oauth_tokens["cdse"] = OAuthToken(access_token="tok", expires_at=999999.0)
+        mock_post.return_value = _Resp({"access_id": "ak", "secret": "sk"})
+        mock_delete.return_value = _Resp({})
+        monkeypatch.setitem(sys.modules, "s3fs", SimpleNamespace(S3FileSystem=_FakeS3FS))
+        monkeypatch.setattr("siac.core.auth.time.sleep", lambda _seconds: None)
+
+        with mgr.cdse().temporary_s3_credentials() as creds:
+            assert creds.access_key_id == "ak"
+            assert creds.secret_access_key == "sk"
+
+        assert attempts["count"] == 3
+        assert mock_delete.call_count == 1
+
+    @patch("siac.core.auth.requests.post")
+    def test_cdse_temporary_s3_credentials_missing_fields_raise(self, mock_post):
+        class _Resp:
+            def __init__(self, body):
+                self._body = body
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._body
+
+        mgr = CredentialManager()
+        mgr.set_credentials("cdse", key="user", secret="pass")
+        mgr._oauth_tokens["cdse"] = OAuthToken(access_token="tok", expires_at=999999.0)
+        mock_post.return_value = _Resp({"access_id": "ak"})
+
+        with pytest.raises(AuthenticationError, match="missing secret"):
+            mgr.cdse().create_temporary_s3_credentials()
+
     def test_cds_adapter_detects_external_config(self, monkeypatch, tmp_path):
         mgr = CredentialManager()
         monkeypatch.setenv("CDSAPI_KEY", "env-key")
@@ -292,6 +459,15 @@ class TestProviderAdapters:
         assert source.earthdata_username == "user"
         assert source.earthdata_password == "pass"
         assert source.login_strategy == "environment"
+        assert source.persist is False
+
+    def test_earthdata_adapter_defaults_to_native_earthaccess_flow(self):
+        mgr = CredentialManager()
+        source = mgr.earthdata().build_earthaccess_source(provider="LPDAAC_ECS")
+        assert source.provider == "LPDAAC_ECS"
+        assert source.earthdata_username is None
+        assert source.earthdata_password is None
+        assert source.login_strategy == "all"
         assert source.persist is False
 
     def test_earthdata_adapter_incomplete_credentials_raise(self):

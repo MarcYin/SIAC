@@ -438,7 +438,8 @@ def resolve_s2_input(
     if local_candidate.exists():
         return local_candidate
 
-    backend = _resolve_s2_backend(config, auth=auth)
+    auth_obj = auth or CredentialManager.from_config(config)
+    backend = _resolve_s2_backend(config, auth=auth_obj)
     if backend is None:
         raise DataNotFoundError(
             "S2 backend is 'local', but input path does not exist. "
@@ -471,7 +472,8 @@ def search_sentinel2(
 
     cfg = config or SIACConfig(sensor="s2")
     cfg = cfg.with_overrides(s2_data={"backend": backend, "max_cloud_cover": max_cloud_cover})
-    backend_obj = _resolve_s2_backend(cfg, auth=auth)
+    auth_obj = auth or CredentialManager.from_config(cfg)
+    backend_obj = _resolve_s2_backend(cfg, auth=auth_obj)
     if backend_obj is None:
         raise ValueError("search_sentinel2 does not support backend='local'.")
 

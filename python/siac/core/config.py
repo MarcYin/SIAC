@@ -298,9 +298,12 @@ class SolverConfig(BaseModel):
 class CredentialConfig(BaseModel):
     """Credentials for remote data providers.
 
-    All fields are optional.  When ``SIACConfig`` is loaded via
-    ``pydantic_settings`` the env-var prefix is
-    ``SIAC_CREDENTIALS__<FIELD>`` (double-underscore nested delimiter).
+    All fields are optional explicit overrides. Provider-native environment
+    variables are preferred for normal runtime configuration; these fields are
+    primarily for programmatic or YAML-driven injection.
+
+    When ``SIACConfig`` is loaded via ``pydantic_settings`` the nested env-var
+    prefix is ``SIAC_CREDENTIALS__<FIELD>``.
     """
 
     cdse_username: str | None = None

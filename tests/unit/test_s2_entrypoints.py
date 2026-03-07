@@ -53,6 +53,35 @@ def test_resolve_s2_input_uses_remote_backend_and_cache(monkeypatch, tmp_path: P
     assert q.max_cloud_cover == 35.0
 
 
+def test_resolve_s2_input_builds_auth_from_config_for_cdse(monkeypatch, tmp_path: Path):
+    cfg = SIACConfig(sensor="s2", s2_data={"backend": "cdse", "cache_dir": tmp_path})
+    captured: dict[str, object] = {}
+    auth_obj = object()
+
+    class _FakeBackend:
+        def __init__(self, access_key=None, secret_key=None, auth=None):  # noqa: ANN001
+            captured["access_key"] = access_key
+            captured["secret_key"] = secret_key
+            captured["auth"] = auth
+
+    def _fake_get(self, query, dest_dir=None):  # noqa: ANN001
+        safe = Path(dest_dir) / "fake.SAFE"
+        safe.mkdir(parents=True, exist_ok=True)
+        return safe
+
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _cfg: auth_obj)
+    monkeypatch.setattr("siac.io.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
+    monkeypatch.setattr("siac.io.s2_data_source.S2DataAccess.get", _fake_get)
+
+    out = resolve_s2_input(
+        "S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000",
+        cfg,
+    )
+
+    assert out == tmp_path / "fake.SAFE"
+    assert captured["auth"] is auth_obj
+
+
 def test_search_sentinel2_builds_query_and_calls_search(monkeypatch):
     fake_product = S2Product(
         product_id="S2A_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433",
@@ -87,6 +116,36 @@ def test_search_sentinel2_builds_query_and_calls_search(monkeypatch):
     assert q.start_date == date(2026, 1, 2)
     assert q.end_date == date(2026, 1, 3)
     assert q.max_cloud_cover == 20.0
+
+
+def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
+    fake_product = S2Product(
+        product_id="S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000",
+        mgrs_tile="31UDQ",
+        sensing_date=datetime(2024, 1, 1, 10, 31, 1),
+        processing_baseline="N0500",
+        cloud_cover=12.0,
+        satellite="S2A",
+        orbit_number=8,
+        source_url="https://example.test",
+    )
+    captured: dict[str, object] = {}
+    auth_obj = object()
+
+    class _FakeBackend:
+        def __init__(self, access_key=None, secret_key=None, auth=None):  # noqa: ANN001
+            captured["access_key"] = access_key
+            captured["secret_key"] = secret_key
+            captured["auth"] = auth
+
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _cfg: auth_obj)
+    monkeypatch.setattr("siac.io.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
+    monkeypatch.setattr("siac.io.s2_data_source.search_s2", lambda backend, query: [fake_product])  # noqa: ARG005
+
+    products = search_sentinel2(tile="31UDQ", date="2024-01-01", backend="cdse")
+
+    assert len(products) == 1
+    assert captured["auth"] is auth_obj
 
 
 def test_siac_process_s2_resolves_and_runs_process(monkeypatch, tmp_path: Path):

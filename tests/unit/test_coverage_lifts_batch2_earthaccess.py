@@ -32,11 +32,23 @@ class _FakeEA:
 
     def search_datasets(self, **kwargs):
         self.search_dataset_calls.append(kwargs)
-        return [{"id": 1}, {"id": 2}]
+        out = [{"id": 1}, {"id": 2}]
+        count = kwargs.get("count")
+        if count == 0:
+            return []
+        if isinstance(count, int) and count > 0:
+            return out[:count]
+        return out
 
     def search_data(self, **kwargs):
         self.search_data_calls.append(kwargs)
-        return [{"id": "a"}, {"id": "b"}]
+        out = [{"id": "a"}, {"id": "b"}]
+        count = kwargs.get("count")
+        if count == 0:
+            return []
+        if isinstance(count, int) and count > 0:
+            return out[:count]
+        return out
 
     def open(self, granules):
         return ["opened", len(granules)]
@@ -92,11 +104,13 @@ def test_earthaccess_source_auth_and_download_variants(monkeypatch, tmp_path: Pa
     out = src.search_datasets(short_name="MCD43A1", provider="PO", count=1)
     assert len(out) == 1
     assert fake.search_dataset_calls[-1]["provider"] == "PO"
+    assert fake.search_dataset_calls[-1]["count"] == 1
 
     # search_granules temporal string branch + count truncation
     gran = src.search_granules(short_name="MCD43A1", temporal="2024-01-01/2024-01-02", count=1)
     assert len(gran) == 1
     assert fake.search_data_calls[-1]["temporal"] == ("2024-01-01", "2024-01-02")
+    assert fake.search_data_calls[-1]["count"] == 1
 
     # download output variants exercise authentication path
     assert src.download_granules(["none"], tmp_path / "d0") == []
