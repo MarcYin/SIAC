@@ -13,12 +13,10 @@ from rasterio.enums import Resampling
 from siac.core.types import AtmosphericState
 from siac.io.earthaccess_catalog import EarthAccessCatalog
 from siac.io.earthaccess_source import EarthAccessSource
-from siac.io.reprojection import transform_bounds
 from siac.priors.earthdata_common import (
-    MODLAND_SINUSOIDAL_CRS,
     apply_scale_and_mask,
+    granule_intersects_bounds,
     make_native_grid_dataarray,
-    modland_tile_bounds,
     parse_granule_date,
     parse_tile_indices,
     read_hdf4_dataset,
@@ -143,28 +141,24 @@ class _EarthAccessMAIACAODProvider:
         if not paths:
             return []
 
-        target_bounds_native = transform_bounds(bounds, crs, MODLAND_SINUSOIDAL_CRS)
-        selected: list[tuple[tuple[int, int], float, Path]] = []
+        selected: list[tuple[tuple[int, int], float, str, Path]] = []
         for path in paths:
             try:
-                tile = parse_tile_indices(path)
                 delta = abs((parse_granule_date(path) - obs_time).total_seconds())
-                tile_bounds = modland_tile_bounds(*tile)
-                intersects = not (
-                    tile_bounds[2] <= target_bounds_native[0]
-                    or tile_bounds[0] >= target_bounds_native[2]
-                    or tile_bounds[3] <= target_bounds_native[1]
-                    or tile_bounds[1] >= target_bounds_native[3]
-                )
+                intersects = granule_intersects_bounds(path, bounds=bounds, crs=crs)
             except Exception:
                 return paths
 
             if intersects:
-                selected.append((tile, delta, path))
+                try:
+                    tile = parse_tile_indices(path)
+                except Exception:
+                    tile = (999, 999)
+                selected.append((tile, delta, Path(path).name, path))
 
         if not selected:
             return []
-        return [item[2] for item in sorted(selected, key=lambda value: (value[0], value[1]))]
+        return [item[3] for item in sorted(selected, key=lambda value: (value[0], value[1], value[2]))]
 
     def _load_from_granules(
         self,

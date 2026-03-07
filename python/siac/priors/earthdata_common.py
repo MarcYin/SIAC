@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +28,16 @@ _MODLAND_X_MIN_M = -20015109.354
 _MODLAND_Y_MAX_M = 10007554.677
 _TILE_RE = re.compile(r"\.h(?P<h>\d{2})v(?P<v>\d{2})\.")
 _DATE_RE = re.compile(r"\.A(?P<year>\d{4})(?P<doy>\d{3})\.")
+_GRID_METADATA_RE = re.compile(
+    r'GridName="(?P<name>[^"]+)".*?'
+    r"XDim=(?P<xdim>\d+).*?"
+    r"YDim=(?P<ydim>\d+).*?"
+    r"UpperLeftPointMtrs=\((?P<ulx>[-+0-9.]+),(?P<uly>[-+0-9.]+)\).*?"
+    r"LowerRightMtrs=\((?P<lrx>[-+0-9.]+),(?P<lry>[-+0-9.]+)\).*?"
+    r"Projection=(?P<projection>[A-Z0-9_]+).*?"
+    r"ProjParams=\((?P<projparams>[^)]*)\)",
+    re.S,
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +48,15 @@ class ProductBandDefinition:
     wavelength_nm: float
     parameter_dataset: str
     qa_dataset: str | None = None
+
+
+@dataclass(frozen=True)
+class NativeGridDefinition:
+    """Native 2-D grid definition for an Earthdata granule."""
+
+    x: tuple[float, ...]
+    y: tuple[float, ...]
+    crs: str
 
 
 def decode_attr(value: Any) -> Any:
@@ -85,6 +105,224 @@ def parse_granule_date(path: str | Path) -> datetime:
     )
 
 
+def _decode_gctp_angle(value: float) -> float:
+    """Decode HDF-EOS packed GCTP angles when present."""
+    if abs(value) <= 360.0:
+        return value
+    return value / 1_000_000.0
+
+
+def _build_sinusoidal_crs(
+    *,
+    radius: float,
+    central_meridian: float = 0.0,
+    false_easting: float = 0.0,
+    false_northing: float = 0.0,
+) -> str:
+    return (
+        f"+proj=sinu +lon_0={central_meridian} +x_0={false_easting} "
+        f"+y_0={false_northing} +R={radius} +units=m +no_defs"
+    )
+
+
+@lru_cache(maxsize=128)
+def _read_hdf5_struct_metadata(path: str) -> str:
+    with h5py.File(path, "r") as handle:
+        metadata = handle["HDFEOS INFORMATION/StructMetadata.0"][()]
+    if isinstance(metadata, bytes):
+        return metadata.decode("utf-8", errors="ignore")
+    return str(metadata)
+
+
+@lru_cache(maxsize=128)
+def _parse_hdf5_grid_metadata(path: str) -> dict[str, dict[str, Any]]:
+    try:
+        metadata = _read_hdf5_struct_metadata(path)
+    except Exception:
+        return {}
+
+    parsed: dict[str, dict[str, Any]] = {}
+    for match in _GRID_METADATA_RE.finditer(metadata):
+        name = match.group("name")
+        projparams = [
+            float(value.strip())
+            for value in match.group("projparams").split(",")
+            if value.strip()
+        ]
+        radius = float(projparams[0]) if projparams else 6371007.181
+        central_meridian = 0.0
+        if len(projparams) >= 5 and projparams[4] != 0:
+            central_meridian = _decode_gctp_angle(float(projparams[4]))
+
+        parsed[name] = {
+            "xdim": int(match.group("xdim")),
+            "ydim": int(match.group("ydim")),
+            "upper_left": (float(match.group("ulx")), float(match.group("uly"))),
+            "lower_right": (float(match.group("lrx")), float(match.group("lry"))),
+            "projection": match.group("projection"),
+            "crs": _build_sinusoidal_crs(
+                radius=radius,
+                central_meridian=central_meridian,
+            ),
+        }
+    return parsed
+
+
+def _grid_definition_from_extent(
+    *,
+    width: int,
+    height: int,
+    upper_left: tuple[float, float],
+    lower_right: tuple[float, float],
+    crs: str,
+) -> NativeGridDefinition:
+    xres = (lower_right[0] - upper_left[0]) / float(width)
+    yres = (lower_right[1] - upper_left[1]) / float(height)
+    x = upper_left[0] + (np.arange(width, dtype=np.float64) + 0.5) * xres
+    y = upper_left[1] + (np.arange(height, dtype=np.float64) + 0.5) * yres
+    return NativeGridDefinition(tuple(x.tolist()), tuple(y.tolist()), crs)
+
+
+@lru_cache(maxsize=128)
+def _read_hdf5_root_bounds(path: str) -> tuple[float, float, float, float] | None:
+    keys = (
+        "WestBoundingCoord",
+        "SouthBoundingCoord",
+        "EastBoundingCoord",
+        "NorthBoundingCoord",
+    )
+    try:
+        with h5py.File(path, "r") as handle:
+            attrs = handle.attrs
+            if not all(key in attrs for key in keys):
+                return None
+            west, south, east, north = (float(decode_attr(attrs[key])) for key in keys)
+            return west, south, east, north
+    except Exception:
+        return None
+
+
+def _read_hdf5_native_grid_definition(
+    path: str | Path,
+    *,
+    height: int | None = None,
+    width: int | None = None,
+) -> NativeGridDefinition | None:
+    path_str = str(path)
+    grid_metadata = _parse_hdf5_grid_metadata(path_str)
+    try:
+        with h5py.File(path_str, "r") as handle:
+            grids = handle.get("HDFEOS/GRIDS")
+            if not isinstance(grids, h5py.Group):
+                return None
+
+            for grid_name in grids:
+                x_name = f"HDFEOS/GRIDS/{grid_name}/XDim"
+                y_name = f"HDFEOS/GRIDS/{grid_name}/YDim"
+                meta = grid_metadata.get(grid_name)
+
+                if x_name in handle and y_name in handle:
+                    x = np.asarray(handle[x_name][...], dtype=np.float64)
+                    y = np.asarray(handle[y_name][...], dtype=np.float64)
+                    if width is not None and len(x) != width:
+                        continue
+                    if height is not None and len(y) != height:
+                        continue
+
+                    crs = meta["crs"] if meta is not None else MODLAND_SINUSOIDAL_CRS
+                    return NativeGridDefinition(tuple(x.tolist()), tuple(y.tolist()), crs)
+
+                if meta is None:
+                    continue
+                if width is not None and meta["xdim"] != width:
+                    continue
+                if height is not None and meta["ydim"] != height:
+                    continue
+
+                return _grid_definition_from_extent(
+                    width=meta["xdim"],
+                    height=meta["ydim"],
+                    upper_left=meta["upper_left"],
+                    lower_right=meta["lower_right"],
+                    crs=meta["crs"],
+                )
+    except Exception:
+        return None
+
+    return None
+
+
+def granule_geographic_bounds(path: str | Path) -> tuple[float, float, float, float] | None:
+    """Return geographic bounds when a granule exposes them directly."""
+    suffix = Path(path).suffix.lower()
+    if suffix in {".h5", ".he5"}:
+        return _read_hdf5_root_bounds(str(path))
+    return None
+
+
+def granule_native_bounds(
+    path: str | Path,
+    *,
+    height: int | None = None,
+    width: int | None = None,
+) -> tuple[tuple[float, float, float, float], str]:
+    """Return granule bounds in its declared native CRS."""
+    suffix = Path(path).suffix.lower()
+    if suffix in {".h5", ".he5"}:
+        grid = _read_hdf5_native_grid_definition(path, height=height, width=width)
+        if grid is not None:
+            x = np.asarray(grid.x, dtype=np.float64)
+            y = np.asarray(grid.y, dtype=np.float64)
+            if x.size > 1:
+                xres = abs(float(x[1] - x[0]))
+            elif width and width > 0:
+                xres = 1000.0
+            else:
+                xres = 1000.0
+            if y.size > 1:
+                yres = abs(float(y[0] - y[1]))
+            elif height and height > 0:
+                yres = 1000.0
+            else:
+                yres = 1000.0
+            bounds = (
+                float(np.min(x) - xres / 2.0),
+                float(np.min(y) - yres / 2.0),
+                float(np.max(x) + xres / 2.0),
+                float(np.max(y) + yres / 2.0),
+            )
+            return bounds, grid.crs
+
+    return modland_tile_bounds(*parse_tile_indices(path)), MODLAND_SINUSOIDAL_CRS
+
+
+def granule_intersects_bounds(
+    path: str | Path,
+    *,
+    bounds: tuple[float, float, float, float],
+    crs: str,
+) -> bool:
+    """Return whether a granule intersects an AOI."""
+    geographic = granule_geographic_bounds(path)
+    if geographic is not None:
+        target_bounds = transform_bounds(bounds, crs, "EPSG:4326")
+        return not (
+            geographic[2] <= target_bounds[0]
+            or geographic[0] >= target_bounds[2]
+            or geographic[3] <= target_bounds[1]
+            or geographic[1] >= target_bounds[3]
+        )
+
+    native_bounds, native_crs = granule_native_bounds(path)
+    target_bounds = transform_bounds(bounds, crs, native_crs)
+    return not (
+        native_bounds[2] <= target_bounds[0]
+        or native_bounds[0] >= target_bounds[2]
+        or native_bounds[3] <= target_bounds[1]
+        or native_bounds[1] >= target_bounds[3]
+    )
+
+
 def modland_tile_coords(
     h_index: int,
     v_index: int,
@@ -125,13 +363,20 @@ def make_native_grid_dataarray(
     coords: dict[str, Any] | None = None,
 ) -> xr.DataArray:
     """Attach MODLAND sinusoidal x/y coordinates and CRS to a native granule array."""
-    h_index, v_index = parse_tile_indices(granule_path)
     if values.ndim < 2:
         raise ValueError(f"Expected at least 2 dimensions, got shape={values.shape}")
 
     height = int(values.shape[-2])
     width = int(values.shape[-1])
-    x, y = modland_tile_coords(h_index, v_index, height, width)
+    grid = _read_hdf5_native_grid_definition(granule_path, height=height, width=width)
+    if grid is not None:
+        x = np.asarray(grid.x, dtype=np.float64)
+        y = np.asarray(grid.y, dtype=np.float64)
+        native_crs = grid.crs
+    else:
+        h_index, v_index = parse_tile_indices(granule_path)
+        x, y = modland_tile_coords(h_index, v_index, height, width)
+        native_crs = MODLAND_SINUSOIDAL_CRS
 
     data_dims = dims or tuple(f"dim_{i}" for i in range(values.ndim - 2)) + ("y", "x")
     data_coords = dict(coords or {})
@@ -140,7 +385,7 @@ def make_native_grid_dataarray(
 
     da = xr.DataArray(np.asarray(values), dims=data_dims, coords=data_coords)
     da = da.rio.set_spatial_dims(x_dim="x", y_dim="y")
-    return da.rio.write_crs(MODLAND_SINUSOIDAL_CRS)
+    return da.rio.write_crs(native_crs)
 
 
 def build_target_template(
