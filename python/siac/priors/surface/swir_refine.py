@@ -25,6 +25,7 @@ from siac.priors.surface.brdf_monthly_database import (
     MonthlyCompositeDatabase,
     build_monthly_composite_database,
 )
+from siac.priors.surface.spectral_mapping import map_multispectral_reflectance
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -49,6 +50,7 @@ def build_monthly_surface_prior_database(
         raise ValueError("resolution must be > 0")
 
     required_bands = _deduplicate_bands([*visible_bands, *query_bands])
+    source_bands = _deduplicate_bands(getattr(brdf_provider, "source_bands", required_bands))
     obs_time = observation.metadata["observation_time"]
     month_specs = [
         (
@@ -65,7 +67,7 @@ def build_monthly_surface_prior_database(
         crs=observation.crs,
         obs_times=[spec[2] for spec in month_specs],
         target_resolution=resolution,
-        bands=required_bands,
+        bands=source_bands,
         temporal_windows=[spec[3] for spec in month_specs],
         sample_date_sets=[spec[4] for spec in month_specs],
     )
@@ -75,12 +77,32 @@ def build_monthly_surface_prior_database(
         temporal_weights_list,
         strict=True,
     ):
-        reflectance, quality = _forward_model_monthly_reflectance(
+        reflectance, quality, reflectance_unc = _forward_model_monthly_reflectance(
             temporal_weights,
             geometry=geometry,
             year=year,
             month=month,
         )
+        if tuple(band.name for band in source_bands) != tuple(band.name for band in required_bands):
+            reflectance, mapped_unc = map_multispectral_reflectance(
+                reflectance,
+                source_bands=source_bands,
+                target_bands=required_bands,
+                source_uncertainty=reflectance_unc,
+            )
+            quality = np.sqrt(
+                np.square(quality.values, dtype=np.float32)
+                + np.square(mapped_unc.mean(dim="band", skipna=True).values, dtype=np.float32)
+            ).astype(np.float32)
+            quality = xr.DataArray(
+                quality,
+                dims=["time", "y", "x"],
+                coords={
+                    "time": reflectance.coords["time"],
+                    "y": reflectance.coords["y"],
+                    "x": reflectance.coords["x"],
+                },
+            )
         composites.append(
             build_monthly_best_pixel_composite(
                 reflectance,
@@ -210,7 +232,7 @@ def _forward_model_monthly_reflectance(
     geometry: GeometryAngles,
     year: int,
     month: int,
-) -> tuple[xr.DataArray, xr.DataArray]:
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
     kernels = BRDFKernels(hb=2.0, br=1.0)
     k_vol, k_geo = kernels.compute(geometry.vza, geometry.sza, geometry.raa)
     reflectance = compute_reflectance(
@@ -228,7 +250,7 @@ def _forward_model_monthly_reflectance(
         reflectance_unc = reflectance_unc.isel(time=month_mask)
 
     quality = reflectance_unc.mean(dim="band", skipna=True).astype(np.float32)
-    return reflectance.astype(np.float32), quality
+    return reflectance.astype(np.float32), quality, reflectance_unc.astype(np.float32)
 
 
 def _select_month_mask(time_values: np.ndarray, *, year: int, month: int) -> np.ndarray:

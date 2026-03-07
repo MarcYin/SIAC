@@ -294,7 +294,7 @@ class SIAC:
         bounds = aoi.get_bounds()
         obs_time = metadata.get("observation_time", datetime.now())
         resolution = 500.0  # MODIS native resolution for BRDF
-        bands = _select_surface_prior_bands(metadata.get("sensor_config"))
+        target_bands = _select_surface_prior_bands(metadata.get("sensor_config"))
 
         method = getattr(self.config.surface_prior, "method", "kernel_model")
         if method == "monthly_database":
@@ -308,7 +308,7 @@ class SIAC:
                 crs=aoi.crs,
                 obs_time=obs_time,
                 target_resolution=resolution,
-                bands=bands,
+                bands=brdf_provider.source_bands,
                 temporal_window=self.config.brdf.temporal_window,
             )
             deriver = BRDFWhittakerDeriver(
@@ -317,14 +317,20 @@ class SIAC:
                 psf_sigma_y=self.config.surface_prior.psf_sigma_y,
                 apply_psf=self.config.surface_prior.apply_psf,
             )
-            return deriver.compute_surface_prior(brdf_weights, geometry, obs_time=obs_time)
+            return deriver.compute_surface_prior(
+                brdf_weights,
+                geometry,
+                obs_time=obs_time,
+                source_bands=brdf_provider.source_bands,
+                target_bands=target_bands,
+            )
 
         brdf_weights = brdf_provider.get_brdf_parameters(
             bounds=bounds,
             crs=aoi.crs,
             obs_time=obs_time,
             target_resolution=resolution,
-            bands=bands,
+            bands=brdf_provider.source_bands,
             temporal_window=self.config.brdf.temporal_window,
         )
         deriver = KernelModelDeriver(
@@ -332,7 +338,12 @@ class SIAC:
             psf_sigma_y=self.config.surface_prior.psf_sigma_y,
             apply_psf=self.config.surface_prior.apply_psf,
         )
-        return deriver.compute_surface_prior(brdf_weights, geometry)
+        return deriver.compute_surface_prior(
+            brdf_weights,
+            geometry,
+            source_bands=brdf_provider.source_bands,
+            target_bands=target_bands,
+        )
 
     def _get_brdf_provider(self):
         """Get or create the BRDF product provider."""
@@ -710,13 +721,15 @@ def _resolve_surface_prior_provider(
                 crs=observation.crs,
                 obs_time=observation.metadata["observation_time"],
                 target_resolution=resolution,
-                bands=_select_surface_prior_bands(observation.sensor_config),
+                bands=brdf_prov.source_bands,
                 temporal_window=config.brdf.temporal_window,
             )
             return deriver.compute_surface_prior(
                 brdf_weights,
                 observation.geometry,
                 obs_time=observation.metadata["observation_time"],
+                source_bands=brdf_prov.source_bands,
+                target_bands=_select_surface_prior_bands(observation.sensor_config),
             )
 
         _brdf_surface_prior.requires_atmo_prior = False
@@ -762,10 +775,15 @@ def _resolve_surface_prior_provider(
                 crs=observation.crs,
                 obs_time=observation.metadata["observation_time"],
                 target_resolution=resolution,
-                bands=visible_bands,
+                bands=brdf_prov.source_bands,
                 temporal_window=config.brdf.temporal_window,
             )
-            return fallback_deriver.compute_surface_prior(brdf_weights, target_geometry)
+            return fallback_deriver.compute_surface_prior(
+                brdf_weights,
+                target_geometry,
+                source_bands=brdf_prov.source_bands,
+                target_bands=visible_bands,
+            )
 
         _monthly_surface_prior.requires_atmo_prior = True
         return _monthly_surface_prior
@@ -777,10 +795,15 @@ def _resolve_surface_prior_provider(
             crs=observation.crs,
             obs_time=observation.metadata["observation_time"],
             target_resolution=resolution,
-            bands=_select_surface_prior_bands(observation.sensor_config),
+            bands=brdf_prov.source_bands,
             temporal_window=config.brdf.temporal_window,
         )
-        return fallback_deriver.compute_surface_prior(brdf_weights, observation.geometry)
+        return fallback_deriver.compute_surface_prior(
+            brdf_weights,
+            observation.geometry,
+            source_bands=brdf_prov.source_bands,
+            target_bands=_select_surface_prior_bands(observation.sensor_config),
+        )
 
     _brdf_surface_prior.requires_atmo_prior = False
     return _brdf_surface_prior

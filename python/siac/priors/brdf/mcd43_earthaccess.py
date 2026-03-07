@@ -151,6 +151,19 @@ class _EarthAccessBRDFProvider:
     def _bands_by_label(self) -> dict[str, ProductBandDefinition]:
         return {band.label: band for band in self._product_bands}
 
+    @property
+    def source_bands(self) -> tuple[SensorBand, ...]:
+        return tuple(
+            SensorBand(
+                name=band.label,
+                center_wavelength=band.wavelength_nm,
+                bandwidth=band.bandwidth_nm,
+                resolution=500.0,
+                band_index=index,
+            )
+            for index, band in enumerate(self._product_bands)
+        )
+
     def get_brdf_parameters(
         self,
         bounds: tuple[float, float, float, float],
@@ -973,13 +986,13 @@ class MCD43EarthAccessProvider(_StackParameterProvider):
     product_key = "mcd43_brdf"
     _source_name = "MCD43"
     _product_bands = (
-        ProductBandDefinition("Band1", 645.0, "BRDF_Albedo_Parameters_Band1", "BRDF_Albedo_Band_Mandatory_Quality_Band1"),
-        ProductBandDefinition("Band2", 858.5, "BRDF_Albedo_Parameters_Band2", "BRDF_Albedo_Band_Mandatory_Quality_Band2"),
-        ProductBandDefinition("Band3", 469.0, "BRDF_Albedo_Parameters_Band3", "BRDF_Albedo_Band_Mandatory_Quality_Band3"),
-        ProductBandDefinition("Band4", 555.0, "BRDF_Albedo_Parameters_Band4", "BRDF_Albedo_Band_Mandatory_Quality_Band4"),
-        ProductBandDefinition("Band5", 1240.0, "BRDF_Albedo_Parameters_Band5", "BRDF_Albedo_Band_Mandatory_Quality_Band5"),
-        ProductBandDefinition("Band6", 1640.0, "BRDF_Albedo_Parameters_Band6", "BRDF_Albedo_Band_Mandatory_Quality_Band6"),
-        ProductBandDefinition("Band7", 2130.0, "BRDF_Albedo_Parameters_Band7", "BRDF_Albedo_Band_Mandatory_Quality_Band7"),
+        ProductBandDefinition("Band1", 645.0, 50.0, "BRDF_Albedo_Parameters_Band1", "BRDF_Albedo_Band_Mandatory_Quality_Band1"),
+        ProductBandDefinition("Band2", 858.5, 35.0, "BRDF_Albedo_Parameters_Band2", "BRDF_Albedo_Band_Mandatory_Quality_Band2"),
+        ProductBandDefinition("Band3", 469.0, 20.0, "BRDF_Albedo_Parameters_Band3", "BRDF_Albedo_Band_Mandatory_Quality_Band3"),
+        ProductBandDefinition("Band4", 555.0, 20.0, "BRDF_Albedo_Parameters_Band4", "BRDF_Albedo_Band_Mandatory_Quality_Band4"),
+        ProductBandDefinition("Band5", 1240.0, 20.0, "BRDF_Albedo_Parameters_Band5", "BRDF_Albedo_Band_Mandatory_Quality_Band5"),
+        ProductBandDefinition("Band6", 1640.0, 24.0, "BRDF_Albedo_Parameters_Band6", "BRDF_Albedo_Band_Mandatory_Quality_Band6"),
+        ProductBandDefinition("Band7", 2130.0, 50.0, "BRDF_Albedo_Parameters_Band7", "BRDF_Albedo_Band_Mandatory_Quality_Band7"),
     )
     _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
 
@@ -994,54 +1007,63 @@ class VNP43EarthAccessProvider(_StackParameterProvider):
         ProductBandDefinition(
             "M1",
             412.0,
+            20.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M1",
         ),
         ProductBandDefinition(
             "M2",
             445.0,
+            18.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M2",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M2",
         ),
         ProductBandDefinition(
             "M3",
             488.0,
+            20.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M3",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M3",
         ),
         ProductBandDefinition(
             "M4",
             555.0,
+            20.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M4",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M4",
         ),
         ProductBandDefinition(
             "M5",
             672.0,
+            20.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M5",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M5",
         ),
         ProductBandDefinition(
             "M7",
             865.0,
+            39.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M7",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M7",
         ),
         ProductBandDefinition(
             "M8",
             1240.0,
+            20.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M8",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M8",
         ),
         ProductBandDefinition(
             "M10",
             1610.0,
+            60.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M10",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M10",
         ),
         ProductBandDefinition(
             "M11",
             2250.0,
+            50.0,
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M11",
             "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M11",
         ),
@@ -1063,14 +1085,14 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
     product_key = "mcd19_brdf"
     _source_name = "MCD19"
     _product_bands = (
-        ProductBandDefinition("Band1", 645.0, "Kiso_Band1", "Status_QA"),
-        ProductBandDefinition("Band2", 858.5, "Kiso_Band2", "Status_QA"),
-        ProductBandDefinition("Band3", 469.0, "Kiso_Band3", "Status_QA"),
-        ProductBandDefinition("Band4", 555.0, "Kiso_Band4", "Status_QA"),
-        ProductBandDefinition("Band5", 1240.0, "Kiso_Band5", "Status_QA"),
-        ProductBandDefinition("Band6", 1640.0, "Kiso_Band6", "Status_QA"),
-        ProductBandDefinition("Band7", 2130.0, "Kiso_Band7", "Status_QA"),
-        ProductBandDefinition("Band8", 412.0, "Kiso_Band8", "Status_QA"),
+        ProductBandDefinition("Band1", 645.0, 50.0, "Kiso_Band1", "Status_QA"),
+        ProductBandDefinition("Band2", 858.5, 35.0, "Kiso_Band2", "Status_QA"),
+        ProductBandDefinition("Band3", 469.0, 20.0, "Kiso_Band3", "Status_QA"),
+        ProductBandDefinition("Band4", 555.0, 20.0, "Kiso_Band4", "Status_QA"),
+        ProductBandDefinition("Band5", 1240.0, 20.0, "Kiso_Band5", "Status_QA"),
+        ProductBandDefinition("Band6", 1640.0, 24.0, "Kiso_Band6", "Status_QA"),
+        ProductBandDefinition("Band7", 2130.0, 50.0, "Kiso_Band7", "Status_QA"),
+        ProductBandDefinition("Band8", 412.0, 20.0, "Kiso_Band8", "Status_QA"),
     )
     _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
 

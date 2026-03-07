@@ -46,6 +46,7 @@ class ProductBandDefinition:
 
     label: str
     wavelength_nm: float
+    bandwidth_nm: float
     parameter_dataset: str
     qa_dataset: str | None = None
 

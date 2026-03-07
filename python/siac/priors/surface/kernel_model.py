@@ -16,6 +16,7 @@ from scipy import ndimage
 
 from siac.core.types import BRDFKernelWeights, GeometryAngles, SurfacePrior
 from siac.priors.brdf.kernels import BRDFKernels, compute_reflectance
+from siac.priors.surface.spectral_mapping import map_multispectral_reflectance
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,11 @@ class KernelModelDeriver:
         brdf_weights: BRDFKernelWeights,
         geometry: GeometryAngles,
         psf_params: tuple[float, float] | None = None,
+        *,
+        source_bands: list | tuple | None = None,
+        target_bands: list | tuple | None = None,
+        spectral_library: object | None = None,
+        spectral_k_neighbors: int = 5,
     ) -> SurfacePrior:
         """
         Compute surface reflectance prior from BRDF parameters.
@@ -85,6 +91,17 @@ class KernelModelDeriver:
         boa_unc = self._compute_uncertainty(
             brdf_weights, k_vol, k_geo
         )
+
+        if source_bands and target_bands:
+            boa, mapped_unc = map_multispectral_reflectance(
+                boa,
+                source_bands=source_bands,
+                target_bands=target_bands,
+                source_uncertainty=boa_unc,
+                spectral_library=spectral_library,
+                k_neighbors=spectral_k_neighbors,
+            )
+            boa_unc = mapped_unc
 
         # Apply PSF convolution if needed
         if self.apply_psf and sigma_x > 0 and sigma_y > 0:

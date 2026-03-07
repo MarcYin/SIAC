@@ -12,6 +12,7 @@ from siac._rust import whittaker_smooth_cube
 from siac.core.types import BRDFKernelWeights, GeometryAngles, SurfacePrior
 from siac.priors.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.priors.surface.kernel_model import KernelModelDeriver
+from siac.priors.surface.spectral_mapping import map_multispectral_reflectance
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -46,6 +47,10 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         geometry: GeometryAngles,
         *,
         obs_time: datetime | None = None,
+        source_bands: list | tuple | None = None,
+        target_bands: list | tuple | None = None,
+        spectral_library: object | None = None,
+        spectral_k_neighbors: int = 5,
     ) -> SurfacePrior:
         if "time" not in brdf_weights.f0.dims:
             raise ValueError("Whittaker BRDF derivation requires BRDF weights with a 'time' dimension")
@@ -119,6 +124,16 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         }
         boa = xr.DataArray(prior, dims=["band", "y", "x"], coords=coords)
         boa_unc = xr.DataArray(prior_unc, dims=["band", "y", "x"], coords=coords)
+
+        if source_bands and target_bands:
+            boa, boa_unc = map_multispectral_reflectance(
+                boa,
+                source_bands=source_bands,
+                target_bands=target_bands,
+                source_uncertainty=boa_unc,
+                spectral_library=spectral_library,
+                k_neighbors=spectral_k_neighbors,
+            )
 
         if self.apply_psf and self.psf_sigma_x > 0 and self.psf_sigma_y > 0:
             boa = self._apply_psf(boa, self.psf_sigma_x, self.psf_sigma_y)
