@@ -6,8 +6,6 @@ import numpy as np
 import pytest
 import xarray as xr
 
-pytest.importorskip("siac._rust")
-
 from siac.core.types import BRDFKernelWeights, GeometryAngles, SurfacePrior
 from siac.priors.surface.brdf_whittaker import BRDFWhittakerDeriver
 

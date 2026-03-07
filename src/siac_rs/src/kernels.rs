@@ -1,11 +1,11 @@
+#![allow(non_local_definitions)]
 //! BRDF Kernel Calculations
 //!
 //! Implements Ross-Thick and Li-Sparse BRDF kernels used in MODIS MCD43 products.
 
-use ndarray::{Array2, ArrayView2, Zip};
+use ndarray::{Array2, Zip};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
-use rayon::prelude::*;
 use std::f64::consts::{FRAC_PI_2, PI};
 
 /// Ross-Thick Li-Sparse kernel calculator
@@ -101,24 +101,16 @@ impl RossThickLiSparse {
         let phase = cos_phase.acos();
 
         // Ross-Thick kernel
-        let ross = self.ross_thick(cos_sza, cos_vza, sin_sza, sin_vza, cos_phase, phase);
+        let ross = self.ross_thick(cos_sza, cos_vza, cos_phase, phase);
 
         // Li-Sparse kernel
-        let li = self.li_sparse(cos_sza, cos_vza, sin_sza, sin_vza, cos_raa, cos_phase, phase);
+        let li = self.li_sparse(cos_sza, cos_vza, sin_sza, sin_vza, cos_raa);
 
         (ross, li)
     }
 
     /// Ross-Thick volumetric scattering kernel
-    fn ross_thick(
-        &self,
-        cos_sza: f64,
-        cos_vza: f64,
-        sin_sza: f64,
-        sin_vza: f64,
-        cos_phase: f64,
-        phase: f64,
-    ) -> f64 {
+    fn ross_thick(&self, cos_sza: f64, cos_vza: f64, cos_phase: f64, phase: f64) -> f64 {
         let denom = cos_sza + cos_vza;
         if denom.abs() < 1e-10 {
             return 0.0;
@@ -136,8 +128,6 @@ impl RossThickLiSparse {
         sin_sza: f64,
         sin_vza: f64,
         cos_raa: f64,
-        cos_phase: f64,
-        phase: f64,
     ) -> f64 {
         // Prime angles (scaled by br for sparse vegetation)
         let tan_sza = sin_sza / cos_sza.max(1e-10);
@@ -155,15 +145,13 @@ impl RossThickLiSparse {
         let sin_vza_prime = vza_prime.sin();
 
         // Prime phase angle
-        let cos_phase_prime =
-            (cos_sza_prime * cos_vza_prime + sin_sza_prime * sin_vza_prime * cos_raa)
-                .clamp(-1.0, 1.0);
+        let cos_phase_prime = (cos_sza_prime * cos_vza_prime
+            + sin_sza_prime * sin_vza_prime * cos_raa)
+            .clamp(-1.0, 1.0);
 
         // Distance term
         let d2 = tan_sza_prime.powi(2) + tan_vza_prime.powi(2)
             - 2.0 * tan_sza_prime * tan_vza_prime * cos_raa;
-        let d = d2.max(0.0).sqrt();
-
         // sec values
         let sec_sza_prime = 1.0 / cos_sza_prime.max(1e-10);
         let sec_vza_prime = 1.0 / cos_vza_prime.max(1e-10);
@@ -177,7 +165,8 @@ impl RossThickLiSparse {
         let overlap = (1.0 / PI) * (t - t.sin() * t.cos()) * (sec_sza_prime + sec_vza_prime);
 
         // Final Li-Sparse kernel
-        overlap - sec_sza_prime - sec_vza_prime + 0.5 * (1.0 + cos_phase_prime) * sec_sza_prime * sec_vza_prime
+        overlap - sec_sza_prime - sec_vza_prime
+            + 0.5 * (1.0 + cos_phase_prime) * sec_sza_prime * sec_vza_prime
     }
 }
 

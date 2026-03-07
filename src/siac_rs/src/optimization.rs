@@ -7,9 +7,8 @@ use numpy::{
     IntoPyArray, PyArray2, PyArray3, PyArray4, PyReadonlyArray1, PyReadonlyArray2,
     PyReadonlyArray3, PyReadonlyArray4,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
-use rayon::prelude::*;
+use pyo3::prelude::*;
 
 /// Remap high-resolution data to coarse grid by averaging
 ///
@@ -228,7 +227,9 @@ pub fn evaluate_grid_search_candidate_cost<'py>(
         }
     }
     if band_weights.len() != n_band {
-        return Err(PyValueError::new_err("band_weights length must match toa.shape[0]"));
+        return Err(PyValueError::new_err(
+            "band_weights length must match toa.shape[0]",
+        ));
     }
     if valid.shape() != [ny, nx]
         || aot_prior.shape() != [ny, nx]
@@ -236,7 +237,9 @@ pub fn evaluate_grid_search_candidate_cost<'py>(
         || aot_prior_unc.shape() != [ny, nx]
         || tcwv_prior_unc.shape() != [ny, nx]
     {
-        return Err(PyValueError::new_err("2D inputs must all match shape (y, x)"));
+        return Err(PyValueError::new_err(
+            "2D inputs must all match shape (y, x)",
+        ));
     }
 
     let mut cost = Array2::<f32>::zeros((ny, nx));
@@ -357,7 +360,9 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
     let tcwv_prior_unc = tcwv_prior_unc.as_array();
 
     if aot_axis.is_empty() || tcwv_axis.is_empty() {
-        return Err(PyValueError::new_err("aot_axis and tcwv_axis must be non-empty"));
+        return Err(PyValueError::new_err(
+            "aot_axis and tcwv_axis must be non-empty",
+        ));
     }
 
     let toa_shape = toa.shape();
@@ -377,7 +382,9 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
         }
     }
     if band_weights.len() != n_band {
-        return Err(PyValueError::new_err("band_weights length must match toa.shape[0]"));
+        return Err(PyValueError::new_err(
+            "band_weights length must match toa.shape[0]",
+        ));
     }
     if valid.shape() != [ny, nx]
         || aot_prior.shape() != [ny, nx]
@@ -385,7 +392,9 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
         || aot_prior_unc.shape() != [ny, nx]
         || tcwv_prior_unc.shape() != [ny, nx]
     {
-        return Err(PyValueError::new_err("2D inputs must all match shape (y, x)"));
+        return Err(PyValueError::new_err(
+            "2D inputs must all match shape (y, x)",
+        ));
     }
 
     let mut costs = Array4::<f32>::zeros((aot_axis.len(), tcwv_axis.len(), ny, nx));
@@ -488,7 +497,8 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
 
                     let prior = 0.5
                         * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
-                            + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p)) / (tcwv_u * tcwv_u).max(1e-12));
+                            + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p))
+                                / (tcwv_u * tcwv_u).max(1e-12));
                     if prior.is_finite() {
                         costs[[ia, it, iy, ix]] += prior as f32;
                     }
@@ -528,13 +538,19 @@ pub fn quadratic_refine_grid_search<'py>(
     let (n_aot, n_tcwv, ny, nx) = (shape[0], shape[1], shape[2], shape[3]);
 
     if aot_axis.len() != n_aot {
-        return Err(PyValueError::new_err("aot_axis length must match costs.shape[0]"));
+        return Err(PyValueError::new_err(
+            "aot_axis length must match costs.shape[0]",
+        ));
     }
     if tcwv_axis.len() != n_tcwv {
-        return Err(PyValueError::new_err("tcwv_axis length must match costs.shape[1]"));
+        return Err(PyValueError::new_err(
+            "tcwv_axis length must match costs.shape[1]",
+        ));
     }
     if valid.shape() != [ny, nx] {
-        return Err(PyValueError::new_err("valid_mask shape must match costs.shape[2:4]"));
+        return Err(PyValueError::new_err(
+            "valid_mask shape must match costs.shape[2:4]",
+        ));
     }
 
     let mut aot_best = Array2::<f32>::zeros((ny, nx));

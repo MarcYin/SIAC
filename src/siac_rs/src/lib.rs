@@ -30,12 +30,18 @@ fn _rust(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(optimization::remap_to_coarse_grid, m)?)?;
     m.add_function(wrap_pyfunction!(optimization::interpolate_to_fine_grid, m)?)?;
     m.add_function(wrap_pyfunction!(optimization::apply_laplacian, m)?)?;
-    m.add_function(wrap_pyfunction!(optimization::evaluate_grid_search_candidate_cost, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        optimization::evaluate_grid_search_candidate_cost,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(
         optimization::evaluate_grid_search_cost_cube_with_provider,
         m
     )?)?;
-    m.add_function(wrap_pyfunction!(optimization::quadratic_refine_grid_search, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        optimization::quadratic_refine_grid_search,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(whittaker::whittaker_smooth_cube, m)?)?;
 
     Ok(())

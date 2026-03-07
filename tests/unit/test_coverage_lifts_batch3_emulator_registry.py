@@ -41,7 +41,7 @@ def _weights(hidden=4):
 
 
 def test_two_nn_empty_dir_and_missing_band_paths(tmp_path: Path):
-    emu = tnn.TwoLayerNNEmulator(tmp_path, sensor_id="MSI", satellite_id="S2A", use_rust=False)
+    emu = tnn.TwoLayerNNEmulator(tmp_path, sensor_id="MSI", satellite_id="S2A")
     assert emu.available_bands == []
     assert emu.is_available_for_sensor("MSI", "S2A") is False
 
@@ -51,7 +51,7 @@ def test_two_nn_empty_dir_and_missing_band_paths(tmp_path: Path):
 
 
 def test_two_nn_compute_coeffs_jacobian_requested_but_none(monkeypatch, tmp_path: Path):
-    emu = tnn.TwoLayerNNEmulator(tmp_path, sensor_id="MSI", satellite_id="S2A", use_rust=False)
+    emu = tnn.TwoLayerNNEmulator(tmp_path, sensor_id="MSI", satellite_id="S2A")
 
     class _FakeBand:
         def forward(self, x, compute_jacobian=False):
@@ -79,11 +79,10 @@ def test_two_nn_load_classmethod_default_emulator_dir(monkeypatch, tmp_path: Pat
 
     captured = {}
 
-    def _fake_init(self, emulator_dir, sensor_id, satellite_id, use_rust=True):
+    def _fake_init(self, emulator_dir, sensor_id, satellite_id):
         captured["emulator_dir"] = Path(emulator_dir)
         captured["sensor_id"] = sensor_id
         captured["satellite_id"] = satellite_id
-        captured["use_rust"] = use_rust
         self.emulator_dir = Path(emulator_dir)
         self.sensor_id = sensor_id
         self.satellite_id = satellite_id
@@ -99,13 +98,18 @@ def test_two_nn_load_classmethod_default_emulator_dir(monkeypatch, tmp_path: Pat
     assert captured["emulator_dir"].name == "emus"
 
 
-def test_band_emulator_rust_and_fallback_branches(monkeypatch):
+def test_band_emulator_initializes_combined_rust_output_layer(monkeypatch):
     hidden_layers, output_layers = _weights(hidden=3)
+    captured = {}
 
     class _FakeRustNN:
         def __init__(self, w1, b1, w2, b2, w3, b3):
-            self.w1 = w1
-            self.w3 = w3
+            captured["w1"] = w1
+            captured["b1"] = b1
+            captured["w2"] = w2
+            captured["b2"] = b2
+            captured["w3"] = w3
+            captured["b3"] = b3
 
         def predict(self, x, compute_jacobian):
             n = x.shape[0]
@@ -113,24 +117,15 @@ def test_band_emulator_rust_and_fallback_branches(monkeypatch):
             jac = np.zeros((n, 3, x.shape[1]), dtype=np.float32) if compute_jacobian else None
             return out, jac
 
-    monkeypatch.setattr(tnn, "_HAS_RUST", True)
     monkeypatch.setattr(tnn, "_RustNN", _FakeRustNN, raising=False)
 
-    be = tnn._BandEmulator(hidden_layers, output_layers, use_rust=True)
+    be = tnn._BandEmulator(hidden_layers, output_layers)
     out, jac = be.forward(np.zeros((2, 7), dtype=np.float32), compute_jacobian=True)
     assert out.shape == (2, 3)
     assert jac is not None and jac.shape == (2, 3, 7)
-
-    # Force rust init failure branch.
-    class _BoomRustNN:
-        def __init__(self, *args, **kwargs):
-            raise RuntimeError("rust init failed")
-
-    monkeypatch.setattr(tnn, "_RustNN", _BoomRustNN, raising=False)
-    be2 = tnn._BandEmulator(hidden_layers, output_layers, use_rust=True)
-    out2, jac2 = be2.forward(np.zeros((1, 7), dtype=np.float32), compute_jacobian=False)
-    assert out2.shape == (1, 3)
-    assert jac2 is None
+    assert captured["w1"].shape == (7, 3)
+    assert captured["w3"].shape == (3, 3)
+    assert captured["b3"].shape == (3,)
 
 
 def test_emulator_registry_branching(monkeypatch, tmp_path: Path):

@@ -1,10 +1,4 @@
-"""
-Unit tests for BRDF kernel calculations.
-"""
-
-import importlib
-import sys
-from types import ModuleType
+"""Unit tests for BRDF kernel calculations."""
 
 import numpy as np
 import pytest
@@ -170,30 +164,14 @@ class TestKernelCoverageExtras:
         with pytest.raises(ValueError, match="Unknown kernel type"):
             compute_kernels(vza, sza, raa, kernel_type="roujean")
 
-    def test_rust_accelerated_branch_via_reload(self, monkeypatch: pytest.MonkeyPatch):
-        class _FakeRustKernels:
-            def __init__(self, hb, br):  # noqa: ANN001
-                self.hb = hb
-                self.br = br
+    def test_rust_kernels_preserve_non_2d_input_shape(self):
+        kernels = BRDFKernels()
+        vza = np.array([0.0, 0.1, 0.2], dtype=np.float32)
+        sza = np.array([0.3, 0.4, 0.5], dtype=np.float32)
+        raa = np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
-            def compute(self, vza, sza, raa):  # noqa: ANN001
-                _ = (sza, raa)
-                return np.full_like(vza, 0.5), np.full_like(vza, -1.5)
-
-        fake_module = ModuleType("siac._rust")
-        fake_module.RossThickLiSparse = _FakeRustKernels  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "siac._rust", fake_module)
-
-        import siac.priors.brdf.kernels as kernels_mod
-
-        kernels_mod = importlib.reload(kernels_mod)
-        kernels = kernels_mod.BRDFKernels(use_rust=True)
-        vza = np.zeros((2, 2), dtype=np.float32)
-        sza = np.zeros((2, 2), dtype=np.float32)
-        raa = np.zeros((2, 2), dtype=np.float32)
         k_vol, k_geo = kernels.compute(vza, sza, raa)
-        assert np.allclose(k_vol, 0.5)
-        assert np.allclose(k_geo, -1.5)
-
-        monkeypatch.delitem(sys.modules, "siac._rust", raising=False)
-        importlib.reload(kernels_mod)
+        assert k_vol.shape == (3,)
+        assert k_geo.shape == (3,)
+        assert np.all(np.isfinite(k_vol))
+        assert np.all(np.isfinite(k_geo))

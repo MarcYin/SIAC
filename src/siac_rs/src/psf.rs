@@ -1,3 +1,4 @@
+#![allow(non_local_definitions)]
 //! PSF Convolution
 //!
 //! DCT-based Gaussian PSF convolution for scale matching between
@@ -7,7 +8,6 @@
 use ndarray::{Array2, ArrayView2};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
-use rustfft::{num_complex::Complex64, FftPlanner};
 
 /// PSF Convolver using DCT-based Gaussian convolution
 ///
@@ -92,10 +92,10 @@ impl PSFConvolver {
                 let v = j as f64 / width as f64;
 
                 // Gaussian in frequency domain
-                let gx = (-2.0 * std::f64::consts::PI.powi(2) * self.sigma_x.powi(2) * u.powi(2))
-                    .exp();
-                let gy = (-2.0 * std::f64::consts::PI.powi(2) * self.sigma_y.powi(2) * v.powi(2))
-                    .exp();
+                let gx =
+                    (-2.0 * std::f64::consts::PI.powi(2) * self.sigma_x.powi(2) * u.powi(2)).exp();
+                let gy =
+                    (-2.0 * std::f64::consts::PI.powi(2) * self.sigma_y.powi(2) * v.powi(2)).exp();
 
                 kernel[[i, j]] = gx * gy;
             }

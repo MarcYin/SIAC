@@ -2,8 +2,7 @@
 BRDF kernel calculations.
 
 Implements Ross-Thick and Li-Sparse BRDF kernels used in the MODIS
-MCD43 BRDF model. Provides both pure Python and Rust-accelerated
-implementations.
+MCD43 BRDF model via the Rust extension shipped with SIAC.
 
 The BRDF model is:
     ρ(θv, θs, φ) = f0 + f1 * K_vol + f2 * K_geo
@@ -18,23 +17,12 @@ where:
 
 from __future__ import annotations
 
-import logging
 from typing import Literal
 
 import numpy as np
 import xarray as xr
 
-logger = logging.getLogger(__name__)
-
-# Try to import Rust implementation
-try:
-    from siac._rust import RossThickLiSparse as _RustKernels
-
-    _HAS_RUST = True
-    logger.debug("Using Rust BRDF kernel implementation")
-except ImportError:
-    _HAS_RUST = False
-    logger.debug("Rust BRDF kernels not available, using Python implementation")
+from siac._rust import RossThickLiSparse as _RustKernels
 
 
 class BRDFKernels:
@@ -47,21 +35,16 @@ class BRDFKernels:
     Args:
         hb: Height-to-breadth ratio for Li kernel (default: 2.0 for MODIS)
         br: Crown relative height for Li kernel (default: 1.0 for sparse)
-        use_rust: Whether to use Rust acceleration if available
     """
 
     def __init__(
         self,
         hb: float = 2.0,
         br: float = 1.0,
-        use_rust: bool = True,
     ):
         self.hb = hb
         self.br = br
-        self._use_rust = use_rust and _HAS_RUST
-
-        if self._use_rust:
-            self._rust_kernels = _RustKernels(hb, br)
+        self._rust_kernels = _RustKernels(hb, br)
 
     def compute(
         self,
@@ -93,15 +76,16 @@ class BRDFKernels:
             raa_np = np.asarray(raa)
             template = None
 
-        # Compute kernels
-        if self._use_rust and vza_np.ndim == 2:
-            # Rust kernels are exposed as float64 numpy bindings.
-            vza_in = np.ascontiguousarray(vza_np, dtype=np.float64)
-            sza_in = np.ascontiguousarray(sza_np, dtype=np.float64)
-            raa_in = np.ascontiguousarray(raa_np, dtype=np.float64)
-            k_vol, k_geo = self._rust_kernels.compute(vza_in, sza_in, raa_in)
-        else:
-            k_vol, k_geo = self._compute_python(vza_np, sza_np, raa_np)
+        if vza_np.shape != sza_np.shape or vza_np.shape != raa_np.shape:
+            raise ValueError("vza, sza, and raa must have the same shape")
+
+        original_shape = vza_np.shape
+        vza_in = np.ascontiguousarray(vza_np.reshape(1, -1), dtype=np.float64)
+        sza_in = np.ascontiguousarray(sza_np.reshape(1, -1), dtype=np.float64)
+        raa_in = np.ascontiguousarray(raa_np.reshape(1, -1), dtype=np.float64)
+        k_vol, k_geo = self._rust_kernels.compute(vza_in, sza_in, raa_in)
+        k_vol = np.asarray(k_vol, dtype=np.float64).reshape(original_shape)
+        k_geo = np.asarray(k_geo, dtype=np.float64).reshape(original_shape)
 
         # Convert back to xarray if needed
         if is_xarray:
@@ -109,122 +93,6 @@ class BRDFKernels:
             k_geo = xr.DataArray(k_geo, dims=template.dims, coords=template.coords)
 
         return k_vol, k_geo
-
-    def _compute_python(
-        self,
-        vza: np.ndarray,
-        sza: np.ndarray,
-        raa: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Pure Python kernel computation."""
-        cos_sza = np.cos(sza)
-        cos_vza = np.cos(vza)
-        sin_sza = np.sin(sza)
-        sin_vza = np.sin(vza)
-        cos_raa = np.cos(np.abs(raa))
-
-        # Phase angle
-        cos_phase = np.clip(
-            cos_sza * cos_vza + sin_sza * sin_vza * cos_raa,
-            -1.0,
-            1.0,
-        )
-        phase = np.arccos(cos_phase)
-
-        # Ross-Thick kernel
-        k_vol = self._ross_thick(cos_sza, cos_vza, cos_phase, phase)
-
-        # Li-Sparse kernel
-        k_geo = self._li_sparse(
-            cos_sza, cos_vza, sin_sza, sin_vza, cos_raa, cos_phase
-        )
-
-        return k_vol, k_geo
-
-    def _ross_thick(
-        self,
-        cos_sza: np.ndarray,
-        cos_vza: np.ndarray,
-        cos_phase: np.ndarray,
-        phase: np.ndarray,
-    ) -> np.ndarray:
-        """Ross-Thick volumetric scattering kernel."""
-        denom = cos_sza + cos_vza
-
-        # Avoid division by zero
-        with np.errstate(divide="ignore", invalid="ignore"):
-            k_vol = ((np.pi / 2 - phase) * cos_phase + np.sin(phase)) / denom - np.pi / 2
-
-        # Handle edge cases
-        k_vol = np.where(np.abs(denom) < 1e-10, 0.0, k_vol)
-
-        return k_vol
-
-    def _li_sparse(
-        self,
-        cos_sza: np.ndarray,
-        cos_vza: np.ndarray,
-        sin_sza: np.ndarray,
-        sin_vza: np.ndarray,
-        cos_raa: np.ndarray,
-        _cos_phase: np.ndarray,
-    ) -> np.ndarray:
-        """Li-Sparse geometric scattering kernel."""
-        # Prime angles (scaled by br for sparse vegetation)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            tan_sza = sin_sza / np.maximum(cos_sza, 1e-10)
-            tan_vza = sin_vza / np.maximum(cos_vza, 1e-10)
-
-        tan_sza_prime = self.br * tan_sza
-        tan_vza_prime = self.br * tan_vza
-
-        sza_prime = np.arctan(tan_sza_prime)
-        vza_prime = np.arctan(tan_vza_prime)
-
-        cos_sza_prime = np.cos(sza_prime)
-        cos_vza_prime = np.cos(vza_prime)
-        sin_sza_prime = np.sin(sza_prime)
-        sin_vza_prime = np.sin(vza_prime)
-
-        # Prime phase angle
-        cos_phase_prime = np.clip(
-            cos_sza_prime * cos_vza_prime + sin_sza_prime * sin_vza_prime * cos_raa,
-            -1.0,
-            1.0,
-        )
-
-        # Distance term
-        d2 = (
-            tan_sza_prime**2
-            + tan_vza_prime**2
-            - 2 * tan_sza_prime * tan_vza_prime * cos_raa
-        )
-        d2 = np.maximum(d2, 0.0)
-
-        # Secant values
-        sec_sza_prime = 1.0 / np.maximum(cos_sza_prime, 1e-10)
-        sec_vza_prime = 1.0 / np.maximum(cos_vza_prime, 1e-10)
-
-        # Overlap function
-        sin_raa = np.sin(np.abs(np.arccos(cos_raa)))
-        cost_arg = self.hb * np.sqrt(
-            d2 + (tan_sza_prime * tan_vza_prime * sin_raa) ** 2
-        ) / (sec_sza_prime + sec_vza_prime)
-        cost = np.clip(cost_arg, -1.0, 1.0)
-        t = np.arccos(cost)
-        overlap = (1.0 / np.pi) * (t - np.sin(t) * np.cos(t)) * (
-            sec_sza_prime + sec_vza_prime
-        )
-
-        # Final Li-Sparse kernel
-        k_geo = (
-            overlap
-            - sec_sza_prime
-            - sec_vza_prime
-            + 0.5 * (1 + cos_phase_prime) * sec_sza_prime * sec_vza_prime
-        )
-
-        return k_geo
 
 
 def compute_kernels(

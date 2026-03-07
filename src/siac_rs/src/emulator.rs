@@ -1,12 +1,12 @@
+#![allow(non_local_definitions)]
 //! Neural Network Emulator
 //!
 //! Fast forward pass for the two-hidden-layer neural network emulators
 //! used to replace computationally expensive 6S radiative transfer calculations.
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use ndarray::{s, Array1, Array2, Array3, ArrayView2};
+use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 /// Two-hidden-layer neural network emulator
 ///
@@ -64,10 +64,7 @@ impl TwoLayerNN {
         py: Python<'py>,
         x: PyReadonlyArray2<f32>,
         compute_jacobian: bool,
-    ) -> PyResult<(
-        &'py PyArray2<f32>,
-        Option<&'py PyArray2<f32>>,
-    )> {
+    ) -> PyResult<(&'py PyArray2<f32>, Option<&'py PyArray3<f32>>)> {
         let x = x.as_array();
         let (output, jacobian) = self.forward(x, compute_jacobian);
 
@@ -94,7 +91,7 @@ impl TwoLayerNN {
         &self,
         x: ArrayView2<f32>,
         compute_jacobian: bool,
-    ) -> (Array2<f32>, Option<Array2<f32>>) {
+    ) -> (Array2<f32>, Option<Array3<f32>>) {
         let n_samples = x.shape()[0];
 
         // Layer 1: Linear + ReLU
@@ -124,9 +121,10 @@ impl TwoLayerNN {
         a1: &Array2<f32>,
         a2: &Array2<f32>,
         n_samples: usize,
-    ) -> Array2<f32> {
+    ) -> Array3<f32> {
         let n_inputs = self.w1.shape()[0];
-        let mut jacobian = Array2::zeros((n_samples, n_inputs));
+        let n_outputs = self.w3.shape()[1];
+        let mut jacobian = Array3::zeros((n_samples, n_outputs, n_inputs));
 
         // Compute Jacobian for each sample
         for i in 0..n_samples {
@@ -134,15 +132,15 @@ impl TwoLayerNN {
             let d_relu1: Array1<f32> = a1.row(i).mapv(|v| if v > 0.0 { 1.0 } else { 0.0 });
             let d_relu2: Array1<f32> = a2.row(i).mapv(|v| if v > 0.0 { 1.0 } else { 0.0 });
 
-            // Backpropagate through layers
-            // For single output, w3 is (hidden2, 1), we want gradient w.r.t. inputs
-            let grad_h2 = self.w3.column(0).to_owned(); // (hidden2,)
-            let grad_a2 = &grad_h2 * &d_relu2; // (hidden2,)
-            let grad_h1 = self.w2.dot(&grad_a2); // (hidden1,)
-            let grad_a1 = &grad_h1 * &d_relu1; // (hidden1,)
-            let grad_x = self.w1.dot(&grad_a1); // (n_inputs,)
+            for output_idx in 0..n_outputs {
+                let grad_h2 = self.w3.column(output_idx).to_owned(); // (hidden2,)
+                let grad_a2 = &grad_h2 * &d_relu2; // (hidden2,)
+                let grad_h1 = self.w2.dot(&grad_a2); // (hidden1,)
+                let grad_a1 = &grad_h1 * &d_relu1; // (hidden1,)
+                let grad_x = self.w1.dot(&grad_a1); // (n_inputs,)
 
-            jacobian.row_mut(i).assign(&grad_x);
+                jacobian.slice_mut(s![i, output_idx, ..]).assign(&grad_x);
+            }
         }
 
         jacobian
@@ -201,6 +199,6 @@ mod tests {
         let (_, jacobian) = nn.forward(x.view(), true);
 
         assert!(jacobian.is_some());
-        assert_eq!(jacobian.unwrap().shape(), &[10, 7]);
+        assert_eq!(jacobian.unwrap().shape(), &[10, 1, 7]);
     }
 }

@@ -6,6 +6,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac._rust import (
+    evaluate_grid_search_candidate_cost,
+    evaluate_grid_search_cost_cube_with_provider,
+    quadratic_refine_grid_search,
+)
 from siac.core.types import AtmosphericState
 from siac.solver.cost import (
     CostFunction,
@@ -574,7 +579,6 @@ class TestMultiGridSolver:
 
     def test_rust_quadratic_refiner_matches_python_reference(self):
         """Rust quadratic refiner should match Python reference behavior."""
-        rust_mod = pytest.importorskip("siac._rust")
         rng = np.random.default_rng(123)
 
         n_aot, n_tcwv, ny, nx = 7, 6, 8, 9
@@ -598,7 +602,7 @@ class TestMultiGridSolver:
                 costs[ia, it] = val.astype(np.float32)
 
         ref = _quadratic_refine_python_reference(costs, aot_axis, tcwv_axis, valid_mask)
-        got = rust_mod.quadratic_refine_grid_search(costs, aot_axis, tcwv_axis, valid_mask)
+        got = quadratic_refine_grid_search(costs, aot_axis, tcwv_axis, valid_mask)
         got = tuple(np.asarray(x, dtype=np.float32) for x in got)
 
         for expected, actual in zip(ref, got, strict=True):
@@ -606,7 +610,6 @@ class TestMultiGridSolver:
 
     def test_rust_candidate_cost_matches_python_reference(self):
         """Rust candidate cost helper should match Python reference."""
-        rust_mod = pytest.importorskip("siac._rust")
         rng = np.random.default_rng(7)
 
         n_band, ny, nx = 3, 6, 7
@@ -642,7 +645,7 @@ class TestMultiGridSolver:
             aot_prior_unc=aot_prior_unc,
             tcwv_prior_unc=tcwv_prior_unc,
         )
-        got = rust_mod.evaluate_grid_search_candidate_cost(
+        got = evaluate_grid_search_candidate_cost(
             toa,
             xap,
             xbp,
@@ -667,7 +670,6 @@ class TestMultiGridSolver:
 
     def test_rust_cost_cube_provider_matches_python_reference(self):
         """Rust cost-cube provider loop should match Python candidate-loop reference."""
-        rust_mod = pytest.importorskip("siac._rust")
         rng = np.random.default_rng(11)
 
         n_aot, n_tcwv, n_band, ny, nx = 4, 5, 2, 3, 4
@@ -719,7 +721,7 @@ class TestMultiGridSolver:
             it = int(np.argmin(np.abs(tcwv_axis - np.float32(tcwv_val))))
             return xap_cube[ia, it], xbp_cube[ia, it], xcp_cube[ia, it]
 
-        got = rust_mod.evaluate_grid_search_cost_cube_with_provider(
+        got = evaluate_grid_search_cost_cube_with_provider(
             _provider,
             aot_axis,
             tcwv_axis,

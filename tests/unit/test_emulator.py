@@ -2,12 +2,48 @@
 Unit tests for neural network emulator.
 """
 
-
 import numpy as np
 import pytest
 import xarray as xr
 
 from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
+
+
+def _forward_reference(hidden_layers, output_layers, x, compute_jacobian=False):  # noqa: ANN001
+    x = x.astype(np.float64, copy=False)
+    w1, b1 = hidden_layers[0]
+    w2, b2 = hidden_layers[1]
+    w1 = np.asarray(w1, dtype=np.float64)
+    b1 = np.asarray(b1, dtype=np.float64)
+    w2 = np.asarray(w2, dtype=np.float64)
+    b2 = np.asarray(b2, dtype=np.float64)
+
+    a1 = x @ w1 + b1
+    h1 = np.maximum(a1, 0.0)
+    a2 = h1 @ w2 + b2
+    h2 = np.maximum(a2, 0.0)
+
+    outputs = []
+    jacobians = []
+    d_relu1 = (a1 > 0).astype(np.float64)
+    d_relu2 = (a2 > 0).astype(np.float64)
+
+    for w3, b3 in output_layers:
+        w3 = np.asarray(w3, dtype=np.float64)
+        b3 = np.asarray(b3, dtype=np.float64)
+        outputs.append((h2 @ w3 + b3).ravel())
+        if compute_jacobian:
+            grad_h2 = w3.ravel().astype(np.float64, copy=False)
+            grad_a2 = grad_h2[np.newaxis, :] * d_relu2
+            grad_h1 = grad_a2 @ w2.T
+            grad_a1 = grad_h1 * d_relu1
+            jacobians.append(grad_a1 @ w1.T)
+
+    output_array = np.column_stack(outputs).astype(np.float32)
+    if not compute_jacobian:
+        return output_array, None
+    jacobian_array = np.stack(jacobians, axis=1).astype(np.float32)
+    return output_array, jacobian_array
 
 
 class TestBandEmulator:
@@ -42,30 +78,40 @@ class TestBandEmulator:
         from siac.rt.emulator.two_nn import _BandEmulator
 
         hidden_layers, output_layers = mock_weights
-        emulator = _BandEmulator(hidden_layers, output_layers, use_rust=False)
+        emulator = _BandEmulator(hidden_layers, output_layers)
 
         # Sample input
         x = np.random.default_rng(0).standard_normal((10, 7)).astype(np.float32)
 
         outputs, jacobians = emulator.forward(x, compute_jacobian=False)
+        expected, _ = _forward_reference(hidden_layers, output_layers, x, compute_jacobian=False)
 
         assert outputs.shape == (10, 3)  # 3 outputs
         assert jacobians is None
+        np.testing.assert_allclose(outputs, expected, rtol=1e-5, atol=1e-6)
 
     def test_forward_with_jacobian(self, mock_weights):
         """Forward pass with Jacobian computation."""
         from siac.rt.emulator.two_nn import _BandEmulator
 
         hidden_layers, output_layers = mock_weights
-        emulator = _BandEmulator(hidden_layers, output_layers, use_rust=False)
+        emulator = _BandEmulator(hidden_layers, output_layers)
 
         x = np.random.default_rng(1).standard_normal((5, 7)).astype(np.float32)
 
         outputs, jacobians = emulator.forward(x, compute_jacobian=True)
+        expected_out, expected_jac = _forward_reference(
+            hidden_layers,
+            output_layers,
+            x,
+            compute_jacobian=True,
+        )
 
         assert outputs.shape == (5, 3)
         assert jacobians is not None
         assert jacobians.shape == (5, 3, 7)
+        np.testing.assert_allclose(outputs, expected_out, rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(jacobians, expected_jac, rtol=1e-5, atol=1e-6)
 
     def test_jacobian_numerical_check(self):
         """Jacobian should match numerical differentiation."""
@@ -88,7 +134,7 @@ class TestBandEmulator:
             for _ in range(3)
         ]
 
-        emulator = _BandEmulator(hidden_layers, output_layers, use_rust=False)
+        emulator = _BandEmulator(hidden_layers, output_layers)
 
         # Input that produces positive activations
         x = np.array([[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]], dtype=np.float32)
@@ -111,9 +157,8 @@ class TestBandEmulator:
 
             numerical_jac[0, :, i] = (out_plus[0] - out_minus[0]) / (2 * eps)
 
-        # Allow tolerance for float32 numerical differentiation
-        # Central differences have O(eps^2) error plus O(eps^-1) roundoff
-        np.testing.assert_allclose(jacobians, numerical_jac, rtol=0.01, atol=1e-4)
+        # Finite differences on float32 inputs are only a loose sanity check.
+        np.testing.assert_allclose(jacobians, numerical_jac, rtol=0.05, atol=5e-4)
 
 
 class TestTwoLayerNNEmulator:
@@ -157,7 +202,6 @@ class TestTwoLayerNNEmulator:
             emulator_dir=mock_emulator_dir,
             sensor_id="MSI",
             satellite_id="S2A",
-            use_rust=False,
         )
 
         assert len(emulator.available_bands) >= 3
@@ -238,7 +282,6 @@ class TestComputeCoefficientsMulti:
             emulator_dir=mock_emulator_dir,
             sensor_id="MSI",
             satellite_id="S2A",
-            use_rust=False,
         )
 
         band = SensorBand("B02", 490.0, 65.0, 10.0, 0)
@@ -279,7 +322,6 @@ class TestComputeCoefficientsMulti:
             emulator_dir=mock_emulator_dir,
             sensor_id="MSI",
             satellite_id="S2A",
-            use_rust=False,
         )
 
         bands = [

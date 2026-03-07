@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from siac._rust import TwoLayerNN as _RustNN
 from siac.core.types import (
     AtmosphericState,
     GeometryAngles,
@@ -27,16 +28,6 @@ from siac.core.types import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Try to import Rust implementation
-try:
-    from siac._rust import TwoLayerNN as _RustNN
-
-    _HAS_RUST = True
-    logger.debug("Using Rust neural network implementation")
-except ImportError:
-    _HAS_RUST = False
-    logger.debug("Rust NN not available, using Python implementation")
 
 
 class TwoLayerNNEmulator:
@@ -56,7 +47,6 @@ class TwoLayerNNEmulator:
         emulator_dir: Directory containing emulator weight files
         sensor_id: Sensor identifier (e.g., "MSI", "OLI")
         satellite_id: Satellite identifier (e.g., "S2A", "L8")
-        use_rust: Whether to use Rust acceleration if available
     """
 
     # Standard emulator input feature names
@@ -70,12 +60,10 @@ class TwoLayerNNEmulator:
         emulator_dir: str | Path,
         sensor_id: str,
         satellite_id: str,
-        use_rust: bool = True,
     ):
         self.emulator_dir = Path(emulator_dir)
         self.sensor_id = sensor_id
         self.satellite_id = satellite_id
-        self._use_rust = use_rust and _HAS_RUST
 
         # Loaded emulators per band
         self._band_emulators: dict[str, _BandEmulator] = {}
@@ -161,7 +149,6 @@ class TwoLayerNNEmulator:
         emulator = _BandEmulator(
             hidden_layers=hidden_layers,
             output_layers=output_layers,
-            use_rust=self._use_rust,
         )
 
         self._band_emulators[band_name] = emulator
@@ -447,17 +434,10 @@ class _BandEmulator:
         self,
         hidden_layers: list,
         output_layers: list,
-        use_rust: bool = True,
     ):
         self.hidden_layers = hidden_layers
         self.output_layers = output_layers
-        self._use_rust = use_rust and _HAS_RUST
-
-        # Initialize Rust backend if available
-        if self._use_rust:
-            self._init_rust_emulator()
-        else:
-            self._rust_nn = None
+        self._init_rust_emulator()
 
     def _init_rust_emulator(self) -> None:
         """Initialize Rust neural network with weights."""
@@ -485,12 +465,7 @@ class _BandEmulator:
             w3 = np.asarray(self.output_layers[0][0], dtype=np.float32)
             b3 = np.asarray(self.output_layers[0][1], dtype=np.float32)
 
-        try:
-            self._rust_nn = _RustNN(w1, b1, w2, b2, w3, b3)
-        except Exception as e:
-            logger.warning(f"Failed to initialize Rust NN: {e}")
-            self._rust_nn = None
-            self._use_rust = False
+        self._rust_nn = _RustNN(w1, b1, w2, b2, w3, b3)
 
     def forward(
         self,
@@ -507,10 +482,7 @@ class _BandEmulator:
         Returns:
             Tuple of (outputs, jacobians) where jacobians is None if not requested
         """
-        if self._use_rust and self._rust_nn is not None:
-            return self._forward_rust(x, compute_jacobian)
-        else:
-            return self._forward_python(x, compute_jacobian)
+        return self._forward_rust(x, compute_jacobian)
 
     def _forward_rust(
         self,
@@ -518,82 +490,11 @@ class _BandEmulator:
         compute_jacobian: bool,
     ) -> tuple[np.ndarray, np.ndarray | None]:
         """Forward pass using Rust implementation."""
-        output, jacobian = self._rust_nn.predict(x, compute_jacobian)
+        output, jacobian = self._rust_nn.predict(
+            np.ascontiguousarray(x, dtype=np.float32),
+            compute_jacobian,
+        )
         return output, jacobian
-
-    def _forward_python(
-        self,
-        x: np.ndarray,
-        compute_jacobian: bool,
-    ) -> tuple[np.ndarray, np.ndarray | None]:
-        """Forward pass using Python/NumPy implementation."""
-        # Use float64 intermediates to improve Jacobian/numerical consistency.
-        x = x.astype(np.float64, copy=False)
-
-        # Hidden layer 1
-        w1, b1 = self.hidden_layers[0]
-        w1 = np.asarray(w1, dtype=np.float64)
-        b1 = np.asarray(b1, dtype=np.float64)
-        a1 = x @ w1 + b1
-        h1 = np.maximum(a1, 0)  # ReLU
-
-        # Hidden layer 2
-        w2, b2 = self.hidden_layers[1]
-        w2 = np.asarray(w2, dtype=np.float64)
-        b2 = np.asarray(b2, dtype=np.float64)
-        a2 = h1 @ w2 + b2
-        h2 = np.maximum(a2, 0)  # ReLU
-
-        # Output layer(s)
-        outputs = []
-        jacobians = []
-
-        for i, (w3, b3) in enumerate(self.output_layers):
-            w3 = np.asarray(w3, dtype=np.float64)
-            b3 = np.asarray(b3, dtype=np.float64)
-            out = h2 @ w3 + b3
-            outputs.append(out)
-
-            if compute_jacobian:
-                # Backpropagation for Jacobian
-                jac = self._compute_jacobian_python(x, a1, a2, w1, w2, w3, i)
-                jacobians.append(jac)
-
-        # Stack outputs
-        output_array = np.column_stack(outputs)
-
-        if compute_jacobian:
-            # Stack jacobians: shape (n_samples, n_outputs, n_inputs)
-            jacobian_array = np.stack(jacobians, axis=1)
-            return output_array, jacobian_array
-        else:
-            return output_array, None
-
-    def _compute_jacobian_python(
-        self,
-        _x: np.ndarray,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        w1: np.ndarray,
-        w2: np.ndarray,
-        w3: np.ndarray,
-        _output_idx: int,
-    ) -> np.ndarray:
-        """Compute Jacobian for a single output using backpropagation."""
-        # Use float64 intermediates for numerical stability in Jacobians.
-        d_relu1 = (a1 > 0).astype(np.float64)
-        d_relu2 = (a2 > 0).astype(np.float64)
-
-        w1_64 = w1.astype(np.float64, copy=False)
-        w2_64 = w2.astype(np.float64, copy=False)
-        grad_h2 = w3.ravel().astype(np.float64, copy=False)  # dout/dh2
-
-        # Vectorized backpropagation (no per-sample loop).
-        grad_a2 = grad_h2[np.newaxis, :] * d_relu2
-        grad_h1 = grad_a2 @ w2_64.T
-        grad_a1 = grad_h1 * d_relu1
-        jacobians = grad_a1 @ w1_64.T
-        return jacobians
 
 
 # Satellite to sensor mapping
