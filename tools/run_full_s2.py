@@ -108,6 +108,18 @@ def parse_args() -> argparse.Namespace:
         help="Aerosol retrieval resolution in meters.",
     )
     parser.add_argument(
+        "--surface-prior-method",
+        choices=("kernel_model", "whittaker"),
+        default="kernel_model",
+        help="Surface-prior derivation route to use during M3.",
+    )
+    parser.add_argument(
+        "--whittaker-lambda",
+        type=float,
+        default=10.0,
+        help="Temporal smoothness strength for Route-A Whittaker BRDF priors.",
+    )
+    parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
@@ -321,6 +333,10 @@ def _build_config(args: argparse.Namespace) -> SIACConfig:
         sensor="s2",
         atmo_prior={"provider": "cams", "data_path": cams_dir, "cache_dir": cams_cache_dir},
         brdf={"provider": "mcd43"},
+        surface_prior={
+            "method": args.surface_prior_method,
+            "whittaker_lambda": args.whittaker_lambda,
+        },
         rt_model={"backend": "lut", "lut_path": args.lut_path},
         solver={"aerosol_resolution": args.aerosol_resolution},
         s2_data={

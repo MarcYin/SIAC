@@ -153,7 +153,7 @@ class BRDFConfig(BaseModel):
 class SurfacePriorConfig(BaseModel):
     """Configuration for surface prior derivation from BRDF."""
 
-    method: Literal["kernel_model", "neural", "direct"] = Field(
+    method: Literal["kernel_model", "whittaker", "neural", "direct"] = Field(
         default="kernel_model",
         description="Surface prior derivation method",
     )
@@ -170,6 +170,11 @@ class SurfacePriorConfig(BaseModel):
     apply_psf: bool = Field(
         default=True,
         description="Whether to apply PSF convolution for scale matching",
+    )
+    whittaker_lambda: float = Field(
+        default=10.0,
+        gt=0,
+        description="Temporal smoothness strength for Route-A Whittaker BRDF priors",
     )
 
 

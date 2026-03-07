@@ -19,6 +19,7 @@ numpy = "0.20"
 # Numerical computing
 ndarray = { version = "0.15", features = ["rayon"] }
 ndarray-stats = "0.5"
+nalgebra = "0.32"
 
 # Parallelism
 rayon = "1.8"

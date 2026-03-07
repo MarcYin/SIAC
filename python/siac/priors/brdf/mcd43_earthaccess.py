@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,7 +50,7 @@ class _EarthAccessBRDFProvider:
         short_name: str | None = None,
         provider: str | None = None,
         probe_earthdata: bool = True,
-        max_granules: int = 8,
+        max_granules: int = 64,
     ) -> None:
         self.cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else None
         self.source = source or EarthAccessSource(provider=provider)
@@ -105,6 +106,50 @@ class _EarthAccessBRDFProvider:
             bounds,
             target_resolution,
             [coord for coord, _band in requested],
+        )
+
+    def get_temporal_brdf_parameters(
+        self,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        obs_time: datetime,
+        target_resolution: float,
+        bands: Sequence[int] | Sequence[SensorBand],
+        temporal_window: int = 16,
+    ) -> BRDFKernelWeights:
+        """Return temporal BRDF kernel weights with dims ``(time, band, y, x)``."""
+        if target_resolution <= 0:
+            raise ValueError(f"target_resolution must be > 0, got {target_resolution}")
+        if not bands:
+            raise ValueError("bands must be a non-empty sequence")
+
+        requested = self._resolve_requested_bands(list(bands))
+        time_axis = self._time_axis(obs_time, temporal_window)
+
+        if self.probe_earthdata:
+            paths = self._download_granules(bounds, crs, obs_time, temporal_window)
+            if paths:
+                try:
+                    return self._load_temporal_from_granules(
+                        paths,
+                        requested=requested,
+                        bounds=bounds,
+                        crs=crs,
+                        target_resolution=target_resolution,
+                        time_axis=time_axis,
+                    )
+                except Exception as exc:  # pragma: no cover - external/system dependent
+                    logger.warning(
+                        "%s temporal BRDF granule parsing failed; using defaults (%s)",
+                        self._source_name,
+                        exc,
+                    )
+
+        return self._default_temporal_weights(
+            bounds,
+            target_resolution,
+            [coord for coord, _band in requested],
+            time_axis,
         )
 
     def _resolve_requested_bands(
@@ -298,6 +343,17 @@ class _EarthAccessBRDFProvider:
         return merged.astype(np.float32)
 
     @staticmethod
+    def _time_axis(obs_time: datetime, temporal_window: int) -> np.ndarray:
+        start = obs_time.date() - timedelta(days=int(temporal_window))
+        return np.array(
+            [
+                np.datetime64(start + timedelta(days=offset))
+                for offset in range(2 * int(temporal_window) + 1)
+            ],
+            dtype="datetime64[D]",
+        )
+
+    @staticmethod
     def _qa_to_uncertainty(qa: xr.DataArray) -> xr.DataArray:
         qa_values = qa.values.astype(np.float32)
         unc = np.full(qa_values.shape, 0.08, dtype=np.float32)
@@ -305,6 +361,193 @@ class _EarthAccessBRDFProvider:
         unc = np.where(qa_values == 1, 0.05, unc)
         unc = np.where(np.isfinite(qa_values), unc, np.nan)
         return xr.DataArray(unc, dims=qa.dims, coords=qa.coords)
+
+    def _empty_spatial_array(
+        self,
+        bounds: tuple[float, float, float, float],
+        resolution: float,
+        *,
+        fill_value: float = np.nan,
+    ) -> xr.DataArray:
+        y, x = self._grid(bounds, resolution)
+        return xr.DataArray(
+            np.full((y.size, x.size), fill_value, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": y, "x": x},
+        )
+
+    def _coerce_to_target_grid(
+        self,
+        data: xr.DataArray,
+        bounds: tuple[float, float, float, float],
+        resolution: float,
+    ) -> xr.DataArray:
+        y, x = self._grid(bounds, resolution)
+        extra_coords = [name for name in data.coords if name not in data.dims]
+        if extra_coords:
+            data = data.drop_vars(extra_coords, errors="ignore")
+        return xr.DataArray(
+            np.asarray(data.values, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": y, "x": x},
+        )
+
+    def _default_temporal_weights(
+        self,
+        bounds: tuple[float, float, float, float],
+        resolution: float,
+        bands: list[int | str],
+        time_axis: np.ndarray,
+    ) -> BRDFKernelWeights:
+        base = self._default_weights(bounds, resolution, bands)
+        time_coords = xr.IndexVariable("time", time_axis)
+
+        def _repeat(data: xr.DataArray) -> xr.DataArray:
+            repeated = np.repeat(data.values[np.newaxis, ...], len(time_axis), axis=0)
+            return xr.DataArray(
+                repeated,
+                dims=["time", "band", "y", "x"],
+                coords={
+                    "time": time_coords,
+                    "band": data.coords["band"],
+                    "y": data.coords["y"],
+                    "x": data.coords["x"],
+                },
+            )
+
+        return BRDFKernelWeights(
+            f0=_repeat(base.f0),
+            f1=_repeat(base.f1),
+            f2=_repeat(base.f2),
+            f0_unc=_repeat(base.f0_unc),
+            f1_unc=_repeat(base.f1_unc),
+            f2_unc=_repeat(base.f2_unc),
+        )
+
+    def _load_temporal_from_granules(
+        self,
+        paths: list[Path],
+        *,
+        requested: list[tuple[int | str, ProductBandDefinition]],
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        target_resolution: float,
+        time_axis: np.ndarray,
+    ) -> BRDFKernelWeights:
+        grouped_paths: dict[np.datetime64, list[Path]] = {}
+        for path in paths:
+            granule_day = np.datetime64(parse_granule_date(path).date())
+            grouped_paths.setdefault(granule_day, []).append(path)
+        logger.info(
+            "%s temporal BRDF stack: %d/%d day%s available in search window.",
+            self._source_name,
+            len(grouped_paths),
+            len(time_axis),
+            "" if len(time_axis) == 1 else "s",
+        )
+
+        f0_list: list[xr.DataArray] = []
+        f1_list: list[xr.DataArray] = []
+        f2_list: list[xr.DataArray] = []
+        f0_unc_list: list[xr.DataArray] = []
+        f1_unc_list: list[xr.DataArray] = []
+        f2_unc_list: list[xr.DataArray] = []
+
+        for band_coord, product_band in requested:
+            band_f0_days: list[xr.DataArray] = []
+            band_f1_days: list[xr.DataArray] = []
+            band_f2_days: list[xr.DataArray] = []
+            band_f0_unc_days: list[xr.DataArray] = []
+            band_f1_unc_days: list[xr.DataArray] = []
+            band_f2_unc_days: list[xr.DataArray] = []
+
+            for day in time_axis:
+                day_paths = grouped_paths.get(day, [])
+                if not day_paths:
+                    empty = self._empty_spatial_array(bounds, target_resolution)
+                    unc = self._empty_spatial_array(bounds, target_resolution)
+                    band_f0_days.append(empty.expand_dims(time=[day]))
+                    band_f1_days.append(empty.expand_dims(time=[day]))
+                    band_f2_days.append(empty.expand_dims(time=[day]))
+                    band_f0_unc_days.append(unc.expand_dims(time=[day]))
+                    band_f1_unc_days.append(unc.expand_dims(time=[day]))
+                    band_f2_unc_days.append(unc.expand_dims(time=[day]))
+                    continue
+
+                param_tiles: list[tuple[xr.DataArray, xr.DataArray, xr.DataArray]] = []
+                qa_tiles: list[xr.DataArray] = []
+                for path in day_paths:
+                    params, qa = self._load_native_band_stack(path, product_band)
+                    qa_tiles.append(qa)
+                    param_tiles.append(params)
+
+                f0 = self._merge_reprojected_tiles(
+                    [params[0] for params in param_tiles],
+                    bounds=bounds,
+                    crs=crs,
+                    target_resolution=target_resolution,
+                    resampling=Resampling.bilinear,
+                    nodata=np.nan,
+                )
+                f0 = self._coerce_to_target_grid(f0, bounds, target_resolution)
+                f1 = self._merge_reprojected_tiles(
+                    [params[1] for params in param_tiles],
+                    bounds=bounds,
+                    crs=crs,
+                    target_resolution=target_resolution,
+                    resampling=Resampling.bilinear,
+                    nodata=np.nan,
+                )
+                f1 = self._coerce_to_target_grid(f1, bounds, target_resolution)
+                f2 = self._merge_reprojected_tiles(
+                    [params[2] for params in param_tiles],
+                    bounds=bounds,
+                    crs=crs,
+                    target_resolution=target_resolution,
+                    resampling=Resampling.bilinear,
+                    nodata=np.nan,
+                )
+                f2 = self._coerce_to_target_grid(f2, bounds, target_resolution)
+                qa = self._merge_reprojected_tiles(
+                    qa_tiles,
+                    bounds=bounds,
+                    crs=crs,
+                    target_resolution=target_resolution,
+                    resampling=Resampling.nearest,
+                    nodata=np.nan,
+                )
+                qa = self._coerce_to_target_grid(qa, bounds, target_resolution)
+                unc = self._qa_to_uncertainty(qa).fillna(np.nan)
+                band_f0_days.append(f0.expand_dims(time=[day]))
+                band_f1_days.append(f1.expand_dims(time=[day]))
+                band_f2_days.append(f2.expand_dims(time=[day]))
+                band_f0_unc_days.append(unc.expand_dims(time=[day]))
+                band_f1_unc_days.append((unc * 1.1).expand_dims(time=[day]))
+                band_f2_unc_days.append((unc * 1.1).expand_dims(time=[day]))
+
+            f0_list.append(xr.concat(band_f0_days, dim="time").expand_dims(band=[band_coord]))
+            f1_list.append(xr.concat(band_f1_days, dim="time").expand_dims(band=[band_coord]))
+            f2_list.append(xr.concat(band_f2_days, dim="time").expand_dims(band=[band_coord]))
+            f0_unc_list.append(xr.concat(band_f0_unc_days, dim="time").expand_dims(band=[band_coord]))
+            f1_unc_list.append(xr.concat(band_f1_unc_days, dim="time").expand_dims(band=[band_coord]))
+            f2_unc_list.append(xr.concat(band_f2_unc_days, dim="time").expand_dims(band=[band_coord]))
+
+        temporal = BRDFKernelWeights(
+            f0=xr.concat(f0_list, dim="band").transpose("time", "band", "y", "x"),
+            f1=xr.concat(f1_list, dim="band").transpose("time", "band", "y", "x"),
+            f2=xr.concat(f2_list, dim="band").transpose("time", "band", "y", "x"),
+            f0_unc=xr.concat(f0_unc_list, dim="band").transpose("time", "band", "y", "x"),
+            f1_unc=xr.concat(f1_unc_list, dim="band").transpose("time", "band", "y", "x"),
+            f2_unc=xr.concat(f2_unc_list, dim="band").transpose("time", "band", "y", "x"),
+        )
+        if np.isfinite(temporal.f0.values).any():
+            return temporal
+        return self._default_temporal_weights(
+            bounds,
+            target_resolution,
+            [coord for coord, _band in requested],
+            time_axis,
+        )
 
     def _load_native_band_stack(
         self,

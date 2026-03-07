@@ -108,6 +108,51 @@ def test_vnp43_provider_returns_default_weights_without_probe():
     assert float(weights.f2.mean()) == pytest.approx(0.02)
 
 
+def test_mcd43_provider_returns_temporal_kernel_stack(monkeypatch):
+    granules = [
+        Path("/tmp/MCD43A1.A2024001.h29v07.061.fake.hdf"),
+        Path("/tmp/MCD43A1.A2024003.h29v07.061.fake.hdf"),
+    ]
+    provider = MCD43EarthAccessProvider(
+        source=_StubEarthAccessSource(granules),
+        probe_earthdata=True,
+    )
+
+    def _fake_read_dataset(path, dataset_name):
+        shape = (4, 4)
+        day_value = 100 if ".A2024001." in str(path) else 300
+        params = {
+            "BRDF_Albedo_Parameters_Band3": np.dstack(
+                [np.full(shape, day_value), np.full(shape, 50), np.full(shape, 20)]
+            ).astype(np.int16),
+        }
+        if dataset_name in params:
+            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+        if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
+            return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
+        raise KeyError(dataset_name)
+
+    monkeypatch.setattr(MCD43EarthAccessProvider, "_read_dataset", staticmethod(_fake_read_dataset))
+
+    bounds = _full_tile_bounds(29, 7, (4, 4))
+    resolution = (bounds[2] - bounds[0]) / 4.0
+    weights = provider.get_temporal_brdf_parameters(
+        bounds=bounds,
+        crs=MODLAND_SINUSOIDAL_CRS,
+        obs_time=datetime(2024, 1, 2, 12, 0, 0),
+        target_resolution=resolution,
+        bands=[SensorBand("B02", 490.0, 65.0, 10.0, 1)],
+        temporal_window=1,
+    )
+
+    assert weights.f0.dims == ("time", "band", "y", "x")
+    assert list(weights.f0.coords["band"].values) == ["B02"]
+    assert weights.f0.sizes["time"] == 3
+    assert float(weights.f0.isel(time=0).mean()) == pytest.approx(0.1)
+    assert np.isnan(weights.f0.isel(time=1).values).all()
+    assert float(weights.f0.isel(time=2).mean()) == pytest.approx(0.3)
+
+
 def test_mcd43_provider_parses_real_kernel_fields(monkeypatch):
     granule = Path("/tmp/MCD43A1.A2024001.h29v07.061.fake.hdf")
     provider = MCD43EarthAccessProvider(

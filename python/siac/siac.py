@@ -38,6 +38,7 @@ from siac.pipeline import (
     run_pipeline,
 )
 from siac.priors.atmospheric import CAMSProvider
+from siac.priors.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.priors.surface.kernel_model import KernelModelDeriver
 from siac.rt.emulator import TwoLayerNNEmulator
 from siac.rt.lut import ZarrLUTBackend
@@ -260,6 +261,24 @@ class SIAC:
         resolution = 500.0  # MODIS native resolution for BRDF
         bands = _select_surface_prior_bands(metadata.get("sensor_config"))
 
+        method = getattr(self.config.surface_prior, "method", "kernel_model")
+        if method == "whittaker":
+            brdf_weights = brdf_provider.get_temporal_brdf_parameters(
+                bounds=bounds,
+                crs=aoi.crs,
+                obs_time=obs_time,
+                target_resolution=resolution,
+                bands=bands,
+                temporal_window=self.config.brdf.temporal_window,
+            )
+            deriver = BRDFWhittakerDeriver(
+                temporal_lambda=self.config.surface_prior.whittaker_lambda,
+                psf_sigma_x=self.config.surface_prior.psf_sigma_x,
+                psf_sigma_y=self.config.surface_prior.psf_sigma_y,
+                apply_psf=self.config.surface_prior.apply_psf,
+            )
+            return deriver.compute_surface_prior(brdf_weights, geometry, obs_time=obs_time)
+
         brdf_weights = brdf_provider.get_brdf_parameters(
             bounds=bounds,
             crs=aoi.crs,
@@ -268,8 +287,6 @@ class SIAC:
             bands=bands,
             temporal_window=self.config.brdf.temporal_window,
         )
-
-        # Derive surface prior via kernel model
         deriver = KernelModelDeriver(
             psf_sigma_x=self.config.surface_prior.psf_sigma_x,
             psf_sigma_y=self.config.surface_prior.psf_sigma_y,
@@ -632,6 +649,28 @@ def _resolve_surface_prior_provider(
         cache_dir=config.brdf.cache_dir,
         source=_earthaccess_source_from_auth(auth),
     )
+    method = getattr(config.surface_prior, "method", "kernel_model")
+    if method == "whittaker":
+        deriver = BRDFWhittakerDeriver(
+            temporal_lambda=config.surface_prior.whittaker_lambda,
+            psf_sigma_x=config.surface_prior.psf_sigma_x,
+            psf_sigma_y=config.surface_prior.psf_sigma_y,
+            apply_psf=config.surface_prior.apply_psf,
+        )
+
+        def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
+            brdf_weights = brdf_prov.get_temporal_brdf_parameters(
+                bounds=bounds,
+                crs=crs,
+                obs_time=obs_time,
+                target_resolution=resolution,
+                bands=_select_surface_prior_bands(sensor_config),
+                temporal_window=config.brdf.temporal_window,
+            )
+            return deriver.compute_surface_prior(brdf_weights, geometry, obs_time=obs_time)
+
+        return _brdf_surface_prior
+
     deriver = KernelModelDeriver(
         psf_sigma_x=config.surface_prior.psf_sigma_x,
         psf_sigma_y=config.surface_prior.psf_sigma_y,

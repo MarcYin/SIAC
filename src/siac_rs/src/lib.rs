@@ -12,6 +12,7 @@ mod emulator;
 mod kernels;
 mod optimization;
 mod psf;
+mod whittaker;
 
 /// SIAC Rust extension module
 #[pymodule]
@@ -35,6 +36,7 @@ fn _rust(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(optimization::quadratic_refine_grid_search, m)?)?;
+    m.add_function(wrap_pyfunction!(whittaker::whittaker_smooth_cube, m)?)?;
 
     Ok(())
 }

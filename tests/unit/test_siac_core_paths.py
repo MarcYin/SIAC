@@ -605,6 +605,30 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     geom = _geometry()
     assert surf_fn((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 2), SENTINEL2A_CONFIG, geom, 500.0)[0] == "weights"
 
+    cfg_whittaker = SIACConfig(
+        sensor="s2",
+        brdf={"provider": "mcd43"},
+        surface_prior={"method": "whittaker"},
+        rt_model={"backend": "lut", "lut_path": "s3://bucket/lut"},
+    )
+
+    class _FakeTemporalBRDFProvider(_FakeBRDFProvider):
+        def get_temporal_brdf_parameters(self, **kwargs):
+            return "temporal-weights"
+
+    class _FakeWhittakerDeriver:
+        def __init__(self, **kwargs):
+            pass
+
+        def compute_surface_prior(self, brdf_weights, geometry, obs_time=None):
+            return (brdf_weights, geometry, obs_time)
+
+    monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeTemporalBRDFProvider)
+    monkeypatch.setattr("siac.siac.BRDFWhittakerDeriver", _FakeWhittakerDeriver)
+
+    surf_whittaker = _resolve_surface_prior_provider(cfg_whittaker, auth=_earthdata_auth())
+    assert surf_whittaker((0, 0, 1, 1), "EPSG:4326", datetime(2026, 1, 2), SENTINEL2A_CONFIG, geom, 500.0)[0] == "temporal-weights"
+
     cfg_bad_brdf = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
     cfg_bad_brdf.brdf.provider = "unknown"
     with pytest.raises(ValueError, match="Unknown BRDF provider"):
