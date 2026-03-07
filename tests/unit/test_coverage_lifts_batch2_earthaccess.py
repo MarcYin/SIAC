@@ -147,6 +147,7 @@ def test_earthaccess_source_typeerror_login_and_bounds_transform(monkeypatch):
     "provider_cls,key",
     [
         (MCD19AODProvider, "mcd19_aod"),
+        (VNP19AODProvider, "vnp19_aod"),
         (MERRA2Provider, "merra2_atmo"),
     ],
 )
@@ -161,7 +162,6 @@ def test_atmo_earthaccess_provider_branches(provider_cls, key, monkeypatch):
     assert state.aot.shape == (2, 2)
     assert source.calls and source.calls[0]["short_name"].startswith("SN:")
 
-        (VNP19AODProvider, "vnp19_aod"),
     # _grid validation branch
     with pytest.raises(ValueError, match="resolution must be > 0"):
         p._grid((0.0, 0.0, 1.0, 1.0), 0.0)
@@ -190,6 +190,8 @@ def test_brdf_earthaccess_provider_branches():
 
     v = VNP43EarthAccessProvider(source=src, catalog=cat, probe_earthdata=False)
     assert v.source_name == "VNP43"
+    m = MCD19EarthAccessProvider(source=src, catalog=cat, probe_earthdata=False)
+    assert m.source_name == "MCD19"
 
 
 def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
@@ -202,10 +204,6 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
 
     # ImportError branch in _download_cams_file.
     monkeypatch.setitem(sys.modules, "cdsapi", None)
-    if "cdsapi" in sys.modules:
-        del sys.modules["cdsapi"]
-    m = MCD19EarthAccessProvider(source=src, catalog=cat, probe_earthdata=False)
-    assert m.source_name == "MCD19"
     assert p._download_cams_file(datetime(2024, 1, 1)) is None
 
     # Success branch with auth credentials path.
@@ -297,8 +295,10 @@ def test_cams_load_data_download_missing_path(monkeypatch, tmp_path: Path):
     p = CAMSProvider(tmp_path / "missing_dir", download_missing=True)
 
     downloaded = tmp_path / "missing_dir" / "CAMS_2024-01-01.nc"
+    dataset = SimpleNamespace(data_vars={"aod550": 1, "tcwv": 1, "gtco3": 1})
 
     monkeypatch.setattr(p, "_download_cams_file", lambda _t: downloaded)
-    monkeypatch.setattr(p, "_load_from_explicit_path", lambda _path: "dataset")
+    monkeypatch.setattr(p, "_load_from_explicit_path", lambda _path: dataset)
+    monkeypatch.setattr(p, "_complete_cams_dataset", lambda ds, _obs_time: ds)
 
-    assert p._load_cams_data(datetime(2024, 1, 1)) == "dataset"
+    assert p._load_cams_data(datetime(2024, 1, 1)) is dataset

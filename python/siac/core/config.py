@@ -94,7 +94,7 @@ class AtmoPriorConfig(BaseModel):
         if not text:
             return None
 
-        if urlparse(text).scheme.lower() in {"http", "https"}:
+        if urlparse(text).scheme.lower() in {"http", "https", "s3"}:
             return text
         return Path(text).expanduser()
 

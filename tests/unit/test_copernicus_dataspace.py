@@ -94,7 +94,14 @@ def test_search_cdse_filters_tile_cloud_and_pagination(monkeypatch):
                 cloud=11.0,
             ),
         ],
-        "links": [{"rel": "next", "href": "https://example.test/next"}],
+        "links": [
+            {
+                "rel": "next",
+                "href": "https://example.test/search",
+                "method": "POST",
+                "body": {"token": "next-page"},
+            }
+        ],
     }
     page_2 = {
         "features": [
@@ -113,15 +120,23 @@ def test_search_cdse_filters_tile_cloud_and_pagination(monkeypatch):
 
     def _fake_post(url: str, json: dict, timeout: int = 60, **kwargs):  # noqa: ARG001
         assert url.endswith("/search")
-        assert json["collections"] == ["sentinel-2-l1c"]
-        return _FakeResponse(json_data=page_1)
+        if "collections" in json:
+            assert json["collections"] == ["sentinel-2-l1c"]
+            assert json["filter-lang"] == "cql2-json"
+            assert json["filter"] == {
+                "op": "and",
+                "args": [
+                    {"op": "=", "args": [{"property": "grid:code"}, "MGRS-31UDQ"]},
+                    {"op": "<=", "args": [{"property": "eo:cloud_cover"}, 20.0]},
+                ],
+            }
+            return _FakeResponse(json_data=page_1)
 
-    def _fake_get(url: str, timeout: int = 60, **kwargs):  # noqa: ARG001
-        assert url == "https://example.test/next"
+        assert url == "https://example.test/search"
+        assert json == {"token": "next-page"}
         return _FakeResponse(json_data=page_2)
 
     monkeypatch.setattr("siac.io.copernicus_dataspace.requests.post", _fake_post)
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get)
 
     q = S2Query(
         mgrs_tile="31UDQ",
@@ -133,6 +148,21 @@ def test_search_cdse_filters_tile_cloud_and_pagination(monkeypatch):
     assert len(products) == 1
     assert products[0].mgrs_tile == "31UDQ"
     assert products[0].cloud_cover <= 20.0
+
+
+def test_search_payload_uses_grid_code_queryable():
+    payload = cdse._search_payload(
+        S2Query(
+            mgrs_tile="50QLD",
+            date=date(2023, 1, 8),
+        )
+    )
+
+    assert payload["filter-lang"] == "cql2-json"
+    assert payload["filter"] == {
+        "op": "=",
+        "args": [{"property": "grid:code"}, "MGRS-50QLD"],
+    }
 
 
 def test_search_cdse_product_404_returns_empty(monkeypatch):
@@ -263,16 +293,28 @@ def test_search_payload_and_next_link_helpers():
     assert payload["limit"] == 17
     assert payload["bbox"] == [0.0, 1.0, 2.0, 3.0]
     assert payload["datetime"] == "2024-01-01T00:00:00Z/2024-01-02T23:59:59Z"
-    assert payload["filter"]["op"] == "<="
+    assert payload["filter"] == {
+        "op": "and",
+        "args": [
+            {"op": "=", "args": [{"property": "grid:code"}, "MGRS-31UDQ"]},
+            {"op": "<=", "args": [{"property": "eo:cloud_cover"}, 35.0]},
+        ],
+    }
 
     q_no_filter = S2Query(mgrs_tile="31UDQ", max_cloud_cover=100.0)
     payload_no_filter = cdse._search_payload(q_no_filter)
-    assert "filter" not in payload_no_filter
-    assert "filter-lang" not in payload_no_filter
+    assert payload_no_filter["filter"] == {
+        "op": "=",
+        "args": [{"property": "grid:code"}, "MGRS-31UDQ"],
+    }
+    assert payload_no_filter["filter-lang"] == "cql2-json"
 
     assert cdse._next_link({"links": [{"rel": "self", "href": "x"}]}) is None
     assert cdse._next_link({"links": [{"rel": "next", "href": ""}]}) is None
-    assert cdse._next_link({"links": [{"rel": "next", "href": "https://example.test/n"}]}) == "https://example.test/n"
+    assert cdse._next_link({"links": [{"rel": "next", "href": "https://example.test/n"}]}) == {
+        "rel": "next",
+        "href": "https://example.test/n",
+    }
 
 
 def test_auth_header_resolution_modes(monkeypatch):

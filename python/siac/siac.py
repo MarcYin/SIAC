@@ -598,8 +598,6 @@ def _resolve_atmo_provider(
             source=_earthaccess_source_from_auth(auth),
         )
         return provider.get_prior
-    raise ValueError(f"Unknown atmo provider: {provider_name!r}")
-
     if provider_name == "vnp19":
         from siac.priors.atmospheric.mcd19_earthaccess import VNP19AODProvider
         provider = VNP19AODProvider(
@@ -607,6 +605,8 @@ def _resolve_atmo_provider(
             source=_earthaccess_source_from_auth(auth),
         )
         return provider.get_prior
+    raise ValueError(f"Unknown atmo provider: {provider_name!r}")
+
 
 def _resolve_surface_prior_provider(
     config: SIACConfig,
@@ -621,11 +621,11 @@ def _resolve_surface_prior_provider(
     elif provider_name == "vnp43":
         from siac.priors.brdf.vnp43_earthaccess import VNP43EarthAccessProvider
         provider_cls = VNP43EarthAccessProvider
-    else:
-        raise ValueError(f"Unknown BRDF provider for surface prior: {provider_name!r}")
     elif provider_name == "mcd19":
         from siac.priors.brdf.mcd43_earthaccess import MCD19EarthAccessProvider
         provider_cls = MCD19EarthAccessProvider
+    else:
+        raise ValueError(f"Unknown BRDF provider for surface prior: {provider_name!r}")
 
     # Create provider and deriver once, then close over them
     brdf_prov = provider_cls(

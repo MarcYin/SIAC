@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -88,17 +89,24 @@ class _BytesFS:
 
 def test_cams_source_and_load_branch_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     p_missing = CAMSProvider(tmp_path / "missing")
+    monkeypatch.setattr(p_missing, "_complete_cams_dataset", lambda dataset, _obs_time: dataset)
     assert p_missing.source_name == "CAMS"
     assert p_missing._load_cams_data(datetime(2024, 1, 1)) is None
 
     p = CAMSProvider(tmp_path)
     tif_ds = xr.Dataset({"aod550": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
+    monkeypatch.setattr(p, "_complete_cams_dataset", lambda dataset, _obs_time: dataset)
     monkeypatch.setattr(p, "_load_cams_tif_group", lambda _d, _i: tif_ds)
     loaded = p._load_cams_data(datetime(2024, 1, 1))
     assert loaded is tif_ds
 
     p_download = CAMSProvider(tmp_path, download_missing=True)
     downloaded = tmp_path / "CAMS_2024-01-01.nc"
+    monkeypatch.setattr(
+        p_download,
+        "_complete_cams_dataset",
+        lambda dataset, _obs_time: "loaded" if dataset is None else dataset,
+    )
     monkeypatch.setattr(p_download, "_load_cams_tif_group", lambda _d, _i: None)
     monkeypatch.setattr(p_download, "_download_cams_file", lambda _obs_time: downloaded)
     monkeypatch.setattr(p_download, "_load_from_explicit_path", lambda _path: "loaded")
@@ -117,8 +125,9 @@ def test_cams_remote_base_and_remote_file_paths(
         "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
         cache_dir=tmp_path / "cache",
     )
+    monkeypatch.setattr(remote_base, "_complete_cams_dataset", lambda dataset, _obs_time: dataset)
 
-    def _cache_for_base(url: str) -> Path:
+    def _cache_for_base(url: str, storage_options=None) -> Path:  # noqa: ARG001
         seen.append(url)
         if url.endswith("2024-01-01.nc"):
             return cached
@@ -134,9 +143,206 @@ def test_cams_remote_base_and_remote_file_paths(
         "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-02.nc",
         cache_dir=tmp_path / "cache",
     )
-    monkeypatch.setattr(remote_file, "_cache_remote_file", lambda _url: cached)
+    monkeypatch.setattr(remote_file, "_complete_cams_dataset", lambda dataset, _obs_time: dataset)
+    def _cache_remote_file(_url, storage_options=None):  # noqa: ARG001
+        return cached
+
+    monkeypatch.setattr(remote_file, "_cache_remote_file", _cache_remote_file)
     monkeypatch.setattr(remote_file, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name)
     assert remote_file._load_cams_data(datetime(2024, 1, 2)) == "2024-01-02.nc"
+    assert remote_file._is_remote_source("s3://eodata/CAMS/GLOBAL") is True
+
+
+def test_cams_select_cdse_s3_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import fsspec
+
+    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", cache_dir=tmp_path / "cache")
+
+    class _FakeFS:
+        def ls(self, path, detail=False):  # noqa: ARG002
+            assert path == "eodata/CAMS/GLOBAL/2024/01/01"
+            return [
+                "eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_aod550",
+                "eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_fc_sfc_003_aod550",
+                "eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_gtco3",
+            ]
+
+    def _fake_filesystem(_protocol, **_kwargs):
+        return _FakeFS()
+
+    monkeypatch.setattr(fsspec, "filesystem", _fake_filesystem)
+
+    selected = provider._select_cdse_cams_files(
+        "s3://eodata/CAMS/GLOBAL",
+        datetime(2024, 1, 1, 2, 30),
+        {},
+    )
+
+    assert selected == [
+        "s3://eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_fc_sfc_003_aod550/z_cams_c_ecmf_20240101000000_prod_fc_sfc_003_aod550.nc",
+        "s3://eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_gtco3/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_gtco3.nc",
+    ]
+
+
+def test_cams_remote_s3_base_merges_selected_datasets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", cache_dir=tmp_path / "cache")
+
+    @contextmanager
+    def _fake_storage_context(_url):
+        yield {"key": "k", "secret": "s"}
+
+    monkeypatch.setattr(provider, "_remote_storage_options_context", _fake_storage_context)
+    monkeypatch.setattr(
+        provider,
+        "_select_cdse_cams_files",
+        lambda _base, _time, _opts: ["s3://eodata/aod550.nc", "s3://eodata/gtco3.nc"],
+    )
+
+    def _load(url, *, missing_ok=False, storage_options=None):  # noqa: ARG001
+        if url.endswith("aod550.nc"):
+            return xr.Dataset({"aod550": xr.DataArray(np.ones((1, 2, 2), dtype=np.float32), dims=["time", "latitude", "longitude"])})
+        if url.endswith("gtco3.nc"):
+            return xr.Dataset({"gtco3": xr.DataArray(np.full((1, 2, 2), 0.5, dtype=np.float32), dims=["time", "latitude", "longitude"])})
+        return None
+
+    monkeypatch.setattr(provider, "_load_from_remote_url", _load)
+
+    merged = provider._load_from_remote_s3_base("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1))
+
+    assert merged is not None
+    assert set(merged.data_vars) == {"aod550", "gtco3"}
+
+
+def test_cams_partial_cdse_dataset_is_supplemented_from_jasmin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache")
+    primary = xr.Dataset(
+        {
+            "aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]),
+            "gtco3": xr.DataArray(np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]),
+        }
+    )
+    jasmin = xr.Dataset(
+        {
+            "tcwv": xr.DataArray(np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]),
+        }
+    )
+    calls: list[str] = []
+
+    def _load_remote(base_url: str, obs_time: datetime):  # noqa: ARG001
+        calls.append(base_url)
+        if base_url == "s3://eodata/CAMS/GLOBAL":
+            return primary
+        if base_url == provider._JASMIN_CAMS_BASE_URL:
+            return jasmin
+        return None
+
+    monkeypatch.setattr(provider, "_load_from_explicit_path", lambda _path: None)
+    monkeypatch.setattr(provider, "_load_from_remote_base", _load_remote)
+    monkeypatch.setattr(provider, "_load_cds_dataset", lambda _obs_time: None)
+
+    loaded = provider._load_cams_data(datetime(2024, 1, 1))
+
+    assert loaded is not None
+    assert set(loaded.data_vars) == {"aod550", "gtco3", "tcwv"}
+    assert calls == ["s3://eodata/CAMS/GLOBAL", provider._JASMIN_CAMS_BASE_URL]
+
+
+def test_cams_missing_cdse_day_falls_back_to_jasmin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache")
+    jasmin = xr.Dataset(
+        {
+            "aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]),
+            "tcwv": xr.DataArray(np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]),
+            "gtco3": xr.DataArray(np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]),
+        }
+    )
+    calls: list[str] = []
+
+    def _load_remote(base_url: str, obs_time: datetime):  # noqa: ARG001
+        calls.append(base_url)
+        if base_url == provider._JASMIN_CAMS_BASE_URL:
+            return jasmin
+        return None
+
+    monkeypatch.setattr(provider, "_load_from_explicit_path", lambda _path: None)
+    monkeypatch.setattr(provider, "_load_from_remote_base", _load_remote)
+    monkeypatch.setattr(provider, "_load_cds_dataset", lambda _obs_time: None)
+
+    loaded = provider._load_cams_data(datetime(2024, 1, 1))
+
+    assert loaded is not None
+    assert loaded.equals(jasmin)
+    assert calls == ["s3://eodata/CAMS/GLOBAL", provider._JASMIN_CAMS_BASE_URL]
+
+
+def test_cams_missing_variables_can_fall_back_to_cds_download(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache")
+    primary = xr.Dataset(
+        {
+            "aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]),
+        }
+    )
+    cds = xr.Dataset(
+        {
+            "tcwv": xr.DataArray(np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]),
+            "gtco3": xr.DataArray(np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]),
+        }
+    )
+
+    monkeypatch.setattr(provider, "_load_from_explicit_path", lambda _path: None)
+    monkeypatch.setattr(
+        provider,
+        "_load_from_remote_base",
+        lambda base_url, obs_time: primary if base_url == "s3://eodata/CAMS/GLOBAL" else None,  # noqa: ARG005
+    )
+    monkeypatch.setattr(provider, "_load_cds_dataset", lambda _obs_time: cds)
+
+    loaded = provider._load_cams_data(datetime(2024, 1, 1))
+
+    assert loaded is not None
+    assert set(loaded.data_vars) == {"aod550", "tcwv", "gtco3"}
+
+
+def test_cams_missing_variable_alignment_preserves_primary_grid(tmp_path: Path) -> None:
+    primary = xr.Dataset(
+        {
+            "aod550": xr.DataArray(
+                np.ones((2, 2), dtype=np.float32),
+                dims=["latitude", "longitude"],
+                coords={"latitude": [1.0, 0.0], "longitude": [0.0, 1.0]},
+            ),
+            "gtco3": xr.DataArray(
+                np.full((2, 2), 0.5, dtype=np.float32),
+                dims=["latitude", "longitude"],
+                coords={"latitude": [1.0, 0.0], "longitude": [0.0, 1.0]},
+            ),
+        }
+    )
+    fallback = xr.Dataset(
+        {
+            "tcwv": xr.DataArray(
+                np.full((2, 2), 2.5, dtype=np.float32),
+                dims=["latitude", "longitude"],
+                coords={"latitude": [1.5, 0.5], "longitude": [0.5, 1.5]},
+            ),
+        }
+    )
+
+    merged, added = CAMSProvider._merge_missing_variables(primary, fallback)
+
+    assert added == ["tcwv"]
+    assert merged["tcwv"].coords["latitude"].identical(primary["aod550"].coords["latitude"])
+    assert merged["tcwv"].coords["longitude"].identical(primary["aod550"].coords["longitude"])
+    assert np.isfinite(merged["gtco3"].values).all()
 
 
 def test_cams_remote_missing_can_fallback_to_download(
@@ -148,11 +354,16 @@ def test_cams_remote_missing_can_fallback_to_download(
         download_missing=True,
         cache_dir=tmp_path / "cache",
     )
-    downloaded = tmp_path / "cache" / "CAMS_2024-01-01.nc"
 
-    monkeypatch.setattr(remote, "_cache_remote_file", lambda _url: (_ for _ in ()).throw(FileNotFoundError("missing")))
-    monkeypatch.setattr(remote, "_download_cams_file", lambda _obs_time: downloaded)
-    monkeypatch.setattr(remote, "_load_from_explicit_path", lambda path: "downloaded" if path == downloaded else None)
+    def _missing_cache(_url, _storage_options=None):
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(remote, "_cache_remote_file", _missing_cache)
+    monkeypatch.setattr(
+        remote,
+        "_complete_cams_dataset",
+        lambda dataset, _obs_time: "downloaded" if dataset is None else dataset,
+    )
 
     assert remote._load_cams_data(datetime(2024, 1, 1)) == "downloaded"
 

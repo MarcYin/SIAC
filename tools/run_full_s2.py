@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         "--cams-dir",
         default=None,
         help=(
-            "Directory, file path, or HTTP base/file URL for CAMS data. "
+            "Directory, file path, HTTP base/file URL, or s3:// URL for CAMS data. "
             "If omitted, uses <cache-dir>/cams and falls back to provider defaults when empty."
         ),
     )
@@ -309,7 +309,7 @@ def _build_config(args: argparse.Namespace) -> SIACConfig:
     cams_dir: str | Path = args.cams_dir if args.cams_dir is not None else args.cache_dir / "cams"
     if isinstance(cams_dir, str):
         scheme = urlparse(cams_dir).scheme.lower()
-        if scheme not in {"http", "https"}:
+        if scheme not in {"http", "https", "s3"}:
             cams_dir = Path(cams_dir).expanduser()
     if isinstance(cams_dir, Path):
         cams_dir.mkdir(parents=True, exist_ok=True)

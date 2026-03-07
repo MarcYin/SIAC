@@ -8,6 +8,9 @@ Fetches atmospheric parameters (AOT, TCWV, TCO3) from ECMWF CAMS
 from __future__ import annotations
 
 import logging
+import re
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -19,7 +22,7 @@ from siac.core.auth import CredentialManager
 from siac.core.types import AtmosphericState
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,7 @@ class CAMSProvider:
     _TIFF_SUFFIXES = {".tif", ".tiff"}
     _REQUIRED_VARIABLES = ("aod550", "tcwv", "gtco3")
     _DEFAULT_REMOTE_CACHE_DIR = Path.home() / ".cache" / "siac" / "cams"
+    _JASMIN_CAMS_BASE_URL = "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/"
     _TIFF_VARIABLE_ALIASES = {
         "aod550": "aod550",
         "aot": "aod550",
@@ -51,6 +55,14 @@ class CAMSProvider:
         "gtco3": "gtco3",
         "tco3": "gtco3",
         "ozone": "gtco3",
+    }
+    _CDSE_CAMS_FILE_PATTERN = re.compile(
+        r"z_cams_c_ecmf_(?P<run>\d{14})_prod_(?P<mode>an|fc)_sfc_(?P<lead>\d{3})_(?P<var>[a-z0-9_]+)$"
+    )
+    _CDSE_CAMS_VARIABLE_SUFFIXES = {
+        "aod550": "aod550",
+        "gtco3": "gtco3",
+        "tcwv": "tcwv",
     }
 
     _CDS_VARIABLES = [
@@ -137,17 +149,13 @@ class CAMSProvider:
         """Load CAMS data for the observation date."""
         direct = self._load_from_explicit_path(self.data_dir)
         if direct is not None:
-            return direct
+            return self._complete_cams_dataset(direct, obs_time)
 
         if self._is_remote_source(self.data_dir):
             remote = self._load_from_remote_base(str(self.data_dir), obs_time)
             if remote is not None:
-                return remote
-            if self.download_missing:
-                downloaded_file = self._download_cams_file(obs_time)
-                if downloaded_file is not None:
-                    return self._load_from_explicit_path(downloaded_file)
-            return None
+                return self._complete_cams_dataset(remote, obs_time)
+            return self._complete_cams_dataset(None, obs_time)
 
         data_dir = self._require_local_data_dir()
 
@@ -184,20 +192,127 @@ class CAMSProvider:
             files = list(data_dir.glob(pattern))
             if files:
                 try:
-                    return xr.open_mfdataset(files, combine="by_coords")
+                    return self._complete_cams_dataset(
+                        xr.open_mfdataset(files, combine="by_coords"),
+                        obs_time,
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to load CAMS: {e}")
 
         tif_dataset = self._load_cams_tif_group(date_str, iso_date)
         if tif_dataset is not None:
-            return tif_dataset
+            return self._complete_cams_dataset(tif_dataset, obs_time)
 
-        if self.download_missing:
-            downloaded_file = self._download_cams_file(obs_time)
-            if downloaded_file is not None:
-                return self._load_from_explicit_path(downloaded_file)
+        return self._complete_cams_dataset(None, obs_time)
 
+    @classmethod
+    def _missing_required_variables(cls, dataset: xr.Dataset | None) -> list[str]:
+        if dataset is None:
+            return list(cls._REQUIRED_VARIABLES)
+        return [name for name in cls._REQUIRED_VARIABLES if name not in dataset.data_vars]
+
+    @staticmethod
+    def _reference_variable(dataset: xr.Dataset | None) -> xr.DataArray | None:
+        if dataset is None:
+            return None
+        for name in CAMSProvider._REQUIRED_VARIABLES:
+            if name in dataset.data_vars:
+                return dataset[name]
+        for data_var in dataset.data_vars.values():
+            return data_var
         return None
+
+    @staticmethod
+    def _align_missing_variable(
+        reference: xr.DataArray | None,
+        variable: xr.DataArray,
+    ) -> xr.DataArray:
+        if reference is None:
+            return variable
+
+        aligned = variable
+        for dim in ("latitude", "longitude", "time"):
+            if (
+                dim in aligned.dims
+                and dim in reference.dims
+                and dim in aligned.coords
+                and dim in reference.coords
+                and not aligned.coords[dim].identical(reference.coords[dim])
+            ):
+                try:
+                    aligned = aligned.interp({dim: reference.coords[dim]}, method="linear")
+                except Exception:
+                    aligned = aligned.interp({dim: reference.coords[dim]}, method="nearest")
+        return aligned
+
+    @classmethod
+    def _merge_missing_variables(
+        cls,
+        primary: xr.Dataset | None,
+        fallback: xr.Dataset,
+    ) -> tuple[xr.Dataset, list[str]]:
+        if primary is None:
+            return fallback, list(fallback.data_vars)
+
+        added = [name for name in fallback.data_vars if name not in primary.data_vars]
+        if not added:
+            return primary, []
+        reference = cls._reference_variable(primary)
+        aligned = {
+            name: cls._align_missing_variable(reference, fallback[name])
+            for name in added
+        }
+        return xr.merge([primary, xr.Dataset(aligned)], compat="override", join="exact"), added
+
+    def _load_cds_dataset(self, obs_time: datetime) -> xr.Dataset | None:
+        if not self.download_missing:
+            return None
+        downloaded_file = self._download_cams_file(obs_time)
+        if downloaded_file is None:
+            return None
+        return self._load_from_local_explicit_path(downloaded_file, source_name=downloaded_file.name)
+
+    def _uses_jasmin_source(self) -> bool:
+        if isinstance(self.data_dir, Path):
+            return False
+        return str(self.data_dir).rstrip("/").startswith(self._JASMIN_CAMS_BASE_URL.rstrip("/"))
+
+    def _complete_cams_dataset(self, dataset: xr.Dataset | None, obs_time: datetime) -> xr.Dataset | None:
+        missing = self._missing_required_variables(dataset)
+        if not missing:
+            return dataset
+
+        candidates: list[tuple[str, Callable[[], xr.Dataset | None]]] = []
+        if not self._uses_jasmin_source():
+            candidates.append(
+                (
+                    "JASMIN CAMS mirror",
+                    lambda: self._load_from_remote_base(self._JASMIN_CAMS_BASE_URL, obs_time),
+                )
+            )
+        candidates.append(("CDS download", lambda: self._load_cds_dataset(obs_time)))
+
+        merged = dataset
+        for source_name, loader in candidates:
+            if not missing:
+                break
+            fallback = loader()
+            if fallback is None:
+                continue
+
+            fallback_vars = [name for name in missing if name in fallback.data_vars]
+            if not fallback_vars:
+                continue
+
+            merged, added = self._merge_missing_variables(merged, fallback[fallback_vars])
+            logger.info(
+                "Supplemented CAMS variables from %s: %s",
+                source_name,
+                ", ".join(added),
+            )
+            missing = self._missing_required_variables(merged)
+
+        return merged
 
     def _extract_variable(
         self, data: xr.Dataset, var_name: str, bounds: tuple, crs: str,
@@ -321,7 +436,13 @@ class CAMSProvider:
         if isinstance(value, Path):
             return False
         scheme = urlparse(str(value)).scheme.lower()
-        return scheme in {"http", "https"}
+        return scheme in {"http", "https", "s3"}
+
+    @staticmethod
+    def _remote_scheme(value: str | Path) -> str:
+        if isinstance(value, Path):
+            return ""
+        return urlparse(str(value)).scheme.lower()
 
     @staticmethod
     def _source_suffix(value: str | Path) -> str:
@@ -376,7 +497,7 @@ class CAMSProvider:
 
         if suffix in self._NETCDF_SUFFIXES:
             try:
-                return xr.open_dataset(path)
+                return xr.open_dataset(path, decode_timedelta=True)
             except Exception as e:
                 origin = source_name or str(path)
                 logger.warning(f"Failed to open CAMS NetCDF file {origin}: {e}")
@@ -389,14 +510,48 @@ class CAMSProvider:
         return None
 
     def _load_from_remote_base(self, base_url: str, obs_time: datetime) -> xr.Dataset | None:
+        if self._remote_scheme(base_url) == "s3":
+            return self._load_from_remote_s3_base(base_url, obs_time)
         for url in self._remote_candidate_urls(base_url, obs_time):
             dataset = self._load_from_remote_url(url, missing_ok=True)
             if dataset is not None:
                 return dataset
         return None
 
-    def _cache_remote_file(self, url: str) -> Path:
+    @contextmanager
+    def _remote_storage_options_context(self, url: str):
+        if self._remote_scheme(url) != "s3":
+            yield {}
+            return
+
+        parsed = urlparse(url)
+        if (
+            parsed.netloc == "eodata"
+            and self._auth is not None
+            and self._auth.cdse().has_credentials()
+        ):
+            with self._auth.cdse().temporary_s3_credentials() as creds:
+                yield creds.storage_options()
+            return
+
+        if self._auth is not None and self._auth.aws().has_credentials():
+            yield self._auth.aws().storage_options()
+            return
+
+        yield {}
+
+    def _cache_remote_file(self, url: str, storage_options: dict | None = None) -> Path:
         import fsspec
+
+        if self._remote_scheme(url) == "s3":
+            parsed = urlparse(url)
+            remote_path = f"{parsed.netloc}{parsed.path}"
+            local_path = self._remote_cache_root() / parsed.netloc / parsed.path.lstrip("/")
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            if not local_path.exists():
+                fs = fsspec.filesystem("s3", **(storage_options or {}))
+                fs.get(remote_path, str(local_path))
+            return local_path
 
         local_path = fsspec.open_local(
             f"simplecache::{url}",
@@ -404,28 +559,123 @@ class CAMSProvider:
         )
         return Path(local_path)
 
-    def _load_from_remote_url(self, url: str, *, missing_ok: bool = False) -> xr.Dataset | None:
+    def _load_from_remote_url(
+        self,
+        url: str,
+        *,
+        missing_ok: bool = False,
+        storage_options: dict | None = None,
+    ) -> xr.Dataset | None:
         suffix = self._source_suffix(url)
         if suffix not in self._NETCDF_SUFFIXES and suffix not in self._TIFF_SUFFIXES:
             if not missing_ok:
                 logger.warning(f"Unsupported CAMS remote file extension: {url}")
             return None
 
-        try:
-            local_path = self._cache_remote_file(url)
-        except FileNotFoundError:
-            if not missing_ok:
-                logger.warning(f"CAMS remote file not found: {url}")
-            return None
-        except Exception as exc:
-            log = logger.debug if missing_ok else logger.warning
-            log(f"Failed to cache remote CAMS file {url}: {exc}")
-            return None
+        if storage_options is not None:
+            try:
+                local_path = self._cache_remote_file(url, storage_options=storage_options)
+            except FileNotFoundError:
+                if not missing_ok:
+                    logger.warning(f"CAMS remote file not found: {url}")
+                return None
+            except Exception as exc:
+                log = logger.debug if missing_ok else logger.warning
+                log(f"Failed to cache remote CAMS file {url}: {exc}")
+                return None
+        else:
+            with self._remote_storage_options_context(url) as resolved_storage_options:
+                try:
+                    local_path = self._cache_remote_file(url, storage_options=resolved_storage_options)
+                except FileNotFoundError:
+                    if not missing_ok:
+                        logger.warning(f"CAMS remote file not found: {url}")
+                    return None
+                except Exception as exc:
+                    log = logger.debug if missing_ok else logger.warning
+                    log(f"Failed to cache remote CAMS file {url}: {exc}")
+                    return None
 
         return self._load_from_local_explicit_path(
             local_path,
             source_name=Path(urlparse(url).path).name,
         )
+
+    def _load_from_remote_s3_base(self, base_url: str, obs_time: datetime) -> xr.Dataset | None:
+        if not self._looks_like_cdse_cams_base(base_url):
+            return None
+
+        with self._remote_storage_options_context(base_url) as storage_options:
+            selected = self._select_cdse_cams_files(base_url, obs_time, storage_options)
+            if not selected:
+                return None
+
+            datasets: list[xr.Dataset] = []
+            for url in selected:
+                dataset = self._load_from_remote_url(
+                    url,
+                    missing_ok=True,
+                    storage_options=storage_options,
+                )
+                if dataset is not None:
+                    datasets.append(dataset)
+
+            if not datasets:
+                return None
+            return xr.merge(datasets, compat="override")
+
+    @staticmethod
+    def _looks_like_cdse_cams_base(base_url: str) -> bool:
+        parsed = urlparse(base_url)
+        return parsed.scheme.lower() == "s3" and parsed.netloc == "eodata" and "/CAMS/" in parsed.path
+
+    def _select_cdse_cams_files(
+        self,
+        base_url: str,
+        obs_time: datetime,
+        storage_options: dict,
+    ) -> list[str]:
+        import fsspec
+
+        parsed = urlparse(base_url)
+        day_prefix = f"{parsed.netloc}{parsed.path.rstrip('/')}/{obs_time:%Y/%m/%d}"
+        fs = fsspec.filesystem("s3", **storage_options)
+
+        try:
+            entries = fs.ls(day_prefix, detail=False)
+        except FileNotFoundError:
+            return []
+
+        chosen: dict[str, tuple[timedelta, bool, str]] = {}
+        for entry in entries:
+            name = entry.rsplit("/", 1)[-1]
+            match = self._CDSE_CAMS_FILE_PATTERN.fullmatch(name)
+            if match is None:
+                continue
+
+            variable = match.group("var")
+            if variable not in self._CDSE_CAMS_VARIABLE_SUFFIXES.values():
+                continue
+
+            run_time = datetime.strptime(match.group("run"), "%Y%m%d%H%M%S")
+            lead_hours = int(match.group("lead"))
+            valid_time = run_time + timedelta(hours=lead_hours)
+            delta = abs(valid_time - obs_time)
+            is_forecast = match.group("mode") == "fc"
+            candidate = (delta, is_forecast, entry)
+            existing = chosen.get(variable)
+            if existing is None or candidate < existing:
+                chosen[variable] = candidate
+
+        urls: list[str] = []
+        for variable in ("aod550", "gtco3", "tcwv"):
+            candidate = chosen.get(variable)
+            if candidate is None:
+                continue
+            entry = candidate[2]
+            name = entry.rsplit("/", 1)[-1]
+            urls.append(f"s3://{entry}/{name}.nc")
+        return urls
 
     def _load_cams_tif_group(self, date_str: str, iso_date: str) -> xr.Dataset | None:
         """Load CAMS variables from GeoTIFF files in a directory."""

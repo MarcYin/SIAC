@@ -158,12 +158,12 @@ def _item_to_product(item: dict[str, Any]) -> S2Product:
     )
 
 
-def _next_link(page: dict[str, Any]) -> str | None:
+def _next_link(page: dict[str, Any]) -> dict[str, Any] | None:
     for link in page.get("links", []):
         if link.get("rel") == "next":
             href = link.get("href")
             if isinstance(href, str) and href:
-                return href
+                return link
     return None
 
 
@@ -179,12 +179,22 @@ def _search_payload(query: S2Query, limit: int = 100) -> dict[str, Any]:
     if dt_range is not None:
         payload["datetime"] = dt_range
 
+    filters: list[dict[str, Any]] = []
+    if query.mgrs_tile:
+        filters.append({
+            "op": "=",
+            "args": [{"property": "grid:code"}, f"MGRS-{query.mgrs_tile.lstrip('T').upper()}"],
+        })
+
     if query.max_cloud_cover < 100.0:
-        payload["filter-lang"] = "cql2-json"
-        payload["filter"] = {
+        filters.append({
             "op": "<=",
             "args": [{"property": "eo:cloud_cover"}, float(query.max_cloud_cover)],
-        }
+        })
+
+    if filters:
+        payload["filter-lang"] = "cql2-json"
+        payload["filter"] = filters[0] if len(filters) == 1 else {"op": "and", "args": filters}
     return payload
 
 
@@ -198,6 +208,20 @@ def _get_json(url: str, timeout: int = 60) -> dict[str, Any]:
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
+
+
+def _load_page_from_link(link: dict[str, Any], timeout: int = 60) -> dict[str, Any]:
+    href = link.get("href")
+    if not isinstance(href, str) or not href:
+        raise DataNotFoundError("CDSE STAC next link is missing href.")
+
+    method = str(link.get("method", "GET")).upper()
+    if method == "POST":
+        body = link.get("body")
+        if body is not None and not isinstance(body, dict):
+            raise DataNotFoundError("CDSE STAC POST next link body is not a JSON object.")
+        return _post_json(href, body or {}, timeout=timeout)
+    return _get_json(href, timeout=timeout)
 
 
 def _token_from_credentials(username: str, password: str, timeout: int = 60) -> str:
@@ -269,13 +293,13 @@ def search_cdse(
     while True:
         page_count += 1
         items.extend(page.get("features", []))
-        href = _next_link(page)
-        if href is None:
+        link = _next_link(page)
+        if link is None:
             break
         if page_count >= 50:
             logger.warning("CDSE search pagination limit reached (50 pages).")
             break
-        page = _get_json(href)
+        page = _load_page_from_link(link)
 
     products = [_item_to_product(item) for item in items]
 
