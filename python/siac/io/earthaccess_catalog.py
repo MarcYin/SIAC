@@ -73,17 +73,41 @@ def default_products() -> dict[str, EarthaccessProduct]:
             keyword="MCD19",
             short_name="MCD19A2",
         ),
+        "vnp19_aod": EarthaccessProduct(
+            key="vnp19_aod",
+            description="VIIRS VNP19 atmospheric aerosol optical depth",
+            keyword="VNP19",
+            short_name="VNP19A2",
+        ),
+        "vj119_aod": EarthaccessProduct(
+            key="vj119_aod",
+            description="VIIRS NOAA-20 VJ119 atmospheric aerosol optical depth",
+            keyword="VJ119",
+            short_name="VJ119A2",
+        ),
+        "vj219_aod": EarthaccessProduct(
+            key="vj219_aod",
+            description="VIIRS NOAA-21 VJ219 atmospheric aerosol optical depth",
+            keyword="VJ219",
+            short_name="VJ219A2",
+        ),
         "mcd43_brdf": EarthaccessProduct(
             key="mcd43_brdf",
             description="MODIS MCD43 BRDF/albedo products",
             keyword="MCD43",
             short_name="MCD43A1",
         ),
+        "mcd19_brdf": EarthaccessProduct(
+            key="mcd19_brdf",
+            description="MODIS MCD19 MAIAC BRDF kernel products",
+            keyword="MCD19",
+            short_name="MCD19A3",
+        ),
         "vnp43_brdf": EarthaccessProduct(
             key="vnp43_brdf",
             description="VIIRS VNP43 BRDF/albedo products",
             keyword="VNP43",
-            short_name="VNP43IA1",
+            short_name="VNP43MA1",
         ),
     }
 

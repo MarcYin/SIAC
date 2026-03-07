@@ -45,11 +45,11 @@ DEFAULT_LUT_URL = (
 class AtmoPriorConfig(BaseModel):
     """Configuration for atmospheric prior data provider."""
 
-    provider: Literal["cams", "merra2", "mcd19", "era5", "user"] = Field(
+    provider: Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"] = Field(
         default="cams",
         description=(
             "Atmospheric data source: 'cams' (ECMWF), 'merra2' (NASA), "
-            "'mcd19' (Earthaccess AOD-focused), 'era5', or 'user'"
+            "'mcd19' (MODIS MAIAC), 'vnp19' (VIIRS MAIAC), 'era5', or 'user'"
         ),
     )
     data_path: str | Path | None = Field(
@@ -113,7 +113,10 @@ class BRDFConfig(BaseModel):
 
     provider: Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"] = Field(
         default="mcd43",
-        description="BRDF product source: 'mcd43' (MODIS), 'vnp43' (VIIRS), 'mcd19', 'gee', 'zarr', or 'user'",
+        description=(
+            "BRDF product source: 'mcd43' (MODIS), 'vnp43' (VIIRS), "
+            "'mcd19' (MAIAC kernels), 'gee', 'zarr', or 'user'"
+        ),
     )
     data_path: Path | None = Field(
         default=None,

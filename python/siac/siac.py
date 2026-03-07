@@ -63,6 +63,17 @@ def _earthaccess_source_from_auth(
     return auth.earthdata().build_earthaccess_source(provider=provider)
 
 
+def _select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]:
+    """Return the sensor bands needed by the surface prior solver path."""
+    if sensor_config is None:
+        return list(range(1, 8))
+
+    bands = sensor_config.select_bands_in_range(400.0, 520.0)
+    if not bands:
+        bands = list(sensor_config.bands[:2])
+    return bands
+
+
 class SIAC:
     """
     Sensor-Invariant Atmospheric Correction.
@@ -209,6 +220,12 @@ class SIAC:
                     cache_dir=self.config.atmo_prior.cache_dir,
                     source=_earthaccess_source_from_auth(self._auth),
                 )
+            elif provider_name == "vnp19":
+                from siac.priors.atmospheric.mcd19_earthaccess import VNP19AODProvider
+                self._atmo_provider = VNP19AODProvider(
+                    cache_dir=self.config.atmo_prior.cache_dir,
+                    source=_earthaccess_source_from_auth(self._auth),
+                )
             else:
                 logger.warning(
                     f"Unknown atmospheric provider '{provider_name}', "
@@ -241,9 +258,7 @@ class SIAC:
         bounds = aoi.get_bounds()
         obs_time = metadata.get("observation_time", datetime.now())
         resolution = 500.0  # MODIS native resolution for BRDF
-
-        # Default MODIS bands for atmospheric correction (1-7)
-        bands = list(range(1, 8))
+        bands = _select_surface_prior_bands(metadata.get("sensor_config"))
 
         brdf_weights = brdf_provider.get_brdf_parameters(
             bounds=bounds,
@@ -280,13 +295,19 @@ class SIAC:
                 cache_dir=self.config.brdf.cache_dir,
                 source=_earthaccess_source_from_auth(self._auth),
             )
+        elif provider_name == "mcd19":
+            from siac.priors.brdf.mcd43_earthaccess import MCD19EarthAccessProvider
+            self._brdf_provider = MCD19EarthAccessProvider(
+                cache_dir=self.config.brdf.cache_dir,
+                source=_earthaccess_source_from_auth(self._auth),
+            )
         elif provider_name == "gee":
             from siac.priors.brdf.gee_stub import GEEBRDFProvider
             self._brdf_provider = GEEBRDFProvider()
         else:
             raise ValueError(
                 f"Unknown BRDF provider '{provider_name}'. "
-                f"Available: 'mcd43', 'vnp43', 'gee'"
+                f"Available: 'mcd43', 'vnp43', 'mcd19', 'gee'"
             )
 
         return self._brdf_provider
@@ -577,6 +598,13 @@ def _resolve_atmo_provider(
         return provider.get_prior
     raise ValueError(f"Unknown atmo provider: {provider_name!r}")
 
+    if provider_name == "vnp19":
+        from siac.priors.atmospheric.mcd19_earthaccess import VNP19AODProvider
+        provider = VNP19AODProvider(
+            cache_dir=config.atmo_prior.cache_dir,
+            source=_earthaccess_source_from_auth(auth),
+        )
+        return provider.get_prior
 
 def _resolve_surface_prior_provider(
     config: SIACConfig,
@@ -593,6 +621,9 @@ def _resolve_surface_prior_provider(
         provider_cls = VNP43EarthAccessProvider
     else:
         raise ValueError(f"Unknown BRDF provider for surface prior: {provider_name!r}")
+    elif provider_name == "mcd19":
+        from siac.priors.brdf.mcd43_earthaccess import MCD19EarthAccessProvider
+        provider_cls = MCD19EarthAccessProvider
 
     # Create provider and deriver once, then close over them
     brdf_prov = provider_cls(
@@ -605,13 +636,13 @@ def _resolve_surface_prior_provider(
         apply_psf=config.surface_prior.apply_psf,
     )
 
-    def _brdf_surface_prior(bounds, crs, obs_time, _sensor_config, geometry, resolution):
+    def _brdf_surface_prior(bounds, crs, obs_time, sensor_config, geometry, resolution):
         brdf_weights = brdf_prov.get_brdf_parameters(
             bounds=bounds,
             crs=crs,
             obs_time=obs_time,
             target_resolution=resolution,
-            bands=list(range(1, 8)),
+            bands=_select_surface_prior_bands(sensor_config),
             temporal_window=config.brdf.temporal_window,
         )
         return deriver.compute_surface_prior(brdf_weights, geometry)
