@@ -18,6 +18,8 @@ from pyproj import Transformer
 
 logger = logging.getLogger(__name__)
 
+_EARTHACCESS_DOWNLOAD_THREADS = 8
+
 
 class EarthAccessSource:
     """Thin wrapper around the ``earthaccess`` package with lazy authentication."""
@@ -243,7 +245,11 @@ class EarthAccessSource:
 
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        out = ea.download(granules, str(dest))
+        out = ea.download(
+            granules,
+            str(dest),
+            threads=_EARTHACCESS_DOWNLOAD_THREADS,
+        )
 
         if out is None:
             return []

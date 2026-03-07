@@ -17,7 +17,7 @@ class _FakeEarthAccessModule:
         self.search_datasets_calls: list[dict] = []
         self.search_data_calls: list[dict] = []
         self.open_calls: list[list] = []
-        self.download_calls: list[tuple[list, str]] = []
+        self.download_calls: list[tuple[list, str, int | None]] = []
 
     def login(self, **kwargs):
         self.login_calls += 1
@@ -50,8 +50,8 @@ class _FakeEarthAccessModule:
         self.open_calls.append(list(granules))
         return [f"opened:{len(granules)}"]
 
-    def download(self, granules, dest_dir):
-        self.download_calls.append((list(granules), dest_dir))
+    def download(self, granules, dest_dir, threads=None, **_kwargs):
+        self.download_calls.append((list(granules), dest_dir, threads))
         return [str(Path(dest_dir) / "g1.hdf")]
 
 
@@ -121,6 +121,7 @@ class TestEarthAccessSource:
         assert len(out) == 1
         assert out[0].name == "g1.hdf"
         assert (tmp_path / "cache").exists()
+        assert fake_earthaccess.download_calls[-1][2] == 8
 
     def test_login_uses_temporary_environment_credentials(self, fake_earthaccess, monkeypatch):
         monkeypatch.delenv("EARTHDATA_USERNAME", raising=False)

@@ -26,6 +26,7 @@ class _FakeEA:
         self.login_calls = []
         self.search_dataset_calls = []
         self.search_data_calls = []
+        self.download_calls = []
 
     def login(self, **kwargs):
         self.login_calls.append(kwargs)
@@ -53,7 +54,8 @@ class _FakeEA:
     def open(self, granules):
         return ["opened", len(granules)]
 
-    def download(self, granules, dest):
+    def download(self, granules, dest, threads=None, **_kwargs):
+        self.download_calls.append((list(granules), str(dest), threads))
         if granules == ["none"]:
             return None
         if granules == ["one"]:
@@ -117,6 +119,7 @@ def test_earthaccess_source_auth_and_download_variants(monkeypatch, tmp_path: Pa
     assert fake.login_calls[-1] == {"strategy": "interactive", "persist": True}
     out1 = src.download_granules(["one"], tmp_path / "d1")
     assert len(out1) == 1 and out1[0].name == "one.h5"
+    assert fake.download_calls[-1][2] == 8
     out_many = src.download_granules(["many"], tmp_path / "d2")
     assert len(out_many) == 2
     assert src.download_granules(["weird"], tmp_path / "d3") == []
