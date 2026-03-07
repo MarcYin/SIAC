@@ -137,7 +137,7 @@ class TestAtmoPriorConfig:
 
     def test_valid_providers(self):
         """All valid providers should work."""
-        for provider in ["cams", "merra2", "mcd19", "era5", "user"]:
+        for provider in ["cams", "merra2", "mcd19", "vnp19", "era5", "user"]:
             if provider == "user":
                 # User provider needs at least one path
                 config = AtmoPriorConfig(

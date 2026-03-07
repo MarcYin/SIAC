@@ -12,9 +12,13 @@ import pytest
 from siac.core.auth import CredentialManager
 from siac.io.earthaccess_source import EarthAccessSource
 from siac.priors.atmospheric.cams import CAMSProvider
-from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider
+from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
 from siac.priors.atmospheric.merra2 import MERRA2Provider
-from siac.priors.brdf.mcd43_earthaccess import MCD43EarthAccessProvider, VNP43EarthAccessProvider
+from siac.priors.brdf.mcd43_earthaccess import (
+    MCD19EarthAccessProvider,
+    MCD43EarthAccessProvider,
+    VNP43EarthAccessProvider,
+)
 
 
 class _FakeEA:
@@ -143,6 +147,7 @@ def test_atmo_earthaccess_provider_branches(provider_cls, key, monkeypatch):
     assert state.aot.shape == (2, 2)
     assert source.calls and source.calls[0]["short_name"].startswith("SN:")
 
+        (VNP19AODProvider, "vnp19_aod"),
     # _grid validation branch
     with pytest.raises(ValueError, match="resolution must be > 0"):
         p._grid((0.0, 0.0, 1.0, 1.0), 0.0)
@@ -185,6 +190,8 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
     monkeypatch.setitem(sys.modules, "cdsapi", None)
     if "cdsapi" in sys.modules:
         del sys.modules["cdsapi"]
+    m = MCD19EarthAccessProvider(source=src, catalog=cat, probe_earthdata=False)
+    assert m.source_name == "MCD19"
     assert p._download_cams_file(datetime(2024, 1, 1)) is None
 
     # Success branch with auth credentials path.

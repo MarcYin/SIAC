@@ -35,8 +35,14 @@ class TestEarthAccessCatalog:
 
         assert "landsat" in keys
         assert "mcd19_aod" in keys
+        assert "vnp19_aod" in keys
         assert "mcd43_brdf" in keys
+        assert "mcd19_brdf" in keys
         assert "vnp43_brdf" in keys
+
+    def test_default_vnp43_points_to_moderate_product(self):
+        catalog = EarthAccessCatalog(source=_FakeSource([]))
+        assert catalog.get_product("vnp43_brdf").short_name == "VNP43MA1"
 
     def test_validate_product_infers_short_name(self):
         product = EarthaccessProduct(

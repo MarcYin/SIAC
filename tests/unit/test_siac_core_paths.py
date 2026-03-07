@@ -241,6 +241,11 @@ def test_get_atmospheric_prior_providers_and_fallback(monkeypatch):
     monkeypatch.setattr("siac.priors.atmospheric.mcd19_earthaccess.MCD19AODProvider", _FakeProvider)
     assert siac_mcd19._get_atmospheric_prior(fake_aoi, metadata)[3] == 10.0
 
+    cfg_vnp19 = SIACConfig(sensor="s2", atmo_prior={"provider": "vnp19", "cache_dir": "/tmp/cache"})
+    siac_vnp19 = SIAC(cfg_vnp19)
+    monkeypatch.setattr("siac.priors.atmospheric.mcd19_earthaccess.VNP19AODProvider", _FakeProvider)
+    assert siac_vnp19._get_atmospheric_prior(fake_aoi, metadata)[3] == 10.0
+
     cfg_unknown = SIACConfig(sensor="s2", atmo_prior={"provider": "cams"})
     cfg_unknown.atmo_prior.provider = "era5"
     siac_unknown = SIAC(cfg_unknown)
@@ -280,11 +285,18 @@ def test_get_surface_prior_and_brdf_provider_paths(monkeypatch):
 
     fake_aoi = SimpleNamespace(get_bounds=lambda: (0.0, 0.0, 1.0, 1.0), crs="EPSG:4326")
     geom = _geometry()
-    out = siac_obj._get_surface_prior(fake_aoi, geom, {"observation_time": datetime(2026, 1, 2)})
+    out = siac_obj._get_surface_prior(
+        fake_aoi,
+        geom,
+        {
+            "observation_time": datetime(2026, 1, 2),
+            "sensor_config": SENTINEL2A_CONFIG,
+        },
+    )
 
     assert out[0] == "weights"
     assert out[1] is geom
-    assert provider_calls and provider_calls[0]["bands"] == [1, 2, 3, 4, 5, 6, 7]
+    assert provider_calls and [band.name for band in provider_calls[0]["bands"]] == ["B01", "B02"]
     assert siac_obj._brdf_provider.source.earthdata_username == "u"
 
     cached = object()
@@ -302,6 +314,14 @@ def test_get_brdf_provider_other_branches(monkeypatch):
         lambda **_kwargs: "vnp",
     )
     assert siac_vnp43._get_brdf_provider() == "vnp"
+
+    cfg_mcd19 = SIACConfig(sensor="s2", brdf={"provider": "mcd19"})
+    siac_mcd19 = SIAC(cfg_mcd19)
+    monkeypatch.setattr(
+        "siac.priors.brdf.mcd43_earthaccess.MCD19EarthAccessProvider",
+        lambda **_kwargs: "mcd19",
+    )
+    assert siac_mcd19._get_brdf_provider() == "mcd19"
 
     cfg_gee = SIACConfig(sensor="s2", brdf={"provider": "mcd43"})
     cfg_gee.brdf.provider = "gee"
