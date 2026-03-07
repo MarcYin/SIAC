@@ -26,12 +26,6 @@ import numpy as np
 import xarray as xr
 from scipy import optimize
 
-from siac._rust import (
-    evaluate_grid_search_cost_cube_with_provider,
-    interpolate_to_fine_grid,
-    quadratic_refine_grid_search,
-    remap_to_coarse_grid,
-)
 from siac.core.protocols import RTModelBackend
 from siac.core.types import (
     AtmosphericState,
@@ -447,6 +441,11 @@ class MultiGridSolver:
                 xcp_stack[ib] = np.asarray(coeffs.xcp.values, dtype=np.float32)
             return xap_stack, xbp_stack, xcp_stack
 
+        from siac._rust import (  # noqa: PLC0415 - lazy; siac._rust is optional at import time
+            evaluate_grid_search_cost_cube_with_provider,
+            quadratic_refine_grid_search,
+        )
+
         costs = np.asarray(
             evaluate_grid_search_cost_cube_with_provider(
                 _candidate_coeff_provider,
@@ -549,6 +548,11 @@ class MultiGridSolver:
             return field
 
         data = np.ascontiguousarray(field, dtype=np.float64)
+        from siac._rust import (  # noqa: PLC0415 - lazy; siac._rust is optional at import time
+            interpolate_to_fine_grid,
+            remap_to_coarse_grid,
+        )
+
         if target_shape[0] < field.shape[0]:
             return np.asarray(remap_to_coarse_grid(data, target_shape[0], target_shape[1]))
         return np.asarray(interpolate_to_fine_grid(data, target_shape[0], target_shape[1]))

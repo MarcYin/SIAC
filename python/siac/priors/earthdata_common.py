@@ -13,8 +13,6 @@ import h5py
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
-from pyhdf.SD import SD, SDC
-
 from siac.io.reprojection import transform_bounds
 
 if TYPE_CHECKING:
@@ -457,6 +455,8 @@ def reproject_native_to_target(
 
 def read_hdf4_dataset(path: str | Path, dataset_name: str) -> tuple[np.ndarray, dict[str, Any]]:
     """Read an HDF4 SDS plus decoded attributes."""
+    from pyhdf.SD import SD, SDC  # noqa: PLC0415 - lazy import; pyhdf is optional
+
     sd = SD(str(path), SDC.READ)
     sds = sd.select(dataset_name)
     return np.asarray(sds.get()), {key: decode_attr(value) for key, value in sds.attributes().items()}

@@ -20,6 +20,8 @@ import xarray as xr
 from siac.cloud import build_cloud_classes, classes_to_bool_mask
 from siac.core.types import (
     SENTINEL2A_CONFIG,
+    SENTINEL2B_CONFIG,
+    SENTINEL2C_CONFIG,
     GeometryAngles,
     SensorConfig,
 )
@@ -32,6 +34,13 @@ from siac.satellite.base import (
 from siac.srf.loaders import load_sensor_config_from_srf
 
 logger = logging.getLogger(__name__)
+
+# Built-in fallback configs when SRF workbook cannot be downloaded
+_S2_FALLBACK_CONFIGS: dict[str, SensorConfig] = {
+    "S2A": SENTINEL2A_CONFIG,
+    "S2B": SENTINEL2B_CONFIG,
+    "S2C": SENTINEL2C_CONFIG,
+}
 
 
 @register_preprocessor("s2")
@@ -67,15 +76,30 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     @property
     def sensor_config(self) -> SensorConfig:
-        """Return sensor configuration based on satellite platform."""
+        """Return sensor configuration based on satellite platform.
+
+        Attempts to load the official SRF-backed config from the local cache or
+        the remote SentiWiki source.  When neither is available (e.g. in an
+        offline/test environment), falls back to the built-in nominal band
+        characterisation so that the preprocessor can still operate.
+        """
         if self._satellite_id is None:
             return SENTINEL2A_CONFIG
-        return load_sensor_config_from_srf(
-            "MSI",
-            self._satellite_id,
-            cache_dir=self.config.get("srf_cache_dir"),
-            refresh=bool(self.config.get("refresh_srf", False)),
-        )
+        try:
+            return load_sensor_config_from_srf(
+                "MSI",
+                self._satellite_id,
+                cache_dir=self.config.get("srf_cache_dir"),
+                refresh=bool(self.config.get("refresh_srf", False)),
+            )
+        except Exception:
+            fallback = _S2_FALLBACK_CONFIGS.get(self._satellite_id, SENTINEL2A_CONFIG)
+            logger.warning(
+                "Could not load SRF for %s (network or cache unavailable); "
+                "falling back to built-in nominal band characterisation.",
+                self._satellite_id,
+            )
+            return fallback
 
     def load_toa(self, input_path: str | Path) -> xr.Dataset:
         """Load TOA reflectance from Sentinel-2 SAFE directory."""

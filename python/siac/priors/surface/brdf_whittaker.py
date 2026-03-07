@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from siac._rust import whittaker_smooth_cube
 from siac.core.types import BRDFKernelWeights, GeometryAngles, SurfacePrior
 from siac.priors.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.priors.surface.kernel_model import KernelModelDeriver
@@ -18,6 +17,17 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+def _whittaker_smooth_cube(
+    reflectance: np.ndarray,
+    weights: np.ndarray,
+    lam: float,
+) -> np.ndarray:
+    """Thin wrapper that defers the Rust extension import to first use."""
+    from siac._rust import whittaker_smooth_cube  # noqa: PLC0415 - lazy; siac._rust is optional at import time
+
+    return whittaker_smooth_cube(reflectance, weights, lam)  # type: ignore[no-any-return]
 
 
 class BRDFWhittakerDeriver(KernelModelDeriver):
@@ -88,7 +98,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         np.divide(weights, max_weight, out=normalized_weights, where=max_weight > 0.0)
         weights = normalized_weights
 
-        smoothed = whittaker_smooth_cube(
+        smoothed = _whittaker_smooth_cube(
             np.ascontiguousarray(reflectance_values, dtype=np.float32),
             np.ascontiguousarray(weights, dtype=np.float32),
             self.temporal_lambda,

@@ -19,7 +19,6 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from siac._rust import TwoLayerNN as _RustNN
 from siac.core.types import (
     AtmosphericState,
     GeometryAngles,
@@ -423,6 +422,20 @@ class TwoLayerNNEmulator:
         )
 
 
+def _init_rust_nn(
+    w1: np.ndarray,
+    b1: np.ndarray,
+    w2: np.ndarray,
+    b2: np.ndarray,
+    w3: np.ndarray,
+    b3: np.ndarray,
+) -> object:
+    """Lazily import the Rust NN and construct it; defers the hard dependency to first use."""
+    from siac._rust import TwoLayerNN as _RustNN  # noqa: PLC0415 - lazy; siac._rust is optional at import time
+
+    return _RustNN(w1, b1, w2, b2, w3, b3)
+
+
 class _BandEmulator:
     """
     Internal class for single-band emulator.
@@ -465,7 +478,7 @@ class _BandEmulator:
             w3 = np.asarray(self.output_layers[0][0], dtype=np.float32)
             b3 = np.asarray(self.output_layers[0][1], dtype=np.float32)
 
-        self._rust_nn = _RustNN(w1, b1, w2, b2, w3, b3)
+        self._rust_nn = _init_rust_nn(w1, b1, w2, b2, w3, b3)
 
     def forward(
         self,

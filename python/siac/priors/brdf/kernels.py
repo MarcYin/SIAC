@@ -22,8 +22,6 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
-from siac._rust import RossThickLiSparse as _RustKernels
-
 
 class BRDFKernels:
     """
@@ -44,7 +42,7 @@ class BRDFKernels:
     ):
         self.hb = hb
         self.br = br
-        self._rust_kernels = _RustKernels(hb, br)
+        self._rust_kernels: object | None = None  # lazily initialised on first compute()
 
     def compute(
         self,
@@ -83,7 +81,11 @@ class BRDFKernels:
         vza_in = np.ascontiguousarray(vza_np.reshape(1, -1), dtype=np.float64)
         sza_in = np.ascontiguousarray(sza_np.reshape(1, -1), dtype=np.float64)
         raa_in = np.ascontiguousarray(raa_np.reshape(1, -1), dtype=np.float64)
-        k_vol, k_geo = self._rust_kernels.compute(vza_in, sza_in, raa_in)
+        if self._rust_kernels is None:
+            from siac._rust import RossThickLiSparse as _RustKernels  # noqa: PLC0415 - lazy; siac._rust is optional at import time
+
+            self._rust_kernels = _RustKernels(self.hb, self.br)
+        k_vol, k_geo = self._rust_kernels.compute(vza_in, sza_in, raa_in)  # type: ignore[union-attr]
         k_vol = np.asarray(k_vol, dtype=np.float64).reshape(original_shape)
         k_geo = np.asarray(k_geo, dtype=np.float64).reshape(original_shape)
 
