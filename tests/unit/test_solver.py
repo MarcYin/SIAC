@@ -11,14 +11,14 @@ from siac._rust import (
     evaluate_grid_search_cost_cube_with_provider,
     quadratic_refine_grid_search,
 )
-from siac.core.types import AtmosphericState
-from siac.solver.cost import (
+from siac.algorithms.solver.cost import (
     CostFunction,
     CostFunctionConfig,
     apply_smoothness_filter,
     compute_laplacian_eigenvalues,
 )
-from siac.solver.multigrid import MultiGridConfig, MultiGridSolver
+from siac.algorithms.solver.multigrid import MultiGridConfig, MultiGridSolver
+from siac.domain import AtmosphericState
 
 
 def _quadratic_refine_python_reference(
@@ -309,7 +309,7 @@ class TestMultiGridSolver:
         toa = xr.DataArray(np.full((2, *shape), 0.2, dtype=np.float32), dims=["band", "y", "x"])
         cloud_mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
 
-        from siac.core.types import BRDFKernelWeights, GeometryAngles, SensorBand, SurfacePrior
+        from siac.domain import BRDFKernelWeights, GeometryAngles, SensorBand, SurfacePrior
 
         geometry = GeometryAngles(
             sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -373,7 +373,7 @@ class TestMultiGridSolver:
 
     def test_solve_uses_grid_search_when_rt_has_no_jacobian(self):
         """Solver should switch to grid-search + quadratic fit for non-jacobian RT backends."""
-        from siac.core.types import (
+        from siac.domain import (
             BRDFKernelWeights,
             GeometryAngles,
             RTCoefficients,
@@ -480,14 +480,14 @@ class TestMultiGridSolver:
 
     def test_grid_search_prefers_rust_refiner_when_available(self, monkeypatch):
         """Grid-search refinement should call Rust helper."""
-        from siac.core.types import (
+        from siac.algorithms.solver import multigrid as mg_mod
+        from siac.domain import (
             BRDFKernelWeights,
             GeometryAngles,
             RTCoefficients,
             SensorBand,
             SurfacePrior,
         )
-        from siac.solver import multigrid as mg_mod
 
         shape = (4, 4)
         solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
@@ -744,7 +744,7 @@ class TestMultiGridSolver:
 
     def test_grid_search_accepts_surface_prior_with_extra_bands(self):
         """Grid-search should handle surface priors with more bands than solver bands."""
-        from siac.core.types import (
+        from siac.domain import (
             BRDFKernelWeights,
             GeometryAngles,
             RTCoefficients,
@@ -868,7 +868,7 @@ class TestProtocolValidation:
         toa = xr.DataArray(np.full((3, *shape), 0.2), dims=["band", "y", "x"])
         cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
 
-        from siac.core.types import BRDFKernelWeights, GeometryAngles, SensorBand, SurfacePrior
+        from siac.domain import BRDFKernelWeights, GeometryAngles, SensorBand, SurfacePrior
 
         geometry = GeometryAngles(
             sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -960,7 +960,7 @@ class TestCostFunctionGradient:
         vza = xr.DataArray(np.full(shape, 0.1), dims=["y", "x"])
         vaa = xr.DataArray(np.full(shape, 1.5), dims=["y", "x"])
 
-        from siac.core.types import GeometryAngles
+        from siac.domain import GeometryAngles
         geometry = GeometryAngles(sza=sza, saa=saa, vza=vza, vaa=vaa)
 
         # Atmospheric state

@@ -6,13 +6,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import (
+from siac.algorithms.correction.atmospheric import AtmosphericCorrector, CorrectionResult
+from siac.domain import (
     SENTINEL2A_CONFIG,
     AtmosphericState,
     GeometryAngles,
     RTCoefficients,
 )
-from siac.correction.atmospheric import AtmosphericCorrector, CorrectionResult
 
 
 class TestAtmosphericCorrector:

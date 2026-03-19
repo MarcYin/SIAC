@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
+from siac.domain import AtmosphericState, GeometryAngles, SensorBand
 from siac.rt.lut import ZarrLUTBackend, create_lut_from_py6s
 from siac.rt.lut.http_zip_store import _HTTPRangeFileSystem, _ReadOnlyZipFileSystem
 

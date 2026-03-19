@@ -11,7 +11,7 @@ import pytest
 import requests
 
 import siac.io.copernicus_dataspace as cdse
-from siac.core.exceptions import DataNotFoundError
+from siac.errors import DataNotFoundError
 from siac.io.copernicus_dataspace import CopernicusDataspaceBackend, download_cdse, search_cdse
 from siac.io.s2_data_source import S2Product, S2Query
 

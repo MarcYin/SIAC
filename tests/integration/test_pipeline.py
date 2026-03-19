@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.exceptions import ValidationError
-from siac.core.types import (
+from siac.algorithms.correction.atmospheric import AtmosphericCorrector
+from siac.algorithms.solver.multigrid import MultiGridConfig, MultiGridSolver
+from siac.domain import (
     SENTINEL2A_CONFIG,
     AtmosphericState,
     BRDFKernelWeights,
@@ -22,9 +23,8 @@ from siac.core.types import (
     SensorBand,
     SurfacePrior,
 )
-from siac.correction.atmospheric import AtmosphericCorrector
-from siac.pipeline import run_pipeline
-from siac.solver.multigrid import MultiGridConfig, MultiGridSolver
+from siac.errors import ValidationError
+from siac.workflows.pipeline import run_pipeline
 
 
 @pytest.mark.integration
@@ -577,8 +577,8 @@ class TestConcurrency:
             calls["backend"] = "dask"
             return "dask-result"
 
-        monkeypatch.setattr("siac.pipeline._run_pipeline_thread", _fake_thread)
-        monkeypatch.setattr("siac.pipeline._run_pipeline_dask", _fake_dask)
+        monkeypatch.setattr("siac.workflows.pipeline._run_pipeline_thread", _fake_thread)
+        monkeypatch.setattr("siac.workflows.pipeline._run_pipeline_dask", _fake_dask)
 
         cfg_thread = SimpleNamespace(
             execution=SimpleNamespace(

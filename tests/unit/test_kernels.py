@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.priors.brdf.kernels import (
+from siac.algorithms.brdf.kernels import (
     BRDFKernels,
     compute_black_sky_albedo,
     compute_kernels,

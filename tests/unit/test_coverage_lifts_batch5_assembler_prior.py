@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from siac.core.types import (
+from siac.algorithms.grid import assembler as asm
+from siac.algorithms.surface import prior_store as ps
+from siac.domain import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
@@ -17,8 +19,6 @@ from siac.core.types import (
     SensorConfig,
     SurfacePrior,
 )
-from siac.grid import assembler as asm
-from siac.priors.surface import prior_store as ps
 
 if TYPE_CHECKING:
     import pytest

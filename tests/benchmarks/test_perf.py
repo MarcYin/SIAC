@@ -12,7 +12,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import (
+from siac.algorithms.grid.assembler import assemble_grids
+from siac.domain import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
@@ -21,7 +22,6 @@ from siac.core.types import (
     SensorConfig,
     SurfacePrior,
 )
-from siac.grid.assembler import assemble_grids
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

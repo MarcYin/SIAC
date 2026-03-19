@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from siac.priors.surface.brdf_monthly_composite import MonthlyBestPixelComposite
-from siac.priors.surface.brdf_monthly_database import (
+from siac.algorithms.surface.brdf_monthly_composite import MonthlyBestPixelComposite
+from siac.algorithms.surface.brdf_monthly_database import (
     MonthlyCompositeDatabase,
     build_monthly_composite_database,
 )

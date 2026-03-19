@@ -4,7 +4,7 @@ Layer 7 — Config resolution tests.
 Tests the ``_resolve_*`` helpers in ``siac.siac`` that convert a
 ``SIACConfig`` into module callables for the pipeline.
 
-Note: ``siac.siac`` depends on ``siac.core.config.SIACConfig`` which
+Note: ``siac.siac`` depends on ``siac.config.SIACConfig`` which
 requires ``pydantic_settings``.  If that package is not installed, these
 tests are skipped.
 """
@@ -37,7 +37,7 @@ class TestResolveGridAssembler:
         assert callable(fn)
 
     def test_is_assemble_grids(self):
-        from siac.grid.assembler import assemble_grids
+        from siac.algorithms.grid.assembler import assemble_grids
         fn = _resolve_grid_assembler()
         assert fn is assemble_grids
 

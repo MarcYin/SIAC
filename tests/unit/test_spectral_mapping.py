@@ -6,15 +6,15 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from siac.core.types import BRDFKernelWeights, GeometryAngles, SensorBand
-from siac.priors.surface.brdf_whittaker import BRDFWhittakerDeriver
-from siac.priors.surface.spectral_mapping import (
+from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
+from siac.algorithms.surface.spectral_mapping import (
     HyperspectralLibrary,
     SpectralMapper,
     convolve_hyperspectral_reflectance,
     map_multispectral_reflectance,
     needs_spectral_mapping,
 )
+from siac.domain import BRDFKernelWeights, GeometryAngles, SensorBand
 
 
 def _library() -> HyperspectralLibrary:
@@ -223,7 +223,7 @@ def test_mapping_uses_rsrf_resolution_when_requested(monkeypatch) -> None:
         return _FakeCurve()
 
     monkeypatch.setattr(
-        "siac.priors.surface.spectral_mapping.rsrf.load_response_definition",
+        "siac.algorithms.surface.spectral_mapping.rsrf.load_response_definition",
         _fake_load_response_definition,
     )
 

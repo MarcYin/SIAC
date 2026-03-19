@@ -15,8 +15,10 @@ import requests
 import xarray as xr
 from rasterio.transform import from_origin
 
-from siac.core.aoi import AOI, _detect_crs
-from siac.core.exceptions import (
+from siac.adapters.atmo.cams import CAMSProvider
+from siac.domain import BRDFKernelWeights, GeometryAngles
+from siac.domain.aoi import AOI, _detect_crs
+from siac.errors import (
     ConfigurationError,
     DataNotFoundError,
     RTModelError,
@@ -25,11 +27,9 @@ from siac.core.exceptions import (
     SolverConvergenceError,
     ValidationError,
 )
-from siac.core.types import BRDFKernelWeights, GeometryAngles
 from siac.io.copernicus_dataspace import CopernicusDataspaceBackend, download_cdse, search_cdse
 from siac.io.gcs_sentinel2 import GCSSentinel2Backend
 from siac.io.s2_data_source import S2Product, S2Query
-from siac.priors.atmospheric.cams import CAMSProvider
 from siac.rt.direct import __all__ as direct_all
 
 if TYPE_CHECKING:
@@ -82,7 +82,7 @@ def _kernel_model_classes(request: pytest.FixtureRequest):
     """Import kernel-model classes lazily to avoid collection-time SciPy import."""
     _skip_native_heavy_for_cdse_cov(request)
 
-    from siac.priors.surface.kernel_model import KernelModelDeriver, PSFConvolver
+    from siac.algorithms.surface.kernel_model import KernelModelDeriver, PSFConvolver
 
     return KernelModelDeriver, PSFConvolver
 

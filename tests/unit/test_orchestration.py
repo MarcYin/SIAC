@@ -13,11 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 import xarray as xr
 
-from siac.core.config import SIACConfig
-from siac.core.types import (
+from siac.config import SIACConfig
+from siac.domain import (
     SENTINEL2A_CONFIG,
     CorrectionResult,
     GeometryAngles,
@@ -39,7 +38,7 @@ def _toa_dataset(shape: tuple[int, int] = (2, 2)) -> xr.Dataset:
 
 
 def _empty_auth():
-    from siac.core.auth import CredentialManager
+    from siac.adapters.auth import CredentialManager
     return CredentialManager()
 
 
@@ -75,11 +74,21 @@ class TestProcessDelegatesToPipeline:
         monkeypatch.setattr("siac.siac.get_preprocessor", lambda _s: _PP())
         monkeypatch.setattr(siac_obj, "_resolve_aoi", lambda _toa: SimpleNamespace(get_bounds=lambda: (0, 0, 1, 1), crs="EPSG:4326"))
         monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
-        monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _c, auth=None: "atmo")
-        monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _c, auth=None: "surf")
+
+        def _fake_atmo(_c, auth=None):
+            _ = auth
+            return "atmo"
+
+        def _fake_surface(_c, auth=None):
+            _ = auth
+            return "surf"
+
+        monkeypatch.setattr("siac.siac._resolve_atmo_provider", _fake_atmo)
+        monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", _fake_surface)
         monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "grid")
         monkeypatch.setattr("siac.siac._resolve_solver", lambda _c: "solver")
         monkeypatch.setattr("siac.siac._resolve_corrector", lambda _c: "corrector")
+        monkeypatch.setattr("siac.siac._resolve_rt_model_for_pipeline", lambda *_a, **_kw: "rt")
 
         captured = {}
         final = _final_result()
@@ -116,11 +125,21 @@ class TestProcessDelegatesToPipeline:
         monkeypatch.setattr("siac.siac.get_preprocessor", lambda _s: _PP())
         monkeypatch.setattr(siac_obj, "_resolve_aoi", lambda _toa: SimpleNamespace(get_bounds=lambda: (10, 20, 30, 40), crs="EPSG:32633"))
         monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
-        monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _c, auth=None: "atmo")
-        monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _c, auth=None: "surf")
+
+        def _fake_atmo(_c, auth=None):
+            _ = auth
+            return "atmo"
+
+        def _fake_surface(_c, auth=None):
+            _ = auth
+            return "surf"
+
+        monkeypatch.setattr("siac.siac._resolve_atmo_provider", _fake_atmo)
+        monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", _fake_surface)
         monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "grid")
         monkeypatch.setattr("siac.siac._resolve_solver", lambda _c: "solver")
         monkeypatch.setattr("siac.siac._resolve_corrector", lambda _c: "corrector")
+        monkeypatch.setattr("siac.siac._resolve_rt_model_for_pipeline", lambda *_a, **_kw: "rt")
 
         captured_preprocessor = {}
 
@@ -158,15 +177,33 @@ class TestProcessDelegatesToPipeline:
         monkeypatch.setattr("siac.siac.get_preprocessor", lambda _s: _PP())
         monkeypatch.setattr(siac_obj, "_resolve_aoi", lambda _toa: SimpleNamespace(get_bounds=lambda: (0, 0, 1, 1), crs="EPSG:4326"))
         monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
-        monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _c, auth=None: "atmo")
-        monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", lambda _c, auth=None: "surf")
+
+        def _fake_atmo(_c, auth=None):
+            _ = auth
+            return "atmo"
+
+        def _fake_surface(_c, auth=None):
+            _ = auth
+            return "surf"
+
+        monkeypatch.setattr("siac.siac._resolve_atmo_provider", _fake_atmo)
+        monkeypatch.setattr("siac.siac._resolve_surface_prior_provider", _fake_surface)
         monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "grid")
         monkeypatch.setattr("siac.siac._resolve_solver", lambda _c: "solver")
         monkeypatch.setattr("siac.siac._resolve_corrector", lambda _c: "corrector")
-        monkeypatch.setattr("siac.siac.run_pipeline", lambda *a, **kw: _final_result())
+        monkeypatch.setattr("siac.siac._resolve_rt_model_for_pipeline", lambda *_a, **_kw: "rt")
+
+        def _fake_run_pipeline(*_args, **_kwargs):
+            return _final_result()
+
+        monkeypatch.setattr("siac.siac.run_pipeline", _fake_run_pipeline)
 
         saved = {}
-        monkeypatch.setattr(siac_obj, "_save_output", lambda res, p: saved.update(path=Path(p)))
+
+        def _fake_save_output(_res, p):
+            saved.update(path=Path(p))
+
+        monkeypatch.setattr(siac_obj, "_save_output", _fake_save_output)
 
         siac_obj.process(tmp_path / "in.SAFE", output_path=tmp_path / "out")
         assert saved["path"] == tmp_path / "out"

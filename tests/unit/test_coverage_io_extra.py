@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import (
+from siac.domain import (
     SENTINEL2A_CONFIG,
     CorrectionResult,
     GeometryAngles,

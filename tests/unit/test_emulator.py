@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
+from siac.domain import AtmosphericState, GeometryAngles, SensorBand
 
 
 def _forward_reference(hidden_layers, output_layers, x, compute_jacobian=False):  # noqa: ANN001

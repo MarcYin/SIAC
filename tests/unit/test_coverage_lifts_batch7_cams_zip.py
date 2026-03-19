@@ -14,8 +14,8 @@ import pytest
 import xarray as xr
 from pyproj import Transformer
 
-from siac.core.auth import CredentialManager
-from siac.priors.atmospheric.cams import CAMSProvider
+from siac.adapters.atmo.cams import CAMSProvider
+from siac.adapters.auth import CredentialManager
 from siac.rt.lut import http_zip_store as zip_store
 
 if TYPE_CHECKING:

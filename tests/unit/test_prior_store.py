@@ -11,17 +11,17 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import (
-    GeometryAngles,
-    SensorBand,
-    SensorConfig,
-    SurfacePrior,
-)
-from siac.priors.surface.prior_store import (
+from siac.algorithms.surface.prior_store import (
     PrebuiltPriorStore,
     _doy_from_datetime,
     _interpolate_doy,
     _select_tiles,
+)
+from siac.domain import (
+    GeometryAngles,
+    SensorBand,
+    SensorConfig,
+    SurfacePrior,
 )
 
 # ── Fixtures ─────────────────────────────────────────────────────────

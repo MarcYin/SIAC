@@ -1,25 +1,24 @@
-"""
-Unit tests for SIAC configuration system.
-"""
+"""Unit tests for the reimplemented SIAC config system."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-import yaml
 
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
-from siac.core.config import (
+from siac.config import (
     DEFAULT_LUT_URL,
     AtmoPriorConfig,
     BRDFConfig,
     CloudMaskConfig,
     ExecutionConfig,
     OutputConfig,
-    RTModelConfig,
+    RunRequest,
     S2DataAccessConfig,
     SIACConfig,
     SolverConfig,
@@ -28,10 +27,7 @@ from siac.core.config import (
 
 
 class TestSIACConfig:
-    """Tests for main SIACConfig class."""
-
     def test_default_config(self):
-        """Default config should be valid."""
         config = SIACConfig()
 
         assert config.sensor == "auto"
@@ -41,24 +37,25 @@ class TestSIACConfig:
         assert config.cloud_mask.mode == "auto"
         assert config.execution.backend == "thread"
         assert config.rt_model.backend == "emulator"
-        assert config.rt_model.lut_path == DEFAULT_LUT_URL
+        assert config.paths.lut_path == DEFAULT_LUT_URL
 
     def test_config_from_dict(self):
-        """Config should be creatable from dict."""
-        data = {
-            "sensor": "s2",
-            "atmo_prior": {"provider": "merra2"},
-            "brdf": {"provider": "vnp43", "temporal_window": 8},
-            "s2_data": {"backend": "gcs", "max_cloud_cover": 30.0},
-            "cloud_mask": {
-                "mode": "external_file",
-                "external_mask_path": "/tmp/cloud.tif",
-                "class_mapping": {2: [8, 9, 10], 3: [3], 1: [4, 5, 6, 7]},
+        config = SIACConfig(
+            sensor="s2",
+            providers={
+                "atmo": {"provider": "merra2"},
+                "brdf": {"provider": "vnp43", "temporal_window": 8},
+                "s2": {"backend": "gcs", "max_cloud_cover": 30.0},
             },
-            "execution": {"backend": "thread", "max_workers": 8, "retries": 1},
-        }
-
-        config = SIACConfig(**data)
+            algorithms={
+                "cloud_mask": {
+                    "mode": "external_file",
+                    "external_mask_path": "/tmp/cloud.tif",
+                    "class_mapping": {2: [8, 9, 10], 3: [3], 1: [4, 5, 6, 7]},
+                }
+            },
+            runtime={"execution": {"backend": "thread", "max_workers": 8, "retries": 1}},
+        )
 
         assert config.sensor == "s2"
         assert config.atmo_prior.provider == "merra2"
@@ -73,11 +70,12 @@ class TestSIACConfig:
 
     def test_atmo_prior_remote_url_is_preserved(self):
         config = SIACConfig(
-            sensor="s2",
-            atmo_prior={
-                "provider": "cams",
-                "data_path": "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
-            },
+            providers={
+                "atmo": {
+                    "provider": "cams",
+                    "data_path": "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/",
+                }
+            }
         )
 
         assert isinstance(config.atmo_prior.data_path, str)
@@ -85,88 +83,31 @@ class TestSIACConfig:
 
     def test_atmo_prior_remote_s3_url_is_preserved(self):
         config = SIACConfig(
-            sensor="s2",
-            atmo_prior={
-                "provider": "cams",
-                "data_path": "s3://eodata/CAMS/GLOBAL",
-            },
+            providers={
+                "atmo": {
+                    "provider": "cams",
+                    "data_path": "s3://eodata/CAMS/GLOBAL",
+                }
+            }
         )
 
         assert isinstance(config.atmo_prior.data_path, str)
         assert config.atmo_prior.data_path == "s3://eodata/CAMS/GLOBAL"
 
-    def test_config_to_yaml(self, tmp_path: Path):
-        """Config should serialize to YAML."""
-        config = SIACConfig(
-            sensor="l8",
-            rt_model=RTModelConfig(backend="lut"),
-        )
-
-        yaml_path = tmp_path / "config.yaml"
-        config.to_yaml(yaml_path)
-
-        assert yaml_path.exists()
-
-        with yaml_path.open() as f:
-            data = yaml.safe_load(f)
-
-        assert data["inputs"]["sensor"] == "l8"
-        assert data["models"]["rt_model"]["backend"] == "lut"
-
-    def test_config_from_yaml(self, tmp_path: Path):
-        """Config should load from YAML."""
-        yaml_content = """
-inputs:
-  sensor: s2
-providers:
-  atmo_prior:
-    provider: era5
-  brdf:
-    provider: mcd43
-    temporal_window: 16
-models:
-  solver:
-    aot_gamma: 15.0
-"""
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(yaml_content)
-
-        config = SIACConfig.from_yaml(yaml_path)
-
-        assert config.sensor == "s2"
-        assert config.atmo_prior.provider == "era5"
-        assert config.brdf.temporal_window == 16
-        assert config.solver.aot_gamma == 15.0
-
-    def test_config_from_legacy_flat_yaml(self, tmp_path: Path):
-        yaml_content = """
-sensor: s2
-atmo_prior:
-  provider: era5
-brdf:
-  provider: mcd43
-  temporal_window: 8
-"""
-        yaml_path = tmp_path / "legacy.yaml"
-        yaml_path.write_text(yaml_content)
-
-        config = SIACConfig.from_file(yaml_path)
-
-        assert config.sensor == "s2"
-        assert config.atmo_prior.provider == "era5"
-        assert config.brdf.temporal_window == 8
-
     def test_config_to_and_from_toml(self, tmp_path: Path):
         config = SIACConfig(
-            sensor="s2",
+            sensor="l8",
             paths={"spectral_library_root": "/tmp/library", "lut_path": "s3://bucket/lut.zarr"},
-            surface_prior={
-                "spectral_mapping": {
-                    "siac_library_root": "/tmp/override-library",
-                    "k_neighbors": 7,
-                }
+            providers={"brdf": {"provider": "vnp43", "temporal_window": 8}},
+            algorithms={
+                "surface_prior": {
+                    "spectral_mapping": {
+                        "k_neighbors": 7,
+                    }
+                },
+                "rt": {"backend": "lut"},
             },
-            credentials={"earthdata_username": "user", "earthdata_password": "secret"},
+            auth={"earthdata": {"username": "user", "password": "secret"}},
         )
 
         toml_path = tmp_path / "config.toml"
@@ -175,91 +116,82 @@ brdf:
         with toml_path.open("rb") as handle:
             data = tomllib.load(handle)
 
-        assert data["inputs"]["sensor"] == "s2"
+        assert "sensor" not in data
         assert data["paths"]["spectral_library_root"] == "/tmp/library"
-        assert data["models"]["surface_prior"]["spectral_mapping"]["k_neighbors"] == 7
-        assert data["auth"]["earthdata_username"] == "user"
+        assert data["providers"]["brdf"]["kind"] == "vnp43"
+        assert data["algorithms"]["surface_prior"]["spectral_mapping"]["k_neighbors"] == 7
 
-        round_tripped = SIACConfig.from_toml(toml_path)
-        assert round_tripped.sensor == "s2"
-        assert str(round_tripped.paths.spectral_library_root) == "/tmp/library"
-        assert round_tripped.surface_prior.spectral_mapping.k_neighbors == 7
+        loaded = SIACConfig.from_file(toml_path)
+        assert loaded.sensor == "auto"
+        assert loaded.paths.spectral_library_root == Path("/tmp/library")
+        assert loaded.brdf.temporal_window == 8
+        assert loaded.surface_prior.spectral_mapping.k_neighbors == 7
 
-    def test_to_dict_uses_categorized_layout(self):
-        config = SIACConfig(sensor="l8")
-
-        data = config.to_dict()
-
-        assert set(data) == {"inputs", "paths", "runtime", "providers", "processing", "models", "auth", "output"}
-        assert data["inputs"]["sensor"] == "l8"
-        assert "execution" in data["runtime"]
-
-    def test_categorized_state_redacts_auth(self, tmp_path: Path):
+    def test_from_yaml_is_rejected(self, tmp_path: Path):
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text("inputs:\n  sensor: s2\n")
-        config = SIACConfig.load(
-            yaml_path,
-            credentials={"earthdata_username": "user", "earthdata_password": "secret"},
-            s2_data={"cdse_access_key": "access", "cdse_secret_key": "secret-key"},
+        yaml_path.write_text("sensor: s2\n")
+        with pytest.raises(ValueError, match="TOML"):
+            SIACConfig.from_yaml(yaml_path)
+
+    def test_with_overrides(self):
+        config = SIACConfig(sensor="s2")
+        updated = config.with_overrides(
+            sensor="l8",
+            providers={"s2": {"backend": "gcs"}},
+            runtime={"execution": {"max_workers": 9}},
         )
 
-        state = config.categorized_state()
+        assert config.sensor == "s2"
+        assert updated.sensor == "l8"
+        assert updated.s2_data.backend == "gcs"
+        assert updated.execution.max_workers == 9
 
-        assert state["load"]["config_file"] == str(yaml_path)
-        assert state["config"]["auth"]["earthdata_username"] == "<redacted>"
-        assert state["config"]["auth"]["earthdata_password"] == "<redacted>"
-        assert state["config"]["inputs"]["s2_data"]["cdse_access_key"] == "<redacted>"
-        assert state["resolved"]["paths"]["lut_path_resolved"] == DEFAULT_LUT_URL
+    def test_resolve_uses_python_only_sensor_and_aoi_defaults(self):
+        config = SIACConfig(sensor="s2", aoi="/tmp/aoi.geojson")
 
-    def test_write_default_config_uses_requested_format(self, tmp_path: Path):
-        written = SIACConfig.write_default_config(tmp_path / "siac", format="toml")
+        resolved = config.resolve(RunRequest(input_path="/tmp/input.SAFE"))
+
+        assert resolved.sensor == "s2"
+        assert resolved.aoi == "/tmp/aoi.geojson"
+
+    def test_snapshot_redacts_auth(self):
+        config = SIACConfig(
+            auth={
+                "earthdata": {"username": "user", "password": "secret"},
+                "cds": {"api_key": "uid:key"},
+            }
+        )
+
+        snapshot = config.snapshot()
+
+        assert snapshot["config"]["auth"]["earthdata"]["username"] == "<redacted>"
+        assert snapshot["config"]["auth"]["earthdata"]["password"] == "<redacted>"
+        assert snapshot["config"]["auth"]["cds"]["api_key"] == "<redacted>"
+
+    def test_write_default_config(self, tmp_path: Path):
+        written = SIACConfig.write_default_config(tmp_path / "siac.toml")
 
         assert written == tmp_path / "siac.toml"
-        assert written.exists()
         loaded = SIACConfig.from_file(written)
-        assert loaded.sensor == "auto"
-
-    def test_config_with_overrides(self):
-        """with_overrides should create new config."""
-        config1 = SIACConfig(sensor="s2")
-        config2 = config1.with_overrides(sensor="l8")
-
-        assert config1.sensor == "s2"
-        assert config2.sensor == "l8"
-
-    def test_invalid_sensor(self):
-        """Invalid sensor should raise error."""
-        with pytest.raises(ValueError):
-            SIACConfig(sensor="invalid")
+        assert loaded.paths.lut_path == DEFAULT_LUT_URL
 
 
 class TestAtmoPriorConfig:
-    """Tests for atmospheric prior configuration."""
-
     def test_valid_providers(self):
-        """All valid providers should work."""
         for provider in ["cams", "merra2", "mcd19", "vnp19", "era5", "user"]:
             if provider == "user":
-                # User provider needs at least one path
-                config = AtmoPriorConfig(
-                    provider=provider,
-                    user_aot=Path("/tmp/aot.tif"),
-                )
+                config = AtmoPriorConfig(provider=provider, user_aot=Path("/tmp/aot.tif"))
             else:
                 config = AtmoPriorConfig(provider=provider)
             assert config.provider == provider
 
     def test_user_provider_requires_data(self):
-        """User provider should require data paths."""
         with pytest.raises(ValueError):
             AtmoPriorConfig(provider="user")
 
 
 class TestBRDFConfig:
-    """Tests for BRDF configuration."""
-
     def test_temporal_window_bounds(self):
-        """Temporal window should be bounded."""
         config = BRDFConfig(temporal_window=16)
         assert config.temporal_window == 16
 
@@ -323,36 +255,25 @@ class TestExecutionConfig:
 
 
 class TestSolverConfig:
-    """Tests for solver configuration."""
-
     def test_valid_bounds(self):
-        """Valid bounds should work."""
-        config = SolverConfig(
-            aot_bounds=(0.01, 2.0),
-            tcwv_bounds=(0.1, 6.0),
-        )
+        config = SolverConfig(bounds={"aot": (0.01, 2.0), "tcwv": (0.1, 6.0)})
         assert config.aot_bounds == (0.01, 2.0)
 
     def test_invalid_bounds(self):
-        """Invalid bounds (min >= max) should fail."""
         with pytest.raises(ValueError):
-            SolverConfig(aot_bounds=(2.0, 0.01))
+            SolverConfig(bounds={"aot": (2.0, 0.01)})
 
         with pytest.raises(ValueError):
-            SolverConfig(tcwv_bounds=(5.0, 5.0))
+            SolverConfig(bounds={"tcwv": (5.0, 5.0)})
 
 
 class TestOutputConfig:
-    """Tests for output configuration."""
-
     def test_valid_formats(self):
-        """All valid formats should work."""
         for fmt in ["geotiff", "cog", "zarr", "netcdf"]:
             config = OutputConfig(format=fmt)
             assert config.format == fmt
 
     def test_valid_compression(self):
-        """All valid compression options should work."""
         for comp in ["deflate", "lzw", "zstd", "none"]:
             config = OutputConfig(compression=comp)
             assert config.compression == comp
@@ -362,4 +283,4 @@ class TestLUTConfigHelpers:
     def test_get_lut_config_preserves_s3_url(self):
         cfg = get_lut_config("s3://bucket/path/lut.zarr")
         assert cfg.rt_model.backend == "lut"
-        assert cfg.rt_model.lut_path == "s3://bucket/path/lut.zarr"
+        assert cfg.paths.lut_path == "s3://bucket/path/lut.zarr"

@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.satellite.sentinel2 import Sentinel2Preprocessor
+from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
 
 
 def _da(shape: tuple[int, int] = (8, 8), value: float = 1000.0) -> xr.DataArray:
@@ -84,7 +84,7 @@ class TestSentinel2Internals:
             return _Cfg() if satellite_id == "S2C" else None
 
         monkeypatch.setattr(
-            "siac.satellite.sentinel2.load_sensor_config_from_srf",
+            "siac.adapters.satellite.sentinel2.load_sensor_config_from_srf",
             _load,
         )
         assert p.sensor_config.satellite_id == "S2C"
@@ -176,7 +176,7 @@ class TestSentinel2Internals:
         def _fake_reproject(source, target, resampling="bilinear"):
             return xr.full_like(target, float(np.nanmean(source.values)))
 
-        monkeypatch.setattr("siac.satellite.sentinel2.reproject_match", _fake_reproject)
+        monkeypatch.setattr("siac.adapters.satellite.sentinel2.reproject_match", _fake_reproject)
         out = p._angles_to_grid(np.full((23, 23), 30.0, dtype=np.float32), _da((8, 8), 1.0))
         assert out.shape == (8, 8)
 
@@ -192,9 +192,9 @@ class TestSentinel2Internals:
                 return _da((6, 6), value=4500.0)
             return _da((6, 6), value=3500.0)
 
-        monkeypatch.setattr("siac.satellite.sentinel2.read_raster", _fake_read_raster)
+        monkeypatch.setattr("siac.adapters.satellite.sentinel2.read_raster", _fake_read_raster)
         monkeypatch.setattr(
-            "siac.satellite.sentinel2.reproject_match",
+            "siac.adapters.satellite.sentinel2.reproject_match",
             lambda src, _tgt, **_kwargs: src,
         )
 
@@ -252,13 +252,13 @@ class TestSentinel2Internals:
                 return xr.full_like(_da((2, 2), 0.2), 1, dtype=np.uint8)
             raise ValueError("Could not find any red band")
 
-        monkeypatch.setattr("siac.satellite.sentinel2.build_cloud_classes", _fake_build)
+        monkeypatch.setattr("siac.adapters.satellite.sentinel2.build_cloud_classes", _fake_build)
         out = p.extract_cloud_mask(safe, toa=toa)
         assert out.dtype == bool
         assert calls["n"] == 2  # auto + fallback none
 
         monkeypatch.setattr(
-            "siac.satellite.sentinel2.build_cloud_classes",
+            "siac.adapters.satellite.sentinel2.build_cloud_classes",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("other")),
         )
         with pytest.raises(ValueError, match="other"):

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from siac.core.config import SIACConfig
-from siac.core.exceptions import DataNotFoundError
+from siac.config import SIACConfig
+from siac.errors import DataNotFoundError
 from siac.io.s2_data_source import S2Product, S2Query
 from siac.siac import resolve_s2_input, search_sentinel2, siac_process_s2
 
@@ -16,13 +16,13 @@ from siac.siac import resolve_s2_input, search_sentinel2, siac_process_s2
 def test_resolve_s2_input_returns_existing_local_path(tmp_path: Path):
     safe_dir = tmp_path / "S2A_MSIL1C_20240101T000000_N0500_R001_T31UDQ_20240101T000001.SAFE"
     safe_dir.mkdir(parents=True, exist_ok=True)
-    cfg = SIACConfig(sensor="s2", s2_data={"backend": "local"})
+    cfg = SIACConfig(sensor="s2", providers={"s2": {"backend": "local"}})
     out = resolve_s2_input(safe_dir, cfg)
     assert out == safe_dir
 
 
 def test_resolve_s2_input_local_backend_missing_path_raises():
-    cfg = SIACConfig(sensor="s2", s2_data={"backend": "local"})
+    cfg = SIACConfig(sensor="s2", providers={"s2": {"backend": "local"}})
     with pytest.raises(DataNotFoundError, match="backend is 'local'"):
         resolve_s2_input("T31UDQ_20240101", cfg)
 
@@ -30,7 +30,7 @@ def test_resolve_s2_input_local_backend_missing_path_raises():
 def test_resolve_s2_input_uses_remote_backend_and_cache(monkeypatch, tmp_path: Path):
     cfg = SIACConfig(
         sensor="s2",
-        s2_data={"backend": "gcs", "cache_dir": tmp_path, "max_cloud_cover": 35.0},
+        providers={"s2": {"backend": "gcs", "cache_dir": tmp_path, "max_cloud_cover": 35.0}},
     )
     captured: dict[str, object] = {}
 
@@ -54,14 +54,12 @@ def test_resolve_s2_input_uses_remote_backend_and_cache(monkeypatch, tmp_path: P
 
 
 def test_resolve_s2_input_builds_auth_from_config_for_cdse(monkeypatch, tmp_path: Path):
-    cfg = SIACConfig(sensor="s2", s2_data={"backend": "cdse", "cache_dir": tmp_path})
+    cfg = SIACConfig(sensor="s2", providers={"s2": {"backend": "cdse", "cache_dir": tmp_path}})
     captured: dict[str, object] = {}
     auth_obj = object()
 
     class _FakeBackend:
         def __init__(self, access_key=None, secret_key=None, auth=None):  # noqa: ANN001
-            captured["access_key"] = access_key
-            captured["secret_key"] = secret_key
             captured["auth"] = auth
 
     def _fake_get(self, query, dest_dir=None):  # noqa: ANN001
@@ -149,7 +147,7 @@ def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
 
 
 def test_siac_process_s2_resolves_and_runs_process(monkeypatch, tmp_path: Path):
-    cfg = SIACConfig(sensor="s2", s2_data={"backend": "local"})
+    cfg = SIACConfig(sensor="s2", providers={"s2": {"backend": "local"}})
     safe_dir = tmp_path / "S2A_fake.SAFE"
     safe_dir.mkdir(parents=True, exist_ok=True)
     captured: dict[str, object] = {}

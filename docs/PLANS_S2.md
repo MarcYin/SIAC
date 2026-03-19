@@ -616,9 +616,9 @@ result = siac_process(config, input_path, preprocessor=Sen2CorCloudPreprocessor(
 ### 6.2 Custom Atmospheric Prior (Override M2)
 
 ```python
-# Use ERA5 reanalysis instead of CAMS
-from siac.priors.atmospheric.era5 import ERA5Provider
-result = siac_process(config, input_path, atmo_provider=ERA5Provider().get_prior)
+# Use MERRA-2 reanalysis instead of CAMS
+from siac.adapters.atmo.merra2 import MERRA2Provider
+result = siac_process(config, input_path, atmo_provider=MERRA2Provider().get_prior)
 ```
 
 ### 6.3 Custom Surface Prior from Landsat Composites (Override M3)
@@ -687,7 +687,7 @@ write_to_stac(result.boa, result.metadata, output_dir)
 ```python
 from siac import siac_process, siac_process_s2
 from siac.io.s2_data_source import S2Query, search_sentinel2
-from siac.core.config import SIACConfig
+from siac.config import SIACConfig
 from datetime import date
 from pathlib import Path
 

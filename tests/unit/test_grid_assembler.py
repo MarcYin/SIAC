@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import (
+from siac.algorithms.grid.assembler import assemble_grids
+from siac.domain import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
@@ -16,8 +17,7 @@ from siac.core.types import (
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.core.validation import _validate_solver_input_bundle
-from siac.grid.assembler import assemble_grids
+from siac.domain.validation import _validate_solver_input_bundle
 
 
 @pytest.fixture

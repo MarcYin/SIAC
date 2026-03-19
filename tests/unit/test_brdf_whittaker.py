@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import BRDFKernelWeights, GeometryAngles, SurfacePrior
-from siac.priors.surface.brdf_whittaker import BRDFWhittakerDeriver
+from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
+from siac.domain import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
 
 def _geometry(shape: tuple[int, int]) -> GeometryAngles:

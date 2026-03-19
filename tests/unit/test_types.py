@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import (
+from siac.domain import (
     LANDSAT8_OLI_CONFIG,
     SENTINEL2A_CONFIG,
     AtmosphericState,

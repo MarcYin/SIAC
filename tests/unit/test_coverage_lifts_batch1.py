@@ -9,16 +9,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.protocols import (
-    AerosolSolver,
-    AtmosphericPriorProvider,
-    BRDFProductProvider,
-    OutputWriter,
-    RTModelBackend,
-    SatellitePreprocessor,
-    SurfacePriorDeriver,
+from siac.adapters.satellite.base import (
+    BaseSatellitePreprocessor,
+    detect_sensor,
+    resample_angles_to_data,
 )
-from siac.core.types import (
+from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig, create_sparse_laplacian
+from siac.domain import (
     SENTINEL2A_CONFIG,
     AtmosphericState,
     BRDFKernelWeights,
@@ -27,9 +24,16 @@ from siac.core.types import (
     SensorBand,
     SurfacePrior,
 )
-from siac.core.validation import _spatial_shape
-from siac.satellite.base import BaseSatellitePreprocessor, detect_sensor, resample_angles_to_data
-from siac.solver.cost import CostFunction, CostFunctionConfig, create_sparse_laplacian
+from siac.domain.protocols import (
+    AerosolSolver,
+    AtmosphericPriorProvider,
+    BRDFProductProvider,
+    OutputWriter,
+    RTModelBackend,
+    SatellitePreprocessor,
+    SurfacePriorDeriver,
+)
+from siac.domain.validation import _spatial_shape
 
 if TYPE_CHECKING:
     from pathlib import Path

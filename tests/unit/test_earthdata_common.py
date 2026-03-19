@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 import h5py
 import numpy as np
 
-from siac.io.reprojection import transform_bounds
-from siac.priors.atmospheric.mcd19_earthaccess import VNP19AODProvider
-from siac.priors.earthdata_common import (
+from siac.adapters.atmo.mcd19_earthaccess import VNP19AODProvider
+from siac.adapters.earthdata_common import (
     granule_intersects_bounds,
     granule_native_bounds,
     make_native_grid_dataarray,
 )
+from siac.io.reprojection import transform_bounds
 
 if TYPE_CHECKING:
     from pathlib import Path

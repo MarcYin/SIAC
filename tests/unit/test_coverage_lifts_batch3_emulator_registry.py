@@ -9,7 +9,7 @@ import pytest
 import xarray as xr
 
 import siac.rt.emulator.two_nn as tnn
-from siac.core.types import AtmosphericState, GeometryAngles, SensorBand
+from siac.domain import AtmosphericState, GeometryAngles, SensorBand
 
 
 def _geom(shape=(2, 2)):

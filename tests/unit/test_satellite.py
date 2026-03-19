@@ -10,13 +10,13 @@ import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
 
-from siac.satellite import (
+from siac.adapters.satellite import (
     detect_sensor,
     get_preprocessor,
     list_available_sensors,
     register_preprocessor,
 )
-from siac.satellite.base import (
+from siac.adapters.satellite.base import (
     BaseSatellitePreprocessor,
     apply_scale_offset,
     create_valid_mask,
@@ -124,7 +124,7 @@ class TestSentinel2Preprocessor:
 
     def test_band_patterns(self):
         """Should have correct band file patterns."""
-        from siac.satellite.sentinel2 import Sentinel2Preprocessor
+        from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
 
         preprocessor = Sentinel2Preprocessor()
 
@@ -133,7 +133,7 @@ class TestSentinel2Preprocessor:
 
     def test_parse_observation_time_from_safe_name(self):
         """Should infer sensing datetime from SAFE product names."""
-        from siac.satellite.sentinel2 import Sentinel2Preprocessor
+        from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
 
         product = "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE"
         out = Sentinel2Preprocessor._parse_observation_time_from_name(product)
@@ -142,7 +142,7 @@ class TestSentinel2Preprocessor:
 
     def test_load_toa_aligns_bands_to_reference_grid(self, monkeypatch, tmp_path):
         """Mixed-resolution bands should be aligned before Dataset assembly."""
-        from siac.satellite import sentinel2 as s2mod
+        from siac.adapters.satellite import sentinel2 as s2mod
 
         pre = s2mod.Sentinel2Preprocessor()
         granule_dir = tmp_path / "GRANULE" / "L1C_TEST"
@@ -235,7 +235,7 @@ class TestPreprocessorBase:
 
             @property
             def sensor_config(self):
-                from siac.core.types import SENTINEL2A_CONFIG
+                from siac.domain import SENTINEL2A_CONFIG
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path):
@@ -244,7 +244,7 @@ class TestPreprocessorBase:
 
             def extract_geometry(self, input_path):
                 self.calls.append("extract_geometry")
-                from siac.core.types import GeometryAngles
+                from siac.domain import GeometryAngles
                 arr = xr.DataArray(np.ones((10, 10)), dims=["y", "x"])
                 return GeometryAngles(sza=arr, saa=arr, vza=arr, vaa=arr)
 
@@ -280,7 +280,7 @@ class TestPreprocessorBase:
 
             @property
             def sensor_config(self):
-                from siac.core.types import SENTINEL2A_CONFIG
+                from siac.domain import SENTINEL2A_CONFIG
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path):
@@ -298,7 +298,7 @@ class TestPreprocessorBase:
 
             def extract_geometry(self, input_path):
                 del input_path
-                from siac.core.types import GeometryAngles
+                from siac.domain import GeometryAngles
 
                 geom_started.set()
                 assert cloud_started.wait(timeout=1.0)

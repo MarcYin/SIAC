@@ -1,410 +1,96 @@
-# SIAC v2 — Code Structure & Module Dependency Graph
+# SIAC Code Structure
 
-Status note (2026-02-14): this document mixes current structure and target
-architecture. Sentinel-2 data access backends (`copernicus_dataspace.py`,
-`gcs_sentinel2.py`) and Earthaccess foundation modules now exist; remaining
-"planned" references mainly apply to future Landsat ingestion expansion.
+Status note (2026-03-19): the package has been cut over to the new layered
+layout. The old `siac.core.*` modules and the old top-level `siac.pipeline`
+module have been removed.
 
-## Package Tree
+## Package Layout
 
-```
+```text
 siac/
 ├── __init__.py
-├── siac.py                          # Main entry point & _resolve_* helpers
-├── pipeline.py                      # Pipeline orchestrator (run_pipeline)
+├── siac.py                      # Thin public facade
+├── errors.py                    # Shared exception types
 │
-├── core/                            # Shared types, protocols, config
+├── config/                      # System config, loading, resolution, snapshots
 │   ├── __init__.py
-│   ├── types.py                     # All data types & sensor configs
-│   ├── protocols.py                 # @runtime_checkable Protocol definitions
-│   ├── config.py                    # SIACConfig (pydantic_settings)
-│   ├── exceptions.py                # Error hierarchy (+ AuthenticationError)
-│   ├── auth.py                      # CredentialManager, CredentialSpec, OAuthToken
-│   ├── spectral.py                  # SpectralBandDescriptor, band convolution
-│   ├── validation.py                # Contract validators (_validate_*)
-│   └── aoi.py                       # AOI (area of interest) handling
+│   ├── public.py                # SIACConfig public wrapper
+│   ├── schema.py                # Typed TOML schema
+│   ├── load.py                  # TOML I/O and env overlays
+│   ├── resolve.py               # SystemConfig + RunRequest -> ResolvedConfig
+│   └── snapshot.py              # Resolved/system snapshots
 │
-├── srf/                             # Spectral response function domain
+├── domain/                      # Pure domain models and contracts
 │   ├── __init__.py
-│   ├── types.py                     # SpectralResponseFunction
-│   ├── builders.py                  # Tabulated/metadata SRF -> SensorConfig builders
-│   ├── catalog.py                   # Known official SRF source inventory
-│   ├── loaders.py                   # Remote/local/metadata SRF loading entry points
-│   ├── repository.py                # Canonical SRF repository API
-│   ├── sources/
-│   │   ├── __init__.py
-│   │   ├── sentinel2.py             # Sentinel-2 official workbook loader
-│   │   ├── landsat.py               # Landsat provider boundary
-│   │   └── planet.py                # PlanetScope / SuperDove provider boundary
-│   └── metadata/
-│       ├── __init__.py
-│       ├── enmap.py                 # EnMAP metadata-driven SRF boundary
-│       ├── emit.py                  # EMIT metadata-driven SRF boundary
-│       └── prisma.py                # PRISMA metadata-driven SRF boundary
+│   ├── aoi.py                   # AOI container
+│   ├── contracts.py             # Geometry, atmosphere, solver/correction contracts
+│   ├── sensors.py               # SensorBand, SensorConfig, built-in sensors
+│   ├── protocols.py             # Structural interfaces for pluggable modules
+│   ├── validation.py            # Contract validators
+│   └── spectral.py              # Spectral helper utilities
 │
-├── satellite/                       # M1 — Satellite Preprocessors
+├── adapters/                    # External systems and backend adapters
 │   ├── __init__.py
-│   ├── base.py                      # BaseSatellitePreprocessor, registry
-│   └── sentinel2.py                 # Sentinel-2 SAFE reader
+│   ├── atmo/                    # Atmospheric-prior data-source adapters
+│   ├── brdf/                    # BRDF product data-source adapters
+│   ├── auth.py                  # CredentialManager and provider auth helpers
+│   ├── earthdata.py             # Earthaccess source wiring
+│   ├── earthdata_common.py      # Shared MODLAND/Earthdata grid helpers
+│   ├── rt.py                    # RT backend assembly
+│   ├── satellite/               # Sensor preprocessors
+│   └── sentinel2.py             # Sentinel-2 backend assembly
 │
-├── priors/                          # M2 & M3 — Prior Providers
+├── algorithms/                  # Numerical and retrieval algorithms
 │   ├── __init__.py
-│   ├── atmospheric/                 # M2 — Atmospheric priors
-│   │   ├── __init__.py
-│   │   ├── cams.py                  # ECMWF CAMS provider
-│   │   └── merra2.py               # NASA MERRA-2 provider
-│   ├── brdf/                        # BRDF kernel data & computation
-│   │   ├── __init__.py
-│   │   ├── kernels.py               # Ross-Thick Li-Sparse kernels
-│   │   ├── mcd43_earthaccess.py     # MODIS MCD43 via earthaccess
-│   │   └── gee_stub.py             # Google Earth Engine backend placeholder
-│   └── surface/                     # M3 — Surface prior derivation
-│       ├── __init__.py
-│       ├── kernel_model.py          # BRDF → SurfacePrior deriver
-│       └── prior_store.py           # Pre-built Zarr prior store
+│   ├── brdf/                    # BRDF kernel computations
+│   ├── correction/              # TOA -> BOA atmospheric correction
+│   ├── grid/                    # Grid assembly for solver inputs
+│   ├── solver/                  # Aerosol inversion
+│   └── surface/                 # Surface-prior derivation and spectral mapping
 │
-├── rt/                              # RT Model Backends
+├── app/                         # Runtime planning and component assembly
 │   ├── __init__.py
-│   ├── emulator/
-│   │   ├── __init__.py
-│   │   └── two_nn.py               # Two-layer NN emulator
-│   ├── lut/
-│   │   ├── __init__.py
-│   │   ├── constants.py            # Default LUT URLs and coordinate constants
-│   │   ├── http_zip_store.py       # ReadOnlyZipFileSystem-style ZIP access (local/HTTP/S3)
-│   │   ├── store.py                # Local/remote/ZIP store resolution
-│   │   ├── srf_kernel.py           # LUT-aligned SRF kernel builder
-│   │   ├── backend.py              # ZarrLUTBackend interpolation engine
-│   │   ├── create.py               # LUT generation from Py6S
-│   │   └── zarr_lut.py             # Compatibility facade (re-exports)
-│   └── direct/
-│       └── __init__.py              # (placeholder)
+│   ├── registry.py              # Kind/backend registries
+│   ├── assembly.py              # Config -> runtime callable assembly
+│   └── planning.py              # ExecutionPlan construction
 │
-├── grid/                            # M4 — Grid Assembly
+├── workflows/                   # Orchestration workflows
 │   ├── __init__.py
-│   └── assembler.py                 # assemble_grids() resampler
+│   ├── pipeline.py              # Core pipeline orchestrator
+│   ├── scene.py                 # Generic scene execution flow
+│   └── sentinel2.py             # Sentinel-2 search/download/process flow
 │
-├── solver/                          # M5 — Aerosol Solver
-│   ├── __init__.py
-│   ├── cost.py                      # Cost function & gradient
-│   └── multigrid.py                 # Multi-grid optimiser
-│
-├── correction/                      # M6 — Atmospheric Correction
-│   ├── __init__.py
-│   └── atmospheric.py               # TOA → BOA corrector
-│
-└── io/                              # I/O & Geospatial Utilities
-    ├── __init__.py
-    ├── readers.py                   # Raster/HDF/NetCDF/Zarr readers
-    ├── writers.py                   # COG/Zarr/NetCDF writers
-    ├── reprojection.py              # CRS transforms, resampling, clipping
-    ├── geometry.py                  # AOI loading, bounds math
-    ├── earthaccess_source.py        # NASA Earthdata wrapper
-    ├── s2_data_source.py            # S2Query, S2Product, deduplication
-    ├── copernicus_dataspace.py      # CDSE backend
-    └── gcs_sentinel2.py             # GCS public bucket backend
+├── cloud/                       # Cloud-mask helpers
+├── rt/                          # Radiative-transfer backends
+├── io/                          # File and remote-data I/O
+└── srf/                         # Spectral response function domain
 ```
 
----
+## Layer Boundaries
 
-## Pipeline Data Flow (M1 → M6)
+- `domain/` contains contracts and sensor definitions only. It does not own
+  auth, config loading, filesystem discovery, or remote service access.
+- `config/` owns the canonical TOML schema and config resolution.
+- `adapters/` owns external-system integration concerns.
+- `algorithms/` owns retrieval math, surface priors, correction, and grid prep.
+- `app/` resolves configuration into concrete runtime components.
+- `workflows/` executes end-to-end processing plans.
+- `siac.py` is intentionally thin and delegates to `config`, `app`, and
+  `workflows`.
 
-The six functional modules form a DAG. Arrows show which contract type
-flows between them.
+## Canonical Runtime Flow
 
-```
-                        ┌─────────────────────────────┐
-                        │       siac.siac              │
-                        │  siac_process() / SIAC       │
-                        └──────────┬──────────────────┘
-                                   │ delegates to
-                                   ▼
-                        ┌─────────────────────────────┐
-                        │      siac.pipeline           │
-                        │      run_pipeline()          │
-                        └──────────┬──────────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │                    │                     │
-              ▼                    ▼                     ▼
-   ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-   │ M1: Preprocessor  │ │ M2: Atmo Prior   │ │ M3: Surface Prior│
-   │                   │ │                  │ │                  │
-   │ siac.satellite    │ │ siac.priors      │ │ siac.priors      │
-   │   .sentinel2      │ │   .atmospheric   │ │   .surface       │
-   │                   │ │   .cams          │ │   .kernel_model  │
-   │  → Observation    │ │   .merra2        │ │   .prior_store   │
-   │    Bundle         │ │                  │ │                  │
-   │                   │ │  → Atmospheric   │ │  → SurfacePrior  │
-   └────────┬──────────┘ │    State         │ │                  │
-            │            └────────┬─────────┘ └────────┬─────────┘
-            │                     │   (concurrent)      │
-            │                     │                     │
-            └─────────┬───────────┴─────────────────────┘
-                      │
-                      ▼
-           ┌──────────────────────┐
-           │ M4: Grid Assembler   │
-           │                      │
-           │ siac.grid.assembler  │
-           │ assemble_grids()     │
-           │                      │       ┌──────────────────┐
-           │  → SolverInputBundle │◄──────│  RT Model Backend│
-           └──────────┬───────────┘       │  siac.rt         │
-                      │                   │    .emulator      │
-                      ▼                   │    .lut           │
-           ┌──────────────────────┐       └──────────────────┘
-           │ M5: Aerosol Solver   │              │
-           │                      │              │
-           │ siac.solver          │              │
-           │   .multigrid         │              │
-           │   .cost              │              │
-           │                      │              │
-           │  → SolvedAtmosphere  │              │
-           └──────────┬───────────┘              │
-                      │                          │
-                      ▼                          │
-           ┌──────────────────────┐              │
-           │ M6: Corrector        │◄─────────────┘
-           │                      │
-           │ siac.correction      │
-           │   .atmospheric       │
-           │                      │
-           │  → CorrectionResult  │
-           └──────────────────────┘
-```
+1. Load `SIACConfig` from `siac.config`.
+2. Build a `RunRequest` / resolve a `ResolvedConfig`.
+3. Assemble runtime dependencies in `siac.app`.
+4. Build an `ExecutionPlan`.
+5. Execute via `siac.workflows.scene` or `siac.workflows.pipeline`.
 
----
+## Public API
 
-## Module Dependency Graph
+- `siac.SIAC`
+- `siac.SIACConfig`
+- `siac.siac_process_s2(...)`
+- `siac.search_sentinel2(...)`
 
-Each arrow reads **"imports from"**. Leaf nodes have no internal siac
-dependencies.
-
-```
-siac.siac
- ├── siac.core.config
- ├── siac.core.auth
- ├── siac.core.types
- ├── siac.core.aoi
- ├── siac.pipeline
- ├── siac.satellite
- ├── siac.priors.atmospheric.cams
- ├── siac.priors.surface.kernel_model
- ├── siac.rt.emulator
- ├── siac.rt.lut
- ├── siac.solver
- ├── siac.correction
- └── siac.grid.assembler
-
-siac.pipeline
- ├── siac.core.aoi
- ├── siac.core.types
- └── siac.core.validation
-      └── siac.core.types
-
-siac.satellite.sentinel2
- ├── siac.core.types
- ├── siac.satellite.base
- │    ├── siac.core.types
- │    └── siac.io.reprojection          ← leaf
- └── siac.io                            ← leaf (readers/writers)
-
-siac.priors.atmospheric.cams
- └── siac.core.types
-
-siac.priors.atmospheric.merra2
- ├── siac.core.types
- └── siac.io.earthaccess_source         ← leaf
-
-siac.priors.brdf.mcd43_earthaccess
- ├── siac.core.types
- └── siac.io.earthaccess_source         ← leaf
-
-siac.priors.brdf.kernels                ← leaf (+ optional Rust)
-
-siac.priors.surface.kernel_model
- ├── siac.core.types
- └── siac.priors.brdf.kernels           ← leaf
-
-siac.priors.surface.prior_store
- └── siac.core.types
-
-siac.grid.assembler
- └── siac.core.types
-
-siac.solver.multigrid
- ├── siac.core.types
- ├── siac.core.protocols
- │    └── siac.core.types               (TYPE_CHECKING)
- └── siac.solver.cost
-      ├── siac.core.types
-      └── siac.core.protocols
-
-siac.correction.atmospheric
- ├── siac.core.types
- └── siac.core.protocols
-
-siac.rt.emulator.two_nn
- └── siac.core.types                    (+ optional Rust)
-
-siac.rt.lut.backend
- ├── siac.core.types
- └── siac.rt.lut.store
-      └── siac.rt.lut.http_zip_store
-
-siac.rt.lut.create                   ← leaf (Py6S optional)
-
-siac.core.aoi
- ├── siac.io.geometry                   ← leaf
- └── siac.io.reprojection               ← leaf
-
-siac.core.auth
- └── siac.core.exceptions               ← leaf
-siac.core.spectral                      ← leaf
-siac.core.config                        ← leaf (pydantic_settings)
-siac.core.exceptions                    ← leaf
-siac.core.types                         ← leaf (foundation)
-siac.io.readers                         ← leaf
-siac.io.writers                         ← leaf
-siac.io.reprojection                    ← leaf
-siac.io.geometry                        ← leaf
-siac.io.earthaccess_source              ← leaf
-siac.io.s2_data_source                  ← leaf
-siac.io.copernicus_dataspace
- └── siac.io.s2_data_source             ← leaf
-siac.io.gcs_sentinel2
- └── siac.io.s2_data_source             ← leaf
-```
-
----
-
-## Contract Types & Where They Live
-
-All contract types are defined in **`siac.core.types`** and validated by
-**`siac.core.validation`**.
-
-| Contract | Produced by (module) | Consumed by | Import path |
-|---|---|---|---|
-| `ObservationBundle` | M1 `siac.satellite.*` | M4, M6 | `siac.core.types.ObservationBundle` |
-| `AtmosphericState` | M2 `siac.priors.atmospheric.*` | M4 | `siac.core.types.AtmosphericState` |
-| `SurfacePrior` | M3 `siac.priors.surface.*` | M4 | `siac.core.types.SurfacePrior` |
-| `SolverInputBundle` | M4 `siac.grid.assembler` | M5 | `siac.core.types.SolverInputBundle` |
-| `SolvedAtmosphere` | M5 `siac.solver.multigrid` | M6 | `siac.core.types.SolvedAtmosphere` |
-| `CorrectionResult` | M6 `siac.correction.atmospheric` | User | `siac.core.types.CorrectionResult` |
-
-Supporting types used within contracts:
-
-| Type | Import path | Used by |
-|---|---|---|
-| `GeometryAngles` | `siac.core.types.GeometryAngles` | ObservationBundle, SolverInputBundle |
-| `SensorConfig` | `siac.core.types.SensorConfig` | ObservationBundle, SolverInputBundle |
-| `SensorBand` | `siac.core.types.SensorBand` | SensorConfig, SolverInputBundle |
-| `BRDFKernelWeights` | `siac.core.types.BRDFKernelWeights` | SurfacePrior |
-| `RTCoefficients` | `siac.core.types.RTCoefficients` | RT backends |
-| `SpectralBandDescriptor` | `siac.core.spectral.SpectralBandDescriptor` | Spectral convolution |
-| `CredentialSpec` | `siac.core.auth.CredentialSpec` | Credential storage |
-| `CredentialManager` | `siac.core.auth.CredentialManager` | Auth registry & token cache |
-| `CredentialConfig` | `siac.core.config.CredentialConfig` | Config-file credential fields |
-
----
-
-## Protocol Interfaces (`siac.core.protocols`)
-
-Protocols define the plug-in points. Any class implementing the required
-methods is accepted — no base class inheritance needed.
-
-| Protocol | Required methods | Implemented by |
-|---|---|---|
-| `RTModelBackend` | `compute_coefficients()`, `supports_jacobian()`, `backend_name`, `is_available_for_sensor()` | `siac.rt.emulator.two_nn.TwoLayerNNEmulator`, `siac.rt.lut.backend.ZarrLUTBackend` |
-| `SatellitePreprocessor` | `load_toa()`, `extract_geometry()`, `extract_cloud_mask()`, `get_metadata()` | `siac.satellite.sentinel2.Sentinel2Preprocessor` |
-| `AtmosphericPriorProvider` | `get_prior()`, `source_name` | `siac.priors.atmospheric.cams.CAMSProvider`, `siac.priors.atmospheric.merra2.MERRA2Provider` |
-| `BRDFProductProvider` | `get_brdf_parameters()`, `source_name` | `siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider` |
-| `SurfacePriorDeriver` | `compute_surface_prior()` | `siac.priors.surface.kernel_model.KernelModelDeriver` |
-| `AerosolSolver` | `solve()` | `siac.solver.multigrid.MultiGridSolver` |
-| `OutputWriter` | `write_boa()`, `write_auxiliary()` | (user-provided) |
-
----
-
-## Callable Type Aliases (`siac.pipeline`)
-
-The pipeline accepts plain functions or bound methods for each module slot.
-
-| Alias | Signature | Default resolver |
-|---|---|---|
-| `PreprocessorFn` | `(Path, AOI\|None) -> ObservationBundle` | `siac.siac._resolve_preprocessor` |
-| `AtmoPriorFn` | `(bounds, crs, datetime, float) -> AtmosphericState` | `siac.siac._resolve_atmo_provider` |
-| `SurfacePriorFn` | `(bounds, crs, datetime, SensorConfig, GeometryAngles, float) -> SurfacePrior` | `siac.siac._resolve_surface_prior_provider` |
-| `GridAssemblerFn` | `(ObservationBundle, AtmosphericState, SurfacePrior, RT, float, float) -> SolverInputBundle` | `siac.siac._resolve_grid_assembler` |
-| `SolverFn` | `(SolverInputBundle, config) -> SolvedAtmosphere` | `siac.siac._resolve_solver` |
-| `CorrectorFn` | `(ObservationBundle, SolvedAtmosphere, RT) -> CorrectionResult` | `siac.siac._resolve_corrector` |
-
----
-
-## I/O & Data Access Layer
-
-```
-siac.io
- ├── readers.py          read_raster(), read_jp2(), read_zarr_array(), ...
- ├── writers.py          write_cog(), write_zarr(), write_dataset(), ...
- ├── reprojection.py     reproject_to_crs(), resample(), clip_to_bounds(), ...
- ├── geometry.py         load_aoi(), bounds_intersect(), create_grid_from_bounds(), ...
- ├── earthaccess_source  EarthAccessSource (NASA Earthdata wrapper)
- │
- ├── s2_data_source.py   S2Query, S2Product, S2DataBackend protocol
- │    ├── copernicus_dataspace.py   CopernicusDataspaceBackend
- │    └── gcs_sentinel2.py         GCSSentinel2Backend
- │
- └── (used by)
-      ├── siac.satellite.sentinel2   (reads SAFE via siac.io.readers)
-      ├── siac.priors.atmospheric    (CAMS NetCDF, MERRA-2 via earthaccess)
-      ├── siac.priors.brdf           (MCD43 HDF via earthaccess)
-      └── siac.core.aoi              (geometry + reprojection)
-```
-
----
-
-## Earthaccess Rollout Mapping (Planned)
-
-For implementation order and acceptance gates, see
-`docs/EARTHACCESS_PLAN.md`.
-
-Planned module additions/updates mapped to architecture slots:
-
-| Area | Planned files | Purpose |
-|---|---|---|
-| Shared Earthaccess boundary | `python/siac/io/earthaccess_source.py`, `python/siac/io/earthaccess_catalog.py` | Centralize auth/search/open/download and product registry |
-| Landsat ingestion path | `python/siac/io/landsat_data_source.py`, `python/siac/satellite/landsat.py` | AOI/time discovery and M1 `ObservationBundle` output for Landsat |
-| Atmospheric priors | `python/siac/priors/atmospheric/mcd19_earthaccess.py`, `python/siac/priors/atmospheric/merra2.py` | Earthaccess-backed AOD/atmospheric prior providers |
-| BRDF providers | `python/siac/priors/brdf/mcd43_earthaccess.py`, `python/siac/priors/brdf/vnp43_earthaccess.py` | MODIS/VIIRS BRDF sources for M3 |
-| Pipeline/config wiring | `python/siac/siac.py`, `python/siac/core/config.py` | Provider resolution and config-driven selection |
-
----
-
-## Test Structure
-
-```
-tests/
-├── conftest.py                      # Shared fixtures (MockRTModel, bundles, callables)
-├── unit/
-│   ├── test_types.py                # GeometryAngles, AtmosphericState, SensorConfig
-│   ├── test_contracts.py            # ObservationBundle, SolverInputBundle, etc.
-│   ├── test_validation.py           # _validate_* functions
-│   ├── test_spectral.py             # SpectralBandDescriptor, convolution
-│   ├── test_grid_assembler.py       # assemble_grids()
-│   ├── test_prior_store.py          # PrebuiltPriorStore (Zarr fixtures)
-│   ├── test_s2_data_source.py       # S2Query, S2Product, deduplication
-│   ├── test_resolve.py              # _resolve_* helpers (requires pydantic_settings)
-│   ├── test_correction.py           # AtmosphericCorrector
-│   ├── test_solver.py               # Cost function, multi-grid solver
-│   ├── test_satellite.py            # Preprocessor registry, sensor detection
-│   ├── test_io.py                   # Readers, writers
-│   ├── test_config.py               # SIACConfig (requires pydantic_settings)
-│   └── test_auth.py                 # CredentialManager, token caching, env vars
-├── integration/
-│   ├── test_pipeline.py             # run_pipeline() orchestration & concurrency
-│   ├── test_injection.py            # Custom callable injection & contract violation
-│   └── test_e2e_synthetic.py        # Full M1→M6 with synthetic data
-└── benchmarks/
-    └── test_perf.py                 # Grid assembler performance (256x256, 512x512)
-```
+Everything else should generally be treated as internal package structure.

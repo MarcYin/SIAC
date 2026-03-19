@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from siac.core.exceptions import DataNotFoundError
+from siac.errors import DataNotFoundError
 from siac.io.earthaccess_catalog import (
     EarthAccessCatalog,
     EarthaccessProduct,

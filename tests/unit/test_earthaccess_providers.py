@@ -9,15 +9,15 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.types import SensorBand
-from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
-from siac.priors.atmospheric.merra2 import MERRA2Provider
-from siac.priors.brdf.mcd43_earthaccess import (
+from siac.adapters.atmo.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
+from siac.adapters.atmo.merra2 import MERRA2Provider
+from siac.adapters.brdf.mcd43_earthaccess import (
     MCD19EarthAccessProvider,
     MCD43EarthAccessProvider,
     VNP43EarthAccessProvider,
 )
-from siac.priors.earthdata_common import MODLAND_SINUSOIDAL_CRS, modland_tile_coords
+from siac.adapters.earthdata_common import MODLAND_SINUSOIDAL_CRS, modland_tile_coords
+from siac.domain import SensorBand
 
 
 class _StubEarthAccessSource:
@@ -459,7 +459,7 @@ def test_mcd19_brdf_provider_parses_kernel_fields(monkeypatch):
             raise KeyError(dataset_name)
         return fields[dataset_name], {"scale_factor": 0.001, "_FillValue": -28672, "valid_range": [0, 32766]}
 
-    monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.read_hdf4_dataset", _fake_read_dataset)
+    monkeypatch.setattr("siac.adapters.brdf.mcd43_earthaccess.read_hdf4_dataset", _fake_read_dataset)
 
     bounds = _full_tile_bounds(29, 7, (4, 4))
     resolution = (bounds[2] - bounds[0]) / 4.0

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import siac.io.gcs_sentinel2 as gcs_mod
-from siac.core.exceptions import DataNotFoundError
+from siac.errors import DataNotFoundError
 from siac.io.s2_data_source import S2Product, S2Query
 
 if TYPE_CHECKING:

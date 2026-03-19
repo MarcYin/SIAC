@@ -11,7 +11,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from siac.core.types import (
+from siac.algorithms.grid.assembler import assemble_grids
+from siac.domain import (
     AtmosphericState,
     BRDFKernelWeights,
     CorrectionResult,
@@ -23,14 +24,13 @@ from siac.core.types import (
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.core.validation import (
+from siac.domain.validation import (
     _validate_atmospheric_state,
     _validate_observation_bundle,
     _validate_solver_input_bundle,
     _validate_surface_prior,
 )
-from siac.grid.assembler import assemble_grids
-from siac.pipeline import run_pipeline
+from siac.workflows.pipeline import run_pipeline
 
 # ── Synthetic data builders ──────────────────────────────────────────
 
@@ -137,7 +137,8 @@ class TestE2ESynthetic:
         def atmo_provider(bounds, crs, obs_time, resolution):
             return atmo
 
-        def surface_provider(bounds, crs, obs_time, sensor_config, geometry, resolution):
+        def surface_provider(observation, atmo_state, rt_model, resolution):
+            _ = (observation, atmo_state, rt_model, resolution)
             return surface
 
         def grid_assembler(o, a, s, rt, aux_res=500.0, aero_res=1000.0):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import siac
-import siac.core as siac_core
+import siac.config as siac_config
 
 
 def test_siac_module_lazy_exports_and_unknown_attr():
@@ -21,8 +21,8 @@ def test_siac_module_lazy_exports_and_unknown_attr():
         _ = siac.NOT_A_REAL_EXPORT
 
 
-def test_siac_core_lazy_config_export_and_unknown_attr():
-    assert siac_core.SIACConfig.__name__ == "SIACConfig"
+def test_siac_config_export_and_unknown_attr():
+    assert siac_config.SIACConfig.__name__ == "SIACConfig"
 
     with pytest.raises(AttributeError, match="has no attribute"):
-        _ = siac_core.NOT_A_REAL_EXPORT
+        _ = siac_config.NOT_A_REAL_EXPORT

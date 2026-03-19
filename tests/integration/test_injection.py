@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from siac.core.exceptions import ValidationError
-from siac.core.types import (
+from siac.domain import (
     CorrectionResult,
 )
-from siac.pipeline import run_pipeline
+from siac.errors import ValidationError
+from siac.workflows.pipeline import run_pipeline
 
 
 @pytest.mark.integration

@@ -900,7 +900,7 @@ Validation is applied automatically by the pipeline orchestrator. Users get clea
 
 ```python
 from siac import siac_process
-from siac.core.types import ObservationBundle, AtmosphericState, SurfacePrior
+from siac.domain import ObservationBundle, AtmosphericState, SurfacePrior
 
 # User provides all three data-sourcing modules as simple functions
 def my_preprocessor(input_path, aoi=None) -> ObservationBundle:
@@ -2101,7 +2101,7 @@ class MyRTBackend:
 SIAC v2 accesses multiple remote data sources (CDSE, CAMS/CDS API, AWS S3, NASA Earthdata, GCS). The authentication layer is split into two responsibilities:
 
 1. **Credential store / precedence resolution**
-   - a single **`CredentialManager`** (`siac.core.auth`) owns credential loading from config, environment variables, and external files
+   - a single **`CredentialManager`** (`siac.adapters.auth`) owns credential loading from resolved config
    - it stores raw credentials only and acts as a factory for provider-specific auth adapters
 2. **Provider-specific authentication adapters**
    - small source-specific helpers translate raw credentials into the exact shape needed by that provider:

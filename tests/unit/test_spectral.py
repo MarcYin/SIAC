@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.core.spectral import (
+from siac.domain.spectral import (
     SpectralBandDescriptor,
     load_reference_rsr,
     reference_to_sensor,

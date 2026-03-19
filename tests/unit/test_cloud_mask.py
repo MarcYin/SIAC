@@ -27,7 +27,7 @@ from siac.cloud.mask import (
     classes_to_bool_mask,
 )
 from siac.cloud.providers.omnicloudmask import OmniCloudMaskProvider
-from siac.core.types import SensorBand, SensorConfig
+from siac.domain import SensorBand, SensorConfig
 
 if TYPE_CHECKING:
     from pathlib import Path

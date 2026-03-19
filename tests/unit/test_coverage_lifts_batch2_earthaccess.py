@@ -9,16 +9,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from siac.core.auth import CredentialManager
-from siac.io.earthaccess_source import EarthAccessSource
-from siac.priors.atmospheric.cams import CAMSProvider
-from siac.priors.atmospheric.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
-from siac.priors.atmospheric.merra2 import MERRA2Provider
-from siac.priors.brdf.mcd43_earthaccess import (
+from siac.adapters.atmo.cams import CAMSProvider
+from siac.adapters.atmo.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
+from siac.adapters.atmo.merra2 import MERRA2Provider
+from siac.adapters.auth import CredentialManager
+from siac.adapters.brdf.mcd43_earthaccess import (
     MCD19EarthAccessProvider,
     MCD43EarthAccessProvider,
     VNP43EarthAccessProvider,
 )
+from siac.io.earthaccess_source import EarthAccessSource
 
 
 class _FakeEA:
@@ -258,7 +258,7 @@ def test_cams_download_missing_credentials_branch(monkeypatch, tmp_path: Path):
         def home(cls):
             return tmp_path
 
-    monkeypatch.setattr("siac.priors.atmospheric.cams.Path", _HomePath)
+    monkeypatch.setattr("siac.adapters.atmo.cams.Path", _HomePath)
 
     p = CAMSProvider(tmp_path, auth=CredentialManager())
     assert p._download_cams_file(datetime(2024, 1, 4)) is None

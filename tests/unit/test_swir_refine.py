@@ -5,7 +5,16 @@ from datetime import datetime
 import numpy as np
 import xarray as xr
 
-from siac.core.types import (
+from siac.algorithms.surface.brdf_monthly_composite import MonthlyBestPixelComposite
+from siac.algorithms.surface.brdf_monthly_database import build_monthly_composite_database
+from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary
+from siac.algorithms.surface.swir_refine import (
+    _forward_model_monthly_reflectance,
+    _weekly_sample_dates,
+    build_monthly_surface_prior_database,
+    query_surface_prior_from_monthly_database,
+)
+from siac.domain import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
@@ -13,15 +22,6 @@ from siac.core.types import (
     RTCoefficients,
     SensorBand,
     SensorConfig,
-)
-from siac.priors.surface.brdf_monthly_composite import MonthlyBestPixelComposite
-from siac.priors.surface.brdf_monthly_database import build_monthly_composite_database
-from siac.priors.surface.spectral_mapping import HyperspectralLibrary
-from siac.priors.surface.swir_refine import (
-    _forward_model_monthly_reflectance,
-    _weekly_sample_dates,
-    build_monthly_surface_prior_database,
-    query_surface_prior_from_monthly_database,
 )
 
 
