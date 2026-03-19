@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import xarray as xr
@@ -200,3 +201,86 @@ def test_spectral_mapper_handles_time_dimension() -> None:
     assert mapped.dims == ("time", "band", "y", "x")
     assert mapped_unc.shape == mapped.shape
     assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
+
+
+def test_mapping_uses_rsrf_resolution_when_requested(monkeypatch) -> None:
+    calls: list[tuple[str, str, str, str | None]] = []
+    monkeypatch.setenv("RSRF_ROOT", "/tmp/fake-rsrf")
+
+    class _FakeCurve:
+        def __init__(self) -> None:
+            self.wavelength_nm = np.array([480.0, 490.0, 500.0], dtype=np.float32)
+            self.response = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+    def _fake_load_response_definition(
+        sensor_unit_id: str,
+        band_id: str,
+        representation_variant: str,
+        *,
+        root=None,
+    ) -> _FakeCurve:
+        calls.append((sensor_unit_id, band_id, representation_variant, None if root is None else str(root)))
+        return _FakeCurve()
+
+    monkeypatch.setattr(
+        "siac.priors.surface.spectral_mapping.rsrf.load_response_definition",
+        _fake_load_response_definition,
+    )
+
+    source_band = SensorBand(
+        "B02",
+        490.0,
+        65.0,
+        10.0,
+        0,
+        rsrf_sensor_unit_id="sentinel-2a_msi",
+        rsrf_representation_variant="band_average",
+        rsrf_band_id="B02",
+    )
+    target_band = SensorBand(
+        "B03",
+        560.0,
+        35.0,
+        10.0,
+        0,
+        rsrf_sensor_unit_id="sentinel-2a_msi",
+        rsrf_representation_variant="band_average",
+        rsrf_band_id="B03",
+    )
+    coords = {"band": [source_band.name], "y": [0], "x": [0]}
+    source = xr.DataArray(np.array([[[0.2]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    unc = xr.full_like(source, 0.01)
+
+    mapped, mapped_unc = map_multispectral_reflectance(
+        source,
+        source_bands=(source_band,),
+        target_bands=(target_band,),
+        source_uncertainty=unc,
+        spectral_library=_library(),
+    )
+
+    assert mapped.shape == (1, 1, 1)
+    assert mapped_unc.shape == mapped.shape
+    assert calls == [
+        ("sentinel-2a_msi", "B02", "band_average", str(Path("/tmp/fake-rsrf").resolve())),
+        ("sentinel-2a_msi", "B03", "band_average", str(Path("/tmp/fake-rsrf").resolve())),
+    ]
+
+
+def test_mapping_requires_explicit_spectral_library(monkeypatch) -> None:
+    monkeypatch.delenv("SIAC_SPECTRAL_LIBRARY_ROOT", raising=False)
+
+    coords = {"band": [band.name for band in _source_bands()], "y": [0], "x": [0]}
+    source = xr.DataArray(
+        np.array([[[0.12]], [[0.18]], [[0.40]], [[0.30]], [[0.22]]], dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords=coords,
+    )
+
+    with np.testing.assert_raises_regex(ValueError, "explicit SIAC spectral library"):
+        map_multispectral_reflectance(
+            source,
+            source_bands=_source_bands(),
+            target_bands=_target_bands(),
+            spectral_library=None,
+        )

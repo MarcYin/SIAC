@@ -16,6 +16,7 @@ from siac.core.types import (
 )
 from siac.priors.surface.brdf_monthly_composite import MonthlyBestPixelComposite
 from siac.priors.surface.brdf_monthly_database import build_monthly_composite_database
+from siac.priors.surface.spectral_mapping import HyperspectralLibrary
 from siac.priors.surface.swir_refine import (
     _forward_model_monthly_reflectance,
     _weekly_sample_dates,
@@ -121,6 +122,39 @@ def _database():
         composites,
         query_bands=("B08", "B11", "B12"),
         visible_bands=("B02", "B03"),
+    )
+
+
+def _spectral_library() -> HyperspectralLibrary:
+    wavelengths = np.arange(400.0, 2501.0, 1.0, dtype=np.float32)
+    veg = np.clip(
+        0.03
+        + 0.04 * np.exp(-0.5 * ((wavelengths - 550.0) / 35.0) ** 2)
+        - 0.03 * np.exp(-0.5 * ((wavelengths - 675.0) / 20.0) ** 2)
+        + 0.45 / (1.0 + np.exp(-(wavelengths - 715.0) / 18.0)),
+        0.0,
+        0.9,
+    )
+    soil = np.clip(
+        (0.09 + 1.2e-4 * (wavelengths - 400.0))
+        * (1.0 - 0.03 * np.exp(-0.5 * ((wavelengths - 1900.0) / 80.0) ** 2)),
+        0.0,
+        0.7,
+    )
+    water = np.clip(
+        0.02 * np.exp(-(wavelengths - 400.0) / 280.0)
+        * (
+            1.0
+            - 0.65 * np.exp(-0.5 * ((wavelengths - 740.0) / 45.0) ** 2)
+            - 0.95 * np.exp(-0.5 * ((wavelengths - 1200.0) / 70.0) ** 2)
+        ),
+        0.0,
+        0.08,
+    )
+    return HyperspectralLibrary(
+        wavelengths_nm=wavelengths,
+        spectra=np.stack([veg, soil, water]).astype(np.float32),
+        sample_ids=("veg", "soil", "water"),
     )
 
 
@@ -393,6 +427,7 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
         geometry=_geometry((1, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
+        spectral_library=_spectral_library(),
     )
 
     assert database.query_band_names == ("B08", "B11", "B12")

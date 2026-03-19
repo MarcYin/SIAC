@@ -25,7 +25,11 @@ from siac.priors.surface.brdf_monthly_database import (
     MonthlyCompositeDatabase,
     build_monthly_composite_database,
 )
-from siac.priors.surface.spectral_mapping import map_multispectral_reflectance
+from siac.priors.surface.spectral_mapping import (
+    HyperspectralLibrary,
+    SpectralMappingConfig,
+    map_multispectral_reflectance,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -44,8 +48,14 @@ def build_monthly_surface_prior_database(
     geometry: GeometryAngles,
     visible_bands: Sequence[SensorBand],
     query_bands: Sequence[SensorBand],
+    spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
+    spectral_k_neighbors: int = 5,
 ) -> MonthlyCompositeDatabase:
-    """Build the 15-month Route-B database for the current scene."""
+    """Build the 15-month Route-B database for the current scene.
+
+    When the BRDF provider bands differ from the requested Route-B bands,
+    ``spectral_library`` is forwarded to the spectral mapper.
+    """
     if resolution <= 0:
         raise ValueError("resolution must be > 0")
 
@@ -89,6 +99,8 @@ def build_monthly_surface_prior_database(
                 source_bands=source_bands,
                 target_bands=required_bands,
                 source_uncertainty=reflectance_unc,
+                spectral_library=spectral_library,
+                k_neighbors=spectral_k_neighbors,
             )
             quality = np.sqrt(
                 np.square(quality.values, dtype=np.float32)

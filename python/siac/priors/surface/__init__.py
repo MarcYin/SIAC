@@ -13,7 +13,7 @@ from siac.priors.surface.kernel_model import KernelModelDeriver, PSFConvolver
 from siac.priors.surface.spectral_mapping import (
     HyperspectralLibrary,
     SpectralMapper,
-    build_default_spectral_library,
+    SpectralMappingConfig,
     convolve_hyperspectral_reflectance,
     map_multispectral_reflectance,
     needs_spectral_mapping,
@@ -34,8 +34,8 @@ __all__ = [
     "build_monthly_composite_database",
     "build_monthly_surface_prior_database",
     "HyperspectralLibrary",
+    "SpectralMappingConfig",
     "SpectralMapper",
-    "build_default_spectral_library",
     "convolve_hyperspectral_reflectance",
     "map_multispectral_reflectance",
     "needs_spectral_mapping",
