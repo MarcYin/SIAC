@@ -9,8 +9,13 @@ module have been removed.
 ```text
 siac/
 ├── __init__.py
-├── siac.py                      # Thin public facade
+├── siac.py                      # Compatibility shim to the public API
 ├── errors.py                    # Shared exception types
+│
+├── api/                         # Public API layer and request models
+│   ├── __init__.py
+│   ├── public.py                # Canonical SIAC facade and entrypoints
+│   └── requests.py              # Typed workflow/public request objects
 │
 ├── config/                      # System config, loading, resolution, snapshots
 │   ├── __init__.py
@@ -20,11 +25,15 @@ siac/
 │   ├── resolve.py               # SystemConfig + RunRequest -> ResolvedConfig
 │   └── snapshot.py              # Resolved/system snapshots
 │
+├── catalog/                     # Static built-in catalog data
+│   ├── __init__.py
+│   └── sensors.py               # Built-in sensor definitions and registry
+│
 ├── domain/                      # Pure domain models and contracts
 │   ├── __init__.py
 │   ├── aoi.py                   # AOI container
 │   ├── contracts.py             # Geometry, atmosphere, solver/correction contracts
-│   ├── sensors.py               # SensorBand, SensorConfig, built-in sensors
+│   ├── sensors.py               # SensorBand and SensorConfig types only
 │   ├── protocols.py             # Structural interfaces for pluggable modules
 │   ├── validation.py            # Contract validators
 │   └── spectral.py              # Spectral helper utilities
@@ -43,8 +52,10 @@ siac/
 ├── algorithms/                  # Numerical and retrieval algorithms
 │   ├── __init__.py
 │   ├── brdf/                    # BRDF kernel computations
+│   ├── cloud/                   # Cloud/cloud-shadow detection
 │   ├── correction/              # TOA -> BOA atmospheric correction
 │   ├── grid/                    # Grid assembly for solver inputs
+│   ├── rt/                      # Radiative-transfer backends
 │   ├── solver/                  # Aerosol inversion
 │   └── surface/                 # Surface-prior derivation and spectral mapping
 │
@@ -60,23 +71,28 @@ siac/
 │   ├── scene.py                 # Generic scene execution flow
 │   └── sentinel2.py             # Sentinel-2 search/download/process flow
 │
-├── cloud/                       # Cloud-mask helpers
-├── rt/                          # Radiative-transfer backends
-├── io/                          # File and remote-data I/O
+├── geo/                         # Geometry and reprojection utilities
+├── storage/                     # Raster/product read-write helpers
+├── io/                          # Thin convenience facade over geo/storage/data
 └── srf/                         # Spectral response function domain
 ```
 
 ## Layer Boundaries
 
-- `domain/` contains contracts and sensor definitions only. It does not own
-  auth, config loading, filesystem discovery, or remote service access.
+- `catalog/` owns built-in static lookup data such as bundled sensor
+  definitions.
+- `domain/` contains contracts and types only. It does not own auth, config
+  loading, filesystem discovery, or remote service access.
 - `config/` owns the canonical TOML schema and config resolution.
 - `adapters/` owns external-system integration concerns.
-- `algorithms/` owns retrieval math, surface priors, correction, and grid prep.
+- `algorithms/` owns retrieval math, surface priors, correction, cloud masking,
+  RT backends, and grid prep.
 - `app/` resolves configuration into concrete runtime components.
 - `workflows/` executes end-to-end processing plans.
-- `siac.py` is intentionally thin and delegates to `config`, `app`, and
-  `workflows`.
+- `api/` is the canonical public surface.
+- `siac.py` is intentionally thin and only forwards to `api/`.
+- `io/` is intentionally narrow and exists only as a convenience facade over
+  `geo/`, `storage/`, and `adapters/data/`.
 
 ## Canonical Runtime Flow
 

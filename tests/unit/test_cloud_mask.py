@@ -9,12 +9,12 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.cloud.mapping import (
+from siac.algorithms.cloud.mapping import (
     _ensure_expected_classes,
     apply_class_mapping,
     validate_class_mapping,
 )
-from siac.cloud.mask import (
+from siac.algorithms.cloud.mask import (
     _call_user_callable,
     _external_classes,
     _extract_band,
@@ -26,7 +26,7 @@ from siac.cloud.mask import (
     build_cloud_classes,
     classes_to_bool_mask,
 )
-from siac.cloud.providers.omnicloudmask import OmniCloudMaskProvider
+from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
 from siac.domain import SensorBand, SensorConfig
 
 if TYPE_CHECKING:
@@ -138,7 +138,7 @@ def test_resample_policy_branches(monkeypatch: pytest.MonkeyPatch):
         calls.append((resampling, float(target_resolution)))
         return data
 
-    monkeypatch.setattr("siac.cloud.mask.resample", _fake_resample)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.resample", _fake_resample)
 
     # Finer than target: auto should downsample.
     _ = _resample_continuous(
@@ -191,7 +191,7 @@ def test_build_cloud_classes_external_file_mode(monkeypatch: pytest.MonkeyPatch,
     external.write_text("x")
 
     raw = xr.DataArray(np.array([[8, 3], [1, 255]], dtype=np.int16), dims=["y", "x"])
-    monkeypatch.setattr("siac.cloud.mask.read_raster", lambda _path: raw)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.read_raster", lambda _path: raw)
 
     out = build_cloud_classes(
         toa,
@@ -215,7 +215,7 @@ def test_build_cloud_classes_auto_mode_uses_provider(monkeypatch: pytest.MonkeyP
             # returns already standardized classes
             return xr.DataArray(np.array([[1, 2], [3, 0]], dtype=np.uint8), dims=["y", "x"])
 
-    monkeypatch.setattr("siac.cloud.mask.OmniCloudMaskProvider", _FakeProvider)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.OmniCloudMaskProvider", _FakeProvider)
 
     out = build_cloud_classes(toa, cfg, mode="auto")
     np.testing.assert_array_equal(out.values, np.array([[1, 2], [3, 0]], dtype=np.uint8))
@@ -321,7 +321,7 @@ def test_extract_band_and_resample_error_paths(monkeypatch: pytest.MonkeyPatch):
         calls.append((resampling, float(target_resolution)))
         return data
 
-    monkeypatch.setattr("siac.cloud.mask.resample", _fake_resample)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.resample", _fake_resample)
     coarse = _spatial_da(0.2, shape=(5, 5)).assign_coords(
         x=np.linspace(0.0, 80.0, 5),
         y=np.linspace(80.0, 0.0, 5),
@@ -365,7 +365,7 @@ def test_mean_group_alignment_reproject_and_interp(monkeypatch: pytest.MonkeyPat
         calls["reproject"] += 1
         return xr.full_like(ref, float(np.nanmean(src.values)))
 
-    monkeypatch.setattr("siac.cloud.mask.reproject_match", _fake_reproject)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.reproject_match", _fake_reproject)
 
     toa_geo = xr.Dataset(
         {
@@ -406,9 +406,9 @@ def test_prepare_rgbnir_alignment_branches(monkeypatch: pytest.MonkeyPatch):
     cfg = _sensor_config_with_duplicate_red()
     toa = _toa_hs((3, 3))
 
-    monkeypatch.setattr("siac.cloud.mask._group_band_names", lambda *_args, **_kwargs: ["R1"])  # noqa: ARG005
+    monkeypatch.setattr("siac.algorithms.cloud.mask._group_band_names", lambda *_args, **_kwargs: ["R1"])  # noqa: ARG005
     monkeypatch.setattr(
-        "siac.cloud.mask._mean_group",
+        "siac.algorithms.cloud.mask._mean_group",
         lambda *_args, **_kwargs: _spatial_da(0.2, shape=(3, 3)).assign_coords(
             x=np.linspace(0.0, 20.0, 3),
             y=np.linspace(20.0, 0.0, 3),
@@ -420,7 +420,7 @@ def test_prepare_rgbnir_alignment_branches(monkeypatch: pytest.MonkeyPatch):
         rep_calls["n"] += 1
         return xr.full_like(ref, float(np.nanmean(src.values)))
 
-    monkeypatch.setattr("siac.cloud.mask.reproject_match", _fake_reproject)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.reproject_match", _fake_reproject)
     _ = _prepare_rgbnir(
         toa,
         cfg,
@@ -449,7 +449,7 @@ def test_prepare_rgbnir_alignment_branches(monkeypatch: pytest.MonkeyPatch):
             ),
         ]
     )
-    monkeypatch.setattr("siac.cloud.mask._mean_group", lambda *_args, **_kwargs: next(seq))
+    monkeypatch.setattr("siac.algorithms.cloud.mask._mean_group", lambda *_args, **_kwargs: next(seq))
     red, green, nir = _prepare_rgbnir(
         toa,
         cfg,
@@ -467,13 +467,13 @@ def test_external_classes_and_user_callable_fallbacks(monkeypatch: pytest.Monkey
     ref = _spatial_da(0.2, shape=(2, 2))
     calls = {"reproject": 0}
 
-    monkeypatch.setattr("siac.cloud.mask.read_raster", lambda _path: raw)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.read_raster", lambda _path: raw)
 
     def _fake_reproject(src, target, resampling="nearest"):  # noqa: ANN001
         calls["reproject"] += 1
         return xr.full_like(target, 8, dtype=np.int16)
 
-    monkeypatch.setattr("siac.cloud.mask.reproject_match", _fake_reproject)
+    monkeypatch.setattr("siac.algorithms.cloud.mask.reproject_match", _fake_reproject)
     out = _external_classes(
         tmp_path / "mask.tif",
         reference=ref,
@@ -512,7 +512,7 @@ def test_build_cloud_classes_user_callable_shape_reproject_and_provider_error(
     cfg = _sensor_config_with_duplicate_red()
 
     monkeypatch.setattr(
-        "siac.cloud.mask.reproject_match",
+        "siac.algorithms.cloud.mask.reproject_match",
         lambda _src, target, **_kwargs: xr.full_like(target, 1, dtype=np.int16),
     )
 

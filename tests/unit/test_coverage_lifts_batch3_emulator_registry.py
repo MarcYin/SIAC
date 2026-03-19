@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-import siac.rt.emulator.two_nn as tnn
+import siac.algorithms.rt.emulator.two_nn as tnn
 from siac.domain import AtmosphericState, GeometryAngles, SensorBand
 
 

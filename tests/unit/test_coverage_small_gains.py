@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.io.geometry import (
+from siac.adapters.data.s2_data_source import S2DataAccess, S2Product, S2Query, _parse_query
+from siac.geo.geometry import (
     geo_to_pixel_coords,
     get_raster_bounds,
     get_raster_center,
@@ -19,7 +20,6 @@ from siac.io.geometry import (
     pixel_coords_to_geo,
     raster_to_geojson_feature,
 )
-from siac.io.s2_data_source import S2DataAccess, S2Product, S2Query, _parse_query
 
 if TYPE_CHECKING:
     from pathlib import Path

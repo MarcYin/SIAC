@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from siac.rt.lut.srf_kernel import AlignedSRFKernel, build_aligned_srf_kernel
+from siac.algorithms.rt.lut.srf_kernel import AlignedSRFKernel, build_aligned_srf_kernel
 from siac.srf.types import SpectralResponseFunction
 
 

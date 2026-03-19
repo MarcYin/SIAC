@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from siac.rt.lut import DEFAULT_LUT_URL, ZarrLUTBackend
+from siac.algorithms.rt.lut import DEFAULT_LUT_URL, ZarrLUTBackend
 
 
 def _is_network_unavailable_error(exc: Exception) -> bool:

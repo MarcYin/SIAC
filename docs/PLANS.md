@@ -106,11 +106,11 @@ Each module's output feeds exactly into the inputs of downstream modules. No cro
 
 To keep LUT code maintainable, the Zarr LUT backend is separated by concern:
 
-- `siac.rt.lut.backend`: RT interpolation logic (`ZarrLUTBackend`)
-- `siac.rt.lut.store`: local/remote/S3/ZIP store resolution
-- `siac.rt.lut.http_zip_store`: ReadOnlyZipFileSystem-style ZIP access for local/HTTP/S3 LUT archives
-- `siac.rt.lut.create`: LUT generation utilities (`create_lut_from_py6s`)
-- `siac.rt.lut.constants`: default public LUT URL and LUT coordinate constants
+- `siac.algorithms.rt.lut.backend`: RT interpolation logic (`ZarrLUTBackend`)
+- `siac.algorithms.rt.lut.store`: local/remote/S3/ZIP store resolution
+- `siac.algorithms.rt.lut.http_zip_store`: ReadOnlyZipFileSystem-style ZIP access for local/HTTP/S3 LUT archives
+- `siac.algorithms.rt.lut.create`: LUT generation utilities (`create_lut_from_py6s`)
+- `siac.algorithms.rt.lut.constants`: default public LUT URL and LUT coordinate constants
 
 ### 2.4 Key Design Rule
 

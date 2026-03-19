@@ -18,7 +18,7 @@ from siac.adapters.brdf.mcd43_earthaccess import (
     MCD43EarthAccessProvider,
     VNP43EarthAccessProvider,
 )
-from siac.io.earthaccess_source import EarthAccessSource
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 
 
 class _FakeEA:
@@ -139,7 +139,7 @@ def test_earthaccess_source_typeerror_login_and_bounds_transform(monkeypatch):
             return x + 1.0, y + 2.0
 
     monkeypatch.setattr(
-        "siac.io.earthaccess_source.Transformer.from_crs",
+        "siac.adapters.data.earthaccess_source.Transformer.from_crs",
         lambda *_args, **_kwargs: _FakeTransformer(),
     )
     b = EarthAccessSource.normalize_bounds_to_wgs84((0.0, 0.0, 1.0, 1.0), "EPSG:3857")

@@ -390,7 +390,7 @@ class TestCDSEBackendWithAuth:
         """CopernicusDataspaceBackend uses auth manager when provided."""
         mock_exchange.return_value = ("mgr_token", 3600)
 
-        from siac.io.copernicus_dataspace import CopernicusDataspaceBackend
+        from siac.adapters.data.copernicus_dataspace import CopernicusDataspaceBackend
 
         mgr = CredentialManager()
         mgr.set_credentials("cdse", key="u", secret="p")
@@ -401,7 +401,7 @@ class TestCDSEBackendWithAuth:
 
     def test_backend_explicit_keys_take_priority(self):
         """Explicit access_key/secret_key still take priority when supplied."""
-        from siac.io.copernicus_dataspace import CopernicusDataspaceBackend
+        from siac.adapters.data.copernicus_dataspace import CopernicusDataspaceBackend
 
         mgr = CredentialManager()  # no CDSE creds
         backend = CopernicusDataspaceBackend(

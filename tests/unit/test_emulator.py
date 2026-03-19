@@ -75,7 +75,7 @@ class TestBandEmulator:
 
     def test_forward_pass(self, mock_weights):
         """Forward pass should produce outputs."""
-        from siac.rt.emulator.two_nn import _BandEmulator
+        from siac.algorithms.rt.emulator.two_nn import _BandEmulator
 
         hidden_layers, output_layers = mock_weights
         emulator = _BandEmulator(hidden_layers, output_layers)
@@ -92,7 +92,7 @@ class TestBandEmulator:
 
     def test_forward_with_jacobian(self, mock_weights):
         """Forward pass with Jacobian computation."""
-        from siac.rt.emulator.two_nn import _BandEmulator
+        from siac.algorithms.rt.emulator.two_nn import _BandEmulator
 
         hidden_layers, output_layers = mock_weights
         emulator = _BandEmulator(hidden_layers, output_layers)
@@ -115,7 +115,7 @@ class TestBandEmulator:
 
     def test_jacobian_numerical_check(self):
         """Jacobian should match numerical differentiation."""
-        from siac.rt.emulator.two_nn import _BandEmulator
+        from siac.algorithms.rt.emulator.two_nn import _BandEmulator
 
         # Create small deterministic weights with positive biases
         # to ensure neurons are active (avoid ReLU discontinuities)
@@ -196,7 +196,7 @@ class TestTwoLayerNNEmulator:
 
     def test_discover_bands(self, mock_emulator_dir):
         """Should discover available bands."""
-        from siac.rt.emulator.two_nn import TwoLayerNNEmulator
+        from siac.algorithms.rt.emulator.two_nn import TwoLayerNNEmulator
 
         emulator = TwoLayerNNEmulator(
             emulator_dir=mock_emulator_dir,
@@ -209,7 +209,7 @@ class TestTwoLayerNNEmulator:
 
     def test_backend_properties(self, mock_emulator_dir):
         """Backend properties should be correct."""
-        from siac.rt.emulator.two_nn import TwoLayerNNEmulator
+        from siac.algorithms.rt.emulator.two_nn import TwoLayerNNEmulator
 
         emulator = TwoLayerNNEmulator(
             emulator_dir=mock_emulator_dir,
@@ -258,7 +258,7 @@ class TestComputeCoefficientsMulti:
 
     def test_multi_equals_single(self, mock_emulator_dir):
         """compute_coefficients_multi([band]) should equal compute_coefficients(band)."""
-        from siac.rt.emulator.two_nn import TwoLayerNNEmulator
+        from siac.algorithms.rt.emulator.two_nn import TwoLayerNNEmulator
 
         shape = (8, 8)
         geometry = GeometryAngles(
@@ -298,7 +298,7 @@ class TestComputeCoefficientsMulti:
 
     def test_multi_returns_correct_count(self, mock_emulator_dir):
         """compute_coefficients_multi should return one result per band."""
-        from siac.rt.emulator.two_nn import TwoLayerNNEmulator
+        from siac.algorithms.rt.emulator.two_nn import TwoLayerNNEmulator
 
         shape = (4, 4)
         geometry = GeometryAngles(
@@ -339,7 +339,7 @@ class TestEmulatorRegistry:
 
     def test_creation(self, tmp_path):
         """Registry should be creatable."""
-        from siac.rt.emulator.two_nn import EmulatorRegistry
+        from siac.algorithms.rt.emulator.two_nn import EmulatorRegistry
 
         registry = EmulatorRegistry(tmp_path)
         assert registry.emulator_dir == tmp_path

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import siac.rt.lut.http_zip_store as zip_store
+import siac.algorithms.rt.lut.http_zip_store as zip_store
 
 if TYPE_CHECKING:
     from pathlib import Path

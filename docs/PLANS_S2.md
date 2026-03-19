@@ -686,7 +686,7 @@ write_to_stac(result.boa, result.metadata, output_dir)
 
 ```python
 from siac import siac_process, siac_process_s2
-from siac.io.s2_data_source import S2Query, search_sentinel2
+from siac.adapters.data.s2_data_source import S2Query, search_sentinel2
 from siac.config import SIACConfig
 from datetime import date
 from pathlib import Path

@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.algorithms.rt.lut import ZarrLUTBackend, create_lut_from_py6s
+from siac.algorithms.rt.lut.http_zip_store import _HTTPRangeFileSystem, _ReadOnlyZipFileSystem
 from siac.domain import AtmosphericState, GeometryAngles, SensorBand
-from siac.rt.lut import ZarrLUTBackend, create_lut_from_py6s
-from siac.rt.lut.http_zip_store import _HTTPRangeFileSystem, _ReadOnlyZipFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -171,7 +171,7 @@ class TestZarrLUTBackend:
             _ = b.lut
 
     def test_load_lut_falls_back_from_v3_and_consolidated(self, monkeypatch):
-        import siac.rt.lut.backend as lut_backend
+        import siac.algorithms.rt.lut.backend as lut_backend
 
         calls: list[dict[str, object]] = []
         dataset = xr.Dataset(coords={"sza": [30.0], "vza": [10.0], "aot": [0.2]})
@@ -575,7 +575,7 @@ class TestZarrLUTBackend:
         assert float(reduced.values) == pytest.approx(0.25)
 
     def test_http_zip_store_uses_reference_mapper_for_remote_zip(self, monkeypatch):
-        import siac.rt.lut.store as lut_store
+        import siac.algorithms.rt.lut.store as lut_store
 
         class _FakeZipFS:
             _files = {
@@ -598,7 +598,7 @@ class TestZarrLUTBackend:
         assert store == sentinel_store
 
     def test_http_zip_headers_validation(self):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         with pytest.raises(TypeError):
             zip_store.build_readonly_zip_mapper(
@@ -937,7 +937,7 @@ class _FallbackSession:
 
 class TestZipStoreUtilities:
     def test_helper_path_and_slice_utilities(self):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         assert zip_store._normalize_fs_path("") == ""
         assert zip_store._normalize_fs_path("/") == ""
@@ -965,7 +965,7 @@ class TestZipStoreUtilities:
         fs.close()
 
     def test_local_filesystem_wrapper(self, tmp_path: Path):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         file_path = tmp_path / "x.bin"
         file_path.write_bytes(b"0123456789")
@@ -1001,7 +1001,7 @@ class TestZipStoreUtilities:
             asyncio.run(zip_fs._cat_file("arr"))
 
     def test_s3_parse_and_import_error(self):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         assert zip_store._parse_s3_url("s3://bucket/key/path") == ("bucket", "key/path")
         with pytest.raises(ValueError):
@@ -1017,7 +1017,7 @@ class TestZipStoreUtilities:
         assert fs is not None
 
     def test_s3_builder_defaults_to_ambient_credentials(self, monkeypatch):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         captured: dict[str, object] = {}
 
@@ -1034,7 +1034,7 @@ class TestZipStoreUtilities:
         assert "secret" not in captured
 
     def test_build_mapper_validation_and_remote_compressed_branch(self, monkeypatch):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         with pytest.raises(TypeError):
             zip_store.build_readonly_zip_mapper(
@@ -1059,7 +1059,7 @@ class TestZipStoreUtilities:
             )
 
     def test_build_mapper_http_omits_none_headers_for_fs_serialization(self, monkeypatch):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         class _FakeZipFS:
             def __init__(self, fs, path, **kwargs):  # noqa: ANN001, ARG002
@@ -1083,7 +1083,7 @@ class TestZipStoreUtilities:
         assert mapper.fs.fs.to_dict(include_password=False)["timeout"] == 1.0
 
     def test_local_compressed_zip_fallback_detects_nested_zarr_root(self, tmp_path: Path):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         zip_path = tmp_path / "lut_nested.zarr.zip"
         with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1095,7 +1095,7 @@ class TestZipStoreUtilities:
         assert mapper[".zgroup"].startswith(b"{")
 
     def test_read_only_zip_listing_detail_and_close(self):
-        import siac.rt.lut.http_zip_store as zip_store
+        import siac.algorithms.rt.lut.http_zip_store as zip_store
 
         buf = BytesIO()
         with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
@@ -1130,7 +1130,7 @@ class TestZipStoreUtilities:
         assert fs.closed is True
 
     def test_store_helper_paths_and_local_mapper_branch(self, monkeypatch, tmp_path: Path):
-        import siac.rt.lut.store as lut_store
+        import siac.algorithms.rt.lut.store as lut_store
 
         local_file_uri = (tmp_path / "lut.zarr").as_uri()
         local_path = lut_store.as_local_path(local_file_uri)
@@ -1159,7 +1159,7 @@ class TestZipStoreUtilities:
         assert captured["kwargs"] == {"anon": True}
 
     def test_remote_zip_builds_and_reuses_reference_json(self, monkeypatch, tmp_path: Path):
-        import siac.rt.lut.store as lut_store
+        import siac.algorithms.rt.lut.store as lut_store
 
         class _FakeZipFS:
             _files = {
@@ -1220,7 +1220,7 @@ class TestZipStoreUtilities:
         assert payload["refs"]["arr/0"] == ["https://example.com/lut.zarr.zip", 42, 3]
 
     def test_remote_zip_reference_mapper_failure_raises(self, monkeypatch, tmp_path: Path):
-        import siac.rt.lut.store as lut_store
+        import siac.algorithms.rt.lut.store as lut_store
 
         class _FakeZipFS:
             _files = {
@@ -1328,7 +1328,7 @@ class TestCreateLUTFromPy6S:
         assert ds.attrs["aerosol_type"] == "unknown"
 
     def test_create_lut_defaults_maritime_and_progress(self, tmp_path: Path, monkeypatch):
-        import siac.rt.lut.create as create_mod
+        import siac.algorithms.rt.lut.create as create_mod
 
         class _FakeGeometry:
             @staticmethod

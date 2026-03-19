@@ -10,10 +10,14 @@ from pathlib import Path
 import pytest
 import requests
 
-import siac.io.copernicus_dataspace as cdse
+import siac.adapters.data.copernicus_dataspace as cdse
+from siac.adapters.data.copernicus_dataspace import (
+    CopernicusDataspaceBackend,
+    download_cdse,
+    search_cdse,
+)
+from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
-from siac.io.copernicus_dataspace import CopernicusDataspaceBackend, download_cdse, search_cdse
-from siac.io.s2_data_source import S2Product, S2Query
 
 
 class _FakeResponse:
@@ -71,7 +75,7 @@ def test_search_cdse_product_id_lookup(monkeypatch):
         assert product_id in url
         return _FakeResponse(json_data=_stac_item(product_id))
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
 
     q = S2Query.from_product_id(product_id)
     products = search_cdse(q)
@@ -136,7 +140,7 @@ def test_search_cdse_filters_tile_cloud_and_pagination(monkeypatch):
         assert json == {"token": "next-page"}
         return _FakeResponse(json_data=page_2)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.post", _fake_post)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
 
     q = S2Query(
         mgrs_tile="31UDQ",
@@ -169,7 +173,7 @@ def test_search_cdse_product_404_returns_empty(monkeypatch):
     def _fake_get(url: str, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(status_code=404)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
     products = search_cdse(
         S2Query.from_product_id("S2B_MSIL1C_20240101T000000_N0500_R000_T31UDQ_20240101T000000")
     )
@@ -199,7 +203,7 @@ def test_download_cdse_extracts_safe_zip(monkeypatch, tmp_path: Path):
         assert headers == {"Authorization": "Bearer token"}
         return _FakeResponse(raw_bytes=payload)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
 
     safe_path = download_cdse(product, tmp_path, access_key="token")
     assert safe_path.exists()
@@ -227,8 +231,8 @@ def test_cdse_backend_delegates(monkeypatch, tmp_path: Path):
         out.mkdir(parents=True, exist_ok=True)
         return out
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.search_cdse", _fake_search)
-    monkeypatch.setattr("siac.io.copernicus_dataspace.download_cdse", _fake_download)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.search_cdse", _fake_search)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.download_cdse", _fake_download)
 
     backend = CopernicusDataspaceBackend(access_key="ak", secret_key="sk")
     found = backend.search(S2Query(mgrs_tile="31UDQ"))
@@ -327,7 +331,7 @@ def test_auth_header_resolution_modes(monkeypatch):
         called["ok"] = (username, password) == ("user", "pass")
         return "issued-token"
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace._token_from_credentials", _fake_token)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace._token_from_credentials", _fake_token)
     assert cdse._resolve_auth_header("user", "pass") == {"Authorization": "Bearer issued-token"}
     assert called["ok"] is True
 
@@ -336,7 +340,7 @@ def test_token_from_credentials_missing_token_raises(monkeypatch):
     def _fake_post(url: str, **kwargs):  # noqa: ARG001
         return _FakeResponse(json_data={"not_access_token": "x"})
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.post", _fake_post)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
     with pytest.raises(DataNotFoundError, match="access_token"):
         cdse._token_from_credentials("user", "pass")
 
@@ -350,14 +354,14 @@ def test_search_cdse_processing_level_filter_and_product_lookup_error(monkeypatc
     def _fake_post(url: str, json: dict, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(json_data=page)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.post", _fake_post)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
     q = S2Query(mgrs_tile="31UDQ", processing_level="L2A")
     assert search_cdse(q) == []
 
     def _fake_get_500(url: str, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(status_code=500)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get_500)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_500)
     with pytest.raises(requests.HTTPError):
         search_cdse(
             S2Query.from_product_id(
@@ -386,7 +390,7 @@ def test_download_cdse_existing_safe_short_circuit(monkeypatch, tmp_path: Path):
         called["n"] += 1
         raise AssertionError("requests.get should not be called when SAFE already exists")
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
     out = download_cdse(product, tmp_path)
     assert out == safe
     assert called["n"] == 0
@@ -412,7 +416,7 @@ def test_download_cdse_fallback_candidate_and_missing_safe(monkeypatch, tmp_path
     def _fake_get_alt(url: str, headers: dict | None = None, **kwargs):  # noqa: ARG001
         return _FakeResponse(raw_bytes=payload_with_alt)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get_alt)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_alt)
     out = download_cdse(product, tmp_path / "with_alt")
     assert out.name == f"{product.product_id}_ALT.SAFE"
     assert (out / "manifest.safe").exists()
@@ -425,6 +429,6 @@ def test_download_cdse_fallback_candidate_and_missing_safe(monkeypatch, tmp_path
     def _fake_get_no_safe(url: str, headers: dict | None = None, **kwargs):  # noqa: ARG001
         return _FakeResponse(raw_bytes=payload_no_safe)
 
-    monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get_no_safe)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_no_safe)
     with pytest.raises(DataNotFoundError, match="SAFE directory was not found"):
         download_cdse(product, tmp_path / "missing_safe")

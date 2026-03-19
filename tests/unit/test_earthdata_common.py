@@ -14,7 +14,7 @@ from siac.adapters.earthdata_common import (
     granule_native_bounds,
     make_native_grid_dataarray,
 )
-from siac.io.reprojection import transform_bounds
+from siac.geo.reprojection import transform_bounds
 
 if TYPE_CHECKING:
     from pathlib import Path

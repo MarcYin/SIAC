@@ -16,7 +16,7 @@ from pyproj import Transformer
 
 from siac.adapters.atmo.cams import CAMSProvider
 from siac.adapters.auth import CredentialManager
-from siac.rt.lut import http_zip_store as zip_store
+from siac.algorithms.rt.lut import http_zip_store as zip_store
 
 if TYPE_CHECKING:
     from pathlib import Path

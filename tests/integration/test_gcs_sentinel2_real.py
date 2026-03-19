@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from siac.io.gcs_sentinel2 import (
+from siac.adapters.data.gcs_sentinel2 import (
     _download_with_retry,
     _list_objects_under,
     _object_download_url,
     _resolve_safe_prefix,
     search_gcs,
 )
-from siac.io.s2_data_source import S2Query
+from siac.adapters.data.s2_data_source import S2Query
 
 if TYPE_CHECKING:
     from pathlib import Path

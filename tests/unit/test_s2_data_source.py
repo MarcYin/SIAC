@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 import pytest
 
-from siac.io.s2_data_source import (
+from siac.adapters.data.s2_data_source import (
     S2Product,
     S2Query,
     deduplicate_products,

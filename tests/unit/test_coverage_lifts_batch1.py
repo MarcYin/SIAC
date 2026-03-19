@@ -126,7 +126,7 @@ def test_base_preprocessor_and_sensor_detection_branches(tmp_path: Path, monkeyp
         called["resampling"] = resampling
         return xr.full_like(tgt, 42.0)
 
-    monkeypatch.setattr("siac.io.reprojection.reproject_match", _fake_reproject_match)
+    monkeypatch.setattr("siac.geo.reprojection.reproject_match", _fake_reproject_match)
     res = resample_angles_to_data(out["geometry"].sza, target, method="nearest")
     assert called["resampling"] == "nearest"
     assert float(res.mean()) == 42.0

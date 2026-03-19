@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.algorithms.rt.lut.backend import ZarrLUTBackend
 from siac.domain import AtmosphericState, GeometryAngles, SensorBand
-from siac.rt.lut.backend import ZarrLUTBackend
 
 
 def _spectral_lut() -> xr.Dataset:

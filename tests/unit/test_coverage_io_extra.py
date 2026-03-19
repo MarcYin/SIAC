@@ -16,20 +16,7 @@ from siac.domain import (
     GeometryAngles,
     ObservationBundle,
 )
-from siac.io.readers import (
-    check_rasters_aligned,
-    get_raster_info,
-    read_hdf_subdataset,
-    read_jp2,
-    read_multiband,
-    read_multiband_stack,
-    read_netcdf_variable,
-    read_raster,
-    read_raster_at_resolution,
-    read_raster_window,
-    read_zarr_array,
-)
-from siac.io.reprojection import (
+from siac.geo.reprojection import (
     align_grids,
     clip_to_bounds,
     clip_to_geometry,
@@ -43,8 +30,21 @@ from siac.io.reprojection import (
     resample_to_shape,
     transform_points,
 )
-from siac.io.stac import build_stac_item, write_stac_item
-from siac.io.writers import (
+from siac.storage.readers import (
+    check_rasters_aligned,
+    get_raster_info,
+    read_hdf_subdataset,
+    read_jp2,
+    read_multiband,
+    read_multiband_stack,
+    read_netcdf_variable,
+    read_raster,
+    read_raster_at_resolution,
+    read_raster_window,
+    read_zarr_array,
+)
+from siac.storage.stac import build_stac_item, write_stac_item
+from siac.storage.writers import (
     _compute_overview_levels,
     _prepare_for_write,
     write_auxiliary_products,
@@ -475,7 +475,7 @@ class TestWritersExtra:
         def _missing(_name: str):  # noqa: ANN001
             return None
 
-        monkeypatch.setattr("siac.io.writers.importlib.util.find_spec", _missing)
+        monkeypatch.setattr("siac.storage.writers.importlib.util.find_spec", _missing)
         with pytest.raises(RuntimeError, match="requires h5netcdf or netCDF4"):
             write_netcdf(da, tmp_path / "missing.nc")
 

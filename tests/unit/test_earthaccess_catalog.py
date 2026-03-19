@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from siac.errors import DataNotFoundError
-from siac.io.earthaccess_catalog import (
+from siac.adapters.data.earthaccess_catalog import (
     EarthAccessCatalog,
     EarthaccessProduct,
     ProductValidationResult,
 )
+from siac.errors import DataNotFoundError
 
 
 class _FakeSource:

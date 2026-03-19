@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from siac.io.earthaccess_source import EarthAccessSource
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 
 
 class _FakeEarthAccessModule:

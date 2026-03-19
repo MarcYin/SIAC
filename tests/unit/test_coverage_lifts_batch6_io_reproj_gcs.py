@@ -12,12 +12,12 @@ import pytest
 import xarray as xr
 from rasterio.enums import Resampling
 
-import siac.io.gcs_sentinel2 as gcs_mod
+import siac.adapters.data.gcs_sentinel2 as gcs_mod
+from siac.adapters.data.gcs_sentinel2 import GCS_DOWNLOAD_BASE
+from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
 from siac.io import readers as readers_mod
 from siac.io import reprojection as reproj_mod
-from siac.io.gcs_sentinel2 import GCS_DOWNLOAD_BASE
-from siac.io.s2_data_source import S2Product, S2Query
 
 if TYPE_CHECKING:
     from pathlib import Path

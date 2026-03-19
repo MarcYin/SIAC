@@ -1,62 +1,44 @@
-"""
-Layer 7 — Config resolution tests.
+"""Resolver tests for the canonical assembly layer."""
 
-Tests the ``_resolve_*`` helpers in ``siac.siac`` that convert a
-``SIACConfig`` into module callables for the pipeline.
-
-Note: ``siac.siac`` depends on ``siac.config.SIACConfig`` which
-requires ``pydantic_settings``.  If that package is not installed, these
-tests are skipped.
-"""
+from __future__ import annotations
 
 import pytest
 
-try:
-    from siac.siac import (
-        _resolve_atmo_provider,
-        _resolve_corrector,
-        _resolve_grid_assembler,
-        _resolve_preprocessor,
-        _resolve_rt_model_for_pipeline,
-        _resolve_solver,
-        _resolve_surface_prior_provider,
-    )
-    _HAS_SIAC = True
-except ImportError:
-    _HAS_SIAC = False
-
-pytestmark = pytest.mark.skipif(
-    not _HAS_SIAC,
-    reason="siac.siac requires pydantic_settings",
+from siac.app.assembly import (
+    resolve_atmo_provider,
+    resolve_corrector,
+    resolve_grid_assembler,
+    resolve_preprocessor,
+    resolve_rt_model_for_pipeline,
+    resolve_solver,
+    resolve_surface_prior_provider,
 )
 
 
 class TestResolveGridAssembler:
     def test_returns_callable(self):
-        fn = _resolve_grid_assembler()
+        fn = resolve_grid_assembler()
         assert callable(fn)
 
     def test_is_assemble_grids(self):
         from siac.algorithms.grid.assembler import assemble_grids
-        fn = _resolve_grid_assembler()
+
+        fn = resolve_grid_assembler()
         assert fn is assemble_grids
 
 
 class TestResolvePreprocessor:
     def test_unknown_sensor_raises(self):
-        """Unknown sensor should raise ValueError."""
-
         class _FakeConfig:
             sensor = "unknown_sensor_xyz"
+            cloud_mask = type("CloudMask", (), {"model_dump": lambda _self, **_kwargs: {}})()
 
         with pytest.raises(ValueError, match="Unknown sensor"):
-            _resolve_preprocessor(_FakeConfig())
+            resolve_preprocessor(_FakeConfig())
 
 
 class TestResolveAtmoProvider:
     def test_mcd19_provider_returns_callable(self):
-        """MCD19 atmo provider branch should resolve to a callable."""
-
         class _FakeAtmo:
             provider = "mcd19"
             cache_dir = None
@@ -64,12 +46,9 @@ class TestResolveAtmoProvider:
         class _FakeConfig:
             atmo_prior = _FakeAtmo()
 
-        fn = _resolve_atmo_provider(_FakeConfig())
-        assert callable(fn)
+        assert callable(resolve_atmo_provider(_FakeConfig()))
 
     def test_vnp19_provider_returns_callable(self):
-        """VNP19 atmo provider branch should resolve to a callable."""
-
         class _FakeAtmo:
             provider = "vnp19"
             cache_dir = None
@@ -77,12 +56,9 @@ class TestResolveAtmoProvider:
         class _FakeConfig:
             atmo_prior = _FakeAtmo()
 
-        fn = _resolve_atmo_provider(_FakeConfig())
-        assert callable(fn)
+        assert callable(resolve_atmo_provider(_FakeConfig()))
 
     def test_unknown_provider_raises(self):
-        """Unknown atmo provider should raise ValueError."""
-
         class _FakeAtmo:
             provider = "nonexistent_provider"
 
@@ -90,74 +66,75 @@ class TestResolveAtmoProvider:
             atmo_prior = _FakeAtmo()
 
         with pytest.raises(ValueError, match="Unknown atmo provider"):
-            _resolve_atmo_provider(_FakeConfig())
+            resolve_atmo_provider(_FakeConfig())
 
 
 class TestResolveSurfacePriorProvider:
     def test_vnp43_returns_callable(self):
-        """VNP43 branch should resolve to a callable."""
-
         class _FakeBrdf:
             provider = "vnp43"
             cache_dir = None
             temporal_window = 16
 
         class _FakeSurfacePrior:
+            method = "kernel_model"
             psf_sigma_x = 29.75
             psf_sigma_y = 39.0
             apply_psf = True
+            spectral_mapping = type(
+                "SpectralMapping",
+                (),
+                {
+                    "enabled": False,
+                    "k_neighbors": 5,
+                    "neighbor_estimator": "distance_weighted_mean",
+                    "knn_backend": "numpy",
+                    "knn_eps": 0.0,
+                    "min_valid_bands": 1,
+                },
+            )()
 
         class _FakeConfig:
             brdf = _FakeBrdf()
             surface_prior = _FakeSurfacePrior()
+            paths = None
 
-        fn = _resolve_surface_prior_provider(_FakeConfig())
-        assert callable(fn)
+        assert callable(resolve_surface_prior_provider(_FakeConfig()))
 
     def test_mcd19_returns_callable(self):
-        """MCD19 BRDF branch should resolve to a callable."""
-
         class _FakeBrdf:
             provider = "mcd19"
             cache_dir = None
             temporal_window = 16
 
         class _FakeSurfacePrior:
+            method = "kernel_model"
             psf_sigma_x = 29.75
             psf_sigma_y = 39.0
             apply_psf = True
+            spectral_mapping = type(
+                "SpectralMapping",
+                (),
+                {
+                    "enabled": False,
+                    "k_neighbors": 5,
+                    "neighbor_estimator": "distance_weighted_mean",
+                    "knn_backend": "numpy",
+                    "knn_eps": 0.0,
+                    "min_valid_bands": 1,
+                },
+            )()
 
         class _FakeConfig:
             brdf = _FakeBrdf()
             surface_prior = _FakeSurfacePrior()
+            paths = None
 
-        fn = _resolve_surface_prior_provider(_FakeConfig())
-        assert callable(fn)
-
-    def test_returns_callable(self):
-        """Default resolver should return a callable."""
-
-        class _FakeBrdf:
-            cache_dir = None
-            temporal_window = 16
-
-        class _FakeSurfacePrior:
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-
-        class _FakeConfig:
-            brdf = _FakeBrdf()
-            surface_prior = _FakeSurfacePrior()
-
-        fn = _resolve_surface_prior_provider(_FakeConfig())
-        assert callable(fn)
+        assert callable(resolve_surface_prior_provider(_FakeConfig()))
 
 
 class TestResolveSolver:
     def test_returns_callable(self):
-        """Default solver resolver should return a callable."""
-
         class _FakeSolverCfg:
             aot_gamma = 10.0
             tcwv_gamma = 5.0
@@ -167,31 +144,26 @@ class TestResolveSolver:
         class _FakeConfig:
             solver = _FakeSolverCfg()
 
-        fn = _resolve_solver(_FakeConfig())
-        assert callable(fn)
+        assert callable(resolve_solver(_FakeConfig()))
 
 
 class TestResolveCorrector:
     def test_returns_callable(self):
-        """Default corrector resolver should return a callable."""
-
         class _FakeConfig:
             pass
 
-        fn = _resolve_corrector(_FakeConfig())
-        assert callable(fn)
+        assert callable(resolve_corrector(_FakeConfig()))
 
 
 class TestResolveRTModel:
     def test_unknown_backend_raises(self):
-        """Unknown RT backend should raise ValueError."""
-
         class _FakeRTConfig:
             backend = "unknown"
             lut_path = None
 
         class _FakeConfig:
             rt_model = _FakeRTConfig()
+            sensor = "s2"
 
         with pytest.raises(ValueError, match="Cannot resolve RT model"):
-            _resolve_rt_model_for_pipeline(_FakeConfig())
+            resolve_rt_model_for_pipeline(_FakeConfig())

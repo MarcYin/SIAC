@@ -1,4 +1,4 @@
-"""Unit tests for S2 convenience entrypoints in siac.siac."""
+"""Unit tests for S2 convenience entrypoints in the public API."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from siac.adapters.data.s2_data_source import S2Product, S2Query
+from siac.api.public import resolve_s2_input, search_sentinel2, siac_process_s2
 from siac.config import SIACConfig
 from siac.errors import DataNotFoundError
-from siac.io.s2_data_source import S2Product, S2Query
-from siac.siac import resolve_s2_input, search_sentinel2, siac_process_s2
 
 
 def test_resolve_s2_input_returns_existing_local_path(tmp_path: Path):
@@ -41,7 +41,7 @@ def test_resolve_s2_input_uses_remote_backend_and_cache(monkeypatch, tmp_path: P
         safe.mkdir(parents=True, exist_ok=True)
         return safe
 
-    monkeypatch.setattr("siac.io.s2_data_source.S2DataAccess.get", _fake_get)
+    monkeypatch.setattr("siac.adapters.data.s2_data_source.S2DataAccess.get", _fake_get)
     out = resolve_s2_input("T31UDQ_20240101", cfg)
 
     assert out == tmp_path / "fake.SAFE"
@@ -67,9 +67,9 @@ def test_resolve_s2_input_builds_auth_from_config_for_cdse(monkeypatch, tmp_path
         safe.mkdir(parents=True, exist_ok=True)
         return safe
 
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _cfg: auth_obj)
-    monkeypatch.setattr("siac.io.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
-    monkeypatch.setattr("siac.io.s2_data_source.S2DataAccess.get", _fake_get)
+    monkeypatch.setattr("siac.workflows.sentinel2.CredentialManager.from_config", lambda _cfg: auth_obj)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
+    monkeypatch.setattr("siac.adapters.data.s2_data_source.S2DataAccess.get", _fake_get)
 
     out = resolve_s2_input(
         "S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000",
@@ -98,7 +98,7 @@ def test_search_sentinel2_builds_query_and_calls_search(monkeypatch):
         captured["query"] = query
         return [fake_product]
 
-    monkeypatch.setattr("siac.io.s2_data_source.search_s2", _fake_search)
+    monkeypatch.setattr("siac.adapters.data.s2_data_source.search_s2", _fake_search)
     products = search_sentinel2(
         tile="50QLD",
         start_date="2026-01-02",
@@ -132,13 +132,11 @@ def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
 
     class _FakeBackend:
         def __init__(self, access_key=None, secret_key=None, auth=None):  # noqa: ANN001
-            captured["access_key"] = access_key
-            captured["secret_key"] = secret_key
             captured["auth"] = auth
 
-    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _cfg: auth_obj)
-    monkeypatch.setattr("siac.io.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
-    monkeypatch.setattr("siac.io.s2_data_source.search_s2", lambda backend, query: [fake_product])  # noqa: ARG005
+    monkeypatch.setattr("siac.workflows.sentinel2.CredentialManager.from_config", lambda _cfg: auth_obj)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
+    monkeypatch.setattr("siac.adapters.data.s2_data_source.search_s2", lambda backend, query: [fake_product])  # noqa: ARG005
 
     products = search_sentinel2(tile="31UDQ", date="2024-01-01", backend="cdse")
 
@@ -146,22 +144,23 @@ def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
     assert captured["auth"] is auth_obj
 
 
-def test_siac_process_s2_resolves_and_runs_process(monkeypatch, tmp_path: Path):
+def test_siac_process_s2_delegates_to_workflow(monkeypatch, tmp_path: Path):
     cfg = SIACConfig(sensor="s2", providers={"s2": {"backend": "local"}})
     safe_dir = tmp_path / "S2A_fake.SAFE"
     safe_dir.mkdir(parents=True, exist_ok=True)
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("siac.siac.resolve_s2_input", lambda *_args, **_kwargs: safe_dir)
-
-    def _fake_process(self, input_path, output_path=None):  # noqa: ANN001
-        captured["input_path"] = Path(input_path)
-        captured["output_path"] = output_path
+    def _fake_process_s2(config, query, **kwargs):  # noqa: ANN001
+        captured["config"] = config
+        captured["query"] = query
+        captured["kwargs"] = kwargs
         return "ok"
 
-    monkeypatch.setattr("siac.siac.SIAC.process", _fake_process)
+    monkeypatch.setattr("siac.api.public.process_s2", _fake_process_s2)
+
     out = siac_process_s2(cfg, "T31UDQ_20240101", output_path=tmp_path / "out")
 
     assert out == "ok"
-    assert captured["input_path"] == safe_dir
-    assert captured["output_path"] == tmp_path / "out"
+    assert captured["config"] is cfg
+    assert captured["query"] == "T31UDQ_20240101"
+    assert captured["kwargs"]["output_path"] == tmp_path / "out"

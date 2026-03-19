@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.io.geometry import (
+from siac.geo.geometry import (
     bounds_area,
     bounds_contains,
     bounds_intersect,
@@ -20,7 +20,7 @@ from siac.io.geometry import (
     load_aoi,
     polygon_to_bounds,
 )
-from siac.io.reprojection import (
+from siac.geo.reprojection import (
     compute_common_bounds,
     get_bounds,
     get_resolution,

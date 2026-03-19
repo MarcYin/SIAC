@@ -16,6 +16,14 @@ import xarray as xr
 from rasterio.transform import from_origin
 
 from siac.adapters.atmo.cams import CAMSProvider
+from siac.adapters.data.copernicus_dataspace import (
+    CopernicusDataspaceBackend,
+    download_cdse,
+    search_cdse,
+)
+from siac.adapters.data.gcs_sentinel2 import GCSSentinel2Backend
+from siac.adapters.data.s2_data_source import S2Product, S2Query
+from siac.algorithms.rt.direct import __all__ as direct_all
 from siac.domain import BRDFKernelWeights, GeometryAngles
 from siac.domain.aoi import AOI, _detect_crs
 from siac.errors import (
@@ -27,10 +35,6 @@ from siac.errors import (
     SolverConvergenceError,
     ValidationError,
 )
-from siac.io.copernicus_dataspace import CopernicusDataspaceBackend, download_cdse, search_cdse
-from siac.io.gcs_sentinel2 import GCSSentinel2Backend
-from siac.io.s2_data_source import S2Product, S2Query
-from siac.rt.direct import __all__ as direct_all
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -70,7 +74,7 @@ def _brdf_weights(shape: tuple[int, int] = (8, 8)) -> BRDFKernelWeights:
 
 def _is_cdse_targeted_cov_run(request: pytest.FixtureRequest) -> bool:
     cov_sources = getattr(request.config.option, "cov_source", None) or []
-    return "siac.io.copernicus_dataspace" in cov_sources
+    return "siac.adapters.data.copernicus_dataspace" in cov_sources
 
 
 def _skip_native_heavy_for_cdse_cov(request: pytest.FixtureRequest) -> None:
@@ -221,8 +225,8 @@ class TestExceptionsAndStubs:
                 return _Resp(raw=payload)
             return _Resp(json_data=page)
 
-        monkeypatch.setattr("siac.io.copernicus_dataspace.requests.post", _fake_post)
-        monkeypatch.setattr("siac.io.copernicus_dataspace.requests.get", _fake_get)
+        monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
+        monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
 
         found = search_cdse(query)
         assert len(found) == 1
@@ -236,7 +240,7 @@ class TestExceptionsAndStubs:
         safe_backend = backend.download(found_backend[0], tmp_path)
         assert safe_backend.exists()
 
-        import siac.io.gcs_sentinel2 as gcs_mod
+        import siac.adapters.data.gcs_sentinel2 as gcs_mod
 
         gcs_safe = tmp_path / f"{prod.product_id}.SAFE"
         gcs_safe.mkdir(parents=True, exist_ok=True)
