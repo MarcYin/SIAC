@@ -20,7 +20,7 @@ import numpy as np
 import xarray as xr
 
 from siac._rust import TwoLayerNN as _RustNN
-from siac.core.types import (
+from siac.domain import (
     AtmosphericState,
     GeometryAngles,
     RTCoefficients,

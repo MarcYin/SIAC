@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 ENMAP_SPEC_URL = "https://www.enmap.org/data/doc/EN-PCV-ICD-2009-2_HSI_Product_Specification_Level1_Level2.pdf"
 

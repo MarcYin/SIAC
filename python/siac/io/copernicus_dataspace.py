@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
-from siac.core.exceptions import DataNotFoundError
+from siac.errors import DataNotFoundError
 from siac.io.s2_data_source import S2Product, S2Query
 
 if TYPE_CHECKING:
-    from siac.core.auth import CredentialManager
+    from siac.adapters.auth import CredentialManager
 
 logger = logging.getLogger(__name__)
 

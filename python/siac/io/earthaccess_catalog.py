@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from siac.core.exceptions import DataNotFoundError
+from siac.errors import DataNotFoundError
 from siac.io.earthaccess_source import EarthAccessSource
 
 

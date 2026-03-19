@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 PLANET_RSR_URL = "https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-"
 

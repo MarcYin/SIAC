@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 PRISMA_MISSION_URL = "https://www.asi.it/en/earth-science/prisma/"
 

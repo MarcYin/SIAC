@@ -15,7 +15,7 @@ from rasterio.warp import transform_bounds
 if TYPE_CHECKING:
     from rasterio.crs import CRS
 
-    from siac.core.types import CorrectionResult, ObservationBundle, SensorBand
+    from siac.domain import CorrectionResult, ObservationBundle, SensorBand
 
 _STAC_VERSION = "1.0.0"
 _EO_EXTENSION = "https://stac-extensions.github.io/eo/v2.0.0/schema.json"

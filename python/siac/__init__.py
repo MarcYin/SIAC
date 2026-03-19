@@ -6,7 +6,7 @@ Supports Sentinel-2, Landsat 8, and extensible to other sensors.
 
 Example usage:
     >>> from siac import SIAC
-    >>> from siac.core.config import SIACConfig
+    >>> from siac.config import SIACConfig
     >>>
     >>> config = SIACConfig.from_file("siac_config.toml")
     >>> siac = SIAC(config)
@@ -26,7 +26,7 @@ def __getattr__(name: str):
         from siac.siac import SIAC
         return SIAC
     if name == "SIACConfig":
-        from siac.core.config import SIACConfig
+        from siac.config import SIACConfig
         return SIACConfig
     if name == "process_sentinel2":
         from siac.siac import process_sentinel2

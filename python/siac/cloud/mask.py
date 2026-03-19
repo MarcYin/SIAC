@@ -16,7 +16,7 @@ from siac.io.reprojection import resample
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 _EXPECTED_CLASS_VALUES = (0, 1, 2, 3)
 _COLOR_WINDOWS = {

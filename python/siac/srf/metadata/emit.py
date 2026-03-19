@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 EMIT_ATBD_URL = "https://lpdaac.usgs.gov/documents/2147/EMIT_L2A-RFL_ATBD_V1.pdf"
 

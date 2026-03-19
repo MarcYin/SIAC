@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 USGS_LANDSAT_SCV_URL = "https://landsat.usgs.gov/spectral-characteristics-viewer"
 

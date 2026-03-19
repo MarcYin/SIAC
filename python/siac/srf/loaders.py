@@ -19,7 +19,7 @@ from siac.srf.sources.planet import load_planet_sensor_config
 from siac.srf.sources.sentinel2 import load_sentinel2_sensor_config
 
 if TYPE_CHECKING:
-    from siac.core.types import SensorConfig
+    from siac.domain import SensorConfig
 
 
 def _raise_no_loader(
