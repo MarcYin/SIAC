@@ -364,6 +364,9 @@ class SensorBand:
         band_index: Zero-based index in data arrays
         srf_wavelengths_nm: Optional tabulated SRF wavelengths in nanometers
         srf_response: Optional tabulated SRF response
+        rsrf_sensor_unit_id: Optional RSRF repository sensor identifier
+        rsrf_representation_variant: Optional RSRF representation variant
+        rsrf_band_id: Optional RSRF band identifier when it differs from ``name``
     """
 
     name: str
@@ -373,6 +376,9 @@ class SensorBand:
     band_index: int
     srf_wavelengths_nm: np.ndarray | None = None
     srf_response: np.ndarray | None = None
+    rsrf_sensor_unit_id: str | None = None
+    rsrf_representation_variant: str | None = None
+    rsrf_band_id: str | None = None
 
     @property
     def wavelength_um(self) -> float:
@@ -523,23 +529,47 @@ class SensorConfig:
 # Predefined Sensor Configurations
 # =============================================================================
 
+
+def _rsrf_band(
+    name: str,
+    center_wavelength: float,
+    bandwidth: float,
+    resolution: float,
+    band_index: int,
+    *,
+    sensor_unit_id: str,
+    representation_variant: str = "band_average",
+    rsrf_band_id: str | None = None,
+) -> SensorBand:
+    """Construct a band with an attached RSRF repository identity."""
+    return SensorBand(
+        name=name,
+        center_wavelength=center_wavelength,
+        bandwidth=bandwidth,
+        resolution=resolution,
+        band_index=band_index,
+        rsrf_sensor_unit_id=sensor_unit_id,
+        rsrf_representation_variant=representation_variant,
+        rsrf_band_id=rsrf_band_id or name,
+    )
+
 SENTINEL2A_CONFIG = SensorConfig(
     sensor_id="MSI",
     satellite_id="S2A",
     bands=(
-        SensorBand("B01", 443.0, 20.0, 60.0, 0),   # Coastal aerosol
-        SensorBand("B02", 490.0, 65.0, 10.0, 1),   # Blue
-        SensorBand("B03", 560.0, 35.0, 10.0, 2),   # Green
-        SensorBand("B04", 665.0, 30.0, 10.0, 3),   # Red
-        SensorBand("B05", 705.0, 15.0, 20.0, 4),   # Red edge 1
-        SensorBand("B06", 740.0, 15.0, 20.0, 5),   # Red edge 2
-        SensorBand("B07", 783.0, 20.0, 20.0, 6),   # Red edge 3
-        SensorBand("B08", 842.0, 115.0, 10.0, 7),  # NIR
-        SensorBand("B8A", 865.0, 20.0, 20.0, 8),   # NIR narrow
-        SensorBand("B09", 945.0, 20.0, 60.0, 9),   # Water vapor
-        SensorBand("B10", 1375.0, 30.0, 60.0, 10), # Cirrus
-        SensorBand("B11", 1610.0, 90.0, 20.0, 11), # SWIR 1
-        SensorBand("B12", 2190.0, 180.0, 20.0, 12), # SWIR 2
+        _rsrf_band("B01", 443.0, 20.0, 60.0, 0, sensor_unit_id="sentinel-2a_msi"),   # Coastal aerosol
+        _rsrf_band("B02", 490.0, 65.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi"),   # Blue
+        _rsrf_band("B03", 560.0, 35.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi"),   # Green
+        _rsrf_band("B04", 665.0, 30.0, 10.0, 3, sensor_unit_id="sentinel-2a_msi"),   # Red
+        _rsrf_band("B05", 705.0, 15.0, 20.0, 4, sensor_unit_id="sentinel-2a_msi"),   # Red edge 1
+        _rsrf_band("B06", 740.0, 15.0, 20.0, 5, sensor_unit_id="sentinel-2a_msi"),   # Red edge 2
+        _rsrf_band("B07", 783.0, 20.0, 20.0, 6, sensor_unit_id="sentinel-2a_msi"),   # Red edge 3
+        _rsrf_band("B08", 842.0, 115.0, 10.0, 7, sensor_unit_id="sentinel-2a_msi"),  # NIR
+        _rsrf_band("B8A", 865.0, 20.0, 20.0, 8, sensor_unit_id="sentinel-2a_msi"),   # NIR narrow
+        _rsrf_band("B09", 945.0, 20.0, 60.0, 9, sensor_unit_id="sentinel-2a_msi"),   # Water vapor
+        _rsrf_band("B10", 1375.0, 30.0, 60.0, 10, sensor_unit_id="sentinel-2a_msi"), # Cirrus
+        _rsrf_band("B11", 1610.0, 90.0, 20.0, 11, sensor_unit_id="sentinel-2a_msi"), # SWIR 1
+        _rsrf_band("B12", 2190.0, 180.0, 20.0, 12, sensor_unit_id="sentinel-2a_msi"), # SWIR 2
     ),
     default_ref_scale=1.0 / 10000.0,
     default_ref_offset=0.0,
@@ -549,19 +579,19 @@ SENTINEL2B_CONFIG = SensorConfig(
     sensor_id="MSI",
     satellite_id="S2B",
     bands=(
-        SensorBand("B01", 442.0, 20.0, 60.0, 0),
-        SensorBand("B02", 492.0, 65.0, 10.0, 1),
-        SensorBand("B03", 559.0, 35.0, 10.0, 2),
-        SensorBand("B04", 665.0, 30.0, 10.0, 3),
-        SensorBand("B05", 704.0, 15.0, 20.0, 4),
-        SensorBand("B06", 739.0, 15.0, 20.0, 5),
-        SensorBand("B07", 780.0, 20.0, 20.0, 6),
-        SensorBand("B08", 833.0, 115.0, 10.0, 7),
-        SensorBand("B8A", 864.0, 20.0, 20.0, 8),
-        SensorBand("B09", 943.0, 20.0, 60.0, 9),
-        SensorBand("B10", 1377.0, 30.0, 60.0, 10),
-        SensorBand("B11", 1610.0, 90.0, 20.0, 11),
-        SensorBand("B12", 2186.0, 180.0, 20.0, 12),
+        _rsrf_band("B01", 442.0, 20.0, 60.0, 0, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B02", 492.0, 65.0, 10.0, 1, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B03", 559.0, 35.0, 10.0, 2, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B04", 665.0, 30.0, 10.0, 3, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B05", 704.0, 15.0, 20.0, 4, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B06", 739.0, 15.0, 20.0, 5, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B07", 780.0, 20.0, 20.0, 6, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B08", 833.0, 115.0, 10.0, 7, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B8A", 864.0, 20.0, 20.0, 8, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B09", 943.0, 20.0, 60.0, 9, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B10", 1377.0, 30.0, 60.0, 10, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B11", 1610.0, 90.0, 20.0, 11, sensor_unit_id="sentinel-2b_msi"),
+        _rsrf_band("B12", 2186.0, 180.0, 20.0, 12, sensor_unit_id="sentinel-2b_msi"),
     ),
     default_ref_scale=1.0 / 10000.0,
     default_ref_offset=0.0,
@@ -571,13 +601,13 @@ LANDSAT8_OLI_CONFIG = SensorConfig(
     sensor_id="OLI",
     satellite_id="L8",
     bands=(
-        SensorBand("B1", 443.0, 16.0, 30.0, 0),    # Coastal aerosol
-        SensorBand("B2", 482.0, 60.0, 30.0, 1),    # Blue
-        SensorBand("B3", 561.5, 57.0, 30.0, 2),    # Green
-        SensorBand("B4", 654.5, 37.0, 30.0, 3),    # Red
-        SensorBand("B5", 865.0, 28.0, 30.0, 4),    # NIR
-        SensorBand("B6", 1608.5, 85.0, 30.0, 5),   # SWIR 1
-        SensorBand("B7", 2200.5, 187.0, 30.0, 6),  # SWIR 2
+        _rsrf_band("B1", 443.0, 16.0, 30.0, 0, sensor_unit_id="landsat-8_oli"),    # Coastal aerosol
+        _rsrf_band("B2", 482.0, 60.0, 30.0, 1, sensor_unit_id="landsat-8_oli"),    # Blue
+        _rsrf_band("B3", 561.5, 57.0, 30.0, 2, sensor_unit_id="landsat-8_oli"),    # Green
+        _rsrf_band("B4", 654.5, 37.0, 30.0, 3, sensor_unit_id="landsat-8_oli"),    # Red
+        _rsrf_band("B5", 865.0, 28.0, 30.0, 4, sensor_unit_id="landsat-8_oli"),    # NIR
+        _rsrf_band("B6", 1608.5, 85.0, 30.0, 5, sensor_unit_id="landsat-8_oli"),   # SWIR 1
+        _rsrf_band("B7", 2200.5, 187.0, 30.0, 6, sensor_unit_id="landsat-8_oli"),  # SWIR 2
     ),
     default_ref_scale=2.75e-5,
     default_ref_offset=-0.2,
@@ -588,19 +618,19 @@ SENTINEL2C_CONFIG = SensorConfig(
     sensor_id="MSI",
     satellite_id="S2C",
     bands=(
-        SensorBand("B01", 443.0, 20.0, 60.0, 0),   # Coastal aerosol
-        SensorBand("B02", 490.0, 65.0, 10.0, 1),   # Blue
-        SensorBand("B03", 560.0, 35.0, 10.0, 2),   # Green
-        SensorBand("B04", 665.0, 30.0, 10.0, 3),   # Red
-        SensorBand("B05", 705.0, 15.0, 20.0, 4),   # Red edge 1
-        SensorBand("B06", 740.0, 15.0, 20.0, 5),   # Red edge 2
-        SensorBand("B07", 783.0, 20.0, 20.0, 6),   # Red edge 3
-        SensorBand("B08", 842.0, 115.0, 10.0, 7),  # NIR
-        SensorBand("B8A", 865.0, 20.0, 20.0, 8),   # NIR narrow
-        SensorBand("B09", 945.0, 20.0, 60.0, 9),   # Water vapor
-        SensorBand("B10", 1375.0, 30.0, 60.0, 10), # Cirrus
-        SensorBand("B11", 1610.0, 90.0, 20.0, 11), # SWIR 1
-        SensorBand("B12", 2190.0, 180.0, 20.0, 12), # SWIR 2
+        _rsrf_band("B01", 443.0, 20.0, 60.0, 0, sensor_unit_id="sentinel-2c_msi"),   # Coastal aerosol
+        _rsrf_band("B02", 490.0, 65.0, 10.0, 1, sensor_unit_id="sentinel-2c_msi"),   # Blue
+        _rsrf_band("B03", 560.0, 35.0, 10.0, 2, sensor_unit_id="sentinel-2c_msi"),   # Green
+        _rsrf_band("B04", 665.0, 30.0, 10.0, 3, sensor_unit_id="sentinel-2c_msi"),   # Red
+        _rsrf_band("B05", 705.0, 15.0, 20.0, 4, sensor_unit_id="sentinel-2c_msi"),   # Red edge 1
+        _rsrf_band("B06", 740.0, 15.0, 20.0, 5, sensor_unit_id="sentinel-2c_msi"),   # Red edge 2
+        _rsrf_band("B07", 783.0, 20.0, 20.0, 6, sensor_unit_id="sentinel-2c_msi"),   # Red edge 3
+        _rsrf_band("B08", 842.0, 115.0, 10.0, 7, sensor_unit_id="sentinel-2c_msi"),  # NIR
+        _rsrf_band("B8A", 865.0, 20.0, 20.0, 8, sensor_unit_id="sentinel-2c_msi"),   # NIR narrow
+        _rsrf_band("B09", 945.0, 20.0, 60.0, 9, sensor_unit_id="sentinel-2c_msi"),   # Water vapor
+        _rsrf_band("B10", 1375.0, 30.0, 60.0, 10, sensor_unit_id="sentinel-2c_msi"), # Cirrus
+        _rsrf_band("B11", 1610.0, 90.0, 20.0, 11, sensor_unit_id="sentinel-2c_msi"), # SWIR 1
+        _rsrf_band("B12", 2190.0, 180.0, 20.0, 12, sensor_unit_id="sentinel-2c_msi"), # SWIR 2
     ),
     default_ref_scale=1.0 / 10000.0,
     default_ref_offset=0.0,
@@ -611,13 +641,13 @@ LANDSAT9_OLI2_CONFIG = SensorConfig(
     sensor_id="OLI",
     satellite_id="L9",
     bands=(
-        SensorBand("B1", 443.0, 16.0, 30.0, 0),    # Coastal aerosol
-        SensorBand("B2", 482.0, 60.0, 30.0, 1),    # Blue
-        SensorBand("B3", 561.5, 57.0, 30.0, 2),    # Green
-        SensorBand("B4", 654.5, 37.0, 30.0, 3),    # Red
-        SensorBand("B5", 865.0, 28.0, 30.0, 4),    # NIR
-        SensorBand("B6", 1608.5, 85.0, 30.0, 5),   # SWIR 1
-        SensorBand("B7", 2200.5, 187.0, 30.0, 6),  # SWIR 2
+        _rsrf_band("B1", 443.0, 16.0, 30.0, 0, sensor_unit_id="landsat-9_oli2"),    # Coastal aerosol
+        _rsrf_band("B2", 482.0, 60.0, 30.0, 1, sensor_unit_id="landsat-9_oli2"),    # Blue
+        _rsrf_band("B3", 561.5, 57.0, 30.0, 2, sensor_unit_id="landsat-9_oli2"),    # Green
+        _rsrf_band("B4", 654.5, 37.0, 30.0, 3, sensor_unit_id="landsat-9_oli2"),    # Red
+        _rsrf_band("B5", 865.0, 28.0, 30.0, 4, sensor_unit_id="landsat-9_oli2"),    # NIR
+        _rsrf_band("B6", 1608.5, 85.0, 30.0, 5, sensor_unit_id="landsat-9_oli2"),   # SWIR 1
+        _rsrf_band("B7", 2200.5, 187.0, 30.0, 6, sensor_unit_id="landsat-9_oli2"),  # SWIR 2
     ),
     default_ref_scale=2.75e-5,
     default_ref_offset=-0.2,

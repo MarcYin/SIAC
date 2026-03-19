@@ -19,9 +19,13 @@ pyproj = ">=3.6.0"
 
 # Scientific computing
 numpy = ">=1.26.0"
+pandas = ">=2.0.0"
 scipy = ">=1.12.0"
 scikit-learn = ">=1.4.0"
 scikit-image = ">=0.22.0"
+duckdb = ">=1.1.0"
+pyarrow = ">=10.0.0"
+openpyxl = ">=3.1.0"
 
 # ML for cloud detection
 lightgbm = ">=4.0.0"
@@ -47,6 +51,10 @@ tqdm = ">=4.66.0"
 aiohttp = ">=3.13.3,<4"
 libgdal-jp2openjpeg = ">=3.12.2,<4"
 pyhdf = ">=0.11.6,<0.12"
+
+[pypi-dependencies]
+spectral-library = ">=0.2.0"
+RSRF = ">=0.0.1"
 
 [feature.dev.dependencies]
 pytest = ">=8.0.0"

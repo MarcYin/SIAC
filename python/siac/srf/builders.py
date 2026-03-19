@@ -46,6 +46,9 @@ def build_sensor_config_from_tabulated_srfs(
                 band_index=band.band_index,
                 srf_wavelengths_nm=srf.wavelengths_nm.copy(),
                 srf_response=srf.response.copy(),
+                rsrf_sensor_unit_id=band.rsrf_sensor_unit_id,
+                rsrf_representation_variant=band.rsrf_representation_variant,
+                rsrf_band_id=band.rsrf_band_id,
             )
         )
     return SensorConfig(

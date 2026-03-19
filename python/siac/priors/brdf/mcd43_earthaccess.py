@@ -123,6 +123,8 @@ class _EarthAccessBRDFProvider:
     _source_name: str = ""
     _product_bands: tuple[ProductBandDefinition, ...] = ()
     _legacy_band_map: dict[int, str] = {}
+    _rsrf_sensor_unit_id: str | None = None
+    _rsrf_representation_variant: str | None = "band_average"
 
     def __init__(
         self,
@@ -160,6 +162,9 @@ class _EarthAccessBRDFProvider:
                 bandwidth=band.bandwidth_nm,
                 resolution=500.0,
                 band_index=index,
+                rsrf_sensor_unit_id=self._rsrf_sensor_unit_id,
+                rsrf_representation_variant=self._rsrf_representation_variant,
+                rsrf_band_id=band.label,
             )
             for index, band in enumerate(self._product_bands)
         )
@@ -985,6 +990,7 @@ class MCD43EarthAccessProvider(_StackParameterProvider):
 
     product_key = "mcd43_brdf"
     _source_name = "MCD43"
+    _rsrf_sensor_unit_id = "terra_modis"
     _product_bands = (
         ProductBandDefinition("Band1", 645.0, 50.0, "BRDF_Albedo_Parameters_Band1", "BRDF_Albedo_Band_Mandatory_Quality_Band1"),
         ProductBandDefinition("Band2", 858.5, 35.0, "BRDF_Albedo_Parameters_Band2", "BRDF_Albedo_Band_Mandatory_Quality_Band2"),
@@ -1002,6 +1008,7 @@ class VNP43EarthAccessProvider(_StackParameterProvider):
 
     product_key = "vnp43_brdf"
     _source_name = "VNP43"
+    _rsrf_sensor_unit_id = "snpp_viirs"
     _read_dataset = staticmethod(read_hdf5_dataset)
     _product_bands = (
         ProductBandDefinition(
@@ -1084,6 +1091,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
 
     product_key = "mcd19_brdf"
     _source_name = "MCD19"
+    _rsrf_sensor_unit_id = "terra_modis"
     _product_bands = (
         ProductBandDefinition("Band1", 645.0, 50.0, "Kiso_Band1", "Status_QA"),
         ProductBandDefinition("Band2", 858.5, 35.0, "Kiso_Band2", "Status_QA"),
