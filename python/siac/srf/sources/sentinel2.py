@@ -17,12 +17,14 @@ from zipfile import ZipFile
 
 import numpy as np
 
-from siac.domain import SENTINEL2A_CONFIG, SENTINEL2B_CONFIG, SENTINEL2C_CONFIG, SensorConfig
+from siac.catalog import SENTINEL2A_CONFIG, SENTINEL2B_CONFIG, SENTINEL2C_CONFIG
 from siac.srf.builders import build_sensor_config_from_tabulated_srfs
 from siac.srf.types import SpectralResponseFunction
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from siac.domain import SensorConfig
 
 logger = logging.getLogger(__name__)
 

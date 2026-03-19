@@ -12,11 +12,11 @@ def build_s2_backend(config, *, auth: CredentialManager | None = None):
     """Build the configured Sentinel-2 backend adapter."""
     backend_name = config.s2_data.backend
     if backend_name == "cdse":
-        from siac.io.copernicus_dataspace import CopernicusDataspaceBackend
+        from siac.adapters.data.copernicus_dataspace import CopernicusDataspaceBackend
 
         return CopernicusDataspaceBackend(auth=auth)
     if backend_name == "gcs":
-        from siac.io.gcs_sentinel2 import GCSSentinel2Backend
+        from siac.adapters.data.gcs_sentinel2 import GCSSentinel2Backend
 
         return GCSSentinel2Backend()
     if backend_name == "local":

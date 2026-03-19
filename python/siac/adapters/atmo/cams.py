@@ -353,7 +353,7 @@ class CAMSProvider:
         xmin, ymin, xmax, ymax = bounds
         if "latitude" in var.dims:
             if crs and str(crs).upper() != "EPSG:4326":
-                from siac.io.reprojection import transform_bounds
+                from siac.geo.reprojection import transform_bounds
 
                 xmin, ymin, xmax, ymax = transform_bounds(bounds, crs, "EPSG:4326")
 

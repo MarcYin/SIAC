@@ -6,7 +6,7 @@ to various geospatial raster formats including GeoTIFF, Cloud-Optimized
 GeoTIFF (COG), Zarr, and NetCDF.
 
 Example:
-    >>> from siac.io.writers import write_raster, write_cog
+    >>> from siac.storage.writers import write_raster, write_cog
     >>>
     >>> # Write DataArray to GeoTIFF
     >>> write_raster(da, "/path/to/output.tif")

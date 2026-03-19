@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from siac.rt.emulator import TwoLayerNNEmulator
-from siac.rt.lut import ZarrLUTBackend
+from siac.algorithms.rt.emulator import TwoLayerNNEmulator
+from siac.algorithms.rt.lut import ZarrLUTBackend
 
 if TYPE_CHECKING:
     from siac.adapters.auth import CredentialManager

@@ -5,7 +5,7 @@ This module provides functions for working with geometries, including
 loading AOIs, converting between formats, and spatial operations.
 
 Example:
-    >>> from siac.io.geometry import load_aoi, get_raster_footprint
+    >>> from siac.geo.geometry import load_aoi, get_raster_footprint
     >>>
     >>> # Load AOI from GeoJSON
     >>> aoi = load_aoi("/path/to/aoi.geojson")
@@ -270,7 +270,7 @@ def get_raster_bounds(
     bounds = data.rio.bounds()
 
     if crs is not None and data.rio.crs is not None:
-        from siac.io.reprojection import transform_bounds
+        from siac.geo.reprojection import transform_bounds
 
         bounds = transform_bounds(bounds, data.rio.crs, crs)
 

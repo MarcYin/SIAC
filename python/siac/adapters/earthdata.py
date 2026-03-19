@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from siac.io.earthaccess_source import EarthAccessSource
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 
 if TYPE_CHECKING:
     from siac.adapters.auth import CredentialManager

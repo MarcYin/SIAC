@@ -19,8 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
-from siac.io.s2_data_source import S2Product, S2Query
 
 logger = logging.getLogger(__name__)
 

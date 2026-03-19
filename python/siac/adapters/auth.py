@@ -307,7 +307,7 @@ class EarthdataAuth(_ProviderAuthBase):
         return kwargs
 
     def build_earthaccess_source(self, *, provider: str | None = None, **kwargs: Any) -> Any:
-        from siac.io.earthaccess_source import EarthAccessSource
+        from siac.adapters.data.earthaccess_source import EarthAccessSource
 
         source_kwargs = self.source_kwargs(provider=provider)
         source_kwargs.update(kwargs)

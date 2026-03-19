@@ -10,6 +10,8 @@ import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
+from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata_common import (
     apply_scale_and_mask,
     granule_intersects_bounds,
@@ -22,8 +24,6 @@ from siac.adapters.earthdata_common import (
     reproject_native_to_target,
 )
 from siac.domain import AtmosphericState
-from siac.io.earthaccess_catalog import EarthAccessCatalog
-from siac.io.earthaccess_source import EarthAccessSource
 
 if TYPE_CHECKING:
     from datetime import datetime

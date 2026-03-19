@@ -11,6 +11,8 @@ import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
+from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata_common import (
     ProductBandDefinition,
     apply_scale_and_mask,
@@ -23,8 +25,6 @@ from siac.adapters.earthdata_common import (
     reproject_native_to_target,
 )
 from siac.domain import BRDFKernelWeights, SensorBand
-from siac.io.earthaccess_catalog import EarthAccessCatalog
-from siac.io.earthaccess_source import EarthAccessSource
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

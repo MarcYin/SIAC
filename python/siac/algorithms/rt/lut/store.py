@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from siac.rt.lut.http_zip_store import build_readonly_zip_mapper
+from siac.algorithms.rt.lut.http_zip_store import build_readonly_zip_mapper
 
 logger = logging.getLogger(__name__)
 

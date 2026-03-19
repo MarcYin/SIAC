@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.domain import AtmosphericState
-from siac.io.earthaccess_catalog import EarthAccessCatalog
-from siac.io.earthaccess_source import EarthAccessSource
 
 if TYPE_CHECKING:
     from datetime import datetime

@@ -1,35 +1,39 @@
-"""
-I/O module for reading and writing geospatial data.
+"""Convenience facade over the narrower geo/storage/data packages."""
 
-This module provides rioxarray-based utilities for:
-- Reading rasters in various formats (GeoTIFF, COG, VRT, JP2, HDF, Zarr)
-- Writing rasters with compression (GeoTIFF, COG, Zarr, NetCDF)
-- Reprojection and resampling
-- Geometry and vector operations
-
-Example:
-    >>> from siac.io import read_raster, write_cog, reproject_match
-    >>>
-    >>> # Read and process
-    >>> da = read_raster("/path/to/input.tif")
-    >>> aligned = reproject_match(da, target)
-    >>> write_cog(aligned, "/path/to/output.tif")
-"""
-
-from siac.io.copernicus_dataspace import (
+import siac.adapters.data as data
+import siac.adapters.data.copernicus_dataspace as copernicus_dataspace
+import siac.adapters.data.earthaccess_catalog as earthaccess_catalog
+import siac.adapters.data.earthaccess_source as earthaccess_source
+import siac.adapters.data.gcs_sentinel2 as gcs_sentinel2
+import siac.adapters.data.s2_data_source as s2_data_source
+import siac.geo.geometry as geometry
+import siac.geo.reprojection as reprojection
+import siac.storage.readers as readers
+import siac.storage.stac as stac
+import siac.storage.writers as writers
+from siac.adapters.data.copernicus_dataspace import (
     CopernicusDataspaceBackend,
     download_cdse,
     search_cdse,
 )
-from siac.io.earthaccess_catalog import (
+from siac.adapters.data.earthaccess_catalog import (
     EarthAccessCatalog,
     EarthaccessProduct,
     ProductValidationResult,
     default_products,
 )
-from siac.io.earthaccess_source import EarthAccessSource
-from siac.io.gcs_sentinel2 import GCSSentinel2Backend, download_gcs, search_gcs
-from siac.io.geometry import (
+from siac.adapters.data.earthaccess_source import EarthAccessSource
+from siac.adapters.data.gcs_sentinel2 import GCSSentinel2Backend, download_gcs, search_gcs
+from siac.adapters.data.s2_data_source import (
+    S2DataAccess,
+    S2Product,
+    S2Query,
+    deduplicate_products,
+    fetch_s2,
+    search_s2,
+    select_best_product,
+)
+from siac.geo.geometry import (
     bounds_area,
     bounds_contains,
     bounds_intersect,
@@ -46,20 +50,7 @@ from siac.io.geometry import (
     polygon_to_bounds,
     raster_to_geojson_feature,
 )
-from siac.io.readers import (
-    check_rasters_aligned,
-    get_raster_info,
-    read_hdf_subdataset,
-    read_jp2,
-    read_multiband,
-    read_multiband_stack,
-    read_netcdf_variable,
-    read_raster,
-    read_raster_at_resolution,
-    read_raster_window,
-    read_zarr_array,
-)
-from siac.io.reprojection import (
+from siac.geo.reprojection import (
     align_grids,
     clip_to_bounds,
     clip_to_geometry,
@@ -76,17 +67,21 @@ from siac.io.reprojection import (
     transform_bounds,
     transform_points,
 )
-from siac.io.s2_data_source import (
-    S2DataAccess,
-    S2Product,
-    S2Query,
-    deduplicate_products,
-    fetch_s2,
-    search_s2,
-    select_best_product,
+from siac.storage.readers import (
+    check_rasters_aligned,
+    get_raster_info,
+    read_hdf_subdataset,
+    read_jp2,
+    read_multiband,
+    read_multiband_stack,
+    read_netcdf_variable,
+    read_raster,
+    read_raster_at_resolution,
+    read_raster_window,
+    read_zarr_array,
 )
-from siac.io.stac import build_stac_item, write_stac_item
-from siac.io.writers import (
+from siac.storage.stac import build_stac_item, write_stac_item
+from siac.storage.writers import (
     write_auxiliary_products,
     write_boa_products,
     write_cog,
@@ -175,4 +170,16 @@ __all__ = [
     "EarthaccessProduct",
     "ProductValidationResult",
     "default_products",
+    # Convenience module aliases
+    "copernicus_dataspace",
+    "data",
+    "earthaccess_catalog",
+    "earthaccess_source",
+    "gcs_sentinel2",
+    "geometry",
+    "readers",
+    "reprojection",
+    "s2_data_source",
+    "stac",
+    "writers",
 ]

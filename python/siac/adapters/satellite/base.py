@@ -294,7 +294,7 @@ def resample_angles_to_data(
     Returns:
         Resampled angles matching target grid
     """
-    from siac.io.reprojection import reproject_match
+    from siac.geo.reprojection import reproject_match
 
     return reproject_match(angles, target, resampling=method)
 

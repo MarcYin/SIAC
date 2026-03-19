@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
-from siac.io.s2_data_source import S2Product, S2Query
 
 if TYPE_CHECKING:
     from siac.adapters.auth import CredentialManager

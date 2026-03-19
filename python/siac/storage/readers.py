@@ -6,7 +6,7 @@ xarray DataArrays and Datasets, with support for various formats including
 GeoTIFF, COG, VRT, and remote URLs.
 
 Example:
-    >>> from siac.io.readers import read_raster, read_multiband
+    >>> from siac.storage.readers import read_raster, read_multiband
     >>>
     >>> # Read single band
     >>> da = read_raster("/path/to/file.tif")

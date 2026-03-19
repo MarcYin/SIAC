@@ -6,7 +6,7 @@ and resampling of geospatial raster data. It replaces the GDAL-based
 reproject.py from the original SIAC.
 
 Example:
-    >>> from siac.io.reprojection import reproject_match, resample
+    >>> from siac.geo.reprojection import reproject_match, resample
     >>>
     >>> # Reproject to match another raster
     >>> aligned = reproject_match(source, target)

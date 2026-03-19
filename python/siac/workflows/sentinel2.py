@@ -30,7 +30,7 @@ def apply_s2_query_defaults(query, *, config):
 
 
 def coerce_s2_query(query, *, config):
-    from siac.io.s2_data_source import S2Query
+    from siac.adapters.data.s2_data_source import S2Query
 
     if isinstance(query, S2Query):
         q = S2Query(**query.__dict__)
@@ -74,7 +74,7 @@ def resolve_s2_input(
             "Provide a local SAFE path or switch config.s2_data.backend to 'cdse' or 'gcs'."
         )
 
-    from siac.io.s2_data_source import S2DataAccess
+    from siac.adapters.data.s2_data_source import S2DataAccess
 
     cache_dir = resolved_config.s2_data.cache_dir
     accessor = S2DataAccess(backend=backend, cache_dir=cache_dir)
@@ -96,7 +96,7 @@ def search_sentinel2(
     auth: CredentialManager | None = None,
     resolve_s2_backend_fn=None,
 ):
-    from siac.io.s2_data_source import S2Query, search_s2
+    from siac.adapters.data.s2_data_source import S2Query, search_s2
 
     cfg = config or __import__("siac.config", fromlist=["SIACConfig"]).SIACConfig(sensor="s2")
     cfg = cfg.with_overrides(

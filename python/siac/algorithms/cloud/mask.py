@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
-from siac.cloud.mapping import apply_class_mapping
-from siac.cloud.providers.omnicloudmask import OmniCloudMaskProvider
-from siac.io import read_raster, reproject_match
-from siac.io.reprojection import resample
+from siac.algorithms.cloud.mapping import apply_class_mapping
+from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
+from siac.geo import reproject_match
+from siac.geo.reprojection import resample
+from siac.storage import read_raster
 
 if TYPE_CHECKING:
     from collections.abc import Callable

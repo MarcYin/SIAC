@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from siac.cloud.mapping import apply_class_mapping
+from siac.algorithms.cloud.mapping import apply_class_mapping
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable

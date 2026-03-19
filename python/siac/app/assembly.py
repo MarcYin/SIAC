@@ -172,8 +172,13 @@ def build_preprocessor_runtime(
     cloud_cfg = config.cloud_mask.model_dump(exclude={"user_callable"})
     try:
         preprocessor_obj = get_preprocessor_fn(sensor_name, config={"cloud_mask": cloud_cfg})
+    except KeyError as exc:
+        raise ValueError(f"Unknown sensor: {sensor_name!r}") from exc
     except TypeError:
-        preprocessor_obj = get_preprocessor_fn(sensor_name)
+        try:
+            preprocessor_obj = get_preprocessor_fn(sensor_name)
+        except KeyError as exc:
+            raise ValueError(f"Unknown sensor: {sensor_name!r}") from exc
         if hasattr(preprocessor_obj, "config") and isinstance(preprocessor_obj.config, dict):
             preprocessor_obj.config.setdefault("cloud_mask", cloud_cfg)
 

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def save_output(result: CorrectionResult, output_path: Path | str) -> None:
     """Persist SIAC outputs to disk."""
-    from siac.io import write_dataset
+    from siac.storage import write_dataset
 
     resolved = Path(output_path)
     resolved.mkdir(parents=True, exist_ok=True)

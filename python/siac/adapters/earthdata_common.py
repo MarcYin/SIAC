@@ -15,7 +15,7 @@ import rioxarray  # noqa: F401
 import xarray as xr
 from pyhdf.SD import SD, SDC
 
-from siac.io.reprojection import transform_bounds
+from siac.geo.reprojection import transform_bounds
 
 if TYPE_CHECKING:
     from rasterio.enums import Resampling

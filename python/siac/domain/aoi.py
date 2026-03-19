@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from siac.io.geometry import bounds_to_polygon, load_aoi, polygon_to_bounds
-from siac.io.reprojection import transform_bounds
+from siac.geo.geometry import bounds_to_polygon, load_aoi, polygon_to_bounds
+from siac.geo.reprojection import transform_bounds
 
 if TYPE_CHECKING:
     import xarray as xr
