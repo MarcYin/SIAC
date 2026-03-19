@@ -110,6 +110,56 @@ def _select_route_b_query_bands(sensor_config: SensorConfig) -> list[Any]:
     return resolved
 
 
+def _surface_spectral_mapping_runtime(
+    config: SIACConfig,
+    *,
+    source_bands: list[Any] | tuple[Any, ...] | None = None,
+    target_bands: list[Any] | tuple[Any, ...] | None = None,
+    context: str = "surface priors",
+) -> tuple[object | None, int]:
+    """Build the runtime spectral-mapping config consumed by surface-prior code."""
+    settings = config.resolved_surface_spectral_mapping()
+    if source_bands is not None and target_bands is not None and not settings.enabled:
+        from siac.priors.surface.spectral_mapping import needs_spectral_mapping
+
+        if needs_spectral_mapping(tuple(source_bands), tuple(target_bands)):
+            raise ValueError(
+                f"surface_prior.spectral_mapping.enabled=false cannot be used for {context} "
+                "when BRDF/source bands differ from the requested target bands."
+            )
+
+    if not settings.enabled:
+        return None, int(settings.k_neighbors)
+
+    from siac.priors.surface.spectral_mapping import (
+        SpectralMappingConfig as RuntimeSpectralMappingConfig,
+    )
+
+    return (
+        RuntimeSpectralMappingConfig(
+            siac_library_root=settings.siac_library_root,
+            rsrf_root=settings.rsrf_root,
+            cache_dir=settings.cache_dir,
+            neighbor_estimator=settings.neighbor_estimator,
+            knn_backend=settings.knn_backend,
+            knn_eps=settings.knn_eps,
+            min_valid_bands=settings.min_valid_bands,
+        ),
+        int(settings.k_neighbors),
+    )
+
+
+def _coerce_aoi_spec(
+    aoi: AOI | Path | str | tuple[float, float, float, float] | list[float] | None,
+) -> AOI | Any | None:
+    """Resolve a runtime/config AOI specification into an AOI instance."""
+    if aoi is None or isinstance(aoi, AOI):
+        return aoi
+    if isinstance(aoi, (list, tuple)) and len(aoi) == 4:
+        return AOI.from_bounds(tuple(aoi))
+    return AOI.from_geojson(aoi)
+
+
 class SIAC:
     """
     Sensor-Invariant Atmospheric Correction.
@@ -133,8 +183,8 @@ class SIAC:
 
     @classmethod
     def from_config(cls, config_path: str | Path) -> SIAC:
-        """Create SIAC from configuration file."""
-        config = SIACConfig.from_yaml(config_path)
+        """Create SIAC from a TOML or YAML configuration file."""
+        config = SIACConfig.from_file(config_path)
         return cls(config)
 
     @classmethod
@@ -143,7 +193,13 @@ class SIAC:
         config = SIACConfig(sensor=sensor)
         return cls(config)
 
-    def process(self, input_path: str | Path, output_path: str | Path | None = None) -> CorrectionResult:
+    def process(
+        self,
+        input_path: str | Path,
+        output_path: str | Path | None = None,
+        *,
+        aoi: AOI | Path | str | tuple[float, float, float, float] | list[float] | None = None,
+    ) -> CorrectionResult:
         """
         Run full atmospheric correction pipeline.
 
@@ -153,12 +209,15 @@ class SIAC:
         Args:
             input_path: Path to satellite data
             output_path: Optional output path (default: input_path/BOA/)
+            aoi: Optional per-run AOI override. Prefer this for scene-specific AOIs
+                instead of storing them in the package-level config file.
 
         Returns:
             CorrectionResult with BOA reflectance
         """
         input_path = Path(input_path)
         logger.info(f"Processing: {input_path}")
+        runtime_aoi = _coerce_aoi_spec(aoi)
 
         # Detect sensor and build a PreprocessorFn that returns ObservationBundle
         sensor_id = self.config.sensor if self.config.sensor != "auto" else detect_sensor(input_path)
@@ -192,11 +251,9 @@ class SIAC:
         corrector = _resolve_corrector(self.config)
         rt_model = self._get_rt_model(sensor_config)
 
-        aoi = None  # let preprocessor resolve AOI internally
-
         result = run_pipeline(
             input_path,
-            aoi,
+            runtime_aoi,
             self.config,
             preprocessor=_preprocessor_fn,
             atmo_provider=atmo_provider,
@@ -222,11 +279,7 @@ class SIAC:
         Otherwise, extracts AOI from the TOA dataset extent.
         """
         if self.config.aoi is not None:
-            aoi_spec = self.config.aoi
-            # Could be a file path, WKT, or bounds string
-            if isinstance(aoi_spec, (list, tuple)) and len(aoi_spec) == 4:
-                return AOI.from_bounds(tuple(aoi_spec))
-            return AOI.from_geojson(aoi_spec)
+            return _coerce_aoi_spec(self.config.aoi)
 
         # Default: use TOA extent
         first_var = list(toa.data_vars)[0]
@@ -295,6 +348,12 @@ class SIAC:
         obs_time = metadata.get("observation_time", datetime.now())
         resolution = 500.0  # MODIS native resolution for BRDF
         target_bands = _select_surface_prior_bands(metadata.get("sensor_config"))
+        spectral_library, spectral_k_neighbors = _surface_spectral_mapping_runtime(
+            self.config,
+            source_bands=brdf_provider.source_bands,
+            target_bands=target_bands,
+            context="surface priors",
+        )
 
         method = getattr(self.config.surface_prior, "method", "kernel_model")
         if method == "monthly_database":
@@ -323,6 +382,8 @@ class SIAC:
                 obs_time=obs_time,
                 source_bands=brdf_provider.source_bands,
                 target_bands=target_bands,
+                spectral_library=spectral_library,
+                spectral_k_neighbors=spectral_k_neighbors,
             )
 
         brdf_weights = brdf_provider.get_brdf_parameters(
@@ -343,6 +404,8 @@ class SIAC:
             geometry,
             source_bands=brdf_provider.source_bands,
             target_bands=target_bands,
+            spectral_library=spectral_library,
+            spectral_k_neighbors=spectral_k_neighbors,
         )
 
     def _get_brdf_provider(self):
@@ -386,10 +449,12 @@ class SIAC:
             return self._rt_model
 
         rt_config = self.config.rt_model
+        emulator_dir = self.config.resolved_emulator_dir()
+        lut_path = self.config.resolved_lut_path()
         if rt_config.backend == "emulator":
             try:
                 self._rt_model = TwoLayerNNEmulator(
-                    emulator_dir=rt_config.emulator_dir,
+                    emulator_dir=emulator_dir,
                     sensor_id=sensor_config.sensor_id,
                     satellite_id=sensor_config.satellite_id,
                 )
@@ -397,9 +462,9 @@ class SIAC:
                 logger.warning(f"Emulator not available: {e}, falling back to LUT")
                 rt_config.backend = "lut"
 
-        if rt_config.backend == "lut" and rt_config.lut_path:
+        if rt_config.backend == "lut" and lut_path:
             self._rt_model = ZarrLUTBackend(
-                rt_config.lut_path,
+                lut_path,
                 interpolation_method=rt_config.lut_interpolation,
                 storage_options=rt_config.lut_storage_options,
             )
@@ -429,16 +494,16 @@ class SIAC:
         logger.info(f"Saved output to {output_path}")
 
 
-def process_sentinel2(input_path: str, output_path: str | None = None, **_kwargs) -> CorrectionResult:
+def process_sentinel2(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:
     """Convenience function for Sentinel-2 processing."""
     siac = SIAC.from_defaults(sensor="s2")
-    return siac.process(input_path, output_path)
+    return siac.process(input_path, output_path, **kwargs)
 
 
-def process_landsat8(input_path: str, output_path: str | None = None, **_kwargs) -> CorrectionResult:
+def process_landsat8(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:
     """Convenience function for Landsat 8 processing."""
     siac = SIAC.from_defaults(sensor="l8")
-    return siac.process(input_path, output_path)
+    return siac.process(input_path, output_path, **kwargs)
 
 
 def _resolve_s2_backend(config: SIACConfig, *, auth: CredentialManager | None = None):
@@ -562,6 +627,7 @@ def siac_process_s2(
     query: S2Query | str | Path,
     *,
     output_path: str | Path | None = None,
+    aoi: AOI | Path | str | tuple[float, float, float, float] | list[float] | None = None,
     auth: CredentialManager | None = None,
 ) -> CorrectionResult:
     """Run full SIAC process from S2 query/path (product ID, tile+date, or local SAFE)."""
@@ -569,7 +635,7 @@ def siac_process_s2(
     input_path = resolve_s2_input(query, config, auth=auth_obj)
     siac_obj = SIAC(config)
     siac_obj._auth = auth_obj
-    return siac_obj.process(input_path, output_path)
+    return siac_obj.process(input_path, output_path, aoi=aoi)
 
 def siac_process(
     config: SIACConfig,
@@ -716,6 +782,13 @@ def _resolve_surface_prior_provider(
 
         def _brdf_surface_prior(observation, atmo_prior, rt_model, resolution):
             _ = (atmo_prior, rt_model)
+            target_bands = _select_surface_prior_bands(observation.sensor_config)
+            spectral_library, spectral_k_neighbors = _surface_spectral_mapping_runtime(
+                config,
+                source_bands=brdf_prov.source_bands,
+                target_bands=target_bands,
+                context="Whittaker surface priors",
+            )
             brdf_weights = brdf_prov.get_temporal_brdf_parameters(
                 bounds=observation.bounds,
                 crs=observation.crs,
@@ -729,7 +802,9 @@ def _resolve_surface_prior_provider(
                 observation.geometry,
                 obs_time=observation.metadata["observation_time"],
                 source_bands=brdf_prov.source_bands,
-                target_bands=_select_surface_prior_bands(observation.sensor_config),
+                target_bands=target_bands,
+                spectral_library=spectral_library,
+                spectral_k_neighbors=spectral_k_neighbors,
             )
 
         _brdf_surface_prior.requires_atmo_prior = False
@@ -742,6 +817,12 @@ def _resolve_surface_prior_provider(
 
             visible_bands = _select_visible_surface_prior_bands(observation.sensor_config)
             query_bands = _select_route_b_query_bands(observation.sensor_config)
+            spectral_library, spectral_k_neighbors = _surface_spectral_mapping_runtime(
+                config,
+                source_bands=brdf_prov.source_bands,
+                target_bands=[*visible_bands, *query_bands],
+                context="Route-B monthly-database surface priors",
+            )
             target_geometry = resample_geometry_for_surface_prior(
                 observation,
                 resolution=resolution,
@@ -753,6 +834,8 @@ def _resolve_surface_prior_provider(
                 geometry=target_geometry,
                 visible_bands=visible_bands,
                 query_bands=query_bands,
+                spectral_library=spectral_library,
+                spectral_k_neighbors=spectral_k_neighbors,
             )
             prior = query_surface_prior_from_monthly_database(
                 observation=observation,
@@ -783,6 +866,8 @@ def _resolve_surface_prior_provider(
                 target_geometry,
                 source_bands=brdf_prov.source_bands,
                 target_bands=visible_bands,
+                spectral_library=spectral_library,
+                spectral_k_neighbors=spectral_k_neighbors,
             )
 
         _monthly_surface_prior.requires_atmo_prior = True
@@ -790,6 +875,13 @@ def _resolve_surface_prior_provider(
 
     def _brdf_surface_prior(observation, atmo_prior, rt_model, resolution):
         _ = (atmo_prior, rt_model)
+        target_bands = _select_surface_prior_bands(observation.sensor_config)
+        spectral_library, spectral_k_neighbors = _surface_spectral_mapping_runtime(
+            config,
+            source_bands=brdf_prov.source_bands,
+            target_bands=target_bands,
+            context="surface priors",
+        )
         brdf_weights = brdf_prov.get_brdf_parameters(
             bounds=observation.bounds,
             crs=observation.crs,
@@ -802,7 +894,9 @@ def _resolve_surface_prior_provider(
             brdf_weights,
             observation.geometry,
             source_bands=brdf_prov.source_bands,
-            target_bands=_select_surface_prior_bands(observation.sensor_config),
+            target_bands=target_bands,
+            spectral_library=spectral_library,
+            spectral_k_neighbors=spectral_k_neighbors,
         )
 
     _brdf_surface_prior.requires_atmo_prior = False
@@ -946,24 +1040,26 @@ def _resolve_rt_model_for_pipeline(
         sid, satid = sensor_config.sensor_id, sensor_config.satellite_id
     else:
         sid, satid = _SENSOR_DEFAULTS.get(getattr(config, "sensor", None), ("MSI", "S2A"))
+    emulator_dir = config.resolved_emulator_dir()
+    lut_path = config.resolved_lut_path()
     if rt_config.backend == "emulator":
         return TwoLayerNNEmulator(
-            emulator_dir=rt_config.emulator_dir,
+            emulator_dir=emulator_dir,
             sensor_id=sid,
             satellite_id=satid,
         )
-    if rt_config.backend == "lut" and rt_config.lut_path:
+    if rt_config.backend == "lut" and lut_path:
         storage_options = dict(rt_config.lut_storage_options)
         # Inject AWS credentials if not already present
         if (
             auth is not None
             and auth.aws().has_credentials()
             and "key" not in storage_options
-            and str(rt_config.lut_path).startswith("s3://")
+            and str(lut_path).startswith("s3://")
         ):
             storage_options.update(auth.aws().storage_options())
         return ZarrLUTBackend(
-            rt_config.lut_path,
+            lut_path,
             interpolation_method=rt_config.lut_interpolation,
             storage_options=storage_options,
         )

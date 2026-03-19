@@ -92,7 +92,7 @@ def _aws_auth() -> CredentialManager:
 def test_siac_from_helpers(monkeypatch):
     cfg = SIACConfig(sensor="s2")
     monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
-    monkeypatch.setattr("siac.siac.SIACConfig.from_yaml", classmethod(lambda _cls, _path: cfg))
+    monkeypatch.setattr("siac.siac.SIACConfig.from_file", classmethod(lambda _cls, _path: cfg))
 
     siac_from_yaml = SIAC.from_config("dummy.yaml")
     siac_default = SIAC.from_defaults(sensor="l8")
@@ -176,6 +176,57 @@ def test_process_happy_path_calls_all_steps(monkeypatch, tmp_path: Path):
     assert pipeline_calls["input_path"] == tmp_path / "input.SAFE"
     assert pipeline_calls["kwargs"]["rt_model"] == "rt"
     assert callable(pipeline_calls["kwargs"]["preprocessor"])
+
+
+def test_process_accepts_runtime_aoi_override(monkeypatch, tmp_path: Path):
+    cfg = SIACConfig(sensor="auto")
+    monkeypatch.setattr("siac.siac.CredentialManager.from_config", lambda _config: _empty_auth())
+    siac_obj = SIAC(cfg)
+
+    preprocess_result = {
+        "toa": _toa_dataset(),
+        "geometry": _geometry(),
+        "cloud_mask": xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"]),
+        "metadata": {"observation_time": datetime(2026, 1, 2, 3, 4, 5)},
+    }
+
+    class _FakePreprocessor:
+        sensor_config = SENTINEL2A_CONFIG
+
+        def preprocess(self, input_path):
+            return preprocess_result
+
+    monkeypatch.setattr("siac.siac.detect_sensor", lambda _path: "s2")
+    monkeypatch.setattr("siac.siac.get_preprocessor", lambda _sensor: _FakePreprocessor())
+    monkeypatch.setattr("siac.siac.AOI.from_bounds", lambda bounds: ("bounds", bounds))
+    monkeypatch.setattr(siac_obj, "_get_rt_model", lambda _sc: "rt")
+    monkeypatch.setattr("siac.siac._resolve_atmo_provider", lambda _cfg, auth=None: "atmo-provider")
+    monkeypatch.setattr(
+        "siac.siac._resolve_surface_prior_provider",
+        lambda _cfg, auth=None: "surface-prior-provider",
+    )
+    monkeypatch.setattr("siac.siac._resolve_grid_assembler", lambda: "grid-assembler")
+    monkeypatch.setattr("siac.siac._resolve_solver", lambda _cfg: "solver")
+    monkeypatch.setattr("siac.siac._resolve_corrector", lambda _cfg: "corrector")
+
+    pipeline_calls = {}
+
+    def _fake_run_pipeline(input_path, aoi, config, **kwargs):
+        pipeline_calls["aoi"] = aoi
+        return CorrectionResult(
+            boa=_toa_dataset(),
+            boa_unc=None,
+            aot=_da(0.2),
+            tcwv=_da(2.3),
+            cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"]),
+            metadata={"ok": True},
+        )
+
+    monkeypatch.setattr("siac.siac.run_pipeline", _fake_run_pipeline)
+
+    siac_obj.process(tmp_path / "input.SAFE", aoi=(1.0, 2.0, 3.0, 4.0))
+
+    assert pipeline_calls["aoi"] == ("bounds", (1.0, 2.0, 3.0, 4.0))
 
 
 def test_resolve_aoi_branches(monkeypatch):
@@ -651,13 +702,25 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
 
     captured: dict[str, object] = {}
 
-    def _fake_build_monthly_database(*, observation, brdf_provider, resolution, geometry, visible_bands, query_bands):
+    def _fake_build_monthly_database(
+        *,
+        observation,
+        brdf_provider,
+        resolution,
+        geometry,
+        visible_bands,
+        query_bands,
+        spectral_library=None,
+        spectral_k_neighbors=None,
+    ):
         captured["observation"] = observation
         captured["provider"] = brdf_provider
         captured["resolution"] = resolution
         captured["geometry"] = geometry
         captured["visible_bands"] = tuple(visible_bands)
         captured["query_bands"] = tuple(query_bands)
+        captured["spectral_library"] = spectral_library
+        captured["spectral_k_neighbors"] = spectral_k_neighbors
         return "monthly-db"
 
     def _fake_query_surface_prior(*, observation, atmo_prior, rt_model, database, query_band_names, visible_band_names, k_neighbors):
@@ -751,3 +814,50 @@ def test_resolve_surface_prior_solver_corrector_and_rt(monkeypatch):
     assert out == "lut"
     assert captured["path"] == "s3://bucket/lut"
     assert captured["storage"]["key"] == "AK"
+
+
+def test_resolve_surface_prior_provider_rejects_disabled_cross_sensor_mapping(monkeypatch):
+    cfg = SIACConfig(
+        sensor="s2",
+        brdf={"provider": "mcd43"},
+        surface_prior={"spectral_mapping": {"enabled": False}},
+        rt_model={"backend": "lut", "lut_path": "s3://bucket/lut"},
+    )
+
+    class _FakeBRDFProvider:
+        def __init__(self, cache_dir=None, source=None):
+            self.cache_dir = cache_dir
+            self.source = source
+            self.source_bands = [SENTINEL2A_CONFIG.get_band("B02"), SENTINEL2A_CONFIG.get_band("B03")]
+
+        def get_brdf_parameters(self, **kwargs):
+            return "weights"
+
+    called = {"compute_surface_prior": False}
+
+    class _FakeDeriver:
+        def __init__(self, **kwargs):
+            pass
+
+        def compute_surface_prior(self, brdf_weights, geometry, **kwargs):
+            called["compute_surface_prior"] = True
+            return (brdf_weights, geometry, kwargs)
+
+    monkeypatch.setattr("siac.priors.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakeBRDFProvider)
+    monkeypatch.setattr("siac.siac.KernelModelDeriver", _FakeDeriver)
+
+    surf_fn = _resolve_surface_prior_provider(cfg, auth=_earthdata_auth())
+    obs = SimpleNamespace(
+        bounds=(0, 0, 1, 1),
+        crs="EPSG:4326",
+        metadata={"observation_time": datetime(2026, 1, 2)},
+        sensor_config=SENTINEL2A_CONFIG,
+        geometry=_geometry(),
+        toa=_toa_dataset(),
+        cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"]),
+    )
+
+    with pytest.raises(ValueError, match="surface_prior\\.spectral_mapping\\.enabled=false"):
+        surf_fn(obs, None, "rt", 500.0)
+
+    assert called["compute_surface_prior"] is False
