@@ -8,7 +8,7 @@ Example usage:
     >>> from siac import SIAC
     >>> from siac.core.config import SIACConfig
     >>>
-    >>> config = SIACConfig.from_yaml("siac_config.yaml")
+    >>> config = SIACConfig.from_file("siac_config.toml")
     >>> siac = SIAC(config)
     >>> result = siac.process("/path/to/S2_SAFE/")
 """

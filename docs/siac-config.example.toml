@@ -1,0 +1,71 @@
+# Canonical SIAC configuration example.
+# Keep local paths, remote URLs, and provider credentials in one file,
+# then point SIACConfig.from_file(...) or SIAC_CONFIG_FILE at it.
+
+[inputs]
+sensor = "s2"
+# Keep AOI out of the central package config unless it is fixed across runs.
+# For scene-specific work, pass AOI per process call instead.
+
+[inputs.s2_data]
+backend = "cdse"
+cache_dir = "/data/siac/s2-cache"
+max_cloud_cover = 40.0
+processing_level = "L1C"
+
+[paths]
+spectral_library_root = "/data/siac/spectral-library"
+rsrf_root = "/data/siac/RSRF"
+spectral_mapping_cache_dir = "/data/siac/cache/spectral-mapping"
+emulator_dir = "/data/siac/emulators"
+lut_path = "s3://bucket/siac/lut.zarr"
+global_dem = "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt"
+
+[runtime.settings]
+log_level = "INFO"
+n_jobs = -1
+chunk_size = 2048
+
+[runtime.execution]
+backend = "thread"
+max_workers = 4
+retries = 2
+
+[providers.atmo_prior]
+provider = "cams"
+download_missing = true
+
+[providers.brdf]
+provider = "mcd43"
+temporal_window = 16
+
+[processing.cloud_mask]
+mode = "auto"
+provider = "omnicloudmask"
+target_resolution_m = 10.0
+
+[models.surface_prior]
+method = "whittaker"
+whittaker_lambda = 10.0
+
+[models.surface_prior.spectral_mapping]
+enabled = true
+k_neighbors = 5
+
+[models.rt_model]
+backend = "emulator"
+fallback_to_lut = true
+
+[models.solver]
+aot_gamma = 10.0
+tcwv_gamma = 5.0
+
+[auth]
+earthdata_username = "your-username"
+earthdata_password = "your-password"
+cds_api_key = "uid:key"
+
+[output]
+format = "cog"
+include_rgb = true
+include_uncertainty = true

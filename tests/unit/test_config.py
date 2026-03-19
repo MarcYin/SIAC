@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib
+
 from siac.core.config import (
     DEFAULT_LUT_URL,
     AtmoPriorConfig,
@@ -105,20 +110,23 @@ class TestSIACConfig:
         with yaml_path.open() as f:
             data = yaml.safe_load(f)
 
-        assert data["sensor"] == "l8"
-        assert data["rt_model"]["backend"] == "lut"
+        assert data["inputs"]["sensor"] == "l8"
+        assert data["models"]["rt_model"]["backend"] == "lut"
 
     def test_config_from_yaml(self, tmp_path: Path):
         """Config should load from YAML."""
         yaml_content = """
-sensor: s2
-atmo_prior:
-  provider: era5
-brdf:
-  provider: mcd43
-  temporal_window: 16
-solver:
-  aot_gamma: 15.0
+inputs:
+  sensor: s2
+providers:
+  atmo_prior:
+    provider: era5
+  brdf:
+    provider: mcd43
+    temporal_window: 16
+models:
+  solver:
+    aot_gamma: 15.0
 """
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -129,6 +137,87 @@ solver:
         assert config.atmo_prior.provider == "era5"
         assert config.brdf.temporal_window == 16
         assert config.solver.aot_gamma == 15.0
+
+    def test_config_from_legacy_flat_yaml(self, tmp_path: Path):
+        yaml_content = """
+sensor: s2
+atmo_prior:
+  provider: era5
+brdf:
+  provider: mcd43
+  temporal_window: 8
+"""
+        yaml_path = tmp_path / "legacy.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = SIACConfig.from_file(yaml_path)
+
+        assert config.sensor == "s2"
+        assert config.atmo_prior.provider == "era5"
+        assert config.brdf.temporal_window == 8
+
+    def test_config_to_and_from_toml(self, tmp_path: Path):
+        config = SIACConfig(
+            sensor="s2",
+            paths={"spectral_library_root": "/tmp/library", "lut_path": "s3://bucket/lut.zarr"},
+            surface_prior={
+                "spectral_mapping": {
+                    "siac_library_root": "/tmp/override-library",
+                    "k_neighbors": 7,
+                }
+            },
+            credentials={"earthdata_username": "user", "earthdata_password": "secret"},
+        )
+
+        toml_path = tmp_path / "config.toml"
+        config.to_toml(toml_path)
+
+        with toml_path.open("rb") as handle:
+            data = tomllib.load(handle)
+
+        assert data["inputs"]["sensor"] == "s2"
+        assert data["paths"]["spectral_library_root"] == "/tmp/library"
+        assert data["models"]["surface_prior"]["spectral_mapping"]["k_neighbors"] == 7
+        assert data["auth"]["earthdata_username"] == "user"
+
+        round_tripped = SIACConfig.from_toml(toml_path)
+        assert round_tripped.sensor == "s2"
+        assert str(round_tripped.paths.spectral_library_root) == "/tmp/library"
+        assert round_tripped.surface_prior.spectral_mapping.k_neighbors == 7
+
+    def test_to_dict_uses_categorized_layout(self):
+        config = SIACConfig(sensor="l8")
+
+        data = config.to_dict()
+
+        assert set(data) == {"inputs", "paths", "runtime", "providers", "processing", "models", "auth", "output"}
+        assert data["inputs"]["sensor"] == "l8"
+        assert "execution" in data["runtime"]
+
+    def test_categorized_state_redacts_auth(self, tmp_path: Path):
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text("inputs:\n  sensor: s2\n")
+        config = SIACConfig.load(
+            yaml_path,
+            credentials={"earthdata_username": "user", "earthdata_password": "secret"},
+            s2_data={"cdse_access_key": "access", "cdse_secret_key": "secret-key"},
+        )
+
+        state = config.categorized_state()
+
+        assert state["load"]["config_file"] == str(yaml_path)
+        assert state["config"]["auth"]["earthdata_username"] == "<redacted>"
+        assert state["config"]["auth"]["earthdata_password"] == "<redacted>"
+        assert state["config"]["inputs"]["s2_data"]["cdse_access_key"] == "<redacted>"
+        assert state["resolved"]["paths"]["lut_path_resolved"] == DEFAULT_LUT_URL
+
+    def test_write_default_config_uses_requested_format(self, tmp_path: Path):
+        written = SIACConfig.write_default_config(tmp_path / "siac", format="toml")
+
+        assert written == tmp_path / "siac.toml"
+        assert written.exists()
+        loaded = SIACConfig.from_file(written)
+        assert loaded.sensor == "auto"
 
     def test_config_with_overrides(self):
         """with_overrides should create new config."""

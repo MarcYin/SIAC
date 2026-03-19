@@ -926,7 +926,7 @@ result = siac_process(
 ```python
 # Use all defaults except atmospheric prior
 result = siac_process(
-    config=SIACConfig.from_yaml("config.yaml"),
+    config=SIACConfig.from_file("config.toml"),
     input_path=Path("/path/to/S2_SAFE/"),
     atmo_provider=my_custom_atmo_provider,
 )
