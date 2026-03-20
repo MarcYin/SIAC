@@ -360,7 +360,7 @@ def _rsrf_curve_for_band(
             curve = rsrf.realize_curve(response_definition)
     except Exception as exc:  # pragma: no cover - exercised against real repos
         logger.warning(
-            "Falling back to Gaussian SRF for band %s because RSRF lookup failed (%s)",
+            "Falling back to a Gaussian response approximation for band %s because RSRF lookup failed (%s)",
             band.name,
             exc,
         )
@@ -377,10 +377,10 @@ def _curve_for_band(
     *,
     rsrf_root: Path | None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if band.has_srf:
+    if band.has_rsrf:
         return _canonicalize_curve(
-            np.asarray(band.srf_wavelengths_nm, dtype=np.float32),
-            np.asarray(band.srf_response, dtype=np.float32),
+            np.asarray(band.rsrf_wavelengths_nm, dtype=np.float32),
+            np.asarray(band.rsrf_response, dtype=np.float32),
         )
     rsrf_curve = _rsrf_curve_for_band(band, rsrf_root=rsrf_root)
     if rsrf_curve is not None:

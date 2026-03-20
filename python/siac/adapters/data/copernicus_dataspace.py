@@ -268,7 +268,7 @@ def search_cdse(
     access_key: str | None = None,
     secret_key: str | None = None,
 ) -> list[S2Product]:
-    """Search CDSE STAC catalogue for Sentinel-2 L1C products."""
+    """Search CDSE STAC catalog for Sentinel-2 L1C products."""
     del access_key, secret_key  # currently unused for search
     query.validate()
 

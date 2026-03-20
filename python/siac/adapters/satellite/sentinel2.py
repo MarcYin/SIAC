@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
-from siac.adapters.rsrf import load_sensor_config_from_rsrf
+from siac.adapters.rsrf import load_sensor_config_with_rsrf
 from siac.adapters.satellite.base import (
     BaseSatellitePreprocessor,
     degrees_to_radians,
@@ -72,7 +72,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if self._satellite_id is None:
             return SENTINEL2A_CONFIG
         try:
-            return load_sensor_config_from_rsrf(
+            return load_sensor_config_with_rsrf(
                 "MSI",
                 self._satellite_id,
                 rsrf_root=self.config.get("rsrf_root"),
@@ -538,9 +538,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             "allow_upsample_to_target": False,
             "unmapped_to_missing": True,
         }
-        cloud_cfg = self.config.get("cloud_mask", {}) if isinstance(self.config, dict) else {}
-        if isinstance(cloud_cfg, dict):
-            defaults.update(cloud_cfg)
+        cloud_mask_config = self.config.get("cloud_mask", {}) if isinstance(self.config, dict) else {}
+        if isinstance(cloud_mask_config, dict):
+            defaults.update(cloud_mask_config)
         # Resolve external file path relative to SAFE directory when needed.
         external = defaults.get("external_mask_path")
         if isinstance(external, str) and external:

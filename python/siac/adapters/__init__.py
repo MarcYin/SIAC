@@ -18,7 +18,12 @@ from siac.adapters.brdf import (
 from siac.adapters.earthdata import earthaccess_source_from_auth
 from siac.adapters.earthdata_common import MODLAND_SINUSOIDAL_CRS, modland_tile_coords
 from siac.adapters.output import ConfiguredOutputWriter
-from siac.adapters.rsrf import load_band_srf_from_rsrf, load_sensor_config_from_rsrf
+from siac.adapters.rsrf import (
+    load_band_rsrf,
+    load_band_srf_from_rsrf,
+    load_sensor_config_from_rsrf,
+    load_sensor_config_with_rsrf,
+)
 from siac.adapters.rt import build_rt_model
 from siac.adapters.s2_backend import build_s2_backend
 from siac.adapters.satellite import (
@@ -46,8 +51,10 @@ __all__ = [
     "MODLAND_SINUSOIDAL_CRS",
     "modland_tile_coords",
     "ConfiguredOutputWriter",
+    "load_band_rsrf",
     "load_band_srf_from_rsrf",
     "load_sensor_config_from_rsrf",
+    "load_sensor_config_with_rsrf",
     "BaseSatellitePreprocessor",
     "Sentinel2Preprocessor",
     "detect_sensor",

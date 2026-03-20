@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
-from siac.algorithms.rt.lut.srf_kernel import build_aligned_srf_kernel
+from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 from siac.algorithms.rt.lut.store import as_local_path, build_lut_store
-from siac.domain.spectral import SpectralResponseFunction
+from siac.domain.spectral import RelativeSpectralResponse
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 
 if TYPE_CHECKING:
@@ -802,9 +802,9 @@ class ZarrLUTBackend:
         if wl_axis.size == 0:
             return lut
 
-        if band.has_srf:
-            kernel = build_aligned_srf_kernel(
-                self._band_srf(band),
+        if band.has_rsrf:
+            kernel = build_aligned_rsrf_kernel(
+                self._band_rsrf(band),
                 lut_wavelengths_nm=wl_axis,
                 lut_id=self.lut_path,
                 support_padding=1,
@@ -836,7 +836,7 @@ class ZarrLUTBackend:
             dims=["wavelength"],
             coords={"wavelength": wl_axis},
         )
-        if band.has_srf:
+        if band.has_rsrf:
             solar_values = None
             for name in self._SOLAR_IRRADIANCE_NAMES:
                 if name not in source:
@@ -850,8 +850,8 @@ class ZarrLUTBackend:
                 solar_values = np.asarray(solar.values, dtype=np.float32)
                 break
 
-            kernel = build_aligned_srf_kernel(
-                self._band_srf(band),
+            kernel = build_aligned_rsrf_kernel(
+                self._band_rsrf(band),
                 lut_wavelengths_nm=wl_axis,
                 lut_id=self.lut_path,
                 solar_irradiance=solar_values,
@@ -892,16 +892,16 @@ class ZarrLUTBackend:
         return weights
 
     @staticmethod
-    def _band_srf(band: SensorBand) -> SpectralResponseFunction:
-        """Build a canonical SRF object from a band-carried tabulated response."""
-        if not band.has_srf:
-            raise ValueError(f"Band {band.name!r} does not define a tabulated SRF")
-        return SpectralResponseFunction.from_tabulated(
+    def _band_rsrf(band: SensorBand) -> RelativeSpectralResponse:
+        """Build a canonical RSRF object from a band-carried tabulated response."""
+        if not band.has_rsrf:
+            raise ValueError(f"Band {band.name!r} does not define a tabulated RSRF")
+        return RelativeSpectralResponse.from_tabulated(
             sensor_id="UNKNOWN",
             satellite_id="UNKNOWN",
             band_name=band.name,
-            wavelengths_nm=np.asarray(band.srf_wavelengths_nm, dtype=np.float32),
-            response=np.asarray(band.srf_response, dtype=np.float32),
+            wavelengths_nm=np.asarray(band.rsrf_wavelengths_nm, dtype=np.float32),
+            response=np.asarray(band.rsrf_response, dtype=np.float32),
         )
 
     @staticmethod

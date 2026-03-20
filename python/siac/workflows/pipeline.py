@@ -133,9 +133,9 @@ def _resolve_execution_settings(
 
 
 def _aerosol_resolution(config: Any) -> float:
-    solver_cfg = getattr(config, "solver", None)
-    if solver_cfg is not None:
-        return float(getattr(solver_cfg, "aerosol_resolution", 1000.0))
+    solver_config = getattr(config, "solver", None)
+    if solver_config is not None:
+        return float(getattr(solver_config, "aerosol_resolution", 1000.0))
     return 1000.0
 
 

@@ -1,4 +1,4 @@
-"""Canonical spectral response types."""
+"""Canonical relative spectral response types."""
 
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ def _fwhm(wavelengths_nm: NDArray, response: NDArray) -> float | None:
 
 
 @dataclass(frozen=True)
-class SpectralResponseFunction:
-    """Canonical, area-normalized spectral response function."""
+class RelativeSpectralResponse:
+    """Canonical, area-normalized relative spectral response."""
 
     sensor_id: str
     satellite_id: str
@@ -69,7 +69,7 @@ class SpectralResponseFunction:
     source_id: str | None = None
     source_version: str | None = None
     source_url: str | None = None
-    centre_wavelength_nm: float | None = None
+    center_wavelength_nm: float | None = None
     effective_wavelength_nm: float | None = None
     fwhm_nm: float | None = None
 
@@ -79,25 +79,25 @@ class SpectralResponseFunction:
         raw = None if self.response_raw is None else np.asarray(self.response_raw, dtype=np.float32)
 
         if wavelengths.ndim != 1 or response.ndim != 1:
-            raise ValueError("SRF wavelengths and response must be 1-D")
+            raise ValueError("RSRF wavelengths and response must be 1-D")
         if wavelengths.size != response.size:
-            raise ValueError("SRF wavelengths and response must have equal length")
+            raise ValueError("RSRF wavelengths and response must have equal length")
         if wavelengths.size < 2:
-            raise ValueError("SRF must contain at least two samples")
+            raise ValueError("RSRF must contain at least two samples")
         if not np.isfinite(wavelengths).all() or not np.isfinite(response).all():
-            raise ValueError("SRF wavelengths and response must be finite")
+            raise ValueError("RSRF wavelengths and response must be finite")
         if np.any(np.diff(wavelengths) <= 0.0):
-            raise ValueError("SRF wavelengths must be strictly increasing")
+            raise ValueError("RSRF wavelengths must be strictly increasing")
         if np.any(response < 0.0):
-            raise ValueError("SRF response must be non-negative")
+            raise ValueError("RSRF response must be non-negative")
         if raw is not None and raw.shape != wavelengths.shape:
-            raise ValueError("SRF raw response must match wavelengths")
+            raise ValueError("RSRF raw response must match wavelengths")
 
         area = _trapezoid(response, wavelengths)
         if not np.isfinite(area) or area <= 0.0:
-            raise ValueError("SRF response must integrate to a positive value")
+            raise ValueError("RSRF response must integrate to a positive value")
         if not np.isclose(area, 1.0, rtol=1e-4, atol=1e-6):
-            raise ValueError("Canonical SRF response must be area-normalized")
+            raise ValueError("Canonical RSRF response must be area-normalized")
 
         object.__setattr__(self, "wavelengths_nm", wavelengths)
         object.__setattr__(self, "response", response)
@@ -113,6 +113,11 @@ class SpectralResponseFunction:
         """Last wavelength stored in the canonical support."""
         return float(self.wavelengths_nm[-1])
 
+    @property
+    def centre_wavelength_nm(self) -> float | None:
+        """Backward-compatible alias for the American-spelled field name."""
+        return self.center_wavelength_nm
+
     @classmethod
     def from_tabulated(
         cls,
@@ -125,16 +130,16 @@ class SpectralResponseFunction:
         source_id: str | None = None,
         source_version: str | None = None,
         source_url: str | None = None,
-    ) -> SpectralResponseFunction:
-        """Build a canonical SRF from a raw tabulated response."""
+    ) -> RelativeSpectralResponse:
+        """Build a canonical RSRF from a raw tabulated response."""
         wavelengths = np.asarray(wavelengths_nm, dtype=np.float32).reshape(-1)
         raw_response = np.asarray(response, dtype=np.float32).reshape(-1)
         if wavelengths.size != raw_response.size:
-            raise ValueError("SRF wavelengths and response must have equal length")
+            raise ValueError("RSRF wavelengths and response must have equal length")
         if wavelengths.size < 2:
-            raise ValueError("SRF must contain at least two samples")
+            raise ValueError("RSRF must contain at least two samples")
         if not np.isfinite(wavelengths).all() or not np.isfinite(raw_response).all():
-            raise ValueError("SRF wavelengths and response must be finite")
+            raise ValueError("RSRF wavelengths and response must be finite")
 
         order = np.argsort(wavelengths, kind="stable")
         wavelengths = wavelengths[order]
@@ -147,7 +152,7 @@ class SpectralResponseFunction:
 
         nonzero = np.flatnonzero(raw_response > 0.0)
         if nonzero.size == 0:
-            raise ValueError("SRF response must include at least one non-zero sample")
+            raise ValueError("RSRF response must include at least one non-zero sample")
 
         start = max(int(nonzero[0]) - 1, 0)
         stop = min(int(nonzero[-1]) + 2, raw_response.size)
@@ -156,11 +161,11 @@ class SpectralResponseFunction:
 
         area = _trapezoid(raw_response, wavelengths)
         if not np.isfinite(area) or area <= 0.0:
-            raise ValueError("SRF response must integrate to a positive value")
+            raise ValueError("RSRF response must integrate to a positive value")
         response_norm = (raw_response / area).astype(np.float32)
 
         peak_idx = int(np.argmax(response_norm))
-        centre = float(wavelengths[peak_idx])
+        center = float(wavelengths[peak_idx])
         effective = _trapezoid(wavelengths * response_norm, wavelengths)
         width = _fwhm(wavelengths, response_norm)
 
@@ -174,10 +179,13 @@ class SpectralResponseFunction:
             source_id=source_id,
             source_version=source_version,
             source_url=source_url,
-            centre_wavelength_nm=centre,
+            center_wavelength_nm=center,
             effective_wavelength_nm=float(effective),
             fwhm_nm=None if width is None else float(width),
         )
 
 
-__all__ = ["SpectralResponseFunction"]
+SpectralResponseFunction = RelativeSpectralResponse
+
+
+__all__ = ["RelativeSpectralResponse", "SpectralResponseFunction"]

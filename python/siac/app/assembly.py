@@ -170,10 +170,10 @@ def build_preprocessor_runtime(
             raise ValueError("Cannot resolve preprocessor for sensor='auto' without an input path.")
         sensor_name = detect_sensor_fn(input_path)
 
-    cloud_cfg = config.cloud_mask.model_dump(exclude={"user_callable"})
+    cloud_mask_config = config.cloud_mask.model_dump(exclude={"user_callable"})
     paths = getattr(config, "paths", None)
     rsrf_root = getattr(paths, "rsrf_root", None)
-    preprocessor_config = {"cloud_mask": cloud_cfg}
+    preprocessor_config = {"cloud_mask": cloud_mask_config}
     if rsrf_root is not None:
         preprocessor_config["rsrf_root"] = rsrf_root
     try:
@@ -186,7 +186,7 @@ def build_preprocessor_runtime(
         except KeyError as exc:
             raise ValueError(f"Unknown sensor: {sensor_name!r}") from exc
         if hasattr(preprocessor_obj, "config") and isinstance(preprocessor_obj.config, dict):
-            preprocessor_obj.config.setdefault("cloud_mask", cloud_cfg)
+            preprocessor_obj.config.setdefault("cloud_mask", cloud_mask_config)
             if rsrf_root is not None:
                 preprocessor_obj.config.setdefault("rsrf_root", rsrf_root)
 
@@ -475,7 +475,7 @@ def resolve_grid_assembler() -> GridAssemblerFn:
 
 
 def resolve_solver(config) -> SolverFn:
-    def _default_solver(inputs: SolverInputBundle, _cfg) -> SolvedAtmosphere:
+    def _default_solver(inputs: SolverInputBundle, _config) -> SolvedAtmosphere:
         solver_config = MultiGridConfig(
             aot_gamma=config.solver.aot_gamma,
             tcwv_gamma=config.solver.tcwv_gamma,

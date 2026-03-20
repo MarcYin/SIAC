@@ -2,7 +2,7 @@
 Google Cloud Storage backend for Sentinel-2.
 
 Uses the public ``gs://gcp-public-data-sentinel-2`` bucket (no auth).
-Supports MGRS-based listing only (no full catalogue search).
+Supports MGRS-based listing only (no full catalog search).
 See PLANS_S2.md §2, Phase 3.
 """
 

@@ -89,12 +89,12 @@ def resolve_s2_input(
 
 
 def _resolve_search_config(request: Sentinel2SearchRequest):
-    cfg = request.config or SIACConfig(sensor="s2")
-    cfg = cfg.with_overrides(
+    config = request.config or SIACConfig(sensor="s2")
+    config = config.with_overrides(
         sensor="s2",
         providers={"s2": {"backend": request.backend, "max_cloud_cover": request.max_cloud_cover}},
     )
-    return resolve_run_config(cfg, sensor="s2")
+    return resolve_run_config(config, sensor="s2")
 
 
 def search_sentinel2(

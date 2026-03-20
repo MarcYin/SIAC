@@ -33,10 +33,10 @@ _MODIS_LAND_BANDS = (
 )
 
 
-def load_reference_rsr(
+def load_reference_rsrf(
     reference_sensor: str = "MODIS",
 ) -> dict[str, tuple[NDArray, NDArray]]:
-    """Load tabulated spectral response functions for a reference sensor."""
+    """Load tabulated relative spectral responses for a reference sensor."""
     if reference_sensor.upper() == "MODIS":
         result: dict[str, tuple[NDArray, NDArray]] = {}
         for band_name, center_nm, fwhm_nm in _MODIS_LAND_BANDS:
@@ -90,8 +90,8 @@ def sensor_to_reference(
     reference_sensor: str = "MODIS",
 ) -> NDArray:
     """Convolve sensor-band reflectance to a reference basis."""
-    ref_rsr = load_reference_rsr(reference_sensor)
-    matrix, ref_names = _build_conversion_matrix(sensor_bands, ref_rsr)
+    ref_rsrf = load_reference_rsrf(reference_sensor)
+    matrix, ref_names = _build_conversion_matrix(sensor_bands, ref_rsrf)
 
     band_names = [band.name for band in sensor_bands]
     sensor_vals = np.stack(
@@ -111,8 +111,8 @@ def reference_to_sensor(
     reference_sensor: str = "MODIS",
 ) -> NDArray:
     """Project reference-basis reflectance back to sensor bands."""
-    ref_rsr = load_reference_rsr(reference_sensor)
-    matrix, _ = _build_conversion_matrix(target_bands, ref_rsr)
+    ref_rsrf = load_reference_rsrf(reference_sensor)
+    matrix, _ = _build_conversion_matrix(target_bands, ref_rsrf)
     pinv = np.linalg.pinv(matrix)
 
     spatial_shape = ref_reflectance.shape[1:]
@@ -121,7 +121,11 @@ def reference_to_sensor(
     return sensor_flat.reshape(len(target_bands), *spatial_shape)
 
 
+load_reference_rsr = load_reference_rsrf
+
+
 __all__ = [
+    "load_reference_rsrf",
     "load_reference_rsr",
     "sensor_to_reference",
     "reference_to_sensor",

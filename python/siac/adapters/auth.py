@@ -360,14 +360,14 @@ class CredentialManager:
 
     @classmethod
     def from_config(cls, config: SIACConfig | None = None) -> CredentialManager:
-        mgr = cls()
+        manager = cls()
 
         if config is not None:
-            auth_cfg = getattr(config, "auth", None)
-            if auth_cfg is not None:
-                _load_from_auth_config(mgr, auth_cfg)
+            auth_config = getattr(config, "auth", None)
+            if auth_config is not None:
+                _load_from_auth_config(manager, auth_config)
 
-        return mgr
+        return manager
 
 
 def _cdse_token_exchange(username: str, password: str, timeout: int = 60) -> tuple[str, int]:
@@ -392,28 +392,28 @@ def _cdse_token_exchange(username: str, password: str, timeout: int = 60) -> tup
     return token, expires_in
 
 
-def _load_from_auth_config(mgr: CredentialManager, auth_cfg: Any) -> None:
-    """Populate *mgr* from the nested auth config model."""
-    cdse = getattr(auth_cfg, "cdse", None)
-    cds = getattr(auth_cfg, "cds", None)
-    aws = getattr(auth_cfg, "aws", None)
-    earthdata = getattr(auth_cfg, "earthdata", None)
-    gcs = getattr(auth_cfg, "gcs", None)
+def _load_from_auth_config(manager: CredentialManager, auth_config: Any) -> None:
+    """Populate *manager* from the nested auth config model."""
+    cdse = getattr(auth_config, "cdse", None)
+    cds = getattr(auth_config, "cds", None)
+    aws = getattr(auth_config, "aws", None)
+    earthdata = getattr(auth_config, "earthdata", None)
+    gcs = getattr(auth_config, "gcs", None)
 
     if cdse is not None:
-        _maybe_set(mgr, "cdse", getattr(cdse, "username", None), getattr(cdse, "password", None))
+        _maybe_set(manager, "cdse", getattr(cdse, "username", None), getattr(cdse, "password", None))
     if cds is not None:
-        _maybe_set(mgr, "cds", getattr(cds, "api_key", None), None)
+        _maybe_set(manager, "cds", getattr(cds, "api_key", None), None)
     if aws is not None:
         _maybe_set(
-            mgr,
+            manager,
             "aws",
             getattr(aws, "access_key_id", None),
             getattr(aws, "secret_access_key", None),
         )
     if earthdata is not None:
         _maybe_set(
-            mgr,
+            manager,
             "earthdata",
             getattr(earthdata, "username", None),
             getattr(earthdata, "password", None),
@@ -421,16 +421,16 @@ def _load_from_auth_config(mgr: CredentialManager, auth_cfg: Any) -> None:
     if gcs is not None:
         gcs_file = getattr(gcs, "credentials_file", None)
         if gcs_file is not None:
-            _maybe_set(mgr, "gcs", str(gcs_file), None)
+            _maybe_set(manager, "gcs", str(gcs_file), None)
 
 def _maybe_set(
-    mgr: CredentialManager,
+    manager: CredentialManager,
     provider: str,
     key: str | None,
     secret: str | None,
 ) -> None:
     if key is not None or secret is not None:
-        mgr.set_credentials(provider, key=key, secret=secret)
+        manager.set_credentials(provider, key=key, secret=secret)
 
 
 __all__ = [
