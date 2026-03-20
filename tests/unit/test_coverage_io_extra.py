@@ -10,12 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.domain import (
-    SENTINEL2A_CONFIG,
-    CorrectionResult,
-    GeometryAngles,
-    ObservationBundle,
-)
+from siac.catalog import SENTINEL2A_CONFIG
 from siac.geo.reprojection import (
     align_grids,
     clip_to_bounds,
@@ -30,6 +25,7 @@ from siac.geo.reprojection import (
     resample_to_shape,
     transform_points,
 )
+from siac.runtime import CorrectionResult, GeometryAngles, ObservationBundle
 from siac.storage.readers import (
     check_rasters_aligned,
     get_raster_info,
@@ -120,7 +116,7 @@ class TestReadersExtra:
 
         # HDF wrapper just builds a GDAL URI and forwards to read_raster.
         # We validate wiring by monkeypatching read_raster.
-        from siac.io import readers as m
+        import siac.storage.readers as m
 
         seen = {}
         orig = m.read_raster

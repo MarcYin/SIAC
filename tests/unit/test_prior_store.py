@@ -17,12 +17,8 @@ from siac.algorithms.surface.prior_store import (
     _interpolate_doy,
     _select_tiles,
 )
-from siac.domain import (
-    GeometryAngles,
-    SensorBand,
-    SensorConfig,
-    SurfacePrior,
-)
+from siac.domain import SensorBand, SensorConfig
+from siac.runtime import GeometryAngles, SurfacePrior
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 

@@ -10,10 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from siac.domain import (
-    CorrectionResult,
-)
 from siac.errors import ValidationError
+from siac.runtime import CorrectionResult
 from siac.workflows.pipeline import run_pipeline
 
 

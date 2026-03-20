@@ -15,15 +15,8 @@ from siac.adapters.satellite.base import (
     resample_angles_to_data,
 )
 from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig, create_sparse_laplacian
-from siac.domain import (
-    SENTINEL2A_CONFIG,
-    AtmosphericState,
-    BRDFKernelWeights,
-    GeometryAngles,
-    RTCoefficients,
-    SensorBand,
-    SurfacePrior,
-)
+from siac.catalog import SENTINEL2A_CONFIG
+from siac.domain import SensorBand
 from siac.domain.protocols import (
     AerosolSolver,
     AtmosphericPriorProvider,
@@ -33,7 +26,14 @@ from siac.domain.protocols import (
     SatellitePreprocessor,
     SurfacePriorDeriver,
 )
-from siac.domain.validation import _spatial_shape
+from siac.runtime import (
+    AtmosphericState,
+    BRDFKernelWeights,
+    GeometryAngles,
+    RTCoefficients,
+    SurfacePrior,
+)
+from siac.runtime.validation import _spatial_shape
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -18,7 +18,8 @@ import xarray as xr
 
 from siac.algorithms.rt.lut import ZarrLUTBackend, create_lut_from_py6s
 from siac.algorithms.rt.lut.http_zip_store import _HTTPRangeFileSystem, _ReadOnlyZipFileSystem
-from siac.domain import AtmosphericState, GeometryAngles, SensorBand
+from siac.domain import SensorBand
+from siac.runtime import AtmosphericState, GeometryAngles
 
 if TYPE_CHECKING:
     from pathlib import Path

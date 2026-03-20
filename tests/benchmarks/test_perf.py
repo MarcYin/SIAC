@@ -13,13 +13,12 @@ import pytest
 import xarray as xr
 
 from siac.algorithms.grid.assembler import assemble_grids
-from siac.domain import (
+from siac.domain import SensorBand, SensorConfig
+from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
     ObservationBundle,
-    SensorBand,
-    SensorConfig,
     SurfacePrior,
 )
 

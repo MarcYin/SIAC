@@ -7,17 +7,16 @@ import pytest
 import xarray as xr
 
 from siac.algorithms.grid.assembler import assemble_grids
-from siac.domain import (
+from siac.domain import SensorBand, SensorConfig
+from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
     ObservationBundle,
-    SensorBand,
-    SensorConfig,
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.domain.validation import _validate_solver_input_bundle
+from siac.runtime.validation import _validate_solver_input_bundle
 
 
 @pytest.fixture

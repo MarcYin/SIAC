@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.domain.validation import (
+from siac.errors import ValidationError
+from siac.runtime.validation import (
     _validate_atmospheric_state,
     _validate_correction_result,
     _validate_observation_bundle,
@@ -16,7 +17,6 @@ from siac.domain.validation import (
     _validate_solver_input_bundle,
     _validate_surface_prior,
 )
-from siac.errors import ValidationError
 
 # ── _validate_observation_bundle ──────────────────────────────────────
 
@@ -160,7 +160,7 @@ class TestValidateSolvedAtmosphere:
 
 class TestValidateCorrectionResult:
     def test_validate_result_happy(self, mock_observation_bundle, mock_solved_atmosphere):
-        from siac.domain import CorrectionResult
+        from siac.runtime import CorrectionResult
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,
@@ -172,7 +172,7 @@ class TestValidateCorrectionResult:
         _validate_correction_result(result)  # no error
 
     def test_validate_result_empty_boa(self, mock_solved_atmosphere, mock_observation_bundle):
-        from siac.domain import CorrectionResult
+        from siac.runtime import CorrectionResult
         result = CorrectionResult(
             boa=xr.Dataset(),
             boa_unc=None,
@@ -188,7 +188,7 @@ class TestValidateCorrectionResult:
         """Missing processing_time_s should warn, not error."""
         import warnings
 
-        from siac.domain import CorrectionResult
+        from siac.runtime import CorrectionResult
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,
@@ -204,7 +204,7 @@ class TestValidateCorrectionResult:
 
     def test_validate_result_optional_unc(self, mock_observation_bundle, mock_solved_atmosphere):
         """boa_unc=None should be valid."""
-        from siac.domain import CorrectionResult
+        from siac.runtime import CorrectionResult
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,

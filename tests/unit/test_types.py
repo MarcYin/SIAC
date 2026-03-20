@@ -6,13 +6,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.domain import (
-    LANDSAT8_OLI_CONFIG,
-    SENTINEL2A_CONFIG,
+from siac.catalog import LANDSAT8_OLI_CONFIG, SENTINEL2A_CONFIG, get_sensor_config
+from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
     RTCoefficients,
-    get_sensor_config,
 )
 
 

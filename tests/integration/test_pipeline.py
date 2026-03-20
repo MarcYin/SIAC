@@ -14,16 +14,16 @@ import xarray as xr
 
 from siac.algorithms.correction.atmospheric import AtmosphericCorrector
 from siac.algorithms.solver.multigrid import MultiGridConfig, MultiGridSolver
-from siac.domain import (
-    SENTINEL2A_CONFIG,
+from siac.catalog import SENTINEL2A_CONFIG
+from siac.domain import SensorBand
+from siac.errors import ValidationError
+from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
     CorrectionResult,
     GeometryAngles,
-    SensorBand,
     SurfacePrior,
 )
-from siac.errors import ValidationError
 from siac.workflows.pipeline import run_pipeline
 
 

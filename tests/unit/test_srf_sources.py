@@ -8,7 +8,7 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 
-from siac.domain import SENTINEL2C_CONFIG
+from siac.catalog import SENTINEL2C_CONFIG
 from siac.srf.builders import (
     BandCharacterization,
     build_sensor_config_from_band_characterization,

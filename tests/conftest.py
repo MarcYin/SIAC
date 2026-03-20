@@ -215,7 +215,7 @@ class MockRTModel:
 
     def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
         """Return mock coefficients."""
-        from siac.domain import RTCoefficients
+        from siac.runtime import RTCoefficients
         shape = geometry.sza.shape
 
         xap = xr.DataArray(np.full(shape, 0.95), dims=["y", "x"])
@@ -288,7 +288,7 @@ PIPELINE_SHAPE = (32, 32)
 @pytest.fixture
 def mock_geometry():
     """GeometryAngles at pipeline test resolution."""
-    from siac.domain import GeometryAngles
+    from siac.runtime import GeometryAngles
     shape = PIPELINE_SHAPE
     return GeometryAngles(
         sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -301,7 +301,7 @@ def mock_geometry():
 @pytest.fixture
 def mock_observation_bundle(mock_sensor_config, mock_geometry):
     """Complete valid ObservationBundle with 32x32 synthetic TOA."""
-    from siac.domain import ObservationBundle
+    from siac.runtime import ObservationBundle
     shape = PIPELINE_SHAPE
     toa_ds = xr.Dataset({
         "B02": xr.DataArray(np.random.RandomState(42).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
@@ -323,7 +323,7 @@ def mock_observation_bundle(mock_sensor_config, mock_geometry):
 @pytest.fixture
 def mock_atmospheric_state():
     """Spatially uniform AtmosphericState at 32x32."""
-    from siac.domain import AtmosphericState
+    from siac.runtime import AtmosphericState
     shape = PIPELINE_SHAPE
     return AtmosphericState(
         aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
@@ -339,7 +339,7 @@ def mock_atmospheric_state():
 @pytest.fixture
 def mock_surface_prior():
     """Uniform SurfacePrior at 32x32."""
-    from siac.domain import BRDFKernelWeights, SurfacePrior
+    from siac.runtime import BRDFKernelWeights, SurfacePrior
     shape = PIPELINE_SHAPE
     brdf = BRDFKernelWeights(
         f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
@@ -360,7 +360,7 @@ def mock_surface_prior():
 @pytest.fixture
 def mock_solved_atmosphere(mock_atmospheric_state):
     """Dummy solved output (converged, 5 iterations)."""
-    from siac.domain import SolvedAtmosphere
+    from siac.runtime import SolvedAtmosphere
     return SolvedAtmosphere(
         atmo_state=mock_atmospheric_state,
         aot=mock_atmospheric_state.aot,
@@ -381,7 +381,7 @@ def mock_solver_input_bundle(
     mock_rt_model,
 ):
     """Pre-assembled SolverInputBundle (skips M4)."""
-    from siac.domain import SolverInputBundle
+    from siac.runtime import SolverInputBundle
     obs = mock_observation_bundle
     bands = obs.sensor_config.select_bands_in_range(400.0, 520.0)
     band_names = [b.name for b in bands]
@@ -450,7 +450,7 @@ def mock_solver_fn(mock_solved_atmosphere):
 @pytest.fixture
 def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
     """Corrector that returns a synthetic CorrectionResult."""
-    from siac.domain import CorrectionResult
+    from siac.runtime import CorrectionResult
     def _correct(obs, solved, rt_model):
         return CorrectionResult(
             boa=obs.toa,
@@ -470,13 +470,8 @@ def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
 @pytest.fixture
 def cost_function_inputs():
     """Standard inputs for cost function tests."""
-    from siac.domain import (
-        AtmosphericState,
-        BRDFKernelWeights,
-        GeometryAngles,
-        SensorBand,
-        SurfacePrior,
-    )
+    from siac.domain import SensorBand
+    from siac.runtime import AtmosphericState, BRDFKernelWeights, GeometryAngles, SurfacePrior
 
     shape = (16, 16)
 

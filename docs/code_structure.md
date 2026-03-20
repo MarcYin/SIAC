@@ -1,21 +1,25 @@
 # SIAC Code Structure
 
 Status note (2026-03-19): the package has been cut over to the new layered
-layout. The old `siac.core.*` modules and the old top-level `siac.pipeline`
-module have been removed.
+layout. The old `siac.core.*` modules, the old top-level `siac.pipeline`
+module, and the transitional `siac.siac` / `siac.io` facades have been removed.
 
 ## Package Layout
 
 ```text
 siac/
 ├── __init__.py
-├── siac.py                      # Compatibility shim to the public API
 ├── errors.py                    # Shared exception types
 │
-├── api/                         # Public API layer and request models
+├── api/                         # Public API layer
 │   ├── __init__.py
 │   ├── public.py                # Canonical SIAC facade and entrypoints
-│   └── requests.py              # Typed workflow/public request objects
+│   └── requests.py              # Public request-model re-exports
+│
+├── runtime/                     # Xarray-backed execution payloads
+│   ├── __init__.py
+│   ├── models.py                # Geometry/atmosphere/solver/correction payloads
+│   └── validation.py            # Runtime payload validators
 │
 ├── config/                      # System config, loading, resolution, snapshots
 │   ├── __init__.py
@@ -29,13 +33,11 @@ siac/
 │   ├── __init__.py
 │   └── sensors.py               # Built-in sensor definitions and registry
 │
-├── domain/                      # Pure domain models and contracts
+├── domain/                      # Pure domain models and protocols
 │   ├── __init__.py
 │   ├── aoi.py                   # AOI container
-│   ├── contracts.py             # Geometry, atmosphere, solver/correction contracts
 │   ├── sensors.py               # SensorBand and SensorConfig types only
 │   ├── protocols.py             # Structural interfaces for pluggable modules
-│   ├── validation.py            # Contract validators
 │   └── spectral.py              # Spectral helper utilities
 │
 ├── adapters/                    # External systems and backend adapters
@@ -61,6 +63,7 @@ siac/
 │
 ├── app/                         # Runtime planning and component assembly
 │   ├── __init__.py
+│   ├── requests.py              # Canonical request models
 │   ├── registry.py              # Kind/backend registries
 │   ├── assembly.py              # Config -> runtime callable assembly
 │   └── planning.py              # ExecutionPlan construction
@@ -73,7 +76,6 @@ siac/
 │
 ├── geo/                         # Geometry and reprojection utilities
 ├── storage/                     # Raster/product read-write helpers
-├── io/                          # Thin convenience facade over geo/storage/data
 └── srf/                         # Spectral response function domain
 ```
 
@@ -81,8 +83,10 @@ siac/
 
 - `catalog/` owns built-in static lookup data such as bundled sensor
   definitions.
-- `domain/` contains contracts and types only. It does not own auth, config
-  loading, filesystem discovery, or remote service access.
+- `runtime/` owns xarray-backed execution payloads and their validation.
+- `domain/` contains pure domain types and protocols only. It does not own
+  runtime payload containers, auth, config loading, filesystem discovery, or
+  remote service access.
 - `config/` owns the canonical TOML schema and config resolution.
 - `adapters/` owns external-system integration concerns.
 - `algorithms/` owns retrieval math, surface priors, correction, cloud masking,
@@ -90,17 +94,15 @@ siac/
 - `app/` resolves configuration into concrete runtime components.
 - `workflows/` executes end-to-end processing plans.
 - `api/` is the canonical public surface.
-- `siac.py` is intentionally thin and only forwards to `api/`.
-- `io/` is intentionally narrow and exists only as a convenience facade over
-  `geo/`, `storage/`, and `adapters/data/`.
 
 ## Canonical Runtime Flow
 
 1. Load `SIACConfig` from `siac.config`.
 2. Build a `RunRequest` / resolve a `ResolvedConfig`.
-3. Assemble runtime dependencies in `siac.app`.
-4. Build an `ExecutionPlan`.
-5. Execute via `siac.workflows.scene` or `siac.workflows.pipeline`.
+3. Build a typed workflow request in `siac.app.requests`.
+4. Assemble runtime dependencies in `siac.app`.
+5. Build an `ExecutionPlan`.
+6. Execute via `siac.workflows.scene` or `siac.workflows.pipeline`.
 
 ## Public API
 

@@ -235,7 +235,7 @@ class TestPreprocessorBase:
 
             @property
             def sensor_config(self):
-                from siac.domain import SENTINEL2A_CONFIG
+                from siac.catalog import SENTINEL2A_CONFIG
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path):
@@ -244,7 +244,7 @@ class TestPreprocessorBase:
 
             def extract_geometry(self, input_path):
                 self.calls.append("extract_geometry")
-                from siac.domain import GeometryAngles
+                from siac.runtime import GeometryAngles
                 arr = xr.DataArray(np.ones((10, 10)), dims=["y", "x"])
                 return GeometryAngles(sza=arr, saa=arr, vza=arr, vaa=arr)
 
@@ -280,7 +280,7 @@ class TestPreprocessorBase:
 
             @property
             def sensor_config(self):
-                from siac.domain import SENTINEL2A_CONFIG
+                from siac.catalog import SENTINEL2A_CONFIG
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path):
@@ -298,7 +298,7 @@ class TestPreprocessorBase:
 
             def extract_geometry(self, input_path):
                 del input_path
-                from siac.domain import GeometryAngles
+                from siac.runtime import GeometryAngles
 
                 geom_started.set()
                 assert cloud_started.wait(timeout=1.0)

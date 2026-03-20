@@ -14,14 +14,13 @@ from siac.algorithms.surface.swir_refine import (
     build_monthly_surface_prior_database,
     query_surface_prior_from_monthly_database,
 )
-from siac.domain import (
+from siac.domain import SensorBand, SensorConfig
+from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
     ObservationBundle,
     RTCoefficients,
-    SensorBand,
-    SensorConfig,
 )
 
 

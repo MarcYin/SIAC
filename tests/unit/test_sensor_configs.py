@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from siac.domain import (
+from siac.catalog import (
     LANDSAT8_OLI_CONFIG,
     LANDSAT9_OLI2_CONFIG,
     SENSOR_CONFIGS,
     SENTINEL2A_CONFIG,
     SENTINEL2B_CONFIG,
     SENTINEL2C_CONFIG,
-    SensorBand,
-    SensorConfig,
 )
+from siac.domain import SensorBand, SensorConfig
 
 ALL_CONFIGS = [
     SENTINEL2A_CONFIG,

@@ -7,8 +7,8 @@ import pytest
 import xarray as xr
 
 from siac.algorithms.correction.atmospheric import AtmosphericCorrector, CorrectionResult
-from siac.domain import (
-    SENTINEL2A_CONFIG,
+from siac.catalog import SENTINEL2A_CONFIG
+from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
     RTCoefficients,

@@ -146,21 +146,18 @@ def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
 
 def test_siac_process_s2_delegates_to_workflow(monkeypatch, tmp_path: Path):
     cfg = SIACConfig(sensor="s2", providers={"s2": {"backend": "local"}})
-    safe_dir = tmp_path / "S2A_fake.SAFE"
-    safe_dir.mkdir(parents=True, exist_ok=True)
     captured: dict[str, object] = {}
 
-    def _fake_process_s2(config, query, **kwargs):  # noqa: ANN001
-        captured["config"] = config
-        captured["query"] = query
-        captured["kwargs"] = kwargs
+    def _fake_process_s2(request):  # noqa: ANN001
+        captured["request"] = request
         return "ok"
 
-    monkeypatch.setattr("siac.api.public.process_s2", _fake_process_s2)
+    monkeypatch.setattr("siac.api.public.workflow_process_s2", _fake_process_s2)
 
     out = siac_process_s2(cfg, "T31UDQ_20240101", output_path=tmp_path / "out")
 
     assert out == "ok"
-    assert captured["config"] is cfg
-    assert captured["query"] == "T31UDQ_20240101"
-    assert captured["kwargs"]["output_path"] == tmp_path / "out"
+    request = captured["request"]
+    assert request.config is cfg
+    assert request.query == "T31UDQ_20240101"
+    assert request.output_path == tmp_path / "out"

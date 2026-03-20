@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 import siac.workflows.pipeline as pipeline
-from siac.domain import CorrectionResult
+from siac.runtime import CorrectionResult
 
 
 def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success") -> Any:

@@ -14,7 +14,8 @@ from siac.algorithms.surface.spectral_mapping import (
     map_multispectral_reflectance,
     needs_spectral_mapping,
 )
-from siac.domain import BRDFKernelWeights, GeometryAngles, SensorBand
+from siac.domain import SensorBand
+from siac.runtime import BRDFKernelWeights, GeometryAngles
 
 
 def _library() -> HyperspectralLibrary:

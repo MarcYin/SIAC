@@ -12,19 +12,18 @@ import numpy as np
 import xarray as xr
 
 from siac.algorithms.grid.assembler import assemble_grids
-from siac.domain import (
+from siac.domain import SensorBand, SensorConfig
+from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
     CorrectionResult,
     GeometryAngles,
     ObservationBundle,
-    SensorBand,
-    SensorConfig,
     SolvedAtmosphere,
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.domain.validation import (
+from siac.runtime.validation import (
     _validate_atmospheric_state,
     _validate_observation_bundle,
     _validate_solver_input_bundle,

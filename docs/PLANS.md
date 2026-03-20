@@ -900,7 +900,7 @@ Validation is applied automatically by the pipeline orchestrator. Users get clea
 
 ```python
 from siac import siac_process
-from siac.domain import ObservationBundle, AtmosphericState, SurfacePrior
+from siac.runtime import ObservationBundle, AtmosphericState, SurfacePrior
 
 # User provides all three data-sourcing modules as simple functions
 def my_preprocessor(input_path, aoi=None) -> ObservationBundle:
