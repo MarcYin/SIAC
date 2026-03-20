@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from siac.domain.protocols import RTModelBackend
-from siac.runtime import AtmosphericState, CorrectionResult, GeometryAngles
+from siac.runtime import AtmosphericState, CorrectionDiagnostics, CorrectionResult, GeometryAngles
 
 if TYPE_CHECKING:
     from siac.domain import SensorConfig
@@ -58,5 +58,5 @@ class AtmosphericCorrector:
             aot=atmo_state.aot,
             tcwv=atmo_state.tcwv,
             cloud_mask=final_cloud_mask,
-            metadata={"processing_time_s": elapsed},
+            diagnostics=CorrectionDiagnostics(processing_time_s=elapsed),
         )

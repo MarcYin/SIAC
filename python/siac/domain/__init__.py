@@ -11,6 +11,7 @@ from siac.domain.protocols import (
     SurfacePriorDeriver,
 )
 from siac.domain.sensors import SensorBand, SensorConfig
+from siac.domain.spectral import SpectralResponseFunction
 
 __all__ = [
     "AOI",
@@ -23,4 +24,5 @@ __all__ = [
     "SurfacePriorDeriver",
     "SensorBand",
     "SensorConfig",
+    "SpectralResponseFunction",
 ]

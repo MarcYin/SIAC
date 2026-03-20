@@ -842,9 +842,8 @@ class CAMSProvider:
 
         cds_auth = self._auth.cds() if self._auth is not None else CredentialManager().cds()
         client_kwargs = cds_auth.client_kwargs()
-        has_any_credentials = cds_auth.has_any_credentials()
 
-        if not has_any_credentials:
+        if not cds_auth.has_credentials():
             logger.warning("CDS credentials are not configured; cannot auto-download CAMS data")
             return None
 

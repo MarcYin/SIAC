@@ -17,17 +17,17 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
+from siac.adapters.rsrf import load_sensor_config_from_rsrf
 from siac.adapters.satellite.base import (
     BaseSatellitePreprocessor,
     degrees_to_radians,
     register_preprocessor,
 )
 from siac.algorithms.cloud import build_cloud_classes, classes_to_bool_mask
-from siac.catalog import SENTINEL2A_CONFIG
+from siac.catalog import SENTINEL2A_CONFIG, get_sensor_config
 from siac.geo import reproject_match
 from siac.runtime import GeometryAngles
-from siac.srf.loaders import load_sensor_config_from_srf
-from siac.storage import read_raster
+from siac.storage.readers import read_raster
 
 if TYPE_CHECKING:
     from siac.domain import SensorConfig
@@ -71,12 +71,19 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         """Return sensor configuration based on satellite platform."""
         if self._satellite_id is None:
             return SENTINEL2A_CONFIG
-        return load_sensor_config_from_srf(
-            "MSI",
-            self._satellite_id,
-            cache_dir=self.config.get("srf_cache_dir"),
-            refresh=bool(self.config.get("refresh_srf", False)),
-        )
+        try:
+            return load_sensor_config_from_rsrf(
+                "MSI",
+                self._satellite_id,
+                rsrf_root=self.config.get("rsrf_root"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Falling back to built-in Sentinel-2 band metadata for %s because RSRF lookup failed (%s)",
+                self._satellite_id,
+                exc,
+            )
+            return get_sensor_config("MSI", self._satellite_id)
 
     def load_toa(self, input_path: str | Path) -> xr.Dataset:
         """Load TOA reflectance from Sentinel-2 SAFE directory."""

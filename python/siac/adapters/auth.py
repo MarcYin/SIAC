@@ -10,7 +10,6 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import requests
@@ -193,12 +192,6 @@ class CDSAuth(_ProviderAuthBase):
 
     provider = "cds"
 
-    def has_external_credentials(self) -> bool:
-        return bool(os.getenv("CDSAPI_KEY")) or Path.home().joinpath(".cdsapirc").exists()
-
-    def has_any_credentials(self) -> bool:
-        return self.has_credentials() or self.has_external_credentials()
-
     def client_kwargs(self) -> dict[str, str]:
         if not self.has_credentials():
             return {}
@@ -209,9 +202,9 @@ class CDSAuth(_ProviderAuthBase):
         return kwargs
 
     def make_client(self, **kwargs: Any) -> Any:
-        if not self.has_any_credentials():
+        if not self.has_credentials():
             raise AuthenticationError(
-                "CDS credentials are not configured; set CDSAPI_KEY or ~/.cdsapirc."
+                "CDS credentials are not configured; populate config.auth.cds.api_key."
             )
         try:
             import cdsapi  # type: ignore[import-not-found]
@@ -373,10 +366,6 @@ class CredentialManager:
             auth_cfg = getattr(config, "auth", None)
             if auth_cfg is not None:
                 _load_from_auth_config(mgr, auth_cfg)
-            else:
-                cred_cfg = getattr(config, "credentials", None)
-                if cred_cfg is not None:
-                    _load_from_legacy_credential_config(mgr, cred_cfg)
 
         return mgr
 
@@ -433,29 +422,6 @@ def _load_from_auth_config(mgr: CredentialManager, auth_cfg: Any) -> None:
         gcs_file = getattr(gcs, "credentials_file", None)
         if gcs_file is not None:
             _maybe_set(mgr, "gcs", str(gcs_file), None)
-
-
-def _load_from_legacy_credential_config(mgr: CredentialManager, cred_cfg: Any) -> None:
-    """Populate *mgr* from the legacy flat credential config shape."""
-    _maybe_set(mgr, "cdse", getattr(cred_cfg, "cdse_username", None), getattr(cred_cfg, "cdse_password", None))
-    _maybe_set(mgr, "cds", getattr(cred_cfg, "cds_api_key", None), None)
-    _maybe_set(
-        mgr,
-        "aws",
-        getattr(cred_cfg, "aws_access_key_id", None),
-        getattr(cred_cfg, "aws_secret_access_key", None),
-    )
-    _maybe_set(
-        mgr,
-        "earthdata",
-        getattr(cred_cfg, "earthdata_username", None),
-        getattr(cred_cfg, "earthdata_password", None),
-    )
-
-    gcs_file = getattr(cred_cfg, "gcs_credentials_file", None)
-    if gcs_file is not None:
-        _maybe_set(mgr, "gcs", str(gcs_file), None)
-
 
 def _maybe_set(
     mgr: CredentialManager,

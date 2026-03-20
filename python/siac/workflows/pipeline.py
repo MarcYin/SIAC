@@ -23,12 +23,12 @@ from siac.runtime import (
     SurfacePrior,
 )
 from siac.runtime.validation import (
-    _validate_atmospheric_state,
-    _validate_correction_result,
-    _validate_observation_bundle,
-    _validate_solved_atmosphere,
-    _validate_solver_input_bundle,
-    _validate_surface_prior,
+    validate_atmospheric_state,
+    validate_correction_result,
+    validate_observation_bundle,
+    validate_solved_atmosphere,
+    validate_solver_input_bundle,
+    validate_surface_prior,
 )
 
 if TYPE_CHECKING:
@@ -214,7 +214,7 @@ def _prepare_observation(
     logger.info("M1: Preprocessing satellite data...")
     t0 = time.monotonic()
     obs = preprocessor(input_path, aoi)
-    _validate_observation_bundle(obs)
+    validate_observation_bundle(obs)
     logger.info(
         "M1: Preprocessing complete (%.2fs), %d bands.",
         time.monotonic() - t0,
@@ -239,25 +239,25 @@ def _run_tail(
     corrector: CorrectorFn,
     rt_model: Any,
 ) -> CorrectionResult:
-    _validate_atmospheric_state(atmo)
-    _validate_surface_prior(surface)
+    validate_atmospheric_state(atmo)
+    validate_surface_prior(surface)
 
     t0 = time.monotonic()
     logger.info("M4: Assembling solver grids...")
     solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
-    _validate_solver_input_bundle(solver_inputs)
+    validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
 
     t0 = time.monotonic()
     logger.info("M5: Solving for aerosol parameters...")
     solved = solver(solver_inputs, config)
-    _validate_solved_atmosphere(solved)
+    validate_solved_atmosphere(solved)
     logger.info("M5: Solver complete (%.2fs).", time.monotonic() - t0)
 
     t0 = time.monotonic()
     logger.info("M6: Applying atmospheric correction...")
     result = corrector(obs, solved, rt_model)
-    _validate_correction_result(result)
+    validate_correction_result(result)
     logger.info("M6: Correction complete (%.2fs).", time.monotonic() - t0)
 
     logger.info("Pipeline complete.")

@@ -10,16 +10,18 @@ from siac.workflows.pipeline import run_pipeline
 
 if TYPE_CHECKING:
     from siac.app.requests import SceneProcessRequest
+    from siac.domain.protocols import OutputWriter
     from siac.runtime import CorrectionResult
 
 
-def save_output(result: CorrectionResult, output_path: Path | str) -> None:
-    """Persist SIAC outputs to disk."""
-    from siac.storage import write_dataset
-
-    resolved = Path(output_path)
-    resolved.mkdir(parents=True, exist_ok=True)
-    write_dataset(result.boa, resolved / "boa.nc")
+def write_output(
+    result: CorrectionResult,
+    output_path: Path | str,
+    *,
+    output_writer: OutputWriter,
+) -> None:
+    """Persist SIAC outputs through the configured output adapter."""
+    output_writer.write(result, Path(output_path))
 
 
 def execute_plan(plan) -> CorrectionResult:
@@ -77,9 +79,9 @@ def process_scene(
         resolve_rt_model_fn=resolve_rt_model_fn,
     )
     result = execute_plan(plan)
-    if request.output_path is not None:
-        save_output(result, request.output_path)
+    if plan.output_path is not None and plan.output_writer is not None:
+        write_output(result, plan.output_path, output_writer=plan.output_writer)
     return result
 
 
-__all__ = ["execute_plan", "process_scene", "save_output"]
+__all__ = ["execute_plan", "process_scene", "write_output"]

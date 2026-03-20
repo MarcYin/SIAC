@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
+    from pathlib import Path
 
     import xarray as xr
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from siac.runtime.models import (
         AtmosphericState,
         BRDFKernelWeights,
+        CorrectionResult,
         GeometryAngles,
         RTCoefficients,
         SolvedAtmosphere,
@@ -139,21 +141,9 @@ class AerosolSolver(Protocol):
 class OutputWriter(Protocol):
     """Protocol for writing output products."""
 
-    def write_boa(
+    def write(
         self,
-        boa: xr.Dataset,
-        output_path: str,
-        crs: str,
-        transform: tuple,
-    ) -> None:
-        ...
-
-    def write_auxiliary(
-        self,
-        aot: xr.DataArray,
-        tcwv: xr.DataArray,
-        output_path: str,
-        crs: str,
-        transform: tuple,
-    ) -> None:
+        result: CorrectionResult,
+        output_dir: str | Path,
+    ) -> dict[str, Path]:
         ...

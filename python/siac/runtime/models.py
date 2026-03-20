@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -194,7 +194,7 @@ class ObservationBundle:
     toa: xr.Dataset
     geometry: GeometryAngles
     cloud_mask: xr.DataArray
-    sensor_config: SensorConfig | Any
+    sensor_config: SensorConfig
     metadata: dict[str, Any]
     crs: str
     bounds: tuple[float, float, float, float]
@@ -207,8 +207,8 @@ class SolverInputBundle:
     toa: xr.DataArray
     geometry: GeometryAngles
     cloud_mask: xr.DataArray
-    sensor_config: SensorConfig | Any
-    bands: list[SensorBand | Any]
+    sensor_config: SensorConfig
+    bands: list[SensorBand]
     atmo_prior: AtmosphericState
     surface_prior: SurfacePrior
     rt_model: Any
@@ -231,6 +231,13 @@ class SolvedAtmosphere:
 
 
 @dataclass(frozen=True)
+class CorrectionDiagnostics:
+    """Structured diagnostics produced by the correction stage."""
+
+    processing_time_s: float | None = None
+
+
+@dataclass(frozen=True)
 class CorrectionResult:
     """Final output of atmospheric correction."""
 
@@ -239,12 +246,14 @@ class CorrectionResult:
     aot: xr.DataArray
     tcwv: xr.DataArray
     cloud_mask: xr.DataArray
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = field(default_factory=dict)
+    diagnostics: CorrectionDiagnostics = field(default_factory=CorrectionDiagnostics)
 
 
 __all__ = [
     "AtmosphericState",
     "BRDFKernelWeights",
+    "CorrectionDiagnostics",
     "CorrectionResult",
     "GeometryAngles",
     "ObservationBundle",

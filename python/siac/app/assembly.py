@@ -10,9 +10,10 @@ import numpy as np
 
 from siac.adapters.atmo import CAMSProvider
 from siac.adapters.earthdata import earthaccess_source_from_auth
+from siac.adapters.output import ConfiguredOutputWriter
 from siac.adapters.rt import build_rt_model
+from siac.adapters.s2_backend import build_s2_backend
 from siac.adapters.satellite import detect_sensor, get_preprocessor
-from siac.adapters.sentinel2 import build_s2_backend
 from siac.algorithms.correction import AtmosphericCorrector, CorrectionResult
 from siac.algorithms.solver import MultiGridConfig, MultiGridSolver
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
@@ -170,8 +171,13 @@ def build_preprocessor_runtime(
         sensor_name = detect_sensor_fn(input_path)
 
     cloud_cfg = config.cloud_mask.model_dump(exclude={"user_callable"})
+    paths = getattr(config, "paths", None)
+    rsrf_root = getattr(paths, "rsrf_root", None)
+    preprocessor_config = {"cloud_mask": cloud_cfg}
+    if rsrf_root is not None:
+        preprocessor_config["rsrf_root"] = rsrf_root
     try:
-        preprocessor_obj = get_preprocessor_fn(sensor_name, config={"cloud_mask": cloud_cfg})
+        preprocessor_obj = get_preprocessor_fn(sensor_name, config=preprocessor_config)
     except KeyError as exc:
         raise ValueError(f"Unknown sensor: {sensor_name!r}") from exc
     except TypeError:
@@ -181,6 +187,8 @@ def build_preprocessor_runtime(
             raise ValueError(f"Unknown sensor: {sensor_name!r}") from exc
         if hasattr(preprocessor_obj, "config") and isinstance(preprocessor_obj.config, dict):
             preprocessor_obj.config.setdefault("cloud_mask", cloud_cfg)
+            if rsrf_root is not None:
+                preprocessor_obj.config.setdefault("rsrf_root", rsrf_root)
 
     sensor_config = preprocessor_obj.sensor_config
 
@@ -213,6 +221,10 @@ def resolve_preprocessor(config, *, input_path=None, sensor: str | None = None, 
         sensor=sensor,
         default_aoi_resolver=default_aoi_resolver,
     ).preprocessor
+
+
+def resolve_output_writer(config):
+    return ConfiguredOutputWriter(config.output.defaults)
 
 
 @ATMO_PROVIDER_REGISTRY.register("cams")
@@ -589,6 +601,7 @@ __all__ = [
     "resolve_brdf_provider",
     "resolve_corrector",
     "resolve_grid_assembler",
+    "resolve_output_writer",
     "resolve_preprocessor",
     "resolve_rt_model_for_pipeline",
     "resolve_s2_backend",

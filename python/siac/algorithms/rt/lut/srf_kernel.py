@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from siac.srf.types import SpectralResponseFunction
+    from siac.domain.spectral import SpectralResponseFunction
 
 
 def _trapezoid(y: np.ndarray, x: np.ndarray) -> float:

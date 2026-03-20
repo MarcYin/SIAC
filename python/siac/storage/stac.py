@@ -286,7 +286,7 @@ def build_stac_item(
         properties["view:off_nadir"] = mean_vza
     if mean_raa is not None:
         properties["siac:mean_relative_azimuth"] = mean_raa
-    processing_time = _safe_float(result.metadata.get("processing_time_s"))
+    processing_time = _safe_float(result.diagnostics.processing_time_s)
     if processing_time is not None:
         properties["siac:processing_time_s"] = processing_time
 

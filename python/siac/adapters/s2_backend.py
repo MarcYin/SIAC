@@ -1,4 +1,4 @@
-"""Sentinel-2 backend adapters."""
+"""Sentinel-2 data-backend assembly."""
 
 from __future__ import annotations
 

@@ -12,7 +12,7 @@ from siac.algorithms.cloud.mapping import apply_class_mapping
 from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
 from siac.geo import reproject_match
 from siac.geo.reprojection import resample
-from siac.storage import read_raster
+from siac.storage.readers import read_raster
 
 if TYPE_CHECKING:
     from collections.abc import Callable

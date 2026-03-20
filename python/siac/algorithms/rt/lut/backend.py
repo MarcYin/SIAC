@@ -14,8 +14,8 @@ import xarray as xr
 
 from siac.algorithms.rt.lut.srf_kernel import build_aligned_srf_kernel
 from siac.algorithms.rt.lut.store import as_local_path, build_lut_store
+from siac.domain.spectral import SpectralResponseFunction
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
-from siac.srf.types import SpectralResponseFunction
 
 if TYPE_CHECKING:
     from siac.domain import SensorBand

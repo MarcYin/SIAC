@@ -12,18 +12,20 @@ from siac.api.requests import (
     Sentinel2ResolveRequest,
     Sentinel2SearchRequest,
 )
-from siac.config import SIACConfig
-from siac.workflows.scene import process_scene as workflow_process_scene
-from siac.workflows.sentinel2 import (
+from siac.app.sentinel2 import (
     apply_s2_query_defaults,
     coerce_date,
     coerce_s2_query,
 )
-from siac.workflows.sentinel2 import (
-    process_s2 as workflow_process_s2,
+from siac.app.sentinel2 import (
+    resolve_s2_input as app_resolve_s2_input,
 )
-from siac.workflows.sentinel2 import resolve_s2_input as workflow_resolve_s2_input
-from siac.workflows.sentinel2 import search_sentinel2 as workflow_search_sentinel2
+from siac.app.sentinel2 import (
+    search_sentinel2 as app_search_sentinel2,
+)
+from siac.config import SIACConfig
+from siac.workflows.scene import process_scene as workflow_process_scene
+from siac.workflows.sentinel2 import process_s2 as workflow_process_s2
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +78,7 @@ def resolve_s2_input(
     auth: CredentialManager | None = None,
 ) -> Path:
     request = Sentinel2ResolveRequest(config=config, query=query, auth=auth)
-    return workflow_resolve_s2_input(request)
+    return app_resolve_s2_input(request)
 
 
 def search_sentinel2(
@@ -104,7 +106,7 @@ def search_sentinel2(
         config=config,
         auth=auth,
     )
-    return workflow_search_sentinel2(request)
+    return app_search_sentinel2(request)
 
 
 def process_sentinel2(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:

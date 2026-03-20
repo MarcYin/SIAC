@@ -394,10 +394,6 @@ class SystemConfig(SIACBaseModel):
         return self.runtime.execution
 
     @property
-    def credentials(self) -> AuthConfig:
-        return self.auth
-
-    @property
     def global_dem(self) -> str | Path | None:
         return self.paths.dem
 
@@ -578,10 +574,6 @@ class ResolvedConfig(SIACBaseModel):
     @property
     def execution(self) -> ExecutionRuntimeConfig:
         return self.runtime.execution
-
-    @property
-    def credentials(self) -> ResolvedAuthConfig:
-        return self.auth
 
     @property
     def global_dem(self) -> str | Path | None:

@@ -12,6 +12,7 @@ from siac.domain.aoi import AOI
 
 if TYPE_CHECKING:
     from siac.app.requests import SceneProcessRequest
+    from siac.domain.protocols import OutputWriter
     from siac.workflows.pipeline import (
         AtmoPriorFn,
         CorrectorFn,
@@ -67,6 +68,7 @@ class ExecutionPlan:
     solver: SolverFn
     corrector: CorrectorFn
     rt_model: Any
+    output_writer: OutputWriter | None
 
 
 def build_execution_plan(
@@ -87,6 +89,7 @@ def build_execution_plan(
     resolve_solver_fn=None,
     resolve_corrector_fn=None,
     resolve_rt_model_fn=None,
+    resolve_output_writer_fn=None,
 ) -> ExecutionPlan:
     if build_preprocessor_runtime_fn is None:
         from siac.app.assembly import build_preprocessor_runtime as build_preprocessor_runtime_fn
@@ -104,6 +107,8 @@ def build_execution_plan(
         from siac.app.assembly import resolve_corrector as resolve_corrector_fn
     if resolve_rt_model_fn is None:
         from siac.app.assembly import resolve_rt_model_for_pipeline as resolve_rt_model_fn
+    if resolve_output_writer_fn is None:
+        from siac.app.assembly import resolve_output_writer as resolve_output_writer_fn
 
     resolved_config = resolve_run_config(
         request.config,
@@ -124,7 +129,7 @@ def build_execution_plan(
 
     return ExecutionPlan(
         input_path=Path(request.input_path),
-        output_path=request.output_path,
+        output_path=resolved_config.run.output_path,
         config=resolved_config,
         runtime_aoi=runtime_aoi,
         auth=auth_obj,
@@ -139,6 +144,9 @@ def build_execution_plan(
             auth=auth_obj,
             sensor_config=preprocessor_runtime.sensor_config,
         ),
+        output_writer=resolve_output_writer_fn(resolved_config)
+        if resolved_config.run.output_path is not None
+        else None,
     )
 
 

@@ -1,21 +1,13 @@
-"""
-Sensor-agnostic spectral helpers for SIAC.
-"""
+"""Canonical spectral response types."""
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from siac.domain.sensors import SensorBand
-
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    import xarray as xr
     from numpy.typing import NDArray
 
 
@@ -26,153 +18,166 @@ def _trapezoid(y: NDArray, x: NDArray) -> float:
     return float(np.add.reduce((y[1:] + y[:-1]) * np.diff(x) * 0.5))
 
 
-_MODIS_LAND_BANDS = (
-    ("Band1", 645.0, 50.0),
-    ("Band2", 858.5, 35.0),
-    ("Band3", 469.0, 20.0),
-    ("Band4", 555.0, 20.0),
-    ("Band5", 1240.0, 20.0),
-    ("Band6", 1640.0, 24.0),
-    ("Band7", 2130.0, 50.0),
-)
+def _fwhm(wavelengths_nm: NDArray, response: NDArray) -> float | None:
+    """Estimate full-width half-maximum from a sampled response curve."""
+    if wavelengths_nm.size < 2:
+        return None
+
+    peak = float(np.nanmax(response))
+    if not np.isfinite(peak) or peak <= 0.0:
+        return None
+    half = 0.5 * peak
+    above = np.flatnonzero(response >= half)
+    if above.size == 0:
+        return None
+
+    left_idx = int(above[0])
+    right_idx = int(above[-1])
+
+    left = float(wavelengths_nm[left_idx])
+    if left_idx > 0:
+        x0 = float(wavelengths_nm[left_idx - 1])
+        x1 = float(wavelengths_nm[left_idx])
+        y0 = float(response[left_idx - 1])
+        y1 = float(response[left_idx])
+        if y1 != y0:
+            left = float(np.interp(half, np.array([y0, y1]), np.array([x0, x1])))
+
+    right = float(wavelengths_nm[right_idx])
+    if right_idx < wavelengths_nm.size - 1:
+        x0 = float(wavelengths_nm[right_idx])
+        x1 = float(wavelengths_nm[right_idx + 1])
+        y0 = float(response[right_idx])
+        y1 = float(response[right_idx + 1])
+        if y0 != y1:
+            right = float(np.interp(half, np.array([y1, y0]), np.array([x1, x0])))
+
+    width = right - left
+    return width if width >= 0.0 else None
 
 
 @dataclass(frozen=True)
-class SpectralBandDescriptor:
-    """Deprecated band descriptor retained for spectral helper tests."""
+class SpectralResponseFunction:
+    """Canonical, area-normalized spectral response function."""
 
-    name: str
-    center_wavelength_nm: float
-    fwhm_nm: float
-    resolution_m: float
-    srf_wavelengths_nm: NDArray[np.floating] | None = None
-    srf_response: NDArray[np.floating] | None = None
+    sensor_id: str
+    satellite_id: str
+    band_name: str
+    wavelengths_nm: NDArray[np.floating]
+    response: NDArray[np.floating]
+    response_raw: NDArray[np.floating] | None = None
+    source_id: str | None = None
+    source_version: str | None = None
+    source_url: str | None = None
+    centre_wavelength_nm: float | None = None
+    effective_wavelength_nm: float | None = None
+    fwhm_nm: float | None = None
 
     def __post_init__(self) -> None:
-        warnings.warn(
-            "SpectralBandDescriptor is deprecated; use siac.domain.sensors.SensorBand instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        wavelengths = np.asarray(self.wavelengths_nm, dtype=np.float32)
+        response = np.asarray(self.response, dtype=np.float32)
+        raw = None if self.response_raw is None else np.asarray(self.response_raw, dtype=np.float32)
+
+        if wavelengths.ndim != 1 or response.ndim != 1:
+            raise ValueError("SRF wavelengths and response must be 1-D")
+        if wavelengths.size != response.size:
+            raise ValueError("SRF wavelengths and response must have equal length")
+        if wavelengths.size < 2:
+            raise ValueError("SRF must contain at least two samples")
+        if not np.isfinite(wavelengths).all() or not np.isfinite(response).all():
+            raise ValueError("SRF wavelengths and response must be finite")
+        if np.any(np.diff(wavelengths) <= 0.0):
+            raise ValueError("SRF wavelengths must be strictly increasing")
+        if np.any(response < 0.0):
+            raise ValueError("SRF response must be non-negative")
+        if raw is not None and raw.shape != wavelengths.shape:
+            raise ValueError("SRF raw response must match wavelengths")
+
+        area = _trapezoid(response, wavelengths)
+        if not np.isfinite(area) or area <= 0.0:
+            raise ValueError("SRF response must integrate to a positive value")
+        if not np.isclose(area, 1.0, rtol=1e-4, atol=1e-6):
+            raise ValueError("Canonical SRF response must be area-normalized")
+
+        object.__setattr__(self, "wavelengths_nm", wavelengths)
+        object.__setattr__(self, "response", response)
+        object.__setattr__(self, "response_raw", raw)
 
     @property
-    def has_srf(self) -> bool:
-        return self.srf_wavelengths_nm is not None and self.srf_response is not None
+    def support_min_nm(self) -> float:
+        """First wavelength stored in the canonical support."""
+        return float(self.wavelengths_nm[0])
 
     @property
-    def wavelength_um(self) -> float:
-        return self.center_wavelength_nm / 1000.0
+    def support_max_nm(self) -> float:
+        """Last wavelength stored in the canonical support."""
+        return float(self.wavelengths_nm[-1])
 
-    def gaussian_response(self, wavelengths_nm: NDArray) -> NDArray:
-        sigma = self.fwhm_nm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-        return np.exp(-0.5 * ((wavelengths_nm - self.center_wavelength_nm) / sigma) ** 2)
+    @classmethod
+    def from_tabulated(
+        cls,
+        *,
+        sensor_id: str,
+        satellite_id: str,
+        band_name: str,
+        wavelengths_nm: NDArray[np.floating],
+        response: NDArray[np.floating],
+        source_id: str | None = None,
+        source_version: str | None = None,
+        source_url: str | None = None,
+    ) -> SpectralResponseFunction:
+        """Build a canonical SRF from a raw tabulated response."""
+        wavelengths = np.asarray(wavelengths_nm, dtype=np.float32).reshape(-1)
+        raw_response = np.asarray(response, dtype=np.float32).reshape(-1)
+        if wavelengths.size != raw_response.size:
+            raise ValueError("SRF wavelengths and response must have equal length")
+        if wavelengths.size < 2:
+            raise ValueError("SRF must contain at least two samples")
+        if not np.isfinite(wavelengths).all() or not np.isfinite(raw_response).all():
+            raise ValueError("SRF wavelengths and response must be finite")
 
-    def effective_response(self, wavelengths_nm: NDArray) -> NDArray:
-        if self.has_srf:
-            return np.interp(
-                wavelengths_nm,
-                self.srf_wavelengths_nm,
-                self.srf_response,
-                left=0.0,
-                right=0.0,
-            )
-        return self.gaussian_response(wavelengths_nm)
+        order = np.argsort(wavelengths, kind="stable")
+        wavelengths = wavelengths[order]
+        raw_response = raw_response[order]
 
-    def to_sensor_band(self, band_index: int = 0) -> SensorBand:
-        return SensorBand(
-            name=self.name,
-            center_wavelength=self.center_wavelength_nm,
-            bandwidth=self.fwhm_nm,
-            resolution=self.resolution_m,
-            band_index=band_index,
-            srf_wavelengths_nm=self.srf_wavelengths_nm,
-            srf_response=self.srf_response,
+        unique_wavelengths, unique_idx = np.unique(wavelengths, return_index=True)
+        wavelengths = unique_wavelengths.astype(np.float32, copy=False)
+        raw_response = raw_response[unique_idx].astype(np.float32, copy=False)
+        raw_response = np.clip(raw_response, 0.0, None)
+
+        nonzero = np.flatnonzero(raw_response > 0.0)
+        if nonzero.size == 0:
+            raise ValueError("SRF response must include at least one non-zero sample")
+
+        start = max(int(nonzero[0]) - 1, 0)
+        stop = min(int(nonzero[-1]) + 2, raw_response.size)
+        wavelengths = wavelengths[start:stop]
+        raw_response = raw_response[start:stop]
+
+        area = _trapezoid(raw_response, wavelengths)
+        if not np.isfinite(area) or area <= 0.0:
+            raise ValueError("SRF response must integrate to a positive value")
+        response_norm = (raw_response / area).astype(np.float32)
+
+        peak_idx = int(np.argmax(response_norm))
+        centre = float(wavelengths[peak_idx])
+        effective = _trapezoid(wavelengths * response_norm, wavelengths)
+        width = _fwhm(wavelengths, response_norm)
+
+        return cls(
+            sensor_id=sensor_id,
+            satellite_id=satellite_id,
+            band_name=band_name,
+            wavelengths_nm=wavelengths.astype(np.float32, copy=False),
+            response=response_norm,
+            response_raw=raw_response.astype(np.float32, copy=False),
+            source_id=source_id,
+            source_version=source_version,
+            source_url=source_url,
+            centre_wavelength_nm=centre,
+            effective_wavelength_nm=float(effective),
+            fwhm_nm=None if width is None else float(width),
         )
 
 
-def load_reference_rsr(
-    reference_sensor: str = "MODIS",
-) -> dict[str, tuple[NDArray, NDArray]]:
-    """Load tabulated spectral response functions for a reference sensor."""
-    if reference_sensor.upper() == "MODIS":
-        result: dict[str, tuple[NDArray, NDArray]] = {}
-        for band_name, center_nm, fwhm_nm in _MODIS_LAND_BANDS:
-            sigma = fwhm_nm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-            wl = np.linspace(center_nm - 3.0 * fwhm_nm, center_nm + 3.0 * fwhm_nm, 101)
-            resp = np.exp(-0.5 * ((wl - center_nm) / sigma) ** 2)
-            result[band_name] = (wl, resp)
-        return result
-
-    raise ValueError(f"Unknown reference sensor: {reference_sensor!r}. Available: 'MODIS'")
-
-
-def _build_conversion_matrix(
-    sensor_bands: Sequence[SpectralBandDescriptor] | Sequence[SensorBand],
-    ref_bands: dict[str, tuple[NDArray, NDArray]],
-    common_wl: NDArray | None = None,
-) -> tuple[NDArray, list[str]]:
-    """Build a spectral conversion matrix."""
-    if common_wl is None:
-        common_wl = np.linspace(350.0, 2500.0, 2151)
-
-    ref_names = list(ref_bands.keys())
-    n_ref = len(ref_names)
-    n_sensor = len(sensor_bands)
-
-    ref_resp = np.zeros((n_ref, len(common_wl)))
-    for i, name in enumerate(ref_names):
-        wl_r, resp_r = ref_bands[name]
-        interp_r = np.interp(common_wl, wl_r, resp_r, left=0.0, right=0.0)
-        norm = _trapezoid(interp_r, common_wl)
-        ref_resp[i] = interp_r / norm if norm > 0 else interp_r
-
-    sensor_resp = np.zeros((n_sensor, len(common_wl)))
-    for j, sb in enumerate(sensor_bands):
-        sr = sb.effective_response(common_wl)
-        norm = _trapezoid(sr, common_wl)
-        sensor_resp[j] = sr / norm if norm > 0 else sr
-
-    matrix = np.zeros((n_ref, n_sensor))
-    for i in range(n_ref):
-        for j in range(n_sensor):
-            overlap = _trapezoid(ref_resp[i] * sensor_resp[j], common_wl)
-            matrix[i, j] = overlap if overlap > 1e-6 else 0.0
-
-    return matrix, ref_names
-
-
-def sensor_to_reference(
-    sensor_reflectance: xr.Dataset,
-    sensor_bands: Sequence[SpectralBandDescriptor] | Sequence[SensorBand],
-    reference_sensor: str = "MODIS",
-) -> NDArray:
-    """Convolve sensor-band reflectance to a reference basis."""
-    ref_rsr = load_reference_rsr(reference_sensor)
-    matrix, ref_names = _build_conversion_matrix(sensor_bands, ref_rsr)
-
-    band_names = [b.name for b in sensor_bands]
-    sensor_vals = np.stack(
-        [sensor_reflectance[bn].values for bn in band_names if bn in sensor_reflectance],
-        axis=0,
-    )
-
-    spatial_shape = sensor_vals.shape[1:]
-    flat = sensor_vals.reshape(sensor_vals.shape[0], -1)
-    ref_flat = matrix @ flat
-    return ref_flat.reshape(len(ref_names), *spatial_shape)
-
-
-def reference_to_sensor(
-    ref_reflectance: NDArray,
-    target_bands: Sequence[SpectralBandDescriptor] | Sequence[SensorBand],
-    reference_sensor: str = "MODIS",
-) -> NDArray:
-    """Project reference-basis reflectance back to sensor bands."""
-    ref_rsr = load_reference_rsr(reference_sensor)
-    matrix, _ = _build_conversion_matrix(target_bands, ref_rsr)
-    pinv = np.linalg.pinv(matrix)
-
-    spatial_shape = ref_reflectance.shape[1:]
-    flat = ref_reflectance.reshape(ref_reflectance.shape[0], -1)
-    sensor_flat = pinv @ flat
-    return sensor_flat.reshape(len(target_bands), *spatial_shape)
+__all__ = ["SpectralResponseFunction"]

@@ -10,6 +10,11 @@ from siac.algorithms.surface.brdf_monthly_database import (
 )
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.algorithms.surface.kernel_model import KernelModelDeriver, PSFConvolver
+from siac.algorithms.surface.reference_spectral import (
+    load_reference_rsr,
+    reference_to_sensor,
+    sensor_to_reference,
+)
 from siac.algorithms.surface.spectral_mapping import (
     HyperspectralLibrary,
     SpectralMapper,
@@ -28,6 +33,9 @@ __all__ = [
     "KernelModelDeriver",
     "BRDFWhittakerDeriver",
     "PSFConvolver",
+    "load_reference_rsr",
+    "sensor_to_reference",
+    "reference_to_sensor",
     "MonthlyBestPixelComposite",
     "build_monthly_best_pixel_composite",
     "MonthlyCompositeDatabase",

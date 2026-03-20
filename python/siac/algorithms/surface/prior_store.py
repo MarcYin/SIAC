@@ -166,8 +166,7 @@ def _project_to_sensor(
 ) -> np.ndarray:
     """Project reference-band reflectance to sensor bands.
 
-    Uses the spectral model's ``reference_to_sensor`` when available,
-    or falls back to nearest-wavelength selection.
+    Falls back to nearest-wavelength selection.
 
     Args:
         reflectance: (n_ref_bands, y, x) array in the reference basis.

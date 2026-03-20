@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -23,7 +22,7 @@ if TYPE_CHECKING:
     )
 
 
-def _spatial_shape(ds: xr.Dataset) -> tuple[int, ...]:
+def spatial_shape(ds: xr.Dataset) -> tuple[int, ...]:
     """Extract ``(y, x)`` shape from an ``xr.Dataset``."""
     if "y" in ds.dims and "x" in ds.dims:
         return (ds.sizes["y"], ds.sizes["x"])
@@ -33,7 +32,7 @@ def _spatial_shape(ds: xr.Dataset) -> tuple[int, ...]:
     raise ValueError("Dataset has fewer than 2 dimensions")
 
 
-def _validate_observation_bundle(obs: ObservationBundle) -> None:
+def validate_observation_bundle(obs: ObservationBundle) -> None:
     if "observation_time" not in obs.metadata:
         raise ValidationError("metadata must include 'observation_time'")
     if not isinstance(obs.metadata["observation_time"], datetime):
@@ -47,7 +46,7 @@ def _validate_observation_bundle(obs: ObservationBundle) -> None:
     if not obs.toa.sizes:
         raise ValidationError("toa must have spatial dimensions")
 
-    toa_shape = _spatial_shape(obs.toa)
+    toa_shape = spatial_shape(obs.toa)
     cloud_shape = obs.cloud_mask.shape
     if cloud_shape != toa_shape:
         raise ValidationError(
@@ -71,7 +70,7 @@ def _validate_observation_bundle(obs: ObservationBundle) -> None:
             ) from err
 
 
-def _validate_atmospheric_state(atmo: AtmosphericState) -> None:
+def validate_atmospheric_state(atmo: AtmosphericState) -> None:
     for name, field_val in [
         ("aot_unc", atmo.aot_unc),
         ("tcwv_unc", atmo.tcwv_unc),
@@ -82,7 +81,7 @@ def _validate_atmospheric_state(atmo: AtmosphericState) -> None:
             raise ValidationError(f"{name} uncertainties must be non-negative")
 
 
-def _validate_surface_prior(prior: SurfacePrior) -> None:
+def validate_surface_prior(prior: SurfacePrior) -> None:
     if prior.boa.shape != prior.boa_unc.shape:
         raise ValidationError(
             f"boa shape {prior.boa.shape} must match boa_unc shape {prior.boa_unc.shape}"
@@ -97,7 +96,7 @@ def _validate_surface_prior(prior: SurfacePrior) -> None:
         ) from err
 
 
-def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
+def validate_solver_input_bundle(sib: SolverInputBundle) -> None:
     config_bands = {b.name for b in sib.sensor_config.bands}
     solver_bands = {b.name for b in sib.bands}
     if not solver_bands <= config_bands:
@@ -111,7 +110,7 @@ def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
         raise ValidationError("aerosol_resolution_m must be positive")
 
 
-def _validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
+def validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
     if not isinstance(solved.converged, bool):
         raise ValidationError("converged must be a boolean")
     if not isinstance(solved.n_iterations, int):
@@ -130,25 +129,26 @@ def _validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
         raise ValidationError("solved TCWV must be non-negative")
 
 
-def _validate_correction_result(result: CorrectionResult) -> None:
+def validate_correction_result(result: CorrectionResult) -> None:
     if len(result.boa.data_vars) == 0:
         raise ValidationError("BOA must have at least one band variable")
     if not isinstance(result.metadata, dict):
         raise ValidationError("metadata must be a dictionary")
-    if "processing_time_s" not in result.metadata:
-        warnings.warn(
-            "CorrectionResult.metadata missing 'processing_time_s'; "
-            "consider including it for diagnostics",
-            stacklevel=2,
-        )
+    processing_time_s = result.diagnostics.processing_time_s
+    if processing_time_s is not None and (
+        not isinstance(processing_time_s, (int, float)) or not np.isfinite(processing_time_s)
+    ):
+        raise ValidationError("diagnostics.processing_time_s must be finite when provided")
+    if processing_time_s is not None and processing_time_s < 0:
+        raise ValidationError("diagnostics.processing_time_s must be non-negative")
 
 
 __all__ = [
-    "_spatial_shape",
-    "_validate_atmospheric_state",
-    "_validate_correction_result",
-    "_validate_observation_bundle",
-    "_validate_solved_atmosphere",
-    "_validate_solver_input_bundle",
-    "_validate_surface_prior",
+    "spatial_shape",
+    "validate_atmospheric_state",
+    "validate_correction_result",
+    "validate_observation_bundle",
+    "validate_solved_atmosphere",
+    "validate_solver_input_bundle",
+    "validate_surface_prior",
 ]

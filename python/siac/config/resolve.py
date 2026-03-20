@@ -133,7 +133,7 @@ def resolve_config(system: SystemConfig, request: RunRequest) -> ResolvedConfig:
     return ResolvedConfig(
         run=ResolvedRunConfig(
             input_path=request.input_path,
-            output_path=request.output_path,
+            output_path=request.output_path or system.output.defaults.output_dir,
             sensor=sensor,
             aoi=aoi,
             s2_query=request.s2_query,
