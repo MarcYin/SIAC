@@ -111,8 +111,8 @@ def test_subset_wavelength_for_band_uses_tabulated_srf_support():
         bandwidth=80.0,
         resolution=10.0,
         band_index=1,
-        srf_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
-        srf_response=np.array([0.0, 0.5, 1.0, 0.5, 0.0], dtype=np.float32),
+        rsrf_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+        rsrf_response=np.array([0.0, 0.5, 1.0, 0.5, 0.0], dtype=np.float32),
     )
 
     subset = backend._subset_wavelength_for_band(lut, band)
@@ -178,8 +178,8 @@ def test_spectral_integration_weights_use_tabulated_srf_over_gaussian():
         bandwidth=200.0,
         resolution=10.0,
         band_index=1,
-        srf_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
-        srf_response=np.array([0.0, 0.5, 1.0, 0.5, 0.0], dtype=np.float32),
+        rsrf_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+        rsrf_response=np.array([0.0, 0.5, 1.0, 0.5, 0.0], dtype=np.float32),
     )
 
     weights = backend._spectral_integration_weights(band, lut)

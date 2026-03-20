@@ -12,7 +12,7 @@ belong in separate sensor test plans.
 
 ## Table of Contents
 
-1. [Test Organisation](#1-test-organisation)
+1. [Test Organization](#1-test-organization)
 2. [Test Fixtures & Mock Factory](#2-test-fixtures--mock-factory)
 3. [Layer 1 — Contract Types (Unit)](#3-layer-1--contract-types-unit)
 4. [Layer 2 — Validation Functions (Unit)](#4-layer-2--validation-functions-unit)
@@ -29,7 +29,7 @@ belong in separate sensor test plans.
 
 ---
 
-## 1. Test Organisation
+## 1. Test Organization
 
 ### Directory layout
 
@@ -414,12 +414,12 @@ or class instance) and the pipeline still works end-to-end.
 
 **File**: `tests/unit/test_spectral.py`
 
-### 8.1 `SpectralBandDescriptor`
+### 8.1 `SensorBand`
 
 | Test ID | What | Assert |
 |---------|------|--------|
-| `test_band_descriptor_gaussian` | Create with center + FWHM only | `has_srf == False` |
-| `test_band_descriptor_with_srf` | Create with tabulated SRF | `has_srf == True` |
+| `test_gaussian_only_construction` | Create with center + FWHM only | `has_rsrf == False` |
+| `test_with_rsrf` | Create with tabulated RSRF | `has_rsrf == True` |
 | `test_band_descriptor_wavelength_um` | 550 nm → 0.55 µm | Property correct |
 
 ### 8.2 `SensorConfig` Band Selection
@@ -441,8 +441,8 @@ or class instance) and the pipeline still works end-to-end.
 | `test_reference_to_sensor_roundtrip` | `sensor_to_reference` → `reference_to_sensor` | Approximates original (within tolerance) |
 | `test_sensor_to_reference_flat_spectrum` | Flat reflectance = 0.5 across all λ | All reference bands ≈ 0.5 |
 | `test_sensor_to_reference_shape` | 3-band input | Output has 7 MODIS reference bands |
-| `test_load_reference_rsr_modis` | Load MODIS RSR | 7 bands, wavelengths in [0.4, 2.5] µm |
-| `test_load_reference_rsr_unknown` | Unknown sensor name | `ValueError` |
+| `test_load_modis` | Load MODIS RSRF | 7 bands, wavelengths in [0.4, 2.5] µm |
+| `test_load_unknown_raises` | Unknown sensor name | `ValueError` |
 
 ---
 

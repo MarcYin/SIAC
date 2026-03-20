@@ -532,8 +532,8 @@ SurfacePriorFn = Callable[
      uncertainty from residual spread and QA.
    - This is the route closest to the current SIAC paper Appendix A workflow and is the default
      for dynamic per-scene BRDF priors.
-   - Spectral mapping is still required in this route whenever the BRDF-source SRF basis differs
-     from the target-sensor SRF basis.
+   - Spectral mapping is still required in this route whenever the BRDF-source RSRF basis differs
+     from the target-sensor RSRF basis.
 
 2. **Historical monthly best-pixel composite + spectral-mapping route**:
    - Build monthly best-pixel composites of BRDF-simulated reflectance for the scene month and
@@ -546,7 +546,7 @@ SurfacePriorFn = Callable[
    - All MODIS/VIIRS BRDF values remain defined in the MODIS/VIIRS spectral basis; target-sensor
      SWIR/NIR matching must therefore use a spectral-mapping step rather than nearest-band lookup.
    - For Sentinel-2 in particular, SWIR mapping to MODIS/VIIRS must follow the spectral-mapping
-     approach described in SIAC Appendix D, not a simple centre-wavelength substitution.
+     approach described in SIAC Appendix D, not a simple center-wavelength substitution.
 
 **Built-in providers are small classes** (same rationale as M2 — they hold
 configured paths):
@@ -723,7 +723,7 @@ CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, RTModelBackend], Co
    - Used when the RT backend starts from spectrally resolved LUT variables (for example `TOA_rho1`, `TOA_rho2`, `Eg_rho1`, `Eg_rho2`, `Eg_dir_rho1`) rather than final per-band coefficients.
    - Workflow:
      - subset LUT over atmospheric state,
-     - convolve LUT wavelength slices with the sensor bandpass / SRF in radiance and irradiance space,
+     - convolve LUT wavelength slices with the sensor bandpass / RSRF in radiance and irradiance space,
      - derive per-band `path_ref`, `T_total`, and `S` (spherical-albedo term),
      - convert them into standard coefficients:
        - `xap = 1 / T_total`
@@ -773,7 +773,7 @@ class RTModelBackend(Protocol):
     def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool: ...
 ```
 
-Dense spectral LUT workflows still fit this protocol. Their internal implementation may start from wavelength-resolved terms, but after SRF/bandpass convolution they should convert to standard coefficients before returning:
+Dense spectral LUT workflows still fit this protocol. Their internal implementation may start from wavelength-resolved terms, but after RSRF/bandpass convolution they should convert to standard coefficients before returning:
 
 - `xap = 1 / T_total`
 - `xbp = path_ref / T_total`
@@ -1243,7 +1243,7 @@ At minimum, the sensor must define:
 - aerosol-sensitive bands (typically 400–520 nm) used by the solver
 - if available: NIR/SWIR bands (750–2500 nm) for optional surface-prior refinement
 
-If a sensor has SRFs, they can be included for accurate spectral convolution.
+If a sensor has RSRFs, they can be included for accurate spectral convolution.
 
 ### 8.3 Required: AOI Scoping Compatibility
 
@@ -1275,40 +1275,40 @@ For each new sensor:
 SIAC must work with any optical sensor — not just Sentinel-2 and Landsat.
 Sensors range from broadband multispectral (6–13 bands) to hyperspectral (200+ bands).
 The system should never reference hardcoded band names like `B8A` or `B11`; instead,
-all band selection is driven by **wavelength** and (when available) **spectral response functions (SRFs)**.
+all band selection is driven by **wavelength** and (when available) **spectral response functions (RSRFs)**.
 
 ### 9.2 Spectral Band Descriptor
 
-Every input sensor describes its bands with a `SpectralBandDescriptor` that supports:
+Every input sensor describes its bands with a `SensorBand` that supports:
 
 1. Gaussian approximation (multispectral): center wavelength + FWHM
-2. Full SRF (hyperspectral / precision): tabulated (wavelength, response)
+2. Full RSRF (hyperspectral / precision): tabulated (wavelength, response)
 
 ```python
 @dataclass(frozen=True)
-class SpectralBandDescriptor:
+class SensorBand:
     name: str
     center_wavelength_nm: float
     fwhm_nm: float
     resolution_m: float
-    srf_wavelengths_nm: np.ndarray | None = None
-    srf_response: np.ndarray | None = None
+    rsrf_wavelengths_nm: np.ndarray | None = None
+    rsrf_response: np.ndarray | None = None
 
     @property
-    def has_srf(self) -> bool: ...
+    def has_rsrf(self) -> bool: ...
 
     @property
     def wavelength_um(self) -> float: ...
 ```
 
-The existing `SensorBand` in `python/siac/core/types.py` is expected to be replaced/extended by `SpectralBandDescriptor`.
+The existing `SensorBand` in `python/siac/core/types.py` is expected to be replaced/extended by `SensorBand`.
 
 **Tests** (`tests/unit/test_spectral.py`):
 
 | # | Test | Assert |
 |---|------|--------|
-| 1 | Gaussian-only construction (no SRF arrays) | `has_srf == False`, `center_wavelength_nm > 0` |
-| 2 | Full-SRF construction (tabulated arrays) | `has_srf == True`, arrays non-empty |
+| 1 | Gaussian-only construction (no RSRF arrays) | `has_rsrf == False`, `center_wavelength_nm > 0` |
+| 2 | Full-RSRF construction (tabulated arrays) | `has_rsrf == True`, arrays non-empty |
 | 3 | `wavelength_um` property | 550 nm → `≈ 0.55` |
 | 4 | Frozen: mutating field raises | `FrozenInstanceError` |
 
@@ -1320,17 +1320,17 @@ Planned `SensorConfig` additions:
 ```python
 @dataclass(frozen=True)
 class SensorConfig:
-    bands: tuple[SpectralBandDescriptor, ...]
+    bands: tuple[SensorBand, ...]
 
-    def select_bands_in_range(self, wl_min_nm: float, wl_max_nm: float) -> list[SpectralBandDescriptor]: ...
-    def select_nearest_band(self, target_nm: float, tolerance_nm: float = 50.0) -> SpectralBandDescriptor | None: ...
+    def select_bands_in_range(self, wl_min_nm: float, wl_max_nm: float) -> list[SensorBand]: ...
+    def select_nearest_band(self, target_nm: float, tolerance_nm: float = 50.0) -> SensorBand | None: ...
 
     @property
-    def vis_bands(self) -> list[SpectralBandDescriptor]: ...     # 400–700 nm
+    def vis_bands(self) -> list[SensorBand]: ...     # 400–700 nm
     @property
-    def nir_bands(self) -> list[SpectralBandDescriptor]: ...     # 750–1000 nm
+    def nir_bands(self) -> list[SensorBand]: ...     # 750–1000 nm
     @property
-    def swir_bands(self) -> list[SpectralBandDescriptor]: ...    # 1000–2500 nm, excluding absorption windows
+    def swir_bands(self) -> list[SensorBand]: ...    # 1000–2500 nm, excluding absorption windows
 ```
 
 **Tests** (`tests/unit/test_spectral.py`):
@@ -1339,7 +1339,7 @@ class SensorConfig:
 |---|------|--------|
 | 1 | `vis_bands` returns only 400–700 nm bands | all returned bands in [400, 700] |
 | 2 | `nir_bands` excludes visible | all returned bands in [750, 1000] |
-| 3 | `select_nearest_band(550)` finds green | returned band centre ≈ 550 nm |
+| 3 | `select_nearest_band(550)` finds green | returned band center ≈ 550 nm |
 | 4 | `select_nearest_band(3000)` returns None | no match outside tolerance |
 | 5 | Empty range returns empty list | `select_bands_in_range(9000, 9999) == []` |
 
@@ -1363,7 +1363,7 @@ All algorithms operate on spectral regions defined by wavelength boundaries:
 ### 9.5 Spectral Convolution: Sensor ↔ Reference Band Mapping
 
 Surface priors are stored at a compact **reference basis** (MODIS/VIIRS land bands).
-To compare against any input sensor, the mapping uses the reference sensor's **actual RSR**:
+To compare against any input sensor, the mapping uses the reference sensor's **actual RSRF**:
 
 $$
 \rho_{\text{ref},i} = \frac{\int R_i(\lambda)\, \rho(\lambda)\, d\lambda}{\int R_i(\lambda)\, d\lambda}
@@ -1382,14 +1382,14 @@ def sensor_to_reference(
 
 def reference_to_sensor(
     ref_reflectance: np.ndarray,
-    target_bands: list[SpectralBandDescriptor],
+    target_bands: list[SensorBand],
     sensor_config: SensorConfig,
     reference_sensor: str = "MODIS",
 ) -> xr.Dataset:
     """Project reference-basis reflectance back to sensor bands."""
     ...
 
-def load_reference_rsr(reference_sensor: str = "MODIS") -> dict[str, np.ndarray]:
+def load_reference_rsrf(reference_sensor: str = "MODIS") -> dict[str, np.ndarray]:
     """Load tabulated spectral response functions for the reference sensor."""
     ...
 ```
@@ -1398,11 +1398,11 @@ def load_reference_rsr(reference_sensor: str = "MODIS") -> dict[str, np.ndarray]
 
 | # | Test | Assert |
 |---|------|--------|
-| 1 | `sensor_to_reference` with identity SRF | output ≈ input (flat spectrum) |
+| 1 | `sensor_to_reference` with identity RSRF | output ≈ input (flat spectrum) |
 | 2 | `reference_to_sensor` roundtrip | `ref→sensor→ref ≈ original` within tolerance |
 | 3 | Output band count matches reference sensor | `len(result) == len(reference_bands)` |
-| 4 | `load_reference_rsr("MODIS")` | returns dict with ≥6 bands, arrays non-empty |
-| 5 | `load_reference_rsr("UNKNOWN")` | raises `ValueError` |
+| 4 | `load_reference_rsrf("MODIS")` | returns dict with ≥6 bands, arrays non-empty |
+| 5 | `load_reference_rsrf("UNKNOWN")` | raises `ValueError` |
 
 ### 9.6 Surface Prior as an Independent Resource (Preferred)
 
@@ -1453,7 +1453,7 @@ which return the same `SurfacePrior` contract.
      target-scene angles
   2. mask poor-quality days/pixels with product QA
   3. apply the Rust Whittaker smoother per band/pixel to gap-fill and smooth the time series
-  4. if source and target SRFs differ, run spectral mapping from the BRDF source basis to the
+  4. if source and target RSRFs differ, run spectral mapping from the BRDF source basis to the
      target-sensor basis
   5. evaluate the smoothed signal at the sensing date to obtain the BRDF prior mean
   6. derive uncertainty from QA, residual spread, smoother diagnostics, and spectral-mapping error
@@ -1472,7 +1472,7 @@ which return the same `SurfacePrior` contract.
      monthly pixel from the best BRDF quality rather than by median compositing
   2. for a target scene, gather the 15 monthly composites for `(m-1, m, m+1)` across the previous
      5 years
-  3. if source and target SRFs differ, use spectral mapping to compare target-scene NIR+SWIR
+  3. if source and target RSRFs differ, use spectral mapping to compare target-scene NIR+SWIR
      observations with the MODIS/VIIRS BRDF basis
   4. build or load a database whose query key contains:
      - NIR
@@ -1508,22 +1508,22 @@ not as minor implementation options inside one opaque class.
 ### 9.7 Spectral Mapping for BRDF Composite Usage
 
 Spectral mapping is required for **both Route A and Route B** whenever the BRDF
-source basis and the target-sensor SRFs are not the same. Route B simply makes
+source basis and the target-sensor RSRFs are not the same. Route B simply makes
 that requirement more obvious because the query is performed in NIR/SWIR.
 
 The required rule is:
 
 > **Do not map Sentinel-2/Landsat SWIR bands to MODIS/VIIRS BRDF bands by nearest wavelength alone.**
-> Use the Appendix D SIAC spectral-mapping workflow whenever source and target SRFs differ.
+> Use the Appendix D SIAC spectral-mapping workflow whenever source and target RSRFs differ.
 
 Per SIAC Appendix D, the planned runtime/offline mapping should:
 
-1. use the MODIS/VIIRS reflectance basis and MODIS/VIIRS SRFs as the reference basis
+1. use the MODIS/VIIRS reflectance basis and MODIS/VIIRS RSRFs as the reference basis
 2. search a hyperspectral reflectance library for spectra consistent with the reference-basis reflectance
 3. reconstruct a 1 nm reflectance estimate from the selected neighbours
 4. convolve the reconstructed spectrum with both:
-   - MODIS/VIIRS SRFs
-   - target-sensor SRFs
+   - MODIS/VIIRS RSRFs
+   - target-sensor RSRFs
 5. carry the mapping uncertainty from the neighbour dispersion / reconstruction error
 
 Explicit exception:
@@ -1531,14 +1531,14 @@ Explicit exception:
 - **Hyperspectral → multispectral** projection does **not** require an external hyperspectral
   library/database when the source sensor already measures the spectrum densely enough in wavelength.
   In that case, multispectral simulation can be done directly by convolving the hyperspectral
-  reflectance with the target multispectral SRFs.
+  reflectance with the target multispectral RSRFs.
 - The external-library / Appendix-D reconstruction route is required when translating between
   multispectral bases, e.g. MODIS/VIIRS BRDF basis to Sentinel-2 or Landsat.
 
 This is especially important for:
 - Sentinel-2 SWIR bands (`B11`, `B12`)
 - Landsat OLI SWIR bands
-- any target sensor whose NIR/SWIR SRFs differ materially from MODIS/VIIRS band passes
+- any target sensor whose NIR/SWIR RSRFs differ materially from MODIS/VIIRS band passes
 
 The spectral-mapping output is not only a visible-band helper. It is also the
 bridge that lets target-sensor SWIR/NIR observations query a MODIS/VIIRS BRDF
@@ -1554,9 +1554,9 @@ This is most useful where climatology is stale or the sensor is hyperspectral.
 High-level steps:
 1. select query bands by wavelength (`NIR`, `SWIR-1`, `SWIR-2`)
 2. apply first-pass correction using prior atmosphere
-3. if source and target SRFs differ, map target reflectance into the BRDF source basis using
+3. if source and target RSRFs differ, map target reflectance into the BRDF source basis using
    Appendix-D spectral mapping; if the source is hyperspectral and the target is multispectral,
-   use direct SRF convolution instead
+   use direct RSRF convolution instead
 4. form the Route-B database query key from:
    - corrected `NIR`
    - corrected `SWIR-1`
@@ -1583,7 +1583,7 @@ Planned files:
 
 | File | Action | Description |
 |------|--------|-------------|
-| `python/siac/core/spectral.py` | NEW | `SpectralBandDescriptor`, `sensor_to_reference()`, `reference_to_sensor()`, reference RSR loading |
+| `python/siac/core/spectral.py` | NEW | `SensorBand`, `sensor_to_reference()`, `reference_to_sensor()`, reference RSRF loading |
 | `python/siac/core/types.py` | MODIFY | Add `ObservationBundle`, `SolverInputBundle`, `SolvedAtmosphere`; extend/replace `SensorBand` |
 | `python/siac/core/validation.py` | NEW | Contract validation functions for all output types |
 | `python/siac/pipeline.py` | NEW | `run_pipeline()` function with concurrent module execution |
@@ -1594,63 +1594,63 @@ Planned files:
 | `python/siac/priors/surface/brdf_monthly_composite.py` | NEW | Route B: monthly best-pixel BRDF composites over 5-year history |
 | `python/siac/priors/surface/brdf_monthly_database.py` | NEW | Route B database builder/query for 15 monthly composites keyed by NIR + two SWIR bands + median summary |
 | `python/siac/priors/surface/swir_refine.py` | NEW | Optional runtime refinement → returns `SurfacePrior` |
-| `python/siac/priors/surface/spectral_mapping.py` | NEW | SRF-dependent mapping layer: Appendix-D reconstruction for multispectral↔multispectral, direct convolution for hyperspectral→multispectral |
+| `python/siac/algorithms/surface/spectral_mapping.py` | NEW | RSRF-dependent mapping layer: Appendix-D reconstruction for multispectral↔multispectral, direct convolution for hyperspectral→multispectral |
 | `python/siac/grid/assembler.py` | NEW | `assemble_grids()` function → returns `SolverInputBundle` |
 | `python/siac/core/config.py` | MODIFY | Surface prior store path + refinement flags |
-| `tests/unit/test_spectral.py` | NEW | `SpectralBandDescriptor`, `SensorConfig` selection, spectral convolution tests |
+| `tests/unit/test_spectral.py` | NEW | `SensorBand`, `SensorConfig` selection, spectral convolution tests |
 | `tests/unit/test_contracts.py` | NEW | All contract type construction + validation function tests |
 | `tests/unit/test_grid_assembler.py` | NEW | `assemble_grids()` unit tests |
 | `tests/unit/test_prior_store.py` | NEW | Prior store tile selection, DOY interpolation, spectral projection |
 | `tests/unit/test_brdf_whittaker.py` | NEW | Route A Whittaker gap-filling and sensing-date evaluation via Rust smoother |
 | `tests/unit/test_brdf_monthly_composite.py` | NEW | Route B 15-month best-pixel composite logic and BRDF-quality selection |
 | `tests/unit/test_brdf_monthly_database.py` | NEW | Route B database build/query with NIR + two SWIR bands + median-summary key |
-| `tests/unit/test_spectral_mapping.py` | NEW | Appendix-D mapping for differing multispectral SRFs and direct hyperspectral→multispectral convolution |
+| `tests/unit/test_spectral_mapping.py` | NEW | Appendix-D mapping for differing multispectral RSRFs and direct hyperspectral→multispectral convolution |
 | `tests/integration/test_injection.py` | NEW | Custom provider injection + bad-provider rejection tests |
 | `tests/integration/test_orchestration.py` | NEW | Pipeline happy-path, validation-integration, concurrency tests |
 
-### 9.10 Spectral Response Function (SRF) Rollout Plan
+### 9.10 Spectral Response Function (RSRF) Rollout Plan
 
-The current Gaussian centre/FWHM approximation is not sufficient once SIAC
+The current Gaussian center/FWHM approximation is not sufficient once SIAC
 needs to distinguish between satellite platforms such as `S2A`, `S2B`, `S2C`,
-`L8`, and `L9`. The runtime needs a proper SRF plan with three separate layers:
+`L8`, and `L9`. The runtime needs a proper RSRF plan with three separate layers:
 
-1. **Source access**: how SIAC locates authoritative SRF publications
+1. **Source access**: how SIAC locates authoritative RSRF publications
 2. **Canonicalization**: how different vendor formats are converted into one SIAC format
-3. **Runtime consumption**: how LUT, emulator, and prior code use the canonical SRF
+3. **Runtime consumption**: how LUT, emulator, and prior code use the canonical RSRF
 
 The design rule is:
 
-> **If an official SRF exists for a platform, SIAC should use that SRF as the primary spectral definition.**
-> Gaussian centre/FWHM is a fallback only for sensors without published SRFs.
+> **If an official RSRF exists for a platform, SIAC should use that RSRF as the primary spectral definition.**
+> Gaussian center/FWHM is a fallback only for sensors without published RSRFs.
 
 Package boundary rule:
 - `python/siac/core/` should only hold cross-cutting contracts and config
-- canonical SRF types should live under `python/siac/domain/spectral.py`
+- canonical RSRF types should live under `python/siac/domain/spectral.py`
 - external sensor response loading should go through the `RSRF` adapter in `python/siac/adapters/rsrf.py`
 - LUT-specific aligned-kernel logic should live under `python/siac/rt/lut/`
 
-#### 9.10.1 SRF Source Access Layer
+#### 9.10.1 RSRF Source Access Layer
 
-SIAC should not fetch ad hoc SRF files from arbitrary URLs during runtime.
+SIAC should not fetch ad hoc RSRF files from arbitrary URLs during runtime.
 Instead, it should have a small source registry that points to authoritative
-sensor-specific SRF publications.
+sensor-specific RSRF publications.
 
 Implemented architecture direction:
-- `python/siac/adapters/rsrf.py` is the generic SRF loading entry point
+- `python/siac/adapters/rsrf.py` is the generic RSRF loading entry point
 - authoritative sampled curves and band specs come from the external `RSRF` package
-- SIAC should not maintain its own parallel SRF source registry or remote-download layer
+- SIAC should not maintain its own parallel RSRF source registry or remote-download layer
   - `load_sensor_config_from_local_srf_file(...)`
 - metadata-driven sensors should build a `SensorConfig` from per-band
-  centre-wavelength / FWHM metadata through a shared builder, rather than
-  pretending they all have one mission-wide tabulated RSR workbook
+  center-wavelength / FWHM metadata through a shared builder, rather than
+  pretending they all have one mission-wide tabulated RSRF workbook
 
 Planned source families:
 
 | Family | Typical source | Platforms |
 |--------|----------------|-----------|
-| ESA / Copernicus | Sentinel-2 SRF tables | `S2A`, `S2B`, `S2C` |
-| USGS / NASA | Landsat RSR tables | `L8`, `L9` |
-| NASA / NOAA | MODIS / VIIRS reference RSR | prior reference basis |
+| ESA / Copernicus | Sentinel-2 RSRF tables | `S2A`, `S2B`, `S2C` |
+| USGS / NASA | Landsat RSRF tables | `L8`, `L9` |
+| NASA / NOAA | MODIS / VIIRS reference RSRF | prior reference basis |
 | User-local | CSV / TSV / NetCDF provided by user | custom sensors |
 
 Sentinel-2 source note:
@@ -1661,40 +1661,40 @@ Cross-sensor source inventory currently identified:
 
 | Sensor / platform | Access pattern | Spectral definition | Official source |
 |------------------|----------------|---------------------|-----------------|
-| `MSI / S2A` | remote official file | tabulated RSR | [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission) -> [S2 documents SRF section](https://sentiwiki.copernicus.eu/web/s2-documents?inheritRedirect=true#S2Documents-SPECTRALRESPONSEFUNCTIONS) |
-| `MSI / S2B` | remote official file | tabulated RSR | same as `S2A` |
-| `MSI / S2C` | remote official file | tabulated RSR | same as `S2A` |
-| `OLI / L8` | remote catalog / export | tabulated RSR | [USGS Landsat Spectral Characteristics Viewer](https://landsat.usgs.gov/spectral-characteristics-viewer) |
-| `OLI-2 / L9` | remote catalog / export | tabulated RSR | [USGS Landsat Spectral Characteristics Viewer](https://landsat.usgs.gov/spectral-characteristics-viewer) |
-| `MODIS / Terra` | remote official table | tabulated RSR | [NASA Ocean Color RSR tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
-| `MODIS / Aqua` | remote official table | tabulated RSR | [NASA Ocean Color RSR tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
-| `VIIRS / SNPP` | remote official table | tabulated RSR | [NASA Ocean Color RSR tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
+| `MSI / S2A` | remote official file | tabulated RSRF | [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission) -> [S2 documents RSRF section](https://sentiwiki.copernicus.eu/web/s2-documents?inheritRedirect=true#S2Documents-SPECTRALRESPONSEFUNCTIONS) |
+| `MSI / S2B` | remote official file | tabulated RSRF | same as `S2A` |
+| `MSI / S2C` | remote official file | tabulated RSRF | same as `S2A` |
+| `OLI / L8` | remote catalog / export | tabulated RSRF | [USGS Landsat Spectral Characteristics Viewer](https://landsat.usgs.gov/spectral-characteristics-viewer) |
+| `OLI-2 / L9` | remote catalog / export | tabulated RSRF | [USGS Landsat Spectral Characteristics Viewer](https://landsat.usgs.gov/spectral-characteristics-viewer) |
+| `MODIS / Terra` | remote official table | tabulated RSRF | [NASA Ocean Color RSRF tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
+| `MODIS / Aqua` | remote official table | tabulated RSRF | [NASA Ocean Color RSRF tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
+| `VIIRS / SNPP` | remote official table | tabulated RSRF | [NASA Ocean Color RSRF tables](https://oceancolor.gsfc.nasa.gov/resources/docs/rsr_tables/) |
 | `VIIRS / NOAA-20` | remote official monitoring page | tabulated / ancillary files | [NOAA STAR ICVS VIIRS N20](https://www.star.nesdis.noaa.gov/icvs/status_N20_VIIRS.php) |
 | `VIIRS / NOAA-21` | remote official monitoring page | tabulated / ancillary files | [NOAA STAR ICVS VIIRS N21](https://www.star.nesdis.noaa.gov/icvs/status_N21_VIIRS.php) |
-| `OLCI / S3A` | remote official document set | tabulated RSR | SentiWiki Sentinel-3 OLCI instrument performance documents |
-| `OLCI / S3B` | remote official document set | tabulated RSR | SentiWiki Sentinel-3 OLCI instrument performance documents |
-| `SLSTR / S3A` | remote official document set | tabulated RSR | SentiWiki Sentinel-3 SLSTR instrument performance documents |
+| `OLCI / S3A` | remote official document set | tabulated RSRF | SentiWiki Sentinel-3 OLCI instrument performance documents |
+| `OLCI / S3B` | remote official document set | tabulated RSRF | SentiWiki Sentinel-3 OLCI instrument performance documents |
+| `SLSTR / S3A` | remote official document set | tabulated RSRF | SentiWiki Sentinel-3 SLSTR instrument performance documents |
 | `PRISMA` | scene product metadata | metadata band characterization | [ASI PRISMA mission](https://www.asi.it/en/earth-science/prisma/) |
 | `EnMAP` | scene product metadata | metadata band characterization | [EnMAP L1/L2 product specification](https://www.enmap.org/data/doc/EN-PCV-ICD-2009-2_HSI_Product_Specification_Level1_Level2.pdf) |
 | `EMIT` | scene product metadata | metadata band characterization | [EMIT L2A reflectance ATBD](https://lpdaac.usgs.gov/documents/2147/EMIT_L2A-RFL_ATBD_V1.pdf) |
-| `PlanetScope / PS2` | remote official file | tabulated RSR | [Planet RSR access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-) |
-| `PlanetScope / PS2.SD` | remote official file | tabulated RSR | [Planet RSR access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-) |
-| `PlanetScope / PSB.SD` | remote official file | tabulated RSR | [Planet RSR access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRs-) |
+| `PlanetScope / PS2` | remote official file | tabulated RSRF | [Planet RSRF access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRFs-) |
+| `PlanetScope / PS2.SD` | remote official file | tabulated RSRF | [Planet RSRF access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRFs-) |
+| `PlanetScope / PSB.SD` | remote official file | tabulated RSRF | [Planet RSRF access article](https://support.planet.com/hc/en-us/articles/4411132050451-How-Can-I-Access-Relative-Spectral-Responses-RSRFs-) |
 
 Design rule from that inventory:
-- remote tabulated SRFs and metadata-derived band characterizations are not the
+- remote tabulated RSRFs and metadata-derived band characterizations are not the
   same class of source and must not share one parser path
 - a source registry should tell the runtime whether to fetch a remote file,
   parse product metadata, or expect a user-supplied local file
 - hyperspectral missions such as `PRISMA`, `EnMAP`, and `EMIT` should be
-  treated as metadata-driven first, unless a stable official tabulated RSR file
+  treated as metadata-driven first, unless a stable official tabulated RSRF file
   is verified later
 
 Planned source manifest contract:
 
 ```python
 @dataclass(frozen=True)
-class SRFSourceSpec:
+class RSRFSourceSpec:
     source_id: str
     sensor_id: str
     satellite_id: str
@@ -1711,18 +1711,18 @@ Rules:
 - only official or user-explicit sources are allowed
 - the manifest must pin version and checksum where possible
 - remote access is a build/update task, not a runtime dependency
-- runtime code reads from a local SRF repository generated from the manifest
+- runtime code reads from a local RSRF repository generated from the manifest
 
-#### 9.10.2 Canonical SIAC SRF Format
+#### 9.10.2 Canonical SIAC RSRF Format
 
-Raw SRF publications come in different file layouts, wavelength units, and band
+Raw RSRF publications come in different file layouts, wavelength units, and band
 names. SIAC needs one canonical in-memory format for all sensors.
 
 Planned canonical object:
 
 ```python
 @dataclass(frozen=True)
-class SpectralResponseFunction:
+class RelativeSpectralResponse:
     sensor_id: str
     satellite_id: str
     band_name: str
@@ -1732,7 +1732,7 @@ class SpectralResponseFunction:
     source_id: str | None = None
     source_version: str | None = None
     source_url: str | None = None
-    centre_wavelength_nm: float | None = None
+    center_wavelength_nm: float | None = None
     effective_wavelength_nm: float | None = None
     fwhm_nm: float | None = None
 ```
@@ -1741,7 +1741,7 @@ Canonicalization rules:
 - `wavelengths_nm` is strictly ascending and stored in nanometres
 - `response` is dimensionless, non-negative, finite, and **area-normalized**
 - `response_raw` optionally preserves the published relative-response values
-- `centre_wavelength_nm`, `effective_wavelength_nm`, and `fwhm_nm` are derived diagnostics, not the authoritative definition
+- `center_wavelength_nm`, `effective_wavelength_nm`, and `fwhm_nm` are derived diagnostics, not the authoritative definition
 - band identity is always `(sensor_id, satellite_id, band_name)`, not just `band_name`
 
 The runtime should integrate with `response`, not with `response_raw`.
@@ -1755,8 +1755,8 @@ This avoids ambiguity around peak-normalized curves from vendor files.
 
 #### 9.10.3 Raw Source Conversion Pipeline
 
-Each raw SRF family should have a dedicated converter that maps its native file
-format into `SpectralResponseFunction`.
+Each raw RSRF family should have a dedicated converter that maps its native file
+format into `RelativeSpectralResponse`.
 
 Planned conversion stages:
 
@@ -1767,45 +1767,45 @@ Planned conversion stages:
 5. clip tiny negative numerical artefacts to zero
 6. preserve the published response as `response_raw`
 7. compute normalized `response`
-8. derive `effective_wavelength_nm`, `centre_wavelength_nm`, and `fwhm_nm`
-9. validate and store in the local SRF repository
+8. derive `effective_wavelength_nm`, `center_wavelength_nm`, and `fwhm_nm`
+9. validate and store in the local RSRF repository
 
 Planned converters:
 
 | Converter | Input families | Notes |
 |----------|----------------|-------|
-| `parse_esa_s2_srf(...)` | Sentinel-2 ESA SRF tables | source is the SentiWiki `S2 Mission` page and its linked `S2-SRF` document; distinguish `S2A`, `S2B`, `S2C` explicitly |
-| `parse_usgs_landsat_rsr(...)` | Landsat 8/9 RSR files | keep `L8` and `L9` separate |
-| `parse_reference_rsr(...)` | MODIS / VIIRS RSR tables | used by surface-prior projection |
-| `parse_user_srf(...)` | user CSV / TSV / NetCDF | requires explicit metadata mapping |
+| `parse_esa_s2_rsrf(...)` | Sentinel-2 ESA RSRF tables | source is the SentiWiki `S2 Mission` page and its linked `S2-SRF` document; distinguish `S2A`, `S2B`, `S2C` explicitly |
+| `parse_usgs_landsat_rsrf(...)` | Landsat 8/9 RSRF files | keep `L8` and `L9` separate |
+| `parse_reference_rsrf(...)` | MODIS / VIIRS RSRF tables | used by surface-prior projection |
+| `parse_user_rsrf(...)` | user CSV / TSV / NetCDF | requires explicit metadata mapping |
 
-#### 9.10.4 Local SRF Repository
+#### 9.10.4 Local RSRF Repository
 
-Runtime code should not know about raw vendor files. It should resolve SRFs
+Runtime code should not know about raw vendor files. It should resolve RSRFs
 from a local SIAC repository.
 
 Planned repository responsibilities:
-- load SRF by `(sensor_id, satellite_id, band_name)`
+- load RSRF by `(sensor_id, satellite_id, band_name)`
 - expose all bands for a platform
-- return provenance metadata with each SRF
-- cache interpolation of SRFs onto the active LUT wavelength grid
+- return provenance metadata with each RSRF
+- cache interpolation of RSRFs onto the active LUT wavelength grid
 
 Planned API:
 
 ```python
-class SRFRepository:
+class RSRFRepository:
     def get_band_srf(
         self,
         sensor_id: str,
         satellite_id: str,
         band_name: str,
-    ) -> SpectralResponseFunction: ...
+    ) -> RelativeSpectralResponse: ...
 
     def get_sensor_srfs(
         self,
         sensor_id: str,
         satellite_id: str,
-    ) -> dict[str, SpectralResponseFunction]: ...
+    ) -> dict[str, RelativeSpectralResponse]: ...
 ```
 
 Storage choice:
@@ -1813,43 +1813,43 @@ Storage choice:
 - actual on-disk format can be `zarr`, `netcdf`, or `npz`
 - the repository API is the stable boundary; storage format is not
 
-#### 9.10.5 SRF Storage Policy for LUT Usage
+#### 9.10.5 RSRF Storage Policy for LUT Usage
 
-The SRF is used by the dense spectral LUT backend, so the storage policy must
+The RSRF is used by the dense spectral LUT backend, so the storage policy must
 be designed around LUT convolution rather than around plotting convenience.
 
 The decision is:
 
-> **Do not store the authoritative SRF on the LUT wavelength grid.**
-> Store the canonical SRF in a sensor-native form, then derive a LUT-aligned
+> **Do not store the authoritative RSRF on the LUT wavelength grid.**
+> Store the canonical RSRF in a sensor-native form, then derive a LUT-aligned
 > kernel for the active LUT grid and cache that derived kernel.
 
-This avoids coupling SRF content to one LUT version or wavelength spacing.
+This avoids coupling RSRF content to one LUT version or wavelength spacing.
 Different LUT products may use different wavelength axes, so storing the
-authoritative SRF on the LUT grid would duplicate data and make SRFs depend on
+authoritative RSRF on the LUT grid would duplicate data and make RSRFs depend on
 the current LUT implementation.
 
-##### Canonical SRF storage
+##### Canonical RSRF storage
 
-Canonical SRFs should be stored only over their real spectral support:
+Canonical RSRFs should be stored only over their real spectral support:
 
 - start at the first wavelength where the published response becomes non-zero
 - end at the last wavelength where the published response is non-zero
 - preserve one explicit zero-valued boundary sample on each side if the source
   format provides it, or synthesize equivalent boundary zeros during conversion
-- do **not** pad the canonical SRF over the full LUT wavelength domain
+- do **not** pad the canonical RSRF over the full LUT wavelength domain
 
 This means the canonical object is compact and physically meaningful. The
-authoritative SRF is the band support, not a large mostly-zero vector.
+authoritative RSRF is the band support, not a large mostly-zero vector.
 
 ##### Derived LUT-aligned kernel
 
-For actual convolution, the runtime should build a derived SRF kernel on the
+For actual convolution, the runtime should build a derived RSRF kernel on the
 active LUT wavelength axis:
 
 ```python
 @dataclass(frozen=True)
-class AlignedSRFKernel:
+class AlignedRSRFKernel:
     sensor_id: str
     satellite_id: str
     band_name: str
@@ -1864,48 +1864,48 @@ class AlignedSRFKernel:
 
 Design rules:
 - `wavelengths_nm` must be a slice of the LUT wavelength coordinate
-- `response_on_lut` is the canonical SRF interpolated onto the LUT axis
+- `response_on_lut` is the canonical RSRF interpolated onto the LUT axis
 - only the support slice should be stored, not the full zero-padded LUT axis
 - `start_index:end_index` maps the support slice back into the parent LUT axis
 - `solar_weighted_response_on_lut` is optional and only valid for LUT terms that
   require irradiance-weighted convolution
 
-This gives the backend a structured SRF representation without making the SRF
+This gives the backend a structured RSRF representation without making the RSRF
 repository depend on LUT layout.
 
 ##### Wavelength spacing policy
 
-The canonical SRF should keep the source publication's effective sampling after
-cleanup. SIAC should **not** force all sensors onto a universal SRF spacing such
-as 1 nm, and should **not** force canonical SRFs onto the LUT spacing.
+The canonical RSRF should keep the source publication's effective sampling after
+cleanup. SIAC should **not** force all sensors onto a universal RSRF spacing such
+as 1 nm, and should **not** force canonical RSRFs onto the LUT spacing.
 
 Instead:
 - the LUT remains authoritative for convolution spacing during runtime
-- the SRF remains authoritative for the band shape in the repository
+- the RSRF remains authoritative for the band shape in the repository
 - interpolation bridges the two only when a specific LUT is active
 
-If a vendor SRF is extremely coarse or irregular, the converter may densify it
+If a vendor RSRF is extremely coarse or irregular, the converter may densify it
 as a controlled preprocessing step, but that is a source-family parser detail,
 not a global storage rule.
 
 ##### Support window for LUT subsetting
 
-LUT wavelength subsetting for a band should be driven by the tabulated SRF
+LUT wavelength subsetting for a band should be driven by the tabulated RSRF
 support, not by Gaussian sigma rules.
 
 Planned rule:
-- find the SRF support bounds from the canonical SRF
+- find the RSRF support bounds from the canonical RSRF
 - map them onto the LUT wavelength axis
 - expand the selected LUT slice by one wavelength sample on each side when
   available, so numerical integration at the support edge remains stable
-- interpolate the SRF only on that slice
+- interpolate the RSRF only on that slice
 
-This replaces the current "centre wavelength ± sigma window" approximation for
-platforms that have a real SRF.
+This replaces the current "center wavelength ± sigma window" approximation for
+platforms that have a real RSRF.
 
 ##### Persisted artifacts
 
-Only the canonical SRF repository is authoritative.
+Only the canonical RSRF repository is authoritative.
 Derived LUT-aligned kernels are cache artifacts.
 
 Allowed persistence options for derived kernels:
@@ -1919,42 +1919,42 @@ with different spacing or bounds.
 #### 9.10.6 Runtime Integration Rules
 
 `SensorConfig` and `ObservationBundle` must carry the actual platform identity
-used to resolve SRFs. This means Sentinel-2 processing must stop collapsing
+used to resolve RSRFs. This means Sentinel-2 processing must stop collapsing
 unknown platforms to `S2A`.
 
 Required runtime changes:
-- `SensorConfig` should reference canonical SRFs by platform-specific key
+- `SensorConfig` should reference canonical RSRFs by platform-specific key
 - `Sentinel2Preprocessor` must resolve `S2A`, `S2B`, and `S2C` explicitly
 - Landsat paths must keep `L8` and `L9` distinct
-- `SpectralBandDescriptor` should treat tabulated SRF as first-class, not optional decoration
-- LUT spectral convolution must use the tabulated SRF when available
-- emulator and prior-projection code should use derived spectral metadata from the SRF repository, not hand-written constants
+- `SensorBand` should treat tabulated RSRF as first-class, not optional decoration
+- LUT spectral convolution must use the tabulated RSRF when available
+- emulator and prior-projection code should use derived spectral metadata from the RSRF repository, not hand-written constants
 
 Interpolation policy:
-- canonical SRFs remain in their native tabulated form
+- canonical RSRFs remain in their native tabulated form
 - at runtime they are interpolated onto the active LUT wavelength axis
 - interpolation is cached per `(lut_id, platform, band, wavelength_axis)`
-- Gaussian fallback is only allowed when the repository has no SRF for that platform
+- Gaussian fallback is only allowed when the repository has no RSRF for that platform
 
-#### 9.10.7 Expected SRF Design by Sensor Family
+#### 9.10.7 Expected RSRF Design by Sensor Family
 
 Platform specificity must be represented at the right level:
 
-| Sensor family | Required SRF identity | Notes |
+| Sensor family | Required RSRF identity | Notes |
 |--------------|------------------------|-------|
-| Sentinel-2 MSI | `(MSI, S2A, band)`, `(MSI, S2B, band)`, `(MSI, S2C, band)` | platform-specific SRFs are required |
-| Landsat OLI | `(OLI, L8, band)`, `(OLI, L9, band)` | platform-specific RSRs are required |
+| Sentinel-2 MSI | `(MSI, S2A, band)`, `(MSI, S2B, band)`, `(MSI, S2C, band)` | platform-specific RSRFs are required |
+| Landsat OLI | `(OLI, L8, band)`, `(OLI, L9, band)` | platform-specific RSRFs are required |
 | MODIS / VIIRS reference | reference-sensor band id | used for prior-space mapping |
 | Custom sensors | `(sensor_id, satellite_id, band)` | supplied by user manifest |
 
-Detector-level SRFs are out of scope for the first implementation.
-The first stable unit is **platform-level band SRF**. If detector-specific SRFs
+Detector-level RSRFs are out of scope for the first implementation.
+The first stable unit is **platform-level band RSRF**. If detector-specific RSRFs
 are needed later, they should extend the key with an optional detector id
 without changing the platform-level API.
 
 #### 9.10.8 Validation and Test Plan
 
-SRF handling needs both parser tests and physics tests.
+RSRF handling needs both parser tests and physics tests.
 
 Required tests:
 
@@ -1965,28 +1965,28 @@ Required tests:
 | unit | normalization | `response >= 0`, finite, area integrates to `≈ 1` |
 | unit | wavelength cleanup | sorted ascending, duplicates removed |
 | unit | derived diagnostics | effective wavelength and FWHM are finite |
-| unit | repository lookup | correct platform-specific SRF returned |
+| unit | repository lookup | correct platform-specific RSRF returned |
 | unit | LUT-kernel build | support slice and aligned weights are correct |
-| integration | Sentinel-2 platform split | `S2A`, `S2B`, `S2C` resolve different SRFs |
-| integration | LUT convolution | tabulated SRF path is used when SRF exists |
-| regression | fallback control | Gaussian path only used for sensors without SRF |
+| integration | Sentinel-2 platform split | `S2A`, `S2B`, `S2C` resolve different RSRFs |
+| integration | LUT convolution | tabulated RSRF path is used when RSRF exists |
+| regression | fallback control | Gaussian path only used for sensors without RSRF |
 
 #### 9.10.9 Planned Files
 
 | File | Action | Description |
 |------|--------|-------------|
-| `python/siac/domain/spectral.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
+| `python/siac/domain/spectral.py` | NEW | `RelativeSpectralResponse` dataclass + validation helpers |
 | `python/siac/adapters/rsrf.py` | NEW | Thin adapter over the external `RSRF` package |
-| `python/siac/rt/lut/srf_kernel.py` | NEW | LUT-aligned SRF kernel builder and cache-key helpers |
+| `python/siac/algorithms/rt/lut/rsrf_kernel.py` | NEW | LUT-aligned RSRF kernel builder and cache-key helpers |
 | external `RSRF` data root | REQUIRED | authoritative sampled curves and band specifications |
-| `tools/build_srf_repository.py` | NEW | build/update tool from official raw SRF sources |
-| `python/siac/core/spectral.py` | MODIFY | consume `SpectralResponseFunction` directly |
-| `python/siac/core/types.py` | MODIFY | make band identity platform-specific and SRF-aware |
+| `tools/build_rsrf_repository.py` | NEW | build/update tool from official raw RSRF sources |
+| `python/siac/core/spectral.py` | MODIFY | consume `RelativeSpectralResponse` directly |
+| `python/siac/core/types.py` | MODIFY | make band identity platform-specific and RSRF-aware |
 | `python/siac/satellite/sentinel2.py` | MODIFY | resolve `S2A` / `S2B` / `S2C` explicitly |
-| `python/siac/rt/lut/backend.py` | MODIFY | interpolate and use tabulated SRFs in convolution |
-| `tests/unit/test_srf.py` | NEW | SRF parsing, normalization, repository tests |
-| `tests/unit/test_srf_kernel.py` | NEW | LUT-grid alignment and support-window tests |
-| `tests/integration/test_srf_runtime.py` | NEW | end-to-end platform-specific SRF usage |
+| `python/siac/rt/lut/backend.py` | MODIFY | interpolate and use tabulated RSRFs in convolution |
+| `tests/unit/test_relative_spectral_response.py` | NEW | RSRF parsing, normalization, repository tests |
+| `tests/unit/test_rsrf_kernel.py` | NEW | LUT-grid alignment and support-window tests |
+| `tests/integration/test_rsrf_runtime.py` | NEW | end-to-end platform-specific RSRF usage |
 
 ---
 
@@ -2047,7 +2047,7 @@ Not a data provider — a compute module used by M5 and M6. Implementations:
 |---------|-------|----------|-----------------|-----------------|
 | `EmulatorBackend` | Fast | Analytical | `RTCoefficients` | S2, L8 (pre-trained) |
 | `CoefficientLUTBackend` | Medium | Numerical | `RTCoefficients` | Multispectral sensors with pre-banded LUT support |
-| `SpectralLUTBackend` | Medium-Slow | Numerical | `RTCoefficients` after SRF convolution | Hyperspectral or sensors needing on-the-fly SRF convolution |
+| `SpectralLUTBackend` | Medium-Slow | Numerical | `RTCoefficients` after RSRF convolution | Hyperspectral or sensors needing on-the-fly RSRF convolution |
 | `Py6SBackend` | Slow | Numerical | Usually `RTCoefficients` | Any sensor |
 
 Two distinct planning axes must be kept explicit:
@@ -2134,7 +2134,7 @@ The store remains the single place that resolves precedence. Adapters must not r
 
 `CDSE` keeps SIAC-scoped variables because it does not have a stable de facto standard comparable to the other providers.
 The same adapter should also mint temporary S3 credentials for `s3://eodata/...`
-access so CDSE catalogue and object-store usage stay under one auth boundary.
+access so CDSE catalog and object-store usage stay under one auth boundary.
 
 ### Adapter contracts
 

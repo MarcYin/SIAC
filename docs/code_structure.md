@@ -4,6 +4,9 @@ Status note (2026-03-19): the package has been cut over to the new layered
 layout. The old `siac.core.*` modules, the old top-level `siac.pipeline`
 module, and the transitional `siac.siac` / `siac.io` facades have been removed.
 
+Naming rules for new code live in
+[`docs/naming-conventions.md`](/Users/fengyin/Documents/SIAC/docs/naming-conventions.md).
+
 ## Package Layout
 
 ```text

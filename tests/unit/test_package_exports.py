@@ -7,6 +7,20 @@ import pytest
 import siac
 import siac.config as siac_config
 import siac.storage as siac_storage
+from siac.adapters import (
+    load_band_rsrf,
+    load_band_srf_from_rsrf,
+    load_sensor_config_from_rsrf,
+    load_sensor_config_with_rsrf,
+)
+from siac.algorithms.rt.lut.rsrf_kernel import (
+    AlignedRSRFKernel,
+    AlignedSRFKernel,
+    build_aligned_rsrf_kernel,
+    build_aligned_srf_kernel,
+)
+from siac.algorithms.surface import load_reference_rsr, load_reference_rsrf
+from siac.domain import RelativeSpectralResponse, SpectralResponseFunction
 
 
 def test_siac_module_lazy_exports_and_unknown_attr():
@@ -34,3 +48,12 @@ def test_siac_storage_keeps_legacy_package_exports():
     assert callable(siac_storage.read_multiband)
     assert callable(siac_storage.write_dataset)
     assert callable(siac_storage.build_stac_item)
+
+
+def test_spectral_rename_keeps_legacy_aliases():
+    assert SpectralResponseFunction is RelativeSpectralResponse
+    assert load_band_srf_from_rsrf is load_band_rsrf
+    assert load_sensor_config_from_rsrf is load_sensor_config_with_rsrf
+    assert load_reference_rsr is load_reference_rsrf
+    assert AlignedSRFKernel is AlignedRSRFKernel
+    assert build_aligned_srf_kernel is build_aligned_rsrf_kernel

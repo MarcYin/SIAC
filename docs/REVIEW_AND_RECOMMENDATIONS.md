@@ -90,19 +90,15 @@ The plan says M1 returns an `ObservationBundle`. The implementation returns `dic
 
 **Recommendation:** Add `SENTINEL2C_CONFIG` and `LANDSAT9_CONFIG`. S2C band specs are nearly identical to S2A/B but with updated SRFs. Landsat 9 OLI-2 is nearly identical to Landsat 8 OLI.
 
-### 2.6 Duplicate spectral types: `SpectralBandDescriptor` vs `SensorBand`
+### 2.6 Historical spectral-band duplication
 
-Two near-identical dataclasses exist with different field names:
+This issue has since been resolved. `SensorBand` is now the canonical spectral
+band type, and the duplicate spectral-band proposal was removed from the active
+implementation.
 
-| Field | `SpectralBandDescriptor` | `SensorBand` |
-|---|---|---|
-| FWHM | `fwhm_nm` | `bandwidth` |
-| Resolution | `resolution_m` | `resolution` |
-| Band index | absent | `band_index` |
+**Impact:** Historical only. Keep future work on the single `SensorBand` model.
 
-**Impact:** Confusion, potential adaptation bugs.
-
-**Recommendation:** Unify into a single type. Either extend `SensorBand` with the spectral methods (`gaussian_response()`, `effective_response()`) or create an adapter. The plan §9.3 mentions using `SensorBand`; `SpectralBandDescriptor` should be deprecated or merged.
+**Recommendation:** Do not reintroduce a parallel spectral-band type.
 
 ### 2.7 Missing dask integration tests
 
@@ -214,7 +210,7 @@ The pipeline already has `_preload_lut()` running in parallel with M2/M3. Verify
 | **P1** | Align `AerosolSolver` protocol (#2.1) | Medium | Type safety |
 | **P1** | Replace `assert` with exceptions (#3.2) | Low | Production safety |
 | **P1** | Add S2C + L9 configs (#2.5) | Low | Sensor coverage |
-| **P1** | Unify `SpectralBandDescriptor`/`SensorBand` (#2.6) | Medium | Reduces confusion |
+| **P1** | Keep one canonical `SensorBand` type (#2.6) | Medium | Reduces confusion |
 | **P2** | Preprocessor → `ObservationBundle` return (#2.2) | Medium | Type consistency |
 | **P2** | Exception hierarchy (#3.1) | Low | Better error handling |
 | **P2** | Structured logging (#3.3) | Medium | Observability |

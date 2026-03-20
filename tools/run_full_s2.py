@@ -374,18 +374,18 @@ def _resolve_output_dir(base_output_dir: Path, input_path: str | Path) -> Path:
 def main() -> int:
     args = parse_args()
     setup_logging(args.log_level)
-    cfg = _build_config(args)
+    config = _build_config(args)
 
     aoi = AOI.from_bounds(tuple(args.aoi_bbox), crs=args.aoi_crs) if args.aoi_bbox else None
 
     logger.info("Resolving Sentinel-2 input from query: %s", args.query)
-    input_path = resolve_s2_input(args.query, cfg)
+    input_path = resolve_s2_input(args.query, config)
     logger.info("Using local SAFE path: %s", input_path)
     output_dir = _resolve_output_dir(args.output_dir, input_path)
     logger.info("Resolved output directory: %s", output_dir)
 
-    cloud_cfg = cfg.cloud_mask.model_dump(exclude={"user_callable"})
-    pp = Sentinel2Preprocessor(config={"cloud_mask": cloud_cfg})
+    cloud_mask_config = config.cloud_mask.model_dump(exclude={"user_callable"})
+    pp = Sentinel2Preprocessor(config={"cloud_mask": cloud_mask_config})
     obs_capture: dict[str, ObservationBundle] = {}
 
     def _preprocess(path: Path, runtime_aoi: AOI | None = None) -> ObservationBundle:
@@ -396,7 +396,7 @@ def main() -> int:
 
     logger.info("Starting SIAC full pipeline run")
     result = siac_process(
-        cfg,
+        config,
         Path(input_path),
         aoi=aoi,
         preprocessor=_preprocess,
@@ -407,8 +407,8 @@ def main() -> int:
         result.boa,
         output_dir / "boa",
         as_cog=True,
-        compression=cfg.output.compression,
-        dtype=cfg.output.boa_dtype,
+        compression=config.output.compression,
+        dtype=config.output.boa_dtype,
     )
 
     atmo_ds = xr.Dataset(
@@ -423,7 +423,7 @@ def main() -> int:
         xr.Dataset({"cloud_mask": result.cloud_mask.astype("uint8")}),
         output_dir / "qa",
         as_cog=True,
-        compression=cfg.output.compression,
+        compression=config.output.compression,
         dtype="uint8",
     )
 

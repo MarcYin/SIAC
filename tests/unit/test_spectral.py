@@ -9,7 +9,7 @@ import pytest
 import xarray as xr
 
 from siac.algorithms.surface.reference_spectral import (
-    load_reference_rsr,
+    load_reference_rsrf,
     reference_to_sensor,
     sensor_to_reference,
 )
@@ -19,13 +19,13 @@ from siac.domain import SensorBand
 
 class TestSensorBand:
     def test_gaussian_only_construction(self):
-        """Gaussian-only (no SRF arrays) -> has_srf == False."""
+        """Gaussian-only (no RSRF arrays) -> has_rsrf == False."""
         b = SensorBand("B02", 490.0, 65.0, 10.0, 0)
-        assert not b.has_srf
+        assert not b.has_rsrf
         assert b.center_wavelength == 490.0
 
-    def test_with_srf(self):
-        """Full SRF construction -> has_srf == True."""
+    def test_with_rsrf(self):
+        """Full RSRF construction -> has_rsrf == True."""
         wl = np.linspace(460, 520, 61)
         resp = np.exp(-0.5 * ((wl - 490) / 15) ** 2)
         b = SensorBand(
@@ -34,10 +34,10 @@ class TestSensorBand:
             65.0,
             10.0,
             0,
-            srf_wavelengths_nm=wl,
-            srf_response=resp,
+            rsrf_wavelengths_nm=wl,
+            rsrf_response=resp,
         )
-        assert b.has_srf
+        assert b.has_rsrf
 
     def test_wavelength_um(self):
         """550 nm -> 0.55 µm."""
@@ -58,47 +58,66 @@ class TestSensorBand:
         peak_idx = np.argmax(resp)
         assert wl[peak_idx] == pytest.approx(490.0, abs=1.0)
 
-    def test_effective_response_uses_srf_when_available(self):
-        """effective_response should use SRF when available, not Gaussian."""
-        wl_srf = np.array([480.0, 490.0, 500.0])
-        resp_srf = np.array([0.2, 1.0, 0.3])
+    def test_effective_response_uses_rsrf_when_available(self):
+        """effective_response should use RSRF when available, not Gaussian."""
+        wl_rsrf = np.array([480.0, 490.0, 500.0])
+        resp_rsrf = np.array([0.2, 1.0, 0.3])
         b = SensorBand(
             "B02",
             490.0,
             65.0,
             10.0,
             0,
-            srf_wavelengths_nm=wl_srf,
-            srf_response=resp_srf,
+            rsrf_wavelengths_nm=wl_rsrf,
+            rsrf_response=resp_rsrf,
         )
-        # At 490 nm, should return 1.0 from the SRF
+        # At 490 nm, should return 1.0 from the RSRF
         result = b.effective_response(np.array([490.0]))
         assert result[0] == pytest.approx(1.0)
 
+    def test_legacy_srf_names_remain_supported(self):
+        """Backward-compatible SRF aliases should map onto the renamed RSRF fields."""
+        wl = np.array([480.0, 490.0, 500.0])
+        resp = np.array([0.2, 1.0, 0.3])
+        b = SensorBand(
+            "B02",
+            490.0,
+            65.0,
+            10.0,
+            0,
+            srf_wavelengths_nm=wl,
+            srf_response=resp,
+        )
 
-# ── Reference RSR loading ─────────────────────────────────────────────
+        assert b.has_srf
+        assert b.has_rsrf
+        assert np.array_equal(b.srf_wavelengths_nm, wl)
+        assert np.array_equal(b.srf_response, resp)
 
-class TestLoadReferenceRSR:
+
+# ── Reference RSRF loading ────────────────────────────────────────────
+
+class TestLoadReferenceRSRF:
     def test_load_modis(self):
         """MODIS should return 7 bands with non-empty arrays."""
-        rsr = load_reference_rsr("MODIS")
-        assert len(rsr) == 7
-        for _name, (wl, resp) in rsr.items():
+        rsrf = load_reference_rsrf("MODIS")
+        assert len(rsrf) == 7
+        for _name, (wl, resp) in rsrf.items():
             assert len(wl) > 0
             assert len(resp) > 0
             assert resp.max() > 0
 
     def test_load_modis_wavelengths_reasonable(self):
         """MODIS band wavelengths should be in ~400-2500 nm range."""
-        rsr = load_reference_rsr("MODIS")
-        for _name, (wl, _) in rsr.items():
+        rsrf = load_reference_rsrf("MODIS")
+        for _name, (wl, _) in rsrf.items():
             assert wl.min() >= 350.0
             assert wl.max() <= 2500.0
 
     def test_load_unknown_raises(self):
         """Unknown sensor should raise ValueError."""
         with pytest.raises(ValueError, match="Unknown reference sensor"):
-            load_reference_rsr("UNKNOWN")
+            load_reference_rsrf("UNKNOWN")
 
 
 # ── Spectral convolution functions ────────────────────────────────────

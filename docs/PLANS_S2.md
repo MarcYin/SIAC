@@ -7,7 +7,7 @@ All Sentinel-2 work follows the core plan's modular contracts:
 - M1: `Sentinel2Preprocessor` class → returns `ObservationBundle`
 - M3: S2-specific surface prior options → returns `SurfacePrior`
 - `S2DataBackend` protocol for data access (search + download) — sits before M1
-- `SpectralBandDescriptor` / `SensorConfig` for band definitions
+- `SensorBand` / `SensorConfig` for band definitions
 - AOI-scoped data access rules
 - `sensor_to_reference()` / `reference_to_sensor()` functions for reference-band mapping
 
@@ -118,7 +118,7 @@ class S2DataBackend(Protocol):
 ```
 
 Two concrete backends:
-1. **`CopernicusDataspaceBackend`** — CDSE S3 (primary, full catalogue search)
+1. **`CopernicusDataspaceBackend`** — CDSE S3 (primary, full catalog search)
 2. **`GCSSentinel2Backend`** — GCS public bucket (no auth, MGRS-based listing only)
 
 ### Phase 1: Data Types & Query Model
@@ -225,7 +225,7 @@ CDSE_PREFIX = "Sentinel-2/MSI/L1C"
 CDSE_ODATA_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1"
 
 def search_cdse(query: S2Query, access_key=None, secret_key=None) -> list[S2Product]:
-    """Search CDSE OData catalogue for S2 products."""
+    """Search CDSE OData catalog for S2 products."""
     ...
 
 def download_cdse(product: S2Product, dest_dir: Path, access_key=None, secret_key=None) -> Path:
@@ -233,7 +233,7 @@ def download_cdse(product: S2Product, dest_dir: Path, access_key=None, secret_ke
     ...
 ```
 
-**Why CDSE S3 over HTTP zip download**: S3 allows downloading individual bands/files (for future AOI-scoped partial reads), supports resume, and avoids the need to unzip. The OData catalogue API is free and doesn't require tokens for searching.
+**Why CDSE S3 over HTTP zip download**: S3 allows downloading individual bands/files (for future AOI-scoped partial reads), supports resume, and avoids the need to unzip. The OData catalog API is free and doesn't require tokens for searching.
 
 ### Phase 3: Google Cloud Storage Backend
 
@@ -252,7 +252,7 @@ def download_gcs(product: S2Product, dest_dir: Path) -> Path:
     ...
 ```
 
-**Trade-offs**: GCS is public (no auth), fast, but has no catalogue search — only prefix listing. Good when you know the MGRS tile. CDSE has full catalogue search but requires credentials.
+**Trade-offs**: GCS is public (no auth), fast, but has no catalog search — only prefix listing. Good when you know the MGRS tile. CDSE has full catalog search but requires credentials.
 
 **S2DataBackend protocol** (kept as a protocol because backends bundle search + download):
 ```python
@@ -331,16 +331,16 @@ def search_sentinel2(tile=None, date=None, start_date=None, end_date=None,
 ## 3. S2 Spectral Band Definitions
 
 Sentinel-2 MSI has 13 bands across three native resolutions. The following
-`SpectralBandDescriptor` definitions map S2 into the core plan's sensor-agnostic
+`SensorBand` definitions map S2 into the core plan's sensor-agnostic
 spectral model (see [Core Plan §9.2](PLANS.md#92-spectral-band-descriptor)).
 
-Authoritative SRF source:
+Authoritative RSRF source:
 - [SentiWiki S2 Mission](https://sentiwiki.copernicus.eu/web/s2-mission)
 - the implementation should follow the linked `Sentinel-2 Spectral Response Functions (S2-SRF)` document from that page / its linked documents page, rather than hard-coding a transient attachment URL
 
 ### S2A/S2B Band Table
 
-| Band | Name | Centre λ (nm) S2A | Centre λ (nm) S2B | FWHM (nm) | Resolution (m) | Spectral Region | Role in SIAC |
+| Band | Name | Center λ (nm) S2A | Center λ (nm) S2B | FWHM (nm) | Resolution (m) | Spectral Region | Role in SIAC |
 |------|------|--------------------|--------------------|-----------|----------------|-----------------|-------------|
 | B01 | Coastal | 443.9 | 442.3 | 27 | 60 | Coastal/Deep blue | Aerosol retrieval (high AOT sensitivity) |
 | B02 | Blue | 496.6 | 492.1 | 98 | 10 | Blue | Aerosol retrieval (primary) |
@@ -367,25 +367,25 @@ def build_s2_sensor_config(satellite_id: str = "S2A") -> SensorConfig:
     """
     Construct SensorConfig for Sentinel-2 MSI.
 
-    Uses actual S2A/S2B centre wavelengths and FWHMs. Full SRFs can
+    Uses actual S2A/S2B center wavelengths and FWHMs. Full RSRFs can
     optionally be loaded from the official SentiWiki `S2 Mission` page and its
     linked `Sentinel-2 Spectral Response Functions (S2-SRF)` document.
     """
-    # S2A wavelengths shown; S2B has slightly shifted centres
+    # S2A wavelengths shown; S2B has slightly shifted centers
     bands = (
-        SpectralBandDescriptor("B01", 443.9, 27.0, 60.0),
-        SpectralBandDescriptor("B02", 496.6, 98.0, 10.0),
-        SpectralBandDescriptor("B03", 560.0, 45.0, 10.0),
-        SpectralBandDescriptor("B04", 664.5, 38.0, 10.0),
-        SpectralBandDescriptor("B05", 703.9, 19.0, 20.0),
-        SpectralBandDescriptor("B06", 740.2, 18.0, 20.0),
-        SpectralBandDescriptor("B07", 782.5, 28.0, 20.0),
-        SpectralBandDescriptor("B08", 835.1, 145.0, 10.0),
-        SpectralBandDescriptor("B8A", 864.8, 33.0, 20.0),
-        SpectralBandDescriptor("B09", 945.0, 26.0, 60.0),
-        SpectralBandDescriptor("B10", 1373.5, 75.0, 60.0),
-        SpectralBandDescriptor("B11", 1613.7, 143.0, 20.0),
-        SpectralBandDescriptor("B12", 2202.4, 242.0, 20.0),
+        SensorBand("B01", 443.9, 27.0, 60.0),
+        SensorBand("B02", 496.6, 98.0, 10.0),
+        SensorBand("B03", 560.0, 45.0, 10.0),
+        SensorBand("B04", 664.5, 38.0, 10.0),
+        SensorBand("B05", 703.9, 19.0, 20.0),
+        SensorBand("B06", 740.2, 18.0, 20.0),
+        SensorBand("B07", 782.5, 28.0, 20.0),
+        SensorBand("B08", 835.1, 145.0, 10.0),
+        SensorBand("B8A", 864.8, 33.0, 20.0),
+        SensorBand("B09", 945.0, 26.0, 60.0),
+        SensorBand("B10", 1373.5, 75.0, 60.0),
+        SensorBand("B11", 1613.7, 143.0, 20.0),
+        SensorBand("B12", 2202.4, 242.0, 20.0),
     )
     return SensorConfig(
         sensor_id="MSI",

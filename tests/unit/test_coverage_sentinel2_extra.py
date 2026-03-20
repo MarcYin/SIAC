@@ -50,7 +50,7 @@ class TestSentinel2Internals:
             )
 
         monkeypatch.setattr(
-            "siac.adapters.satellite.sentinel2.load_sensor_config_from_rsrf",
+            "siac.adapters.satellite.sentinel2.load_sensor_config_with_rsrf",
             _load_config,
         )
 
@@ -100,7 +100,7 @@ class TestSentinel2Internals:
             return _Cfg() if satellite_id == "S2C" else None
 
         monkeypatch.setattr(
-            "siac.adapters.satellite.sentinel2.load_sensor_config_from_rsrf",
+            "siac.adapters.satellite.sentinel2.load_sensor_config_with_rsrf",
             _load,
         )
         assert p.sensor_config.satellite_id == "S2C"

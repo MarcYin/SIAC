@@ -136,6 +136,9 @@ siac/
 └── storage/        # Raster and product I/O helpers
 ```
 
+See the naming rules for future changes in
+[`docs/naming-conventions.md`](/Users/fengyin/Documents/SIAC/docs/naming-conventions.md).
+
 ```mermaid
 
 					graph LR
