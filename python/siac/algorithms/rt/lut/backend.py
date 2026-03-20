@@ -7,15 +7,18 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 
 from siac.algorithms.rt.lut.srf_kernel import build_aligned_srf_kernel
 from siac.algorithms.rt.lut.store import as_local_path, build_lut_store
-from siac.domain import AtmosphericState, GeometryAngles, RTCoefficients, SensorBand
+from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 from siac.srf.types import SpectralResponseFunction
+
+if TYPE_CHECKING:
+    from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
 

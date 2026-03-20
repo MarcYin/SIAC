@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 
     import xarray as xr
 
-    from siac.domain import GeometryAngles, ObservationBundle, SensorConfig
+    from siac.domain import SensorConfig
+    from siac.runtime import GeometryAngles, ObservationBundle
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ class BaseSatellitePreprocessor(ABC):
         Returns:
             A fully populated :class:`ObservationBundle`.
         """
-        from siac.domain import ObservationBundle
+        from siac.runtime import ObservationBundle
 
         raw = self.preprocess(input_path)
         return ObservationBundle(

@@ -15,17 +15,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
 from siac._rust import TwoLayerNN as _RustNN
-from siac.domain import (
-    AtmosphericState,
-    GeometryAngles,
-    RTCoefficients,
-    SensorBand,
-)
+from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
+
+if TYPE_CHECKING:
+    from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
 

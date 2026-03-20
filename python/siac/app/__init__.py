@@ -18,9 +18,27 @@ from siac.app.planning import (
     coerce_aoi_spec,
     resolve_run_config,
 )
+from siac.app.requests import (
+    AOISpec,
+    DateSpec,
+    PathLike,
+    SceneProcessRequest,
+    Sentinel2ProcessRequest,
+    Sentinel2QuerySpec,
+    Sentinel2ResolveRequest,
+    Sentinel2SearchRequest,
+)
 
 __all__ = [
+    "AOISpec",
+    "DateSpec",
     "ExecutionPlan",
+    "PathLike",
+    "SceneProcessRequest",
+    "Sentinel2ProcessRequest",
+    "Sentinel2QuerySpec",
+    "Sentinel2ResolveRequest",
+    "Sentinel2SearchRequest",
     "build_execution_plan",
     "build_preprocessor_runtime",
     "coerce_aoi_spec",

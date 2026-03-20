@@ -9,7 +9,8 @@ from siac.app.planning import build_execution_plan
 from siac.workflows.pipeline import run_pipeline
 
 if TYPE_CHECKING:
-    from siac.algorithms.correction import CorrectionResult
+    from siac.app.requests import SceneProcessRequest
+    from siac.runtime import CorrectionResult
 
 
 def save_output(result: CorrectionResult, output_path: Path | str) -> None:
@@ -38,12 +39,8 @@ def execute_plan(plan) -> CorrectionResult:
 
 
 def process_scene(
-    config,
-    input_path: Path,
+    request: SceneProcessRequest,
     *,
-    output_path: Path | str | None = None,
-    aoi=None,
-    auth=None,
     preprocessor=None,
     atmo_provider=None,
     surface_prior_provider=None,
@@ -62,11 +59,7 @@ def process_scene(
 ) -> CorrectionResult:
     """Build a runtime plan and execute it for one scene."""
     plan = build_execution_plan(
-        config,
-        input_path,
-        output_path=output_path,
-        aoi=aoi,
-        auth=auth,
+        request,
         preprocessor=preprocessor,
         atmo_provider=atmo_provider,
         surface_prior_provider=surface_prior_provider,
@@ -84,8 +77,8 @@ def process_scene(
         resolve_rt_model_fn=resolve_rt_model_fn,
     )
     result = execute_plan(plan)
-    if output_path is not None:
-        save_output(result, output_path)
+    if request.output_path is not None:
+        save_output(result, request.output_path)
     return result
 
 

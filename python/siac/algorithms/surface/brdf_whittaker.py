@@ -12,7 +12,7 @@ from siac._rust import whittaker_smooth_cube
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectance
-from siac.domain import BRDFKernelWeights, GeometryAngles, SurfacePrior
+from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
 if TYPE_CHECKING:
     from datetime import datetime

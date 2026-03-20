@@ -19,7 +19,7 @@ import numpy as np
 import xarray as xr
 
 from siac.adapters.auth import CredentialManager
-from siac.domain import AtmosphericState
+from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
     from collections.abc import Callable

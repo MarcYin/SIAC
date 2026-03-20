@@ -23,7 +23,7 @@ from siac.adapters.earthdata_common import (
     reduce_orbit_stack,
     reproject_native_to_target,
 )
-from siac.domain import AtmosphericState
+from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
     from datetime import datetime

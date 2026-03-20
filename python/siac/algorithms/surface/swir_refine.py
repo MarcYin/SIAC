@@ -22,17 +22,18 @@ from siac.algorithms.surface.spectral_mapping import (
     SpectralMappingConfig,
     map_multispectral_reflectance,
 )
-from siac.domain import (
+from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
     GeometryAngles,
     ObservationBundle,
-    SensorBand,
     SurfacePrior,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from siac.domain import SensorBand
 
 
 _HISTORY_YEARS = 5

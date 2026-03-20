@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
@@ -33,13 +33,11 @@ from siac._rust import (
     remap_to_coarse_grid,
 )
 from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig
-from siac.domain import (
-    AtmosphericState,
-    GeometryAngles,
-    SensorBand,
-    SurfacePrior,
-)
 from siac.domain.protocols import RTModelBackend
+from siac.runtime import AtmosphericState, GeometryAngles, SurfacePrior
+
+if TYPE_CHECKING:
+    from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
 

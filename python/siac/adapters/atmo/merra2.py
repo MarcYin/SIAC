@@ -16,7 +16,7 @@ import xarray as xr
 
 from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 from siac.adapters.data.earthaccess_source import EarthAccessSource
-from siac.domain import AtmosphericState
+from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
     from datetime import datetime

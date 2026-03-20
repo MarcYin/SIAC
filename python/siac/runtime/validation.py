@@ -1,6 +1,4 @@
-"""
-Contract validation helpers for SIAC pipeline module outputs.
-"""
+"""Validation helpers for SIAC runtime payloads."""
 
 from __future__ import annotations
 
@@ -15,7 +13,7 @@ from siac.errors import ValidationError
 if TYPE_CHECKING:
     import xarray as xr
 
-    from siac.domain.contracts import (
+    from siac.runtime.models import (
         AtmosphericState,
         CorrectionResult,
         ObservationBundle,
@@ -26,7 +24,7 @@ if TYPE_CHECKING:
 
 
 def _spatial_shape(ds: xr.Dataset) -> tuple[int, ...]:
-    """Extract (y, x) shape from an xr.Dataset."""
+    """Extract ``(y, x)`` shape from an ``xr.Dataset``."""
     if "y" in ds.dims and "x" in ds.dims:
         return (ds.sizes["y"], ds.sizes["x"])
     dims = list(ds.dims)
@@ -36,7 +34,6 @@ def _spatial_shape(ds: xr.Dataset) -> tuple[int, ...]:
 
 
 def _validate_observation_bundle(obs: ObservationBundle) -> None:
-    """Validate M1 output before passing to M4."""
     if "observation_time" not in obs.metadata:
         raise ValidationError("metadata must include 'observation_time'")
     if not isinstance(obs.metadata["observation_time"], datetime):
@@ -75,7 +72,6 @@ def _validate_observation_bundle(obs: ObservationBundle) -> None:
 
 
 def _validate_atmospheric_state(atmo: AtmosphericState) -> None:
-    """Validate M2 output before passing to M4."""
     for name, field_val in [
         ("aot_unc", atmo.aot_unc),
         ("tcwv_unc", atmo.tcwv_unc),
@@ -87,7 +83,6 @@ def _validate_atmospheric_state(atmo: AtmosphericState) -> None:
 
 
 def _validate_surface_prior(prior: SurfacePrior) -> None:
-    """Validate M3 output before passing to M4."""
     if prior.boa.shape != prior.boa_unc.shape:
         raise ValidationError(
             f"boa shape {prior.boa.shape} must match boa_unc shape {prior.boa_unc.shape}"
@@ -103,7 +98,6 @@ def _validate_surface_prior(prior: SurfacePrior) -> None:
 
 
 def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
-    """Validate M4 output before passing to M5."""
     config_bands = {b.name for b in sib.sensor_config.bands}
     solver_bands = {b.name for b in sib.bands}
     if not solver_bands <= config_bands:
@@ -118,7 +112,6 @@ def _validate_solver_input_bundle(sib: SolverInputBundle) -> None:
 
 
 def _validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
-    """Validate M5 output before passing to M6."""
     if not isinstance(solved.converged, bool):
         raise ValidationError("converged must be a boolean")
     if not isinstance(solved.n_iterations, int):
@@ -138,7 +131,6 @@ def _validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
 
 
 def _validate_correction_result(result: CorrectionResult) -> None:
-    """Validate M6 output before returning to user."""
     if len(result.boa.data_vars) == 0:
         raise ValidationError("BOA must have at least one band variable")
     if not isinstance(result.metadata, dict):
@@ -149,3 +141,14 @@ def _validate_correction_result(result: CorrectionResult) -> None:
             "consider including it for diagnostics",
             stacklevel=2,
         )
+
+
+__all__ = [
+    "_spatial_shape",
+    "_validate_atmospheric_state",
+    "_validate_correction_result",
+    "_validate_observation_bundle",
+    "_validate_solved_atmosphere",
+    "_validate_solver_input_bundle",
+    "_validate_surface_prior",
+]

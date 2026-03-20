@@ -28,15 +28,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from siac.domain import (
-    BRDFKernelWeights,
-    GeometryAngles,
-    SensorConfig,
-    SurfacePrior,
-)
+from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    from siac.domain import SensorConfig
 
 logger = logging.getLogger(__name__)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from siac.adapters.auth import CredentialManager
@@ -10,8 +11,7 @@ from siac.config import RunRequest
 from siac.domain.aoi import AOI
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
+    from siac.app.requests import SceneProcessRequest
     from siac.workflows.pipeline import (
         AtmoPriorFn,
         CorrectorFn,
@@ -70,12 +70,8 @@ class ExecutionPlan:
 
 
 def build_execution_plan(
-    config,
-    input_path: Path,
+    request: SceneProcessRequest,
     *,
-    output_path: Path | str | None = None,
-    aoi: AOI | Path | str | tuple[float, float, float, float] | list[float] | None = None,
-    auth: CredentialManager | None = None,
     preprocessor: PreprocessorFn | None = None,
     atmo_provider: AtmoPriorFn | None = None,
     surface_prior_provider: SurfacePriorFn | None = None,
@@ -110,25 +106,25 @@ def build_execution_plan(
         from siac.app.assembly import resolve_rt_model_for_pipeline as resolve_rt_model_fn
 
     resolved_config = resolve_run_config(
-        config,
-        input_path=input_path,
-        output_path=output_path,
-        sensor=config.sensor,
-        aoi=aoi if aoi is not None else config.aoi,
+        request.config,
+        input_path=Path(request.input_path),
+        output_path=request.output_path,
+        sensor=request.config.sensor,
+        aoi=request.aoi if request.aoi is not None else request.config.aoi,
     )
     runtime_aoi = coerce_aoi_spec(resolved_config.aoi)
-    auth_obj = auth or CredentialManager.from_config(resolved_config)
+    auth_obj = request.auth or CredentialManager.from_config(resolved_config)
 
     preprocessor_runtime = build_preprocessor_runtime_fn(
         resolved_config,
-        input_path=input_path,
+        input_path=Path(request.input_path),
         sensor=resolved_config.sensor,
         default_aoi_resolver=lambda toa: aoi_resolver(toa) if callable(aoi_resolver) else AOI.from_raster(toa[list(toa.data_vars)[0]]),
     )
 
     return ExecutionPlan(
-        input_path=input_path,
-        output_path=output_path,
+        input_path=Path(request.input_path),
+        output_path=request.output_path,
         config=resolved_config,
         runtime_aoi=runtime_aoi,
         auth=auth_obj,

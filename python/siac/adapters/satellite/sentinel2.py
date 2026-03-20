@@ -12,7 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
@@ -24,13 +24,13 @@ from siac.adapters.satellite.base import (
 )
 from siac.algorithms.cloud import build_cloud_classes, classes_to_bool_mask
 from siac.catalog import SENTINEL2A_CONFIG
-from siac.domain import (
-    GeometryAngles,
-    SensorConfig,
-)
 from siac.geo import reproject_match
+from siac.runtime import GeometryAngles
 from siac.srf.loaders import load_sensor_config_from_srf
 from siac.storage import read_raster
+
+if TYPE_CHECKING:
+    from siac.domain import SensorConfig
 
 logger = logging.getLogger(__name__)
 

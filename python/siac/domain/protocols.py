@@ -12,7 +12,8 @@ if TYPE_CHECKING:
 
     import xarray as xr
 
-    from siac.domain.contracts import (
+    from siac.domain.sensors import SensorBand, SensorConfig
+    from siac.runtime.models import (
         AtmosphericState,
         BRDFKernelWeights,
         GeometryAngles,
@@ -21,7 +22,6 @@ if TYPE_CHECKING:
         SolverInputBundle,
         SurfacePrior,
     )
-    from siac.domain.sensors import SensorBand, SensorConfig
 
 
 @runtime_checkable

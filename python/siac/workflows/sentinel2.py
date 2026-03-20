@@ -7,6 +7,12 @@ from pathlib import Path
 
 from siac.adapters.auth import CredentialManager
 from siac.app.planning import resolve_run_config
+from siac.app.requests import (
+    SceneProcessRequest,
+    Sentinel2ProcessRequest,
+    Sentinel2ResolveRequest,
+    Sentinel2SearchRequest,
+)
 from siac.errors import DataNotFoundError
 from siac.workflows.scene import process_scene
 
@@ -48,12 +54,11 @@ def coerce_s2_query(query, *, config):
 
 
 def resolve_s2_input(
-    query,
-    config,
+    request: Sentinel2ResolveRequest,
     *,
-    auth: CredentialManager | None = None,
     resolve_s2_backend_fn=None,
 ) -> Path:
+    query = request.query
     local_candidate = Path(query).expanduser() if isinstance(query, Path) else Path(str(query)).expanduser()
     if local_candidate.exists():
         return local_candidate
@@ -62,11 +67,11 @@ def resolve_s2_input(
         from siac.app.assembly import resolve_s2_backend as resolve_s2_backend_fn
 
     resolved_config = resolve_run_config(
-        config,
-        sensor=config.sensor if config.sensor != "auto" else "s2",
+        request.config,
+        sensor=request.config.sensor if request.config.sensor != "auto" else "s2",
         s2_query=query,
     )
-    auth_obj = auth or CredentialManager.from_config(resolved_config)
+    auth_obj = request.auth or CredentialManager.from_config(resolved_config)
     backend = resolve_s2_backend_fn(resolved_config, auth=auth_obj)
     if backend is None:
         raise DataNotFoundError(
@@ -83,28 +88,19 @@ def resolve_s2_input(
 
 
 def search_sentinel2(
+    request: Sentinel2SearchRequest,
     *,
-    tile: str | None = None,
-    date: date | str | None = None,
-    date_value: date | str | None = None,
-    start_date: date | str | None = None,
-    end_date: date | str | None = None,
-    bbox: tuple[float, float, float, float] | None = None,
-    max_cloud_cover: float = 80.0,
-    backend: str = "cdse",
-    config=None,
-    auth: CredentialManager | None = None,
     resolve_s2_backend_fn=None,
 ):
     from siac.adapters.data.s2_data_source import S2Query, search_s2
 
-    cfg = config or __import__("siac.config", fromlist=["SIACConfig"]).SIACConfig(sensor="s2")
+    cfg = request.config or __import__("siac.config", fromlist=["SIACConfig"]).SIACConfig(sensor="s2")
     cfg = cfg.with_overrides(
         sensor="s2",
-        providers={"s2": {"backend": backend, "max_cloud_cover": max_cloud_cover}},
+        providers={"s2": {"backend": request.backend, "max_cloud_cover": request.max_cloud_cover}},
     )
     resolved_config = resolve_run_config(cfg, sensor="s2")
-    auth_obj = auth or CredentialManager.from_config(resolved_config)
+    auth_obj = request.auth or CredentialManager.from_config(resolved_config)
 
     if resolve_s2_backend_fn is None:
         from siac.app.assembly import resolve_s2_backend as resolve_s2_backend_fn
@@ -114,42 +110,46 @@ def search_sentinel2(
         raise ValueError("search_sentinel2 does not support backend='local'.")
 
     query = S2Query(
-        mgrs_tile=tile,
-        date=coerce_date(date if date is not None else date_value),
-        start_date=coerce_date(start_date),
-        end_date=coerce_date(end_date),
-        bbox=bbox,
-        max_cloud_cover=max_cloud_cover,
+        mgrs_tile=request.tile,
+        date=coerce_date(request.date if request.date is not None else request.date_value),
+        start_date=coerce_date(request.start_date),
+        end_date=coerce_date(request.end_date),
+        bbox=request.bbox,
+        max_cloud_cover=request.max_cloud_cover,
         processing_level=resolved_config.s2_data.processing_level,
     )
     return search_s2(backend_obj, query)
 
 
 def process_s2(
-    config,
-    query,
+    request: Sentinel2ProcessRequest,
     *,
-    output_path: str | Path | None = None,
-    aoi=None,
-    auth: CredentialManager | None = None,
     resolve_s2_input_fn=None,
 ):
     resolved_config = resolve_run_config(
-        config,
-        sensor=config.sensor if config.sensor != "auto" else "s2",
-        aoi=aoi if aoi is not None else config.aoi,
-        s2_query=query,
+        request.config,
+        sensor=request.config.sensor if request.config.sensor != "auto" else "s2",
+        aoi=request.aoi if request.aoi is not None else request.config.aoi,
+        s2_query=request.query,
     )
-    auth_obj = auth or CredentialManager.from_config(resolved_config)
+    auth_obj = request.auth or CredentialManager.from_config(resolved_config)
     if resolve_s2_input_fn is None:
         resolve_s2_input_fn = resolve_s2_input
-    input_path = resolve_s2_input_fn(query, config, auth=auth_obj)
+    input_path = resolve_s2_input_fn(
+        Sentinel2ResolveRequest(
+            config=request.config,
+            query=request.query,
+            auth=auth_obj,
+        )
+    )
     return process_scene(
-        config,
-        input_path,
-        output_path=output_path,
-        aoi=aoi,
-        auth=auth_obj,
+        request=SceneProcessRequest(
+            config=request.config,
+            input_path=input_path,
+            output_path=request.output_path,
+            aoi=request.aoi,
+            auth=auth_obj,
+        )
     )
 
 

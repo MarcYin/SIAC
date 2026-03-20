@@ -30,12 +30,8 @@ from scipy.fftpack import dct, idct
 from siac.domain.protocols import RTModelBackend
 
 if TYPE_CHECKING:
-    from siac.domain import (
-        AtmosphericState,
-        GeometryAngles,
-        SensorBand,
-        SurfacePrior,
-    )
+    from siac.domain import SensorBand
+    from siac.runtime import AtmosphericState, GeometryAngles, SurfacePrior
 
 logger = logging.getLogger(__name__)
 

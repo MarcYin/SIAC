@@ -24,7 +24,8 @@ from siac.adapters.earthdata_common import (
     read_hdf5_dataset,
     reproject_native_to_target,
 )
-from siac.domain import BRDFKernelWeights, SensorBand
+from siac.domain import SensorBand
+from siac.runtime import BRDFKernelWeights
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

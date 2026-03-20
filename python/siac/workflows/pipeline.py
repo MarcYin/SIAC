@@ -14,16 +14,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from siac.domain import (
+from siac.runtime import (
     AtmosphericState,
     CorrectionResult,
     ObservationBundle,
-    SensorConfig,
     SolvedAtmosphere,
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.domain.validation import (
+from siac.runtime.validation import (
     _validate_atmospheric_state,
     _validate_correction_result,
     _validate_observation_bundle,
@@ -34,6 +33,7 @@ from siac.domain.validation import (
 
 if TYPE_CHECKING:
     from siac.domain.aoi import AOI
+    from siac.domain.sensors import SensorConfig
 
 logger = logging.getLogger(__name__)
 

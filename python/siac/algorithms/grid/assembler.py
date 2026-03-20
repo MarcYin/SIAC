@@ -16,7 +16,7 @@ import numpy as np
 import xarray as xr
 from scipy.ndimage import uniform_filter, zoom
 
-from siac.domain import (
+from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
     ObservationBundle,

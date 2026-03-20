@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 
-from siac.domain import (
-    AtmosphericState,
-    CorrectionResult,
-    GeometryAngles,
-    SensorConfig,
-)
 from siac.domain.protocols import RTModelBackend
+from siac.runtime import AtmosphericState, CorrectionResult, GeometryAngles
+
+if TYPE_CHECKING:
+    from siac.domain import SensorConfig
 
 
 class AtmosphericCorrector:

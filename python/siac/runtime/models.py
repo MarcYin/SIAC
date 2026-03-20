@@ -1,14 +1,15 @@
-"""
-Core data contracts for SIAC atmospheric correction.
-"""
+"""Xarray-backed runtime payload models used during SIAC execution."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
+
+if TYPE_CHECKING:
+    from siac.domain.sensors import SensorBand, SensorConfig
 
 
 @dataclass(frozen=True)
@@ -125,7 +126,8 @@ class RTCoefficients:
         return y / (1.0 + self.xcp * y)
 
     def compute_boa_jacobian(
-        self, toa: xr.DataArray
+        self,
+        toa: xr.DataArray,
     ) -> tuple[xr.DataArray, xr.DataArray]:
         if not self.has_jacobian:
             raise ValueError("RTCoefficients does not have Jacobian information")
@@ -158,12 +160,16 @@ class BRDFKernelWeights:
     reflectance_unc: xr.DataArray | None = None
 
     def compute_reflectance(
-        self, k_vol: xr.DataArray, k_geo: xr.DataArray
+        self,
+        k_vol: xr.DataArray,
+        k_geo: xr.DataArray,
     ) -> xr.DataArray:
         return self.f0 + self.f1 * k_vol + self.f2 * k_geo
 
     def compute_reflectance_uncertainty(
-        self, k_vol: xr.DataArray, k_geo: xr.DataArray
+        self,
+        k_vol: xr.DataArray,
+        k_geo: xr.DataArray,
     ) -> xr.DataArray:
         if self.reflectance_unc is not None:
             return self.reflectance_unc
@@ -188,7 +194,7 @@ class ObservationBundle:
     toa: xr.Dataset
     geometry: GeometryAngles
     cloud_mask: xr.DataArray
-    sensor_config: Any
+    sensor_config: SensorConfig | Any
     metadata: dict[str, Any]
     crs: str
     bounds: tuple[float, float, float, float]
@@ -201,8 +207,8 @@ class SolverInputBundle:
     toa: xr.DataArray
     geometry: GeometryAngles
     cloud_mask: xr.DataArray
-    sensor_config: Any
-    bands: list[Any]
+    sensor_config: SensorConfig | Any
+    bands: list[SensorBand | Any]
     atmo_prior: AtmosphericState
     surface_prior: SurfacePrior
     rt_model: Any
@@ -234,3 +240,16 @@ class CorrectionResult:
     tcwv: xr.DataArray
     cloud_mask: xr.DataArray
     metadata: dict[str, Any]
+
+
+__all__ = [
+    "AtmosphericState",
+    "BRDFKernelWeights",
+    "CorrectionResult",
+    "GeometryAngles",
+    "ObservationBundle",
+    "RTCoefficients",
+    "SolvedAtmosphere",
+    "SolverInputBundle",
+    "SurfacePrior",
+]

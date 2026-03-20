@@ -29,7 +29,7 @@ from siac.app.registry import (
     SURFACE_PRIOR_METHOD_REGISTRY,
 )
 from siac.domain.aoi import AOI
-from siac.domain.contracts import (
+from siac.runtime import (
     AtmosphericState,
     ObservationBundle,
     SolvedAtmosphere,
