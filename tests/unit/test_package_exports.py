@@ -6,6 +6,7 @@ import pytest
 
 import siac
 import siac.config as siac_config
+import siac.storage as siac_storage
 
 
 def test_siac_module_lazy_exports_and_unknown_attr():
@@ -23,6 +24,13 @@ def test_siac_module_lazy_exports_and_unknown_attr():
 
 def test_siac_config_export_and_unknown_attr():
     assert siac_config.SIACConfig.__name__ == "SIACConfig"
+    assert siac_config.CredentialConfig is siac_config.AuthConfig
 
     with pytest.raises(AttributeError, match="has no attribute"):
         _ = siac_config.NOT_A_REAL_EXPORT
+
+
+def test_siac_storage_keeps_legacy_package_exports():
+    assert callable(siac_storage.read_multiband)
+    assert callable(siac_storage.write_dataset)
+    assert callable(siac_storage.build_stac_item)
