@@ -121,7 +121,7 @@ class TestSolvedAtmosphere:
 
 class TestCorrectionResult:
     def test_correction_result_construction(self):
-        from siac.runtime import CorrectionResult
+        from siac.runtime import CorrectionDiagnostics, CorrectionResult
         shape = (4, 4)
         boa = xr.Dataset({"B02": xr.DataArray(np.ones(shape), dims=["y", "x"])})
         result = CorrectionResult(
@@ -130,9 +130,10 @@ class TestCorrectionResult:
             aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
             tcwv=xr.DataArray(np.full(shape, 2.0), dims=["y", "x"]),
             cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
-            metadata={"processing_time_s": 1.0},
+            diagnostics=CorrectionDiagnostics(processing_time_s=1.0),
         )
         assert "B02" in result.boa.data_vars
+        assert result.diagnostics.processing_time_s == pytest.approx(1.0)
 
     def test_correction_result_optional_unc(self):
         from siac.runtime import CorrectionResult

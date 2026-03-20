@@ -24,10 +24,10 @@ from siac.runtime import (
     SurfacePrior,
 )
 from siac.runtime.validation import (
-    _validate_atmospheric_state,
-    _validate_observation_bundle,
-    _validate_solver_input_bundle,
-    _validate_surface_prior,
+    validate_atmospheric_state,
+    validate_observation_bundle,
+    validate_solver_input_bundle,
+    validate_surface_prior,
 )
 from siac.workflows.pipeline import run_pipeline
 
@@ -122,7 +122,7 @@ class TestE2ESynthetic:
         sib = assemble_grids(obs, atmo, surface, mock_rt_model)
 
         assert isinstance(sib, SolverInputBundle)
-        _validate_solver_input_bundle(sib)
+        validate_solver_input_bundle(sib)
 
     def test_full_pipeline_with_mocks(self, mock_rt_model):
         """Full pipeline (M1→M6) with all mock modules returns CorrectionResult."""
@@ -188,9 +188,9 @@ class TestE2ESynthetic:
         atmo = _make_atmo()
         surface = _make_surface()
 
-        _validate_observation_bundle(obs)
-        _validate_atmospheric_state(atmo)
-        _validate_surface_prior(surface)
+        validate_observation_bundle(obs)
+        validate_atmospheric_state(atmo)
+        validate_surface_prior(surface)
 
     def test_pipeline_preserves_crs_and_bounds(self, mock_rt_model):
         """ObservationBundle CRS/bounds are preserved through the pipeline."""

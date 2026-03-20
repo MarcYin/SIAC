@@ -11,6 +11,8 @@ import pytest
 import xarray as xr
 
 from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
+from siac.catalog import SENTINEL2A_CONFIG
+from siac.domain import SensorConfig
 
 
 def _da(shape: tuple[int, int] = (8, 8), value: float = 1000.0) -> xr.DataArray:
@@ -36,7 +38,22 @@ def _safe_tree(tmp_path: Path, safe_name: str = "S2A_TEST.SAFE") -> Path:
 
 
 class TestSentinel2Internals:
-    def test_resolve_paths_variants(self, tmp_path: Path):
+    def test_resolve_paths_variants(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        def _load_config(sensor_id: str, satellite_id: str, *, rsrf_root=None) -> SensorConfig:
+            _ = rsrf_root
+            return SensorConfig(
+                sensor_id=sensor_id,
+                satellite_id=satellite_id,
+                bands=SENTINEL2A_CONFIG.bands,
+                default_ref_scale=SENTINEL2A_CONFIG.default_ref_scale,
+                default_ref_offset=SENTINEL2A_CONFIG.default_ref_offset,
+            )
+
+        monkeypatch.setattr(
+            "siac.adapters.satellite.sentinel2.load_sensor_config_from_rsrf",
+            _load_config,
+        )
+
         p = Sentinel2Preprocessor()
 
         safe_a = _safe_tree(tmp_path, "S2A_DEMO.SAFE")
@@ -68,7 +85,7 @@ class TestSentinel2Internals:
             p4._resolve_paths(bad)
 
     def test_sensor_config_uses_real_srf_loader(self, monkeypatch: pytest.MonkeyPatch):
-        p = Sentinel2Preprocessor(config={"srf_cache_dir": "/tmp/srf-cache", "refresh_srf": True})
+        p = Sentinel2Preprocessor(config={"rsrf_root": "/tmp/rsrf-root"})
         p._satellite_id = "S2C"
 
         class _Cfg:
@@ -76,23 +93,21 @@ class TestSentinel2Internals:
 
         seen: dict[str, object] = {}
 
-        def _load(sensor_id: str, satellite_id: str, *, cache_dir=None, refresh=False):
+        def _load(sensor_id: str, satellite_id: str, *, rsrf_root=None):
             seen["sensor_id"] = sensor_id
             seen["satellite_id"] = satellite_id
-            seen["cache_dir"] = cache_dir
-            seen["refresh"] = refresh
+            seen["rsrf_root"] = rsrf_root
             return _Cfg() if satellite_id == "S2C" else None
 
         monkeypatch.setattr(
-            "siac.adapters.satellite.sentinel2.load_sensor_config_from_srf",
+            "siac.adapters.satellite.sentinel2.load_sensor_config_from_rsrf",
             _load,
         )
         assert p.sensor_config.satellite_id == "S2C"
         assert seen == {
             "sensor_id": "MSI",
             "satellite_id": "S2C",
-            "cache_dir": "/tmp/srf-cache",
-            "refresh": True,
+            "rsrf_root": "/tmp/rsrf-root",
         }
 
     def test_metadata_parsers_and_finders(self, tmp_path: Path):

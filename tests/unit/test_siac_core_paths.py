@@ -62,7 +62,7 @@ def test_resolve_s2_input_builds_request(monkeypatch):
         captured["request"] = request
         return Path("/tmp/fake.SAFE")
 
-    monkeypatch.setattr("siac.api.public.workflow_resolve_s2_input", _fake_resolve)
+    monkeypatch.setattr("siac.api.public.app_resolve_s2_input", _fake_resolve)
 
     out = resolve_s2_input("T31UDQ_20240101", cfg)
     assert out == Path("/tmp/fake.SAFE")
@@ -79,7 +79,7 @@ def test_search_sentinel2_builds_request(monkeypatch):
         captured["request"] = request
         return ["ok"]
 
-    monkeypatch.setattr("siac.api.public.workflow_search_sentinel2", _fake_search)
+    monkeypatch.setattr("siac.api.public.app_search_sentinel2", _fake_search)
 
     out = search_sentinel2(tile="50QLD", start_date="2026-01-02", end_date="2026-01-03", backend="gcs")
     assert out == ["ok"]

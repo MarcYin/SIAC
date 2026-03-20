@@ -15,14 +15,15 @@ from urllib.parse import urlparse
 import numpy as np
 import xarray as xr
 
-from siac.core.aoi import AOI
-from siac.core.config import DEFAULT_LUT_URL, SIACConfig
-from siac.core.types import GeometryAngles, ObservationBundle, SensorConfig
-from siac.io import reproject_match
-from siac.io.stac import write_stac_item
-from siac.io.writers import write_dataset, write_netcdf
-from siac.satellite.sentinel2 import Sentinel2Preprocessor
-from siac.siac import resolve_s2_input, siac_process
+from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
+from siac.api import resolve_s2_input, siac_process
+from siac.config import DEFAULT_LUT_URL, SIACConfig
+from siac.domain import AOI, SensorConfig
+from siac.geo.reprojection import reproject_match
+from siac.runtime import GeometryAngles, ObservationBundle
+from siac.storage.product_writers import write_dataset
+from siac.storage.raster_writers import write_netcdf
+from siac.storage.stac import write_stac_item
 
 logger = logging.getLogger("run_full_s2")
 _L2A_FOLDER_PATTERN = re.compile(r"^S2[A-Z]_MSIL2A_.*T.*$")

@@ -251,14 +251,6 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
 
 def test_cams_download_missing_credentials_branch(monkeypatch, tmp_path: Path):
     monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=lambda **_kwargs: None))
-    monkeypatch.delenv("CDSAPI_KEY", raising=False)
-
-    class _HomePath(type(Path())):
-        @classmethod
-        def home(cls):
-            return tmp_path
-
-    monkeypatch.setattr("siac.adapters.atmo.cams.Path", _HomePath)
 
     p = CAMSProvider(tmp_path, auth=CredentialManager())
     assert p._download_cams_file(datetime(2024, 1, 4)) is None

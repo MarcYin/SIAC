@@ -1,4 +1,4 @@
-"""Tests for the centralised authentication manager (core/auth.py)."""
+"""Tests for the centralized authentication manager."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import pytest
 
 from siac.adapters.auth import (
     AWSAuth,
-    CDSAuth,
     CDSEAuth,
     CredentialManager,
     CredentialSpec,
@@ -48,7 +47,7 @@ class TestCredentialSetGet:
         assert mgr.has_credentials("cdse") is True
 
 
-# ── 2. from_config with CredentialConfig ─────────────────────────────
+# ── 2. from_config with auth config ──────────────────────────────────
 
 class TestFromConfig:
     def test_reads_credential_config_fields(self):
@@ -336,23 +335,15 @@ class TestProviderAdapters:
         with pytest.raises(AuthenticationError, match="missing secret"):
             mgr.cdse().create_temporary_s3_credentials()
 
-    def test_cds_adapter_detects_external_config(self, monkeypatch, tmp_path):
-        mgr = CredentialManager()
-        monkeypatch.setenv("CDSAPI_KEY", "env-key")
-        assert isinstance(mgr.cds(), CDSAuth)
-        assert mgr.cds().has_external_credentials() is True
-        assert mgr.cds().has_any_credentials() is True
-
-        monkeypatch.delenv("CDSAPI_KEY", raising=False)
-        rc_file = tmp_path / ".cdsapirc"
-        rc_file.write_text("key: rc-key\n")
-        monkeypatch.setattr("siac.adapters.auth.Path.home", staticmethod(lambda: tmp_path))
-        assert mgr.cds().has_external_credentials() is True
-
     def test_cds_adapter_client_kwargs_from_store(self):
         mgr = CredentialManager()
         mgr.set_credentials("cds", key="store-key")
         assert mgr.cds().client_kwargs() == {"key": "store-key"}
+
+    def test_cds_make_client_requires_configured_credentials(self):
+        mgr = CredentialManager()
+        with pytest.raises(AuthenticationError, match="config.auth.cds.api_key"):
+            mgr.cds().make_client()
 
     def test_earthdata_adapter_builds_earthaccess_source(self):
         mgr = CredentialManager()

@@ -751,7 +751,7 @@ CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, RTModelBackend], Co
 | `test_correct_boa_range` | Check BOA values | In [–0.05, 1.5] (minor negatives allowed) |
 | `test_correct_cloud_mask_preserved` | Check `result.cloud_mask` | Matches original from M1 |
 | `test_correct_native_resolution` | Check BOA spatial shape | Matches M1 native TOA shape |
-| `test_correct_metadata_timing` | Check `result.metadata` | Contains `"processing_time_s"` |
+| `test_correct_metadata_timing` | Check `result.diagnostics` | Contains `processing_time_s` |
 | `test_correct_coefficient_mode` | Emulator-style backend | Uses `RTCoefficients` path |
 | `test_correct_spectral_lut_coefficients` | Dense spectral LUT backend | Derived coefficients match direct `path_ref/T_total/S` formulation |
 
@@ -1625,7 +1625,8 @@ The design rule is:
 
 Package boundary rule:
 - `python/siac/core/` should only hold cross-cutting contracts and config
-- SRF domain code should live under `python/siac/srf/`
+- canonical SRF types should live under `python/siac/domain/spectral.py`
+- external sensor response loading should go through the `RSRF` adapter in `python/siac/adapters/rsrf.py`
 - LUT-specific aligned-kernel logic should live under `python/siac/rt/lut/`
 
 #### 9.10.1 SRF Source Access Layer
@@ -1635,13 +1636,9 @@ Instead, it should have a small source registry that points to authoritative
 sensor-specific SRF publications.
 
 Implemented architecture direction:
-- `python/siac/srf/loaders.py` should be the generic SRF loading entry point
-- `python/siac/srf/catalog.py` should hold the authoritative source inventory
-- sensor-specific fetch/parser code should live in dedicated modules such as
-  `python/siac/srf/sources/sentinel2.py`
-- public loading APIs should be split by access path:
-  - `load_sensor_config_from_remote_srf(...)`
-  - `load_sensor_config_from_metadata_srf(...)`
+- `python/siac/adapters/rsrf.py` is the generic SRF loading entry point
+- authoritative sampled curves and band specs come from the external `RSRF` package
+- SIAC should not maintain its own parallel SRF source registry or remote-download layer
   - `load_sensor_config_from_local_srf_file(...)`
 - metadata-driven sensors should build a `SensorConfig` from per-band
   centre-wavelength / FWHM metadata through a shared builder, rather than
@@ -1978,19 +1975,10 @@ Required tests:
 
 | File | Action | Description |
 |------|--------|-------------|
-| `python/siac/srf/types.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
-| `python/siac/srf/builders.py` | NEW | Shared builders for tabulated SRFs and metadata-derived band characterization |
-| `python/siac/srf/catalog.py` | NEW | Generic SRF source catalog and source metadata |
-| `python/siac/srf/loaders.py` | NEW | Generic remote/metadata/local load entry points |
-| `python/siac/srf/sources/sentinel2.py` | NEW | Sentinel-2-specific remote workbook discovery + parser |
-| `python/siac/srf/sources/landsat.py` | NEW | Landsat SRF provider boundary |
-| `python/siac/srf/sources/planet.py` | NEW | PlanetScope / SuperDove SRF provider boundary |
-| `python/siac/srf/metadata/enmap.py` | NEW | EnMAP metadata-driven spectral characterization loader |
-| `python/siac/srf/metadata/emit.py` | NEW | EMIT metadata-driven spectral characterization loader |
-| `python/siac/srf/metadata/prisma.py` | NEW | PRISMA metadata-driven spectral characterization loader |
-| `python/siac/srf/repository.py` | NEW | local repository API for runtime SRF lookup |
+| `python/siac/domain/spectral.py` | NEW | `SpectralResponseFunction` dataclass + validation helpers |
+| `python/siac/adapters/rsrf.py` | NEW | Thin adapter over the external `RSRF` package |
 | `python/siac/rt/lut/srf_kernel.py` | NEW | LUT-aligned SRF kernel builder and cache-key helpers |
-| `python/siac/data/srf/` | NEW | versioned canonical SRF repository shipped with SIAC |
+| external `RSRF` data root | REQUIRED | authoritative sampled curves and band specifications |
 | `tools/build_srf_repository.py` | NEW | build/update tool from official raw SRF sources |
 | `python/siac/core/spectral.py` | MODIFY | consume `SpectralResponseFunction` directly |
 | `python/siac/core/types.py` | MODIFY | make band identity platform-specific and SRF-aware |
@@ -2124,16 +2112,15 @@ This keeps secret discovery centralised while preventing provider-specific auth 
 | `AWSAuth` | `core/auth.py` | S3 / fsspec storage option builder |
 | `GCSAuth` | `core/auth.py` | GCS / fsspec storage option builder |
 | `EarthdataAuth` | `core/auth.py` | Earthdata env activation + `EarthAccessSource` factory |
-| `CredentialConfig` | `core/config.py` | Pydantic model for config-file credentials |
+| `AuthConfig` | `config/schema.py` | Pydantic model for centralized auth config |
 | `AuthenticationError` | `core/exceptions.py` | Raised on missing/failed auth |
 
 ### Credential resolution order (in `from_config`)
 
-1. `SIACConfig.credentials` fields (programmatic / YAML)
-2. Provider-native environment variables
-3. External config files (`~/.cdserc`, `~/.cdsapirc`)
+1. `SIACConfig.auth` fields
+2. Environment overlays applied centrally by `siac.config.load.overlay_env_secrets`
 
-The store remains the single place that resolves precedence. Adapters must not reimplement config/env parsing, except where a provider also has a standard external fallback that is intentionally outside SIAC's secret store contract.
+The store remains the single place that resolves precedence. Adapters must not reimplement config/env parsing or provider-native rc-file discovery.
 
 ### Env-var mapping
 
@@ -2149,20 +2136,13 @@ The store remains the single place that resolves precedence. Adapters must not r
 The same adapter should also mint temporary S3 credentials for `s3://eodata/...`
 access so CDSE catalogue and object-store usage stay under one auth boundary.
 
-### External credential files
-
-| Provider | File | Notes |
-|---|---|---|
-| CDSE | `~/.cdserc` | Simple `username=...` and `password=...` pairs; parsed as a low-priority fallback for non-interactive runs |
-| CDS API | `~/.cdsapirc` | Native CDS API configuration; parsed as a low-priority fallback |
-
 ### Adapter contracts
 
 Adapters expose typed operations instead of generic `(key, secret)` plumbing:
 
 - `CDSEAuth.get_token()` / `authorization_header()`
 - `CDSEAuth.create_temporary_s3_credentials()` / `temporary_s3_credentials()`
-- `CDSAuth.client_kwargs()` / `has_any_credentials()`
+- `CDSAuth.client_kwargs()`
 - `AWSAuth.storage_options()`
 - `GCSAuth.storage_options()`
 - `EarthdataAuth.activate_environment()` / `build_earthaccess_source()`
@@ -2174,7 +2154,7 @@ Provider modules and backends should depend on those typed operations, not on di
 - **`SIAC.__init__`** creates `self._auth = CredentialManager.from_config(config)`
 - **`siac_process()`** accepts optional `auth` kwarg; defaults to `from_config`
 - **`CopernicusDataspaceBackend`** uses `CDSEAuth` for OAuth2 bearer tokens
-- **`CAMSProvider`** uses `CDSAuth` for `cdsapi` client kwargs and credential detection
+- **`CAMSProvider`** uses `CDSAuth` for `cdsapi` client kwargs
 - **`EarthAccessSource`** is built through `EarthdataAuth`
 - **`_resolve_rt_model_for_pipeline`** uses `AWSAuth` to inject S3 `storage_options` for LUT paths
 
@@ -2183,7 +2163,7 @@ Provider modules and backends should depend on those typed operations, not on di
 - `CredentialManager` may cache raw credentials and provider adapters, but only provider adapters own provider-specific behavior
 - token exchange must not be embedded in search/download backends directly
 - provider modules should not parse SIAC environment variables themselves
-- provider modules may still honor provider-native external configs when that is part of the underlying client contract (for example `~/.cdsapirc`)
+- provider modules should not honor provider-native rc files outside the centralized config/env overlay path
 
 ## 12. Earthaccess Rollout Plan (Pre-Implementation)
 

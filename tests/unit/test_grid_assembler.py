@@ -16,7 +16,7 @@ from siac.runtime import (
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.runtime.validation import _validate_solver_input_bundle
+from siac.runtime.validation import validate_solver_input_bundle
 
 
 @pytest.fixture
@@ -154,9 +154,9 @@ class TestAssembleGrids:
         assert sib.toa.shape[2] <= 64
 
     def test_passes_validation(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
-        """Output should pass _validate_solver_input_bundle()."""
+        """Output should pass validate_solver_input_bundle()."""
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
-        _validate_solver_input_bundle(sib)  # should not raise
+        validate_solver_input_bundle(sib)  # should not raise
 
     def test_surface_prior_with_band_dimension(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Assembler should handle banded SurfacePrior arrays from real BRDF providers."""

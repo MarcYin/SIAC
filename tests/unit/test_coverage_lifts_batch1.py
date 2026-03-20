@@ -33,7 +33,7 @@ from siac.runtime import (
     RTCoefficients,
     SurfacePrior,
 )
-from siac.runtime.validation import _spatial_shape
+from siac.runtime.validation import spatial_shape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -67,10 +67,7 @@ def test_protocol_method_stubs_execute_lines():
 
     assert AerosolSolver.solve(object(), object()) is None
 
-    assert OutputWriter.write_boa(object(), xr.Dataset(), "/tmp/out", "EPSG:4326", (0, 1, 0, 0, 0, -1)) is None
-    assert OutputWriter.write_auxiliary(
-        object(), xr.DataArray(np.zeros((1, 1))), xr.DataArray(np.zeros((1, 1))), "/tmp/out", "EPSG:4326", (0, 1, 0, 0, 0, -1)
-    ) is None
+    assert OutputWriter.write(object(), object(), "/tmp/out") is None
 
 
 # ------------------------------
@@ -79,11 +76,11 @@ def test_protocol_method_stubs_execute_lines():
 
 def test_spatial_shape_fallback_and_error():
     ds_3d = xr.Dataset({"v": xr.DataArray(np.zeros((2, 3, 4), dtype=np.float32), dims=["b", "row", "col"])})
-    assert _spatial_shape(ds_3d) == (3, 4)
+    assert spatial_shape(ds_3d) == (3, 4)
 
     ds_1d = xr.Dataset({"v": xr.DataArray(np.zeros((2,), dtype=np.float32), dims=["x"])})
     with pytest.raises(ValueError, match="fewer than 2"):
-        _ = _spatial_shape(ds_1d)
+        _ = spatial_shape(ds_1d)
 
 
 # ------------------------------

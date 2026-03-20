@@ -5,8 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from siac.srf.repository import SRFRepository
-from siac.srf.types import SpectralResponseFunction
+from siac.domain.spectral import SpectralResponseFunction
 
 
 def test_srf_from_tabulated_trims_normalizes_and_derives_metadata():
@@ -51,34 +50,13 @@ def test_srf_from_tabulated_rejects_all_zero_response():
         )
 
 
-def test_repository_returns_platform_specific_srf():
-    s2a = SpectralResponseFunction.from_tabulated(
+def test_srf_support_bounds_follow_trimmed_nonzero_extent():
+    srf = SpectralResponseFunction.from_tabulated(
         sensor_id="MSI",
         satellite_id="S2A",
         band_name="B02",
-        wavelengths_nm=np.array([450.0, 460.0, 470.0], dtype=np.float32),
-        response=np.array([0.0, 1.0, 0.0], dtype=np.float32),
+        wavelengths_nm=np.array([430.0, 440.0, 450.0, 460.0, 470.0], dtype=np.float32),
+        response=np.array([0.0, 0.0, 1.0, 0.0, 0.0], dtype=np.float32),
     )
-    s2b = SpectralResponseFunction.from_tabulated(
-        sensor_id="MSI",
-        satellite_id="S2B",
-        band_name="B02",
-        wavelengths_nm=np.array([452.0, 462.0, 472.0], dtype=np.float32),
-        response=np.array([0.0, 1.0, 0.0], dtype=np.float32),
-    )
-    repo = SRFRepository([s2a, s2b])
-
-    loaded = repo.get_band_srf("MSI", "S2B", "B02")
-    sensor_srfs = repo.get_sensor_srfs("MSI", "S2A")
-
-    assert loaded.satellite_id == "S2B"
-    assert loaded.band_name == "B02"
-    assert set(sensor_srfs) == {"B02"}
-    assert sensor_srfs["B02"].satellite_id == "S2A"
-
-
-def test_repository_missing_key_raises_keyerror():
-    repo = SRFRepository([])
-
-    with pytest.raises(KeyError, match="MSI"):
-        repo.get_band_srf("MSI", "S2C", "B08")
+    assert srf.support_min_nm == pytest.approx(440.0)
+    assert srf.support_max_nm == pytest.approx(460.0)

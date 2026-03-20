@@ -322,7 +322,7 @@ Existing tests in `test_correction.py` cover BOA physics. Add contract-level tes
 | `test_correct_boa_bands_match_toa` | BOA dataset band names | Same as input TOA |
 | `test_correct_boa_range` | BOA values | In [–0.05, 1.5] (allowing minor negatives) |
 | `test_correct_cloud_mask_preserved` | Cloud mask in result | Matches original |
-| `test_correct_metadata_has_timing` | `result.metadata` | Contains `"processing_time_s"` |
+| `test_correct_metadata_has_timing` | `result.diagnostics` | Contains `processing_time_s` |
 | `test_correct_native_resolution` | BOA spatial shape | Matches M1 native TOA shape |
 
 ### 5.4 RT Model Backend — Protocol Conformance

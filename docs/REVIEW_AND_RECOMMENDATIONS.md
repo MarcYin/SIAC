@@ -146,7 +146,7 @@ Several contracts use `metadata: dict[str, Any]` which is opaque. Consider typed
 ```python
 @dataclass(frozen=True)
 class CorrectionMetadata:
-    processing_time_s: float
+    diagnostics.processing_time_s: float
     solver_iterations: int
     bands_corrected: list[str]
     # extensible via extra: dict[str, Any]

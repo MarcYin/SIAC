@@ -154,6 +154,13 @@ class TestSIACConfig:
         assert resolved.sensor == "s2"
         assert resolved.aoi == "/tmp/aoi.geojson"
 
+    def test_resolve_uses_default_output_dir_when_run_output_missing(self, tmp_path: Path):
+        config = SIACConfig(output={"defaults": {"output_dir": tmp_path / "products"}})
+
+        resolved = config.resolve(RunRequest(input_path="/tmp/input.SAFE"))
+
+        assert resolved.run.output_path == tmp_path / "products"
+
     def test_snapshot_redacts_auth(self):
         config = SIACConfig(
             auth={

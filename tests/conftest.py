@@ -450,7 +450,7 @@ def mock_solver_fn(mock_solved_atmosphere):
 @pytest.fixture
 def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
     """Corrector that returns a synthetic CorrectionResult."""
-    from siac.runtime import CorrectionResult
+    from siac.runtime import CorrectionDiagnostics, CorrectionResult
     def _correct(obs, solved, rt_model):
         return CorrectionResult(
             boa=obs.toa,
@@ -458,7 +458,7 @@ def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
             aot=solved.aot,
             tcwv=solved.tcwv,
             cloud_mask=obs.cloud_mask,
-            metadata={"processing_time_s": 0.01},
+            diagnostics=CorrectionDiagnostics(processing_time_s=0.01),
         )
     return _correct
 

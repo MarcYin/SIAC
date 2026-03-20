@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from siac.algorithms.rt.lut.srf_kernel import AlignedSRFKernel, build_aligned_srf_kernel
-from siac.srf.types import SpectralResponseFunction
+from siac.domain.spectral import SpectralResponseFunction
 
 
 def _srf() -> SpectralResponseFunction:

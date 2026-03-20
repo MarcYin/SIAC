@@ -344,7 +344,8 @@ class TestReadWriteRoundtrip:
         self, sample_dataarray: xr.DataArray, tmp_path: Path
     ):
         """Write and read GeoTIFF should preserve data."""
-        from siac.storage import read_raster, write_raster
+        from siac.storage.raster_writers import write_raster
+        from siac.storage.readers import read_raster
 
         output_path = tmp_path / "test.tif"
 
@@ -370,7 +371,8 @@ class TestReadWriteRoundtrip:
         self, sample_dataarray: xr.DataArray, tmp_path: Path
     ):
         """Write and read COG should preserve data."""
-        from siac.storage import read_raster, write_cog
+        from siac.storage.raster_writers import write_cog
+        from siac.storage.readers import read_raster
 
         output_path = tmp_path / "test_cog.tif"
 
@@ -391,7 +393,7 @@ class TestReadWriteRoundtrip:
 
     def test_write_dataset(self, sample_dataset: xr.Dataset, tmp_path: Path):
         """write_dataset should create files for each variable."""
-        from siac.storage import write_dataset
+        from siac.storage.product_writers import write_dataset
 
         output_dir = tmp_path / "output"
 
@@ -407,7 +409,8 @@ class TestReadWriteRoundtrip:
         self, sample_dataarray: xr.DataArray, tmp_path: Path
     ):
         """Write and read Zarr should preserve data."""
-        from siac.storage import read_zarr_array, write_zarr
+        from siac.storage.raster_writers import write_zarr
+        from siac.storage.readers import read_zarr_array
 
         output_path = tmp_path / "test.zarr"
 

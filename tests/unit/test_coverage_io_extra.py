@@ -25,7 +25,7 @@ from siac.geo.reprojection import (
     resample_to_shape,
     transform_points,
 )
-from siac.runtime import CorrectionResult, GeometryAngles, ObservationBundle
+from siac.runtime import CorrectionDiagnostics, CorrectionResult, GeometryAngles, ObservationBundle
 from siac.storage.readers import (
     check_rasters_aligned,
     get_raster_info,
@@ -268,7 +268,7 @@ class TestWritersExtra:
             aot=xr.full_like(template, 0.12),
             tcwv=xr.full_like(template, 1.8),
             cloud_mask=xr.full_like(template, True, dtype=bool),
-            metadata={"processing_time_s": 12.5},
+            diagnostics=CorrectionDiagnostics(processing_time_s=12.5),
         )
 
         boa_dir = tmp_path / "boa"

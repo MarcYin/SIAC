@@ -31,23 +31,13 @@ pip install -e ".[dev]"
 maturin develop --release
 ```
 
-Remote-auth setup follows provider-native conventions:
+Remote-auth can be provided in `config.toml` or via the centralized env overlay:
 
 - Earthdata / earthaccess: `EARTHDATA_USERNAME`, `EARTHDATA_PASSWORD`
-- CDS API: `CDSAPI_KEY` or `~/.cdsapirc`
+- CDS API: `CDSAPI_KEY`
 - AWS/S3: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 - GCS: `GOOGLE_APPLICATION_CREDENTIALS`
-- CDSE: `SIAC_CDSE_USERNAME`, `SIAC_CDSE_PASSWORD`, or `~/.cdserc`
-
-Recommended CDSE file-based setup for non-interactive runs:
-
-```bash
-cat > ~/.cdserc <<'EOF'
-username=your_cdse_username
-password=your_cdse_password
-EOF
-chmod 600 ~/.cdserc
-```
+- CDSE: `SIAC_CDSE_USERNAME`, `SIAC_CDSE_PASSWORD`
 
 For CDSE object-store datasets, SIAC can mint temporary S3 credentials from the
 same CDSE username/password and use them against `s3://eodata/...`.
@@ -56,10 +46,10 @@ same CDSE username/password and use them against `s3://eodata/...`.
 
 ```python
 from siac import SIAC
-from siac.core.config import SIACConfig
+from siac.config import SIACConfig
 
 # Load configuration
-config = SIACConfig.from_yaml("siac_config.yaml")
+config = SIACConfig.from_file("siac.toml")
 
 # Or use defaults
 config = SIACConfig()
@@ -90,64 +80,60 @@ PYTHONPATH=python pixi run python tools/run_full_s2.py \
 Notes:
 - `--query` accepts a local SAFE path, product ID, or tile-date shorthand (`T31UDQ_20210801`).
 - Use `--aoi-bbox` to keep runs tractable on local machines.
-- Outputs are written to `output-dir/boa/*.tif`, `output-dir/atmosphere.nc`, and `output-dir/run_summary.json`.
+- Outputs are written under `output-dir/boa/`, `output-dir/auxiliary/`, plus summary/STAC files from the helper script.
 
 ## Configuration
 
-SIAC uses a hierarchical configuration system. Create a `siac_config.yaml`:
+SIAC uses a hierarchical TOML configuration system. Create a `siac_config.toml`:
 
-```yaml
-sensor: auto  # s2, l8, or auto
+```toml
+[paths]
+lut_path = "https://gws-access.jasmin.ac.uk/public/nceo_isp/libradtran_continental_average_lut_1nm.zarr.zip"
+spectral_library_root = "/data/siac/spectral-library"
+rsrf_root = "/data/siac/RSRF"
 
-atmo_prior:
-  provider: cams  # cams, merra2, mcd19, era5, or user
+[providers.atmo]
+kind = "cams"
 
-brdf:
-  provider: mcd43  # mcd43, vnp43, mcd19, gee, zarr
-  temporal_window: 16
+[providers.brdf]
+kind = "mcd43"
+temporal_window = 16
 
-surface_prior:
-  method: kernel_model
-  psf_sigma_x: 29.75
-  psf_sigma_y: 39.0
+[providers.s2]
+backend = "cdse"
+max_cloud_cover = 40.0
 
-rt_model:
-  backend: emulator  # emulator, lut, or py6s
-  # Used when backend=lut (default points to public continental LUT zip):
-  # lut_path: https://gws-access.jasmin.ac.uk/public/nceo_isp/libradtran_continental_average_lut_1nm.zarr.zip
-  # Supports local .zarr dir, local .zarr.zip, http(s)://, and s3:// paths.
-  # For S3-compatible object stores:
-  # lut_storage_options:
-  #   region: eu-west-2
-  #   endpoint_url: https://s3.eu-west-2.amazonaws.com
+[algorithms.surface_prior]
+method = "kernel_model"
 
-solver:
-  aot_gamma: 10.0
-  tcwv_gamma: 5.0
-  aerosol_resolution: 1000.0
+[algorithms.rt]
+backend = "emulator"
 
-output:
-  format: cog
-  include_uncertainty: true
+[algorithms.solver]
+aot_gamma = 10.0
+tcwv_gamma = 5.0
+aerosol_resolution = 1000.0
+
+[output.defaults]
+format = "cog"
+include_uncertainty = true
 ```
 
 ## Architecture
 
 ```
 siac/
-├── core/           # Data types, protocols, configuration
-├── srf/            # Spectral response types, source catalogs, loaders
-├── satellite/      # Sensor-specific preprocessors (S2, L8)
-├── priors/
-│   ├── atmospheric/  # CAMS, MERRA-2, ERA5 providers
-│   ├── brdf/         # MCD43, VNP43, MCD19 providers
-│   └── surface/      # Surface prior derivation
-├── rt/
-│   ├── emulator/     # Neural network emulators (fast)
-│   ├── lut/          # Look-up table backend + LUT-specific SRF kernels
-│   └── direct/       # Py6S simulation (slow)
-├── solver/         # Multi-grid L-BFGS-B optimization
-└── correction/     # TOA to BOA conversion
+├── api/            # Public entrypoints
+├── config/         # System config, TOML loading, resolution
+├── catalog/        # Built-in sensor catalog data
+├── domain/         # Pure domain types and spectral helpers
+├── adapters/       # External systems and backend adapters
+├── algorithms/     # Retrieval, correction, RT, cloud, surface logic
+├── app/            # Runtime planning and component assembly
+├── workflows/      # End-to-end orchestration
+├── runtime/        # Xarray-backed execution payloads
+├── geo/            # Geometry/reprojection utilities
+└── storage/        # Raster and product I/O helpers
 ```
 
 ```mermaid

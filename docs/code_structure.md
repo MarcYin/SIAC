@@ -31,14 +31,14 @@ siac/
 │
 ├── catalog/                     # Static built-in catalog data
 │   ├── __init__.py
-│   └── sensors.py               # Built-in sensor definitions and registry
+│   └── sensors/                 # Built-in sensor definitions split by family
 │
 ├── domain/                      # Pure domain models and protocols
 │   ├── __init__.py
 │   ├── aoi.py                   # AOI container
 │   ├── sensors.py               # SensorBand and SensorConfig types only
 │   ├── protocols.py             # Structural interfaces for pluggable modules
-│   └── spectral.py              # Spectral helper utilities
+│   └── spectral.py              # Canonical spectral response types
 │
 ├── adapters/                    # External systems and backend adapters
 │   ├── __init__.py
@@ -47,9 +47,12 @@ siac/
 │   ├── auth.py                  # CredentialManager and provider auth helpers
 │   ├── earthdata.py             # Earthaccess source wiring
 │   ├── earthdata_common.py      # Shared MODLAND/Earthdata grid helpers
+│   ├── output.py                # Configured output writer adapter
+│   ├── rsrf.py                  # External RSRF-backed spectral response adapter
+│   ├── s2_backend.py            # Sentinel-2 data-backend assembly
 │   ├── rt.py                    # RT backend assembly
 │   ├── satellite/               # Sensor preprocessors
-│   └── sentinel2.py             # Sentinel-2 backend assembly
+│   └── ...
 │
 ├── algorithms/                  # Numerical and retrieval algorithms
 │   ├── __init__.py
@@ -59,24 +62,24 @@ siac/
 │   ├── grid/                    # Grid assembly for solver inputs
 │   ├── rt/                      # Radiative-transfer backends
 │   ├── solver/                  # Aerosol inversion
-│   └── surface/                 # Surface-prior derivation and spectral mapping
+│   └── surface/                 # Surface-prior derivation, reference-basis transforms, spectral mapping
 │
 ├── app/                         # Runtime planning and component assembly
 │   ├── __init__.py
 │   ├── requests.py              # Canonical request models
 │   ├── registry.py              # Kind/backend registries
 │   ├── assembly.py              # Config -> runtime callable assembly
-│   └── planning.py              # ExecutionPlan construction
+│   ├── planning.py              # ExecutionPlan construction
+│   └── sentinel2.py             # Sentinel-2 query coercion and access helpers
 │
 ├── workflows/                   # Orchestration workflows
 │   ├── __init__.py
 │   ├── pipeline.py              # Core pipeline orchestrator
-│   ├── scene.py                 # Generic scene execution flow
-│   └── sentinel2.py             # Sentinel-2 search/download/process flow
+│   ├── scene.py                 # Generic scene execution and output dispatch
+│   └── sentinel2.py             # Sentinel-2 processing workflow only
 │
 ├── geo/                         # Geometry and reprojection utilities
-├── storage/                     # Raster/product read-write helpers
-└── srf/                         # Spectral response function domain
+└── storage/                     # Raster/product read-write helpers
 ```
 
 ## Layer Boundaries
@@ -92,6 +95,7 @@ siac/
 - `algorithms/` owns retrieval math, surface priors, correction, cloud masking,
   RT backends, and grid prep.
 - `app/` resolves configuration into concrete runtime components.
+- `app/` also owns request coercion for Sentinel-2 search/resolve paths.
 - `workflows/` executes end-to-end processing plans.
 - `api/` is the canonical public surface.
 
