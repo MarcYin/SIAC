@@ -9,14 +9,14 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import struct
+from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
-from fsspec.asyn import AsyncFileSystem, sync
-from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
-from fsspec.implementations.local import LocalFileSystem
-from fsspec.mapping import FSMap
+from fsspec.asyn import AsyncFileSystem, sync  # type: ignore[import-untyped]
+from fsspec.implementations.local import LocalFileSystem  # type: ignore[import-untyped]
+from fsspec.mapping import FSMap  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, MutableMapping
@@ -66,7 +66,7 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        import requests
+        import requests  # type: ignore[import-untyped]
 
         self.timeout = timeout
         self.headers = {
@@ -144,11 +144,11 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
             # Some endpoints reject ranged GETs. Fallback to full-body fetch.
             response = self._session.get(path, headers=self.headers, timeout=self.timeout)
             response.raise_for_status()
-            payload = response.content
+            payload = cast("bytes", response.content)
             if len(payload) == size:
                 self._full_body_cache[path] = payload
             return payload[start_i:end_i]
-        payload = response.content
+        payload = cast("bytes", response.content)
 
         # Some servers may ignore Range and send full body.
         if response.status_code == 200 and len(payload) == size:
@@ -178,7 +178,9 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
 
 def _build_local_filesystem() -> AsyncFileSystem:
     """Return an async wrapper over fsspec's LocalFileSystem."""
-    return AsyncFileSystemWrapper(
+    async_wrapper = cast("Any", import_module("fsspec.implementations.asyn_wrapper"))
+
+    return async_wrapper.AsyncFileSystemWrapper(
         fs=LocalFileSystem(auto_mkdir=False),
         asynchronous=True,
     )
@@ -288,12 +290,17 @@ class _ReadOnlyZipFileSystem(AsyncFileSystem):
                 self._files = {"": {"children": []}}
                 return
 
+            assert cd_size is not None and cd_offset is not None and cd_entries is not None
+            cd_size_i = int(cd_size)
+            cd_offset_i = int(cd_offset)
+            cd_entries_i = int(cd_entries)
+
             cd_data = await self.fs._cat_file(
                 self.path,
-                start=int(cd_offset),
-                end=int(cd_offset + cd_size),
+                start=cd_offset_i,
+                end=cd_offset_i + cd_size_i,
             )
-            if len(cd_data) != int(cd_size):
+            if len(cd_data) != cd_size_i:
                 raise ValueError(
                     f"Failed to read central directory: expected {cd_size} bytes, got {len(cd_data)}"
                 )
@@ -328,7 +335,7 @@ class _ReadOnlyZipFileSystem(AsyncFileSystem):
             pos = 0
             previous_file: dict[str, Any] | None = None
 
-            for _ in range(int(cd_entries)):
+            for _ in range(cd_entries_i):
                 if pos + 46 > len(cd_data):
                     raise ValueError(f"Truncated central directory entry in {self.path}")
 
@@ -495,7 +502,7 @@ class _ReadOnlyZipFileSystem(AsyncFileSystem):
 
         read_start = int(info["offset"]) + start_i
         read_end = read_start + (end_i - start_i)
-        return await self.fs._cat_file(self.path, start=read_start, end=read_end)
+        return cast("bytes", await self.fs._cat_file(self.path, start=read_start, end=read_end))
 
     def close(self) -> None:
         if hasattr(self.fs, "close"):
@@ -521,7 +528,7 @@ def _parse_s3_url(url: str) -> tuple[str, str]:
 
 def _build_s3_filesystem(storage_options: dict[str, Any]) -> AsyncFileSystem:
     try:
-        import s3fs
+        import s3fs  # type: ignore[import-untyped]
     except ImportError as exc:
         raise ImportError(
             "s3fs is required to read s3:// LUT zip paths. Install with `pip install s3fs`."
@@ -617,7 +624,7 @@ def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> Mut
     zip_fs = _ReadOnlyZipFileSystem(base_fs, zip_path)
     try:
         root = _detect_zarr_prefix(zip_fs)
-        return FSMap(root=root, fs=zip_fs, check=False, create=False)
+        return cast("MutableMapping[str, bytes]", FSMap(root=root, fs=zip_fs, check=False, create=False))
     except ValueError as exc:
         message = str(exc).lower()
         if "not stored (uncompressed)" not in message:
@@ -628,9 +635,9 @@ def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> Mut
             ) from exc
 
         # Local compressed ZIP fallback: delegate to fsspec's standard zip mapper.
-        import fsspec
+        fsspec = cast("Any", import_module("fsspec"))
 
         fallback_zip_fs = fsspec.filesystem("zip", fo=zip_path)
         fallback_mapper = fallback_zip_fs.get_mapper("")
         root = _detect_zarr_prefix_from_names(fallback_mapper.keys())
-        return fallback_zip_fs.get_mapper(root)
+        return cast("MutableMapping[str, bytes]", fallback_zip_fs.get_mapper(root))

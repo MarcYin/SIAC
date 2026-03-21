@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 import xarray as xr
@@ -18,9 +18,12 @@ from siac.domain.spectral import RelativeSpectralResponse
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 class ZarrLUTBackend:
@@ -55,6 +58,7 @@ class ZarrLUTBackend:
     _DEFAULT_SURFACE_RHO1 = 0.15
     _DEFAULT_SURFACE_RHO2 = 0.5
     _SPECTRAL_IO_MAX_RETRIES = 8
+    _SUPPORTED_INTERPOLATION_METHODS = frozenset({"linear", "nearest"})
 
     def __init__(
         self,
@@ -64,6 +68,12 @@ class ZarrLUTBackend:
         storage_options: dict[str, Any] | None = None,
     ):
         self.lut_path = str(lut_path)
+        if interpolation_method not in self._SUPPORTED_INTERPOLATION_METHODS:
+            supported = ", ".join(sorted(self._SUPPORTED_INTERPOLATION_METHODS))
+            raise ValueError(
+                f"Unsupported LUT interpolation_method {interpolation_method!r}; "
+                f"expected one of: {supported}"
+            )
         self.interpolation_method = interpolation_method
         self.chunk_cache_size = chunk_cache_size
         self.storage_options = dict(storage_options or {})
@@ -279,6 +289,12 @@ class ZarrLUTBackend:
         # Ensure LUT and coordinate cache are initialized.
         if not self._lut_coords:
             _ = self.lut
+        wavelength_axis = np.asarray(
+            self._lut_coords.get("wavelength", np.array([], dtype=np.float32)),
+            dtype=np.float32,
+        )
+        if wavelength_axis.size == 0:
+            raise ValueError("Coefficient LUT must define a non-empty wavelength coordinate")
 
         original_shape = sza.shape
 
@@ -290,8 +306,8 @@ class ZarrLUTBackend:
         tcwv_flat = tcwv.ravel()
 
         # Find nearest wavelength in LUT
-        wl_idx = np.argmin(np.abs(self._lut_coords["wavelength"] - wavelength))
-        wl_value = self._lut_coords["wavelength"][wl_idx]
+        wl_idx = np.argmin(np.abs(wavelength_axis - wavelength))
+        wl_value = wavelength_axis[wl_idx]
 
         logger.debug(f"Using LUT wavelength {wl_value:.1f}nm for band at {wavelength:.1f}nm")
 
@@ -687,10 +703,10 @@ class ZarrLUTBackend:
 
     def _run_with_transient_lut_io_retry(
         self,
-        fn: Any,
+        fn: Callable[[], _T],
         *,
         operation: str,
-    ) -> Any:
+    ) -> _T:
         """Retry transient remote LUT I/O for preload/read paths."""
         max_attempts = max(1, int(self._SPECTRAL_IO_MAX_RETRIES))
         for attempt in range(1, max_attempts + 1):
@@ -857,11 +873,11 @@ class ZarrLUTBackend:
                 solar_irradiance=solar_values,
                 support_padding=0,
             )
-            weights = kernel.solar_weighted_response_on_lut
-            if weights is None:
-                weights = kernel.response_on_lut
+            rsrf_weights = kernel.solar_weighted_response_on_lut
+            if rsrf_weights is None:
+                rsrf_weights = kernel.response_on_lut
             full_weights = np.zeros_like(wl_axis, dtype=np.float32)
-            full_weights[kernel.start_index:kernel.end_index] = weights
+            full_weights[kernel.start_index:kernel.end_index] = rsrf_weights
             return xr.DataArray(
                 full_weights,
                 dims=["wavelength"],
@@ -1120,4 +1136,8 @@ class ZarrLUTBackend:
 
     def get_available_wavelengths(self) -> np.ndarray:
         """Get wavelengths available in the LUT."""
-        return self._lut_coords.get("wavelength", np.array([]))
+        wavelengths = self._lut_coords.get("wavelength")
+        if wavelengths is None:
+            return np.zeros(0, dtype=np.float32)
+        result: np.ndarray = np.array(wavelengths, dtype=np.float32)
+        return result

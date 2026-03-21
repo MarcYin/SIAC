@@ -166,6 +166,10 @@ def _write_small_spectral_lut(path: Path, *, include_solar: bool = True) -> tupl
 
 
 class TestZarrLUTBackend:
+    def test_invalid_interpolation_method_raises(self):
+        with pytest.raises(ValueError, match="interpolation_method"):
+            ZarrLUTBackend("unused.zarr", interpolation_method="cubic")
+
     def test_missing_lut_raises(self, tmp_path: Path):
         b = ZarrLUTBackend(tmp_path / "missing.zarr")
         with pytest.raises(FileNotFoundError):
@@ -471,6 +475,23 @@ class TestZarrLUTBackend:
         assert trans_down.shape == (1, 1)
         assert trans_up.shape == (1, 1)
         assert sph_alb.shape == (1, 1)
+
+    def test_interpolate_lut_requires_non_empty_wavelength_axis(self):
+        backend = ZarrLUTBackend("unused.zarr")
+        backend._lut = xr.Dataset(coords={"sza": [30.0]})
+        backend._lut_coords = {"sza": np.array([30.0], dtype=np.float32)}
+
+        with pytest.raises(ValueError, match="wavelength coordinate"):
+            backend._interpolate_lut(
+                np.array([[30.0]], dtype=np.float32),
+                np.array([[10.0]], dtype=np.float32),
+                np.array([[90.0]], dtype=np.float32),
+                np.array([[0.2]], dtype=np.float32),
+                np.array([[2.0]], dtype=np.float32),
+                np.array([[0.3]], dtype=np.float32),
+                np.array([[0.1]], dtype=np.float32),
+                490.0,
+            )
 
     def test_build_point_coords_handles_unscaled_ozone_and_sparse_axes(self):
         backend = ZarrLUTBackend("unused.zarr")
@@ -1219,6 +1240,62 @@ class TestZipStoreUtilities:
         assert payload["version"] == 1
         assert payload["refs"][".zgroup"] == ["https://example.com/lut.zarr.zip", 11, 17]
         assert payload["refs"]["arr/0"] == ["https://example.com/lut.zarr.zip", 42, 3]
+
+    def test_remote_zip_rebuilds_invalid_cached_reference_json(self, monkeypatch, tmp_path: Path):
+        import siac.algorithms.rt.lut.store as lut_store
+
+        class _FakeZipFS:
+            _files = {
+                "": {"children": ["lut.zarr"]},
+                "lut.zarr": {"children": ["lut.zarr/.zgroup"]},
+                "lut.zarr/.zgroup": {"offset": 11, "size": 17},
+            }
+
+        class _FakeMapper(dict):
+            def __init__(self):
+                super().__init__()
+                self.fs = _FakeZipFS()
+                self.root = "lut.zarr"
+
+        build_calls = {"n": 0}
+        reference_calls: list[dict[str, object]] = []
+
+        def _fake_build(path: str, options: dict[str, object]):
+            build_calls["n"] += 1
+            assert path == "https://example.com/lut.zarr.zip"
+            assert options == {"timeout": 5.0}
+            return _FakeMapper()
+
+        def _fake_get_mapper(path: str, **kwargs):
+            assert path == "reference://"
+            reference_calls.append(kwargs)
+            return {"kind": "reference", "kwargs": kwargs}
+
+        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", _fake_build)
+        monkeypatch.setattr("fsspec.get_mapper", _fake_get_mapper)
+
+        reference_json = lut_store._reference_json_path(
+            "https://example.com/lut.zarr.zip",
+            lut_store._ReferenceOptions(
+                refresh=False,
+                reference_json=None,
+                cache_dir=tmp_path,
+            ),
+        )
+        reference_json.parent.mkdir(parents=True, exist_ok=True)
+        reference_json.write_text('{"version": 1, "refs": {}}', encoding="utf-8")
+
+        out = lut_store.build_lut_store(
+            "https://example.com/lut.zarr.zip",
+            {"timeout": 5.0, "reference_cache_dir": str(tmp_path)},
+        )
+
+        assert out["kind"] == "reference"
+        assert build_calls["n"] == 1
+        assert len(reference_calls) == 1
+        assert reference_json.exists()
+        payload = json.loads(reference_json.read_text(encoding="utf-8"))
+        assert payload["refs"][".zgroup"] == ["https://example.com/lut.zarr.zip", 11, 17]
 
     def test_remote_zip_reference_mapper_failure_raises(self, monkeypatch, tmp_path: Path):
         import siac.algorithms.rt.lut.store as lut_store

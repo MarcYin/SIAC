@@ -3,32 +3,43 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
-from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 from siac.adapters.data.earthaccess_source import EarthAccessSource
+from siac.adapters.earthdata import (
+    build_earthaccess_runtime,
+    constant_target_array,
+    earthaccess_cache_dir,
+    merge_reprojected_tiles,
+    select_candidate_paths,
+    target_grid_coords,
+)
 from siac.adapters.earthdata_common import (
     apply_scale_and_mask,
-    granule_intersects_bounds,
     make_native_grid_dataarray,
-    parse_granule_date,
-    parse_tile_indices,
     read_hdf4_dataset,
     read_hdf5_dataset,
     reduce_orbit_stack,
-    reproject_native_to_target,
 )
 from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
     from datetime import datetime
+    from pathlib import Path
+
+    from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 
 logger = logging.getLogger(__name__)
+
+
+class _NativeTileState(TypedDict):
+    aot: xr.DataArray
+    aot_unc: xr.DataArray
+    tcwv: xr.DataArray | None
 
 
 class _EarthAccessMAIACAODProvider:
@@ -54,9 +65,15 @@ class _EarthAccessMAIACAODProvider:
         temporal_window_days: int = 2,
         max_granules: int = 8,
     ) -> None:
-        self.cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else None
-        self.source = source or EarthAccessSource(provider=provider)
-        self.catalog = catalog or EarthAccessCatalog(source=self.source)
+        runtime = build_earthaccess_runtime(
+            cache_dir=cache_dir,
+            source=source,
+            catalog=catalog,
+            provider=provider,
+        )
+        self.cache_dir = runtime.cache_dir
+        self.source = runtime.source
+        self.catalog = runtime.catalog
         self.short_name = short_name
         self.provider = provider
         self.probe_earthdata = probe_earthdata
@@ -122,7 +139,7 @@ class _EarthAccessMAIACAODProvider:
             if not granules:
                 continue
 
-            dest = self.cache_dir or Path.home() / ".cache" / "siac" / "earthdata" / short_name
+            dest = earthaccess_cache_dir(self.cache_dir, short_name)
             downloaded = self.source.download_granules(granules, dest)
             selected = self._select_candidate_paths(downloaded, obs_time, bounds, crs)
             if selected:
@@ -138,27 +155,12 @@ class _EarthAccessMAIACAODProvider:
         bounds: tuple[float, float, float, float],
         crs: str,
     ) -> list[Path]:
-        if not paths:
-            return []
-
-        selected: list[tuple[tuple[int, int], float, str, Path]] = []
-        for path in paths:
-            try:
-                delta = abs((parse_granule_date(path) - obs_time).total_seconds())
-                intersects = granule_intersects_bounds(path, bounds=bounds, crs=crs)
-            except Exception:
-                return paths
-
-            if intersects:
-                try:
-                    tile = parse_tile_indices(path)
-                except Exception:
-                    tile = (999, 999)
-                selected.append((tile, delta, Path(path).name, path))
-
-        if not selected:
-            return []
-        return [item[3] for item in sorted(selected, key=lambda value: (value[0], value[1], value[2]))]
+        return select_candidate_paths(
+            paths,
+            obs_time=obs_time,
+            bounds=bounds,
+            crs=crs,
+        )
 
     def _load_from_granules(
         self,
@@ -214,7 +216,7 @@ class _EarthAccessMAIACAODProvider:
             elevation=elevation.astype(np.float32),
         )
 
-    def _load_native_tile(self, path: str | Path) -> dict[str, xr.DataArray | None]:
+    def _load_native_tile(self, path: str | Path) -> _NativeTileState:
         aod_raw, aod_attrs = self._read_dataset(path, self.aod_dataset)
         aod_unc_raw, aod_unc_attrs = self._read_dataset(path, self.aod_unc_dataset)
         qa_raw, qa_attrs = self._read_dataset(path, self.qa_dataset)
@@ -254,33 +256,18 @@ class _EarthAccessMAIACAODProvider:
         crs: str,
         resolution: float,
     ) -> xr.DataArray:
-        reprojected = [
-            reproject_native_to_target(
-                arr,
-                target_bounds=bounds,
-                target_crs=crs,
-                target_resolution=resolution,
-                resampling=Resampling.bilinear,
-                nodata=np.nan,
-            )
-            for arr in arrays
-        ]
-        merged = reprojected[0]
-        for arr in reprojected[1:]:
-            merged = merged.combine_first(arr)
-        return merged
+        return merge_reprojected_tiles(
+            arrays,
+            bounds=bounds,
+            crs=crs,
+            resolution=resolution,
+            resampling=Resampling.bilinear,
+            nodata=np.nan,
+        )
 
     @staticmethod
     def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
-        xmin, ymin, xmax, ymax = bounds
-        if resolution <= 0:
-            raise ValueError(f"resolution must be > 0, got {resolution}")
-
-        nx = max(1, int(np.ceil((xmax - xmin) / resolution)))
-        ny = max(1, int(np.ceil((ymax - ymin) / resolution)))
-        x = xmin + (np.arange(nx, dtype=np.float32) + 0.5) * resolution
-        y = ymax - (np.arange(ny, dtype=np.float32) + 0.5) * resolution
-        return y, x
+        return target_grid_coords(bounds, resolution, resolution_name="resolution")
 
     def _constant_array(
         self,
@@ -288,9 +275,7 @@ class _EarthAccessMAIACAODProvider:
         resolution: float,
         value: float,
     ) -> xr.DataArray:
-        y, x = self._grid(bounds, resolution)
-        arr = np.full((y.size, x.size), value, dtype=np.float32)
-        return xr.DataArray(arr, dims=["y", "x"], coords={"y": y, "x": x})
+        return constant_target_array(bounds, resolution, value, resolution_name="resolution")
 
     def _default_prior(
         self,

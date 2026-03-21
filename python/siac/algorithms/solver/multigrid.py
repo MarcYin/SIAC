@@ -26,7 +26,7 @@ import numpy as np
 import xarray as xr
 from scipy import optimize
 
-from siac._rust import (
+from siac._rust_compat import (
     evaluate_grid_search_cost_cube_with_provider,
     interpolate_to_fine_grid,
     quadratic_refine_grid_search,

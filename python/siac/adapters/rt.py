@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from siac.algorithms.rt.emulator import TwoLayerNNEmulator
 from siac.algorithms.rt.lut import ZarrLUTBackend
@@ -27,17 +27,18 @@ _SENSOR_DEFAULTS: dict[str, tuple[str, str]] = {
 
 
 def build_rt_model(
-    config,
+    config: Any,
     auth: CredentialManager | None = None,
     *,
     sensor_config: SensorConfig | None = None,
-):
+) -> Any:
     """Build the RT backend for the resolved config."""
     rt_config = config.rt_model
     if sensor_config is not None:
         sensor_id, satellite_id = sensor_config.sensor_id, sensor_config.satellite_id
     else:
-        sensor_id, satellite_id = _SENSOR_DEFAULTS.get(getattr(config, "sensor", None), ("MSI", "S2A"))
+        sensor_name = str(getattr(config, "sensor", "auto") or "auto").lower()
+        sensor_id, satellite_id = _SENSOR_DEFAULTS.get(sensor_name, ("MSI", "S2A"))
 
     paths = getattr(config, "paths", None)
     emulator_dir = getattr(rt_config, "emulator_dir", None) or getattr(paths, "emulator_dir", None)

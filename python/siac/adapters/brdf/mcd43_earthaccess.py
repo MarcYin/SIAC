@@ -5,24 +5,28 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
-from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 from siac.adapters.data.earthaccess_source import EarthAccessSource
+from siac.adapters.earthdata import (
+    build_earthaccess_runtime,
+    constant_target_band_array,
+    earthaccess_cache_dir,
+    merge_reprojected_tiles,
+    select_candidate_paths,
+    target_grid_coords,
+)
 from siac.adapters.earthdata_common import (
     ProductBandDefinition,
     apply_scale_and_mask,
-    granule_intersects_bounds,
     make_native_grid_dataarray,
     parse_granule_date,
-    parse_tile_indices,
     read_hdf4_dataset,
     read_hdf5_dataset,
-    reproject_native_to_target,
 )
 from siac.domain import SensorBand
 from siac.runtime import BRDFKernelWeights
@@ -31,10 +35,15 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import date, datetime
 
+    from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
+
 logger = logging.getLogger(__name__)
 
 _BEST_QA_REFLECTANCE_UNCERTAINTY = 0.015
 _QA_UNCERTAINTY_POWER = 1.6
+_RequestedBand: TypeAlias = int | SensorBand
+_RequestedBandCoord: TypeAlias = int | str
+_RequestedBandSpec: TypeAlias = tuple[_RequestedBandCoord, ProductBandDefinition]
 
 
 def _granule_day(granule: object) -> np.datetime64 | None:
@@ -138,9 +147,15 @@ class _EarthAccessBRDFProvider:
         probe_earthdata: bool = True,
         max_granules: int = 64,
     ) -> None:
-        self.cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else None
-        self.source = source or EarthAccessSource(provider=provider)
-        self.catalog = catalog or EarthAccessCatalog(source=self.source)
+        runtime = build_earthaccess_runtime(
+            cache_dir=cache_dir,
+            source=source,
+            catalog=catalog,
+            provider=provider,
+        )
+        self.cache_dir = runtime.cache_dir
+        self.source = runtime.source
+        self.catalog = runtime.catalog
         self.short_name = short_name
         self.provider = provider
         self.probe_earthdata = probe_earthdata
@@ -348,28 +363,26 @@ class _EarthAccessBRDFProvider:
 
     def _resolve_requested_bands(
         self,
-        bands: list[int] | list[SensorBand],
-    ) -> list[tuple[int | str, ProductBandDefinition]]:
+        bands: Sequence[_RequestedBand],
+    ) -> list[_RequestedBandSpec]:
         if not bands:
             raise ValueError("bands must be a non-empty sequence")
 
         product_bands = self._product_bands
-        if isinstance(bands[0], SensorBand):
-            resolved: list[tuple[int | str, ProductBandDefinition]] = []
-            for sensor_band in bands:
+        resolved: list[_RequestedBandSpec] = []
+        for band in bands:
+            if isinstance(band, SensorBand):
                 match = min(
                     product_bands,
-                    key=lambda candidate: abs(candidate.wavelength_nm - sensor_band.center_wavelength),
+                    key=lambda candidate: abs(candidate.wavelength_nm - band.center_wavelength),
                 )
-                resolved.append((sensor_band.name, match))
-            return resolved
+                resolved.append((band.name, match))
+                continue
 
-        resolved = []
-        for band_id in bands:
-            label = self._legacy_band_map.get(int(band_id))
+            label = self._legacy_band_map.get(int(band))
             if label is None:
-                raise KeyError(f"Band {band_id!r} is not available in {self._source_name}")
-            resolved.append((int(band_id), self._bands_by_label[label]))
+                raise KeyError(f"Band {band!r} is not available in {self._source_name}")
+            resolved.append((int(band), self._bands_by_label[label]))
         return resolved
 
     def _download_granules(
@@ -406,7 +419,7 @@ class _EarthAccessBRDFProvider:
                 )
                 return []
 
-        dest = self.cache_dir or Path.home() / ".cache" / "siac" / "earthdata" / short_name
+        dest = earthaccess_cache_dir(self.cache_dir, short_name)
         downloaded = self.source.download_granules(granules, dest)
         return self._select_candidate_paths(
             downloaded,
@@ -452,15 +465,16 @@ class _EarthAccessBRDFProvider:
             )
             return []
 
-        dest = self.cache_dir or Path.home() / ".cache" / "siac" / "earthdata" / short_name
-        return self.source.download_granules(list(unique_granules.values()), dest)
+        dest = earthaccess_cache_dir(self.cache_dir, short_name)
+        downloaded: list[Path] = self.source.download_granules(list(unique_granules.values()), dest)
+        return downloaded
 
     @staticmethod
     def _merge_search_batches(
         request_specs: Sequence[tuple[datetime, np.ndarray]],
         temporal_windows: Sequence[int],
-    ) -> list[tuple[np.datetime64, np.datetime64, np.ndarray]]:
-        windows: list[tuple[np.datetime64, np.datetime64, np.ndarray]] = []
+    ) -> list[tuple[Any, Any, np.ndarray]]:
+        windows: list[tuple[Any, Any, np.ndarray]] = []
         for (obs_time, sample_dates), temporal_window in zip(request_specs, temporal_windows, strict=True):
             temporal = EarthAccessSource.temporal_window(obs_time, temporal_window)
             start_day = np.datetime64(temporal[0][:10], "D")
@@ -468,7 +482,7 @@ class _EarthAccessBRDFProvider:
             windows.append((start_day, end_day, sample_dates))
 
         windows.sort(key=lambda item: item[0])
-        batches: list[tuple[np.datetime64, np.datetime64, np.ndarray]] = []
+        batches: list[tuple[Any, Any, np.ndarray]] = []
         for start_day, end_day, sample_dates in windows:
             if not batches:
                 batches.append((start_day, end_day, sample_dates))
@@ -492,35 +506,13 @@ class _EarthAccessBRDFProvider:
         crs: str,
         sample_dates: np.ndarray | None = None,
     ) -> list[Path]:
-        if not paths:
-            return []
-
-        sample_day_set = None
-        if sample_dates is not None:
-            sample_day_set = {np.datetime64(day, "D") for day in sample_dates.tolist()}
-
-        selected: list[tuple[tuple[int, int], float, str, Path]] = []
-        for path in paths:
-            try:
-                granule_dt = parse_granule_date(path)
-                granule_day = np.datetime64(granule_dt.date(), "D")
-                if sample_day_set is not None and granule_day not in sample_day_set:
-                    continue
-                delta = abs((granule_dt - obs_time).total_seconds())
-                intersects = granule_intersects_bounds(path, bounds=bounds, crs=crs)
-            except Exception:
-                return paths
-
-            if intersects:
-                try:
-                    tile = parse_tile_indices(path)
-                except Exception:
-                    tile = (999, 999)
-                selected.append((tile, delta, Path(path).name, path))
-
-        if not selected:
-            return []
-        return [item[3] for item in sorted(selected, key=lambda value: (value[0], value[1], value[2]))]
+        return select_candidate_paths(
+            paths,
+            obs_time=obs_time,
+            bounds=bounds,
+            crs=crs,
+            sample_dates=sample_dates,
+        )
 
     def _load_from_granules(
         self,
@@ -612,36 +604,34 @@ class _EarthAccessBRDFProvider:
         resampling: Resampling,
         nodata: float | None,
     ) -> xr.DataArray:
-        if not arrays:
-            raise ValueError("Expected at least one array to merge")
+        return merge_reprojected_tiles(
+            arrays,
+            bounds=bounds,
+            crs=crs,
+            resolution=target_resolution,
+            resampling=resampling,
+            nodata=nodata,
+        )
 
-        reprojected = [
-            reproject_native_to_target(
-                arr,
-                target_bounds=bounds,
-                target_crs=crs,
-                target_resolution=target_resolution,
-                resampling=resampling,
-                nodata=nodata,
-            )
-            for arr in arrays
-        ]
-
-        merged = reprojected[0]
-        for arr in reprojected[1:]:
-            merged = merged.combine_first(arr)
-        return merged.astype(np.float32)
+    @staticmethod
+    def _coerce_sample_day(value: date | datetime | np.datetime64) -> np.datetime64:
+        if isinstance(value, np.datetime64):
+            return cast("np.datetime64", value.astype("datetime64[D]"))
+        if hasattr(value, "date"):
+            return np.datetime64(value.date(), "D")
+        return np.datetime64(value, "D")
 
     @staticmethod
     def _time_axis(obs_time: datetime, temporal_window: int) -> np.ndarray:
         start = obs_time.date() - timedelta(days=int(temporal_window))
-        return np.array(
+        axis: np.ndarray = np.array(
             [
                 np.datetime64(start + timedelta(days=offset))
                 for offset in range(2 * int(temporal_window) + 1)
             ],
             dtype="datetime64[D]",
         )
+        return axis
 
     @staticmethod
     def _coerce_sample_time_axis(
@@ -649,18 +639,13 @@ class _EarthAccessBRDFProvider:
     ) -> np.ndarray:
         if not sample_dates:
             raise ValueError("sample_dates must not be empty")
-        return np.unique(
+        axis: np.ndarray = np.unique(
             np.array(
-                [
-                    np.datetime64(
-                        value.date() if hasattr(value, "date") else value,
-                        "D",
-                    )
-                    for value in sample_dates
-                ],
+                [_EarthAccessBRDFProvider._coerce_sample_day(value) for value in sample_dates],
                 dtype="datetime64[D]",
             )
         )
+        return axis
 
     @staticmethod
     def _temporal_search_window(
@@ -669,9 +654,12 @@ class _EarthAccessBRDFProvider:
         sample_dates: np.ndarray | None,
     ) -> tuple[str, str]:
         if sample_dates is None or sample_dates.size == 0:
-            return EarthAccessSource.temporal_window(obs_time, temporal_window)
-        start = f"{str(sample_dates.min())}T00:00:00Z"
-        end = f"{str(sample_dates.max())}T23:59:59Z"
+            temporal: tuple[str, str] = EarthAccessSource.temporal_window(obs_time, temporal_window)
+            return temporal
+        min_day = cast("Any", sample_dates.min())
+        max_day = cast("Any", sample_dates.max())
+        start = f"{str(min_day)}T00:00:00Z"
+        end = f"{str(max_day)}T23:59:59Z"
         return (start, end)
 
     @staticmethod
@@ -902,15 +890,7 @@ class _EarthAccessBRDFProvider:
 
     @staticmethod
     def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
-        xmin, ymin, xmax, ymax = bounds
-        if resolution <= 0:
-            raise ValueError(f"target_resolution must be > 0, got {resolution}")
-
-        nx = max(1, int(np.ceil((xmax - xmin) / resolution)))
-        ny = max(1, int(np.ceil((ymax - ymin) / resolution)))
-        x = xmin + (np.arange(nx, dtype=np.float32) + 0.5) * resolution
-        y = ymax - (np.arange(ny, dtype=np.float32) + 0.5) * resolution
-        return y, x
+        return target_grid_coords(bounds, resolution, resolution_name="target_resolution")
 
     def _constant_band_array(
         self,
@@ -919,12 +899,12 @@ class _EarthAccessBRDFProvider:
         resolution: float,
         value: float,
     ) -> xr.DataArray:
-        y, x = self._grid(bounds, resolution)
-        arr = np.full((len(bands), y.size, x.size), value, dtype=np.float32)
-        return xr.DataArray(
-            arr,
-            dims=["band", "y", "x"],
-            coords={"band": np.array(bands, dtype=object), "y": y, "x": x},
+        return constant_target_band_array(
+            bands,
+            bounds,
+            resolution,
+            value,
+            resolution_name="target_resolution",
         )
 
     def _default_weights(

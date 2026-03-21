@@ -11,8 +11,9 @@ import logging
 import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 from urllib.parse import urlparse
 
 import numpy as np
@@ -22,7 +23,29 @@ from siac.adapters.auth import CredentialManager
 from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
+
+
+class _FsspecFilesystem(Protocol):
+    def get(self, rpath: str, lpath: str) -> None: ...
+    def ls(self, path: str, detail: bool = False) -> list[object]: ...
+
+
+class _FsspecModule(Protocol):
+    def filesystem(self, protocol: str, **storage_options: object) -> _FsspecFilesystem: ...
+    def open_local(self, urlpath: str, **kwargs: object) -> str: ...
+
+
+class _CDSRequest(Protocol):
+    def download(self, path: str) -> object: ...
+
+
+class _CDSClient(Protocol):
+    def retrieve(self, dataset: str, request: dict[str, object]) -> _CDSRequest: ...
+
+
+class _CDSAPIModule(Protocol):
+    def Client(self, **kwargs: object) -> _CDSClient: ...
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +587,7 @@ class CAMSProvider:
         return None
 
     @contextmanager
-    def _remote_storage_options_context(self, url: str):
+    def _remote_storage_options_context(self, url: str) -> Iterator[dict[str, object]]:
         if self._remote_scheme(url) != "s3":
             yield {}
             return
@@ -586,7 +609,7 @@ class CAMSProvider:
         yield {}
 
     def _cache_remote_file(self, url: str, storage_options: dict | None = None) -> Path:
-        import fsspec
+        fsspec = self._import_fsspec()
 
         if self._remote_scheme(url) == "s3":
             parsed = urlparse(url)
@@ -598,11 +621,13 @@ class CAMSProvider:
                 fs.get(remote_path, str(local_path))
             return local_path
 
-        local_path = fsspec.open_local(
-            f"simplecache::{url}",
-            simplecache={"cache_storage": str(self._remote_cache_root())},
+        cached_path = Path(
+            fsspec.open_local(
+                f"simplecache::{url}",
+                simplecache={"cache_storage": str(self._remote_cache_root())},
+            )
         )
-        return Path(local_path)
+        return cached_path
 
     def _load_from_remote_url(
         self,
@@ -680,7 +705,7 @@ class CAMSProvider:
         obs_time: datetime,
         storage_options: dict,
     ) -> list[str]:
-        import fsspec
+        fsspec = self._import_fsspec()
 
         parsed = urlparse(base_url)
         day_prefix = f"{parsed.netloc}{parsed.path.rstrip('/')}/{obs_time:%Y/%m/%d}"
@@ -693,7 +718,8 @@ class CAMSProvider:
 
         chosen: dict[str, tuple[timedelta, bool, str]] = {}
         for entry in entries:
-            name = entry.rsplit("/", 1)[-1]
+            entry_path = str(entry)
+            name = entry_path.rsplit("/", 1)[-1]
             match = self._CDSE_CAMS_FILE_PATTERN.fullmatch(name)
             if match is None:
                 continue
@@ -707,17 +733,17 @@ class CAMSProvider:
             valid_time = run_time + timedelta(hours=lead_hours)
             delta = abs(valid_time - obs_time)
             is_forecast = match.group("mode") == "fc"
-            candidate = (delta, is_forecast, entry)
+            candidate: tuple[timedelta, bool, str] = (delta, is_forecast, entry_path)
             existing = chosen.get(variable)
             if existing is None or candidate < existing:
                 chosen[variable] = candidate
 
         urls: list[str] = []
         for variable in ("aod550", "gtco3", "tcwv"):
-            candidate = chosen.get(variable)
-            if candidate is None:
+            chosen_candidate = chosen.get(variable)
+            if chosen_candidate is None:
                 continue
-            entry = candidate[2]
+            entry = chosen_candidate[2]
             name = entry.rsplit("/", 1)[-1]
             urls.append(f"s3://{entry}/{name}.nc")
         return urls
@@ -815,7 +841,7 @@ class CAMSProvider:
     def _download_cams_file(self, obs_time: datetime) -> Path | None:
         """Download CAMS data using the official CDS API request pattern."""
         try:
-            import cdsapi  # type: ignore[import-not-found]
+            cdsapi = self._import_cdsapi()
         except ImportError:
             logger.warning("cdsapi is not installed; cannot auto-download CAMS data")
             return None
@@ -830,7 +856,7 @@ class CAMSProvider:
         output_path = output_dir / f"CAMS_{obs_time:%Y-%m-%d}.nc"
         date_range = obs_time.strftime("%Y-%m-%d/%Y-%m-%d")
 
-        request = {
+        request: dict[str, object] = {
             "variable": self._CDS_VARIABLES,
             "date": [date_range],
             "time": "00:00",
@@ -853,3 +879,11 @@ class CAMSProvider:
             logger.warning(f"Failed to download CAMS data for {obs_time:%Y-%m-%d}: {e}")
             return None
         return output_path
+
+    @staticmethod
+    def _import_fsspec() -> _FsspecModule:
+        return cast("_FsspecModule", import_module("fsspec"))
+
+    @staticmethod
+    def _import_cdsapi() -> _CDSAPIModule:
+        return cast("_CDSAPIModule", import_module("cdsapi"))

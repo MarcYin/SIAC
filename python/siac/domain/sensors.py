@@ -87,17 +87,21 @@ class SensorBand:
 
     def gaussian_response(self, wavelengths_nm: np.ndarray) -> np.ndarray:
         sigma = self.bandwidth / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-        return np.exp(-0.5 * ((wavelengths_nm - self.center_wavelength) / sigma) ** 2)
+        response = np.exp(-0.5 * ((wavelengths_nm - self.center_wavelength) / sigma) ** 2)
+        return np.asarray(response, dtype=np.float64)
 
     def effective_response(self, wavelengths_nm: np.ndarray) -> np.ndarray:
         if self.has_rsrf:
-            return np.interp(
-                wavelengths_nm,
-                self.rsrf_wavelengths_nm,
-                self.rsrf_response,
-                left=0.0,
-                right=0.0,
+            assert self.rsrf_wavelengths_nm is not None
+            assert self.rsrf_response is not None
+            interpolated = np.interp(
+                np.asarray(wavelengths_nm, dtype=np.float64),
+                np.asarray(self.rsrf_wavelengths_nm, dtype=np.float64),
+                np.asarray(self.rsrf_response, dtype=np.float64),
+                left=np.float64(0.0),
+                right=np.float64(0.0),
             )
+            return np.asarray(interpolated, dtype=np.float64)
         return self.gaussian_response(wavelengths_nm)
 
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import calendar
+import collections.abc
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 import xarray as xr
@@ -22,6 +23,7 @@ from siac.algorithms.surface.spectral_mapping import (
     SpectralMappingConfig,
     map_multispectral_reflectance,
 )
+from siac.domain import SensorBand
 from siac.runtime import (
     AtmosphericState,
     BRDFKernelWeights,
@@ -31,14 +33,28 @@ from siac.runtime import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from siac.domain import SensorBand
+    from collections.abc import Callable
 
 
 _HISTORY_YEARS = 5
 _HISTORY_MONTH_OFFSETS = (-1, 0, 1)
 _WEEKLY_STEP_DAYS = 7
+
+
+class _TemporalBRDFProvider(Protocol):
+    source_bands: collections.abc.Sequence[SensorBand]
+
+    def get_temporal_brdf_parameters_batch(
+        self,
+        *,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        obs_times: collections.abc.Sequence[datetime],
+        target_resolution: float,
+        bands: collections.abc.Sequence[SensorBand],
+        temporal_windows: collections.abc.Sequence[int],
+        sample_date_sets: collections.abc.Sequence[collections.abc.Sequence[datetime]],
+    ) -> collections.abc.Sequence[BRDFKernelWeights]: ...
 
 
 def build_monthly_surface_prior_database(
@@ -47,8 +63,8 @@ def build_monthly_surface_prior_database(
     brdf_provider: object,
     resolution: float,
     geometry: GeometryAngles,
-    visible_bands: Sequence[SensorBand],
-    query_bands: Sequence[SensorBand],
+    visible_bands: collections.abc.Sequence[SensorBand],
+    query_bands: collections.abc.Sequence[SensorBand],
     spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
     spectral_k_neighbors: int = 5,
 ) -> MonthlyCompositeDatabase:
@@ -61,8 +77,8 @@ def build_monthly_surface_prior_database(
         raise ValueError("resolution must be > 0")
 
     required_bands = _deduplicate_bands([*visible_bands, *query_bands])
-    source_bands = _deduplicate_bands(getattr(brdf_provider, "source_bands", required_bands))
-    obs_time = observation.metadata["observation_time"]
+    source_bands = _resolve_provider_source_bands(brdf_provider, required_bands)
+    obs_time = cast("datetime", observation.metadata["observation_time"])
     month_specs = [
         (
             year,
@@ -73,7 +89,8 @@ def build_monthly_surface_prior_database(
         )
         for year, month in _iter_history_months(obs_time)
     ]
-    temporal_weights_list = brdf_provider.get_temporal_brdf_parameters_batch(
+    temporal_weights_list = _get_temporal_brdf_parameters_batch(
+        brdf_provider,
         bounds=observation.bounds,
         crs=observation.crs,
         obs_times=[spec[2] for spec in month_specs],
@@ -160,7 +177,10 @@ def query_surface_prior_from_monthly_database(
         cloud_mask=observation.cloud_mask,
     )
 
-    target_shape = (database.median_summary.sizes["y"], database.median_summary.sizes["x"])
+    target_shape = (
+        int(database.median_summary.sizes["y"]),
+        int(database.median_summary.sizes["x"]),
+    )
     corrected_query = _resample_dataset(
         correction.boa,
         band_names=expected_query,
@@ -199,7 +219,10 @@ def resample_geometry_for_surface_prior(
     """Resample geometry to the Route-B target grid."""
     native_resolution = _native_observation_resolution(observation)
     first_var = next(iter(observation.toa.data_vars))
-    target_shape = _compute_target_shape(observation.toa[first_var].shape, native_resolution, resolution)
+    target_shape = cast(
+        "tuple[int, int]",
+        _compute_target_shape(observation.toa[first_var].shape, native_resolution, resolution),
+    )
     return GeometryAngles(
         sza=_resample_da(observation.geometry.sza, target_shape, "bilinear"),
         saa=_resample_da(observation.geometry.saa, target_shape, "bilinear"),
@@ -248,14 +271,20 @@ def _forward_model_monthly_reflectance(
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
     kernels = BRDFKernels(hb=2.0, br=1.0)
     k_vol, k_geo = kernels.compute(geometry.vza, geometry.sza, geometry.raa)
-    reflectance = compute_reflectance(
-        temporal_weights.f0,
-        temporal_weights.f1,
-        temporal_weights.f2,
-        k_vol,
-        k_geo,
+    reflectance = cast(
+        "xr.DataArray",
+        compute_reflectance(
+            temporal_weights.f0,
+            temporal_weights.f1,
+            temporal_weights.f2,
+            cast("xr.DataArray", k_vol),
+            cast("xr.DataArray", k_geo),
+        ),
     ).transpose("time", "band", "y", "x")
-    reflectance_unc = temporal_weights.compute_reflectance_uncertainty(k_vol, k_geo).transpose("time", "band", "y", "x")
+    reflectance_unc = temporal_weights.compute_reflectance_uncertainty(
+        cast("xr.DataArray", k_vol),
+        cast("xr.DataArray", k_geo),
+    ).transpose("time", "band", "y", "x")
 
     month_mask = _select_month_mask(temporal_weights.f0.coords["time"].values, year=year, month=month)
     if month_mask.any():
@@ -269,10 +298,14 @@ def _forward_model_monthly_reflectance(
 def _select_month_mask(time_values: np.ndarray, *, year: int, month: int) -> np.ndarray:
     month_strings = np.asarray(time_values, dtype="datetime64[D]").astype("datetime64[M]")
     target = np.datetime64(f"{year:04d}-{month:02d}", "M")
-    return month_strings == target
+    month_mask = cast(
+        "np.ndarray[Any, np.dtype[np.bool_]]",
+        np.asarray(month_strings == target, dtype=np.bool_),
+    )
+    return month_mask
 
 
-def _deduplicate_bands(bands: Sequence[SensorBand]) -> list[SensorBand]:
+def _deduplicate_bands(bands: collections.abc.Sequence[SensorBand]) -> list[SensorBand]:
     seen: set[str] = set()
     ordered: list[SensorBand] = []
     for band in bands:
@@ -296,7 +329,11 @@ def _native_observation_resolution(observation: ObservationBundle) -> float:
 
 def _observation_shape(observation: ObservationBundle) -> tuple[int, int]:
     first_var = next(iter(observation.toa.data_vars))
-    return tuple(int(size) for size in observation.toa[first_var].shape)
+    shape = observation.toa[first_var].shape
+    if len(shape) != 2:
+        raise ValueError("Observation TOA variables must be 2-D over y/x")
+    height, width = shape
+    return int(height), int(width)
 
 
 def _resample_atmo_to_observation_grid(
@@ -320,7 +357,7 @@ def _resample_atmo_to_observation_grid(
 def _resample_dataset(
     dataset: xr.Dataset,
     *,
-    band_names: Sequence[str],
+    band_names: collections.abc.Sequence[str],
     target_shape: tuple[int, int],
 ) -> xr.Dataset:
     data_vars = {
@@ -331,3 +368,47 @@ def _resample_dataset(
     if not data_vars:
         raise ValueError("No query bands were available in the corrected reflectance dataset")
     return xr.Dataset(data_vars)
+
+
+def _resolve_provider_source_bands(
+    brdf_provider: object,
+    fallback: collections.abc.Sequence[SensorBand],
+) -> list[SensorBand]:
+    raw_source_bands = getattr(brdf_provider, "source_bands", None)
+    if raw_source_bands is None:
+        return _deduplicate_bands(fallback)
+    if isinstance(raw_source_bands, (str, bytes, collections.abc.Mapping)):
+        raise TypeError("brdf_provider.source_bands must be a sequence of SensorBand objects")
+    try:
+        source_bands = list(raw_source_bands)
+    except TypeError as exc:
+        raise TypeError("brdf_provider.source_bands must be a sequence of SensorBand objects") from exc
+    if not all(isinstance(band, SensorBand) for band in source_bands):
+        raise TypeError("brdf_provider.source_bands must contain only SensorBand objects")
+    return _deduplicate_bands(source_bands)
+
+
+def _get_temporal_brdf_parameters_batch(
+    brdf_provider: object,
+    *,
+    bounds: tuple[float, float, float, float],
+    crs: str,
+    obs_times: collections.abc.Sequence[datetime],
+    target_resolution: float,
+    bands: collections.abc.Sequence[SensorBand],
+    temporal_windows: collections.abc.Sequence[int],
+    sample_date_sets: collections.abc.Sequence[collections.abc.Sequence[datetime]],
+) -> collections.abc.Sequence[BRDFKernelWeights]:
+    method = getattr(brdf_provider, "get_temporal_brdf_parameters_batch", None)
+    if method is None or not callable(method):
+        raise TypeError("brdf_provider must define get_temporal_brdf_parameters_batch(...)")
+    batch_fetcher = cast("Callable[..., collections.abc.Sequence[BRDFKernelWeights]]", method)
+    return batch_fetcher(
+        bounds=bounds,
+        crs=crs,
+        obs_times=obs_times,
+        target_resolution=target_resolution,
+        bands=bands,
+        temporal_windows=temporal_windows,
+        sample_date_sets=sample_date_sets,
+    )

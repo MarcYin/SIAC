@@ -184,6 +184,39 @@ def test_cams_select_cdse_s3_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     ]
 
 
+def test_cams_select_cdse_s3_files_coerces_listing_entries_to_strings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import fsspec
+
+    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", cache_dir=tmp_path / "cache")
+
+    class _Entry:
+        def __str__(self) -> str:
+            return (
+                "eodata/CAMS/GLOBAL/2024/01/01/"
+                "z_cams_c_ecmf_20240101000000_prod_an_sfc_000_tcwv"
+            )
+
+    class _FakeFS:
+        def ls(self, path, detail=False):  # noqa: ARG002
+            assert path == "eodata/CAMS/GLOBAL/2024/01/01"
+            return [_Entry()]
+
+    monkeypatch.setattr(fsspec, "filesystem", lambda _protocol, **_kwargs: _FakeFS())
+
+    selected = provider._select_cdse_cams_files(
+        "s3://eodata/CAMS/GLOBAL",
+        datetime(2024, 1, 1, 0, 0),
+        {},
+    )
+
+    assert selected == [
+        "s3://eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_tcwv/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_tcwv.nc",
+    ]
+
+
 def test_cams_remote_s3_base_merges_selected_datasets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", cache_dir=tmp_path / "cache")
 

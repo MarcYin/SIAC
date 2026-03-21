@@ -9,6 +9,7 @@ convolution for scale matching.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import xarray as xr
@@ -18,7 +19,18 @@ from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectance
 from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from siac.algorithms.surface.spectral_mapping import (
+        HyperspectralLibrary,
+        SpectralMappingConfig,
+    )
+    from siac.domain import SensorBand
+
+
 logger = logging.getLogger(__name__)
+FloatArray = np.ndarray[Any, np.dtype[np.floating[Any]]]
 
 
 class KernelModelDeriver:
@@ -39,7 +51,7 @@ class KernelModelDeriver:
         psf_sigma_x: float = 29.75,
         psf_sigma_y: float = 39.0,
         apply_psf: bool = True,
-    ):
+    ) -> None:
         self.psf_sigma_x = psf_sigma_x
         self.psf_sigma_y = psf_sigma_y
         self.apply_psf = apply_psf
@@ -51,9 +63,9 @@ class KernelModelDeriver:
         geometry: GeometryAngles,
         psf_params: tuple[float, float] | None = None,
         *,
-        source_bands: list | tuple | None = None,
-        target_bands: list | tuple | None = None,
-        spectral_library: object | None = None,
+        source_bands: Sequence[SensorBand] | None = None,
+        target_bands: Sequence[SensorBand] | None = None,
+        spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
         spectral_k_neighbors: int = 5,
     ) -> SurfacePrior:
         """
@@ -76,20 +88,31 @@ class KernelModelDeriver:
         k_vol, k_geo = self._kernels.compute(
             geometry.vza, geometry.sza, geometry.raa
         )
-        k_vol, k_geo = self._align_kernels_to_brdf_grid(k_vol, k_geo, brdf_weights.f0)
+        k_vol_da = cast("xr.DataArray", k_vol)
+        k_geo_da = cast("xr.DataArray", k_geo)
+        k_vol_da, k_geo_da = self._align_kernels_to_brdf_grid(
+            k_vol_da,
+            k_geo_da,
+            brdf_weights.f0,
+        )
 
         # Compute reflectance per band
-        boa = compute_reflectance(
-            brdf_weights.f0,
-            brdf_weights.f1,
-            brdf_weights.f2,
-            k_vol,
-            k_geo,
+        boa = cast(
+            "xr.DataArray",
+            compute_reflectance(
+                brdf_weights.f0,
+                brdf_weights.f1,
+                brdf_weights.f2,
+                k_vol_da,
+                k_geo_da,
+            ),
         )
 
         # Compute uncertainty
         boa_unc = self._compute_uncertainty(
-            brdf_weights, k_vol, k_geo
+            brdf_weights,
+            k_vol_da,
+            k_geo_da,
         )
 
         if source_bands and target_bands:
@@ -175,16 +198,16 @@ class KernelModelDeriver:
         if src.shape == target_shape:
             return xr.DataArray(src, dims=["y", "x"], coords={"y": target_y, "x": target_x})
         if src.shape[0] == 0 or src.shape[1] == 0:
-            out = np.full(target_shape, np.nan, dtype=np.float32)
-            return xr.DataArray(out, dims=["y", "x"], coords={"y": target_y, "x": target_x})
+            empty_out: FloatArray = np.full(target_shape, np.nan, dtype=np.float32)
+            return xr.DataArray(empty_out, dims=["y", "x"], coords={"y": target_y, "x": target_x})
 
         zoom_y = h_out / src.shape[0]
         zoom_x = w_out / src.shape[1]
-        out = ndimage.zoom(src, (zoom_y, zoom_x), order=1)
+        out: FloatArray = np.asarray(ndimage.zoom(src, (zoom_y, zoom_x), order=1), dtype=np.float32)
         out = out[:h_out, :w_out]
 
         if out.shape != target_shape:
-            padded = np.full(target_shape, np.nan, dtype=np.float32)
+            padded: FloatArray = np.full(target_shape, np.nan, dtype=np.float32)
             h = min(out.shape[0], h_out)
             w = min(out.shape[1], w_out)
             padded[:h, :w] = out[:h, :w]
@@ -241,31 +264,40 @@ class KernelModelDeriver:
 
     def _convolve_2d(
         self,
-        data: np.ndarray,
+        data: FloatArray,
         sigma_x: float,
         sigma_y: float,
-    ) -> np.ndarray:
+    ) -> FloatArray:
         """Apply 2D Gaussian convolution."""
+        data_arr = np.asarray(data, dtype=np.float32)
         # Handle NaN values
-        mask = np.isfinite(data)
-        data_filled = np.where(mask, data, 0.0)
+        mask = np.isfinite(data_arr)
+        data_filled = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
 
         # Convolve data and mask
-        convolved = ndimage.gaussian_filter(
-            data_filled, sigma=[sigma_y, sigma_x], mode="reflect"
+        convolved = np.asarray(
+            ndimage.gaussian_filter(
+                data_filled, sigma=[sigma_y, sigma_x], mode="reflect"
+            ),
+            dtype=np.float32,
         )
-        norm = ndimage.gaussian_filter(
-            mask.astype(float), sigma=[sigma_y, sigma_x], mode="reflect"
+        norm = np.asarray(
+            ndimage.gaussian_filter(
+                mask.astype(np.float32), sigma=[sigma_y, sigma_x], mode="reflect"
+            ),
+            dtype=np.float32,
         )
 
         # Normalize to account for missing data
         with np.errstate(divide="ignore", invalid="ignore"):
-            result = convolved / np.maximum(norm, 1e-10)
+            result: FloatArray = np.asarray(
+                convolved / np.maximum(norm, 1.0e-10),
+                dtype=np.float32,
+            )
 
         # Restore NaN where no valid data
-        result = np.where(norm > 0.01, result, np.nan)
-
-        return result
+        restored: FloatArray = np.asarray(np.where(norm > 0.01, result, np.nan), dtype=np.float32)
+        return restored
 
 
 class PSFConvolver:
@@ -277,7 +309,7 @@ class PSFConvolver:
     convolution.
     """
 
-    def __init__(self, sigma_x: float = 29.75, sigma_y: float = 39.0):
+    def __init__(self, sigma_x: float = 29.75, sigma_y: float = 39.0) -> None:
         self.sigma_x = sigma_x
         self.sigma_y = sigma_y
 
@@ -291,55 +323,63 @@ class PSFConvolver:
         Returns:
             Convolved array
         """
-        is_xarray = isinstance(data, xr.DataArray)
-        if is_xarray:
-            arr = data.values
-            template = data
-        else:
-            arr = np.asarray(data)
-            template = None
+        if isinstance(data, xr.DataArray):
+            arr = np.asarray(data.values, dtype=np.float32)
+            result = self._dct_convolve(arr)
+            return xr.DataArray(result, dims=data.dims, coords=data.coords)
 
-        # Apply DCT-based convolution
-        result = self._dct_convolve(arr)
+        arr = np.asarray(data, dtype=np.float32)
+        return self._dct_convolve(arr)
 
-        if is_xarray:
-            return xr.DataArray(result, dims=template.dims, coords=template.coords)
-        return result
-
-    def _dct_convolve(self, data: np.ndarray) -> np.ndarray:
+    def _dct_convolve(self, data: FloatArray) -> FloatArray:
         """DCT-based Gaussian convolution."""
         from scipy.fftpack import dct, idct
 
-        height, width = data.shape
+        data_arr = np.asarray(data, dtype=np.float32)
+        height, width = data_arr.shape
 
         # Handle NaN
-        mask = np.isfinite(data)
-        data_filled = np.where(mask, data, 0.0)
+        mask = np.isfinite(data_arr)
+        data_filled = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
 
         # Gaussian in frequency domain
-        u = np.arange(height) / height
-        v = np.arange(width) / width
+        u = np.arange(height, dtype=np.float32) / max(height, 1)
+        v = np.arange(width, dtype=np.float32) / max(width, 1)
 
-        gx = np.exp(-2 * np.pi**2 * self.sigma_x**2 * (0.5 * u) ** 2)
-        gy = np.exp(-2 * np.pi**2 * self.sigma_y**2 * (0.5 * v) ** 2)
-        kernel = np.outer(gx, gy)
+        gx = np.exp(-2 * np.pi**2 * self.sigma_x**2 * (0.5 * u) ** 2).astype(np.float32)
+        gy = np.exp(-2 * np.pi**2 * self.sigma_y**2 * (0.5 * v) ** 2).astype(np.float32)
+        kernel: FloatArray = np.asarray(np.outer(gx, gy), dtype=np.float32)
 
         # Forward DCT
-        data_dct = dct(dct(data_filled, axis=0, norm="ortho"), axis=1, norm="ortho")
-        mask_dct = dct(dct(mask.astype(float), axis=0, norm="ortho"), axis=1, norm="ortho")
+        data_dct = np.asarray(
+            dct(dct(data_filled, axis=0, norm="ortho"), axis=1, norm="ortho"),
+            dtype=np.float32,
+        )
+        mask_dct = np.asarray(
+            dct(dct(mask.astype(np.float32), axis=0, norm="ortho"), axis=1, norm="ortho"),
+            dtype=np.float32,
+        )
 
         # Multiply in frequency domain
         convolved_dct = data_dct * kernel
         norm_dct = mask_dct * kernel
 
         # Inverse DCT
-        convolved = idct(idct(convolved_dct, axis=1, norm="ortho"), axis=0, norm="ortho")
-        norm = idct(idct(norm_dct, axis=1, norm="ortho"), axis=0, norm="ortho")
+        convolved = np.asarray(
+            idct(idct(convolved_dct, axis=1, norm="ortho"), axis=0, norm="ortho"),
+            dtype=np.float32,
+        )
+        norm = np.asarray(
+            idct(idct(norm_dct, axis=1, norm="ortho"), axis=0, norm="ortho"),
+            dtype=np.float32,
+        )
 
         # Normalize
         with np.errstate(divide="ignore", invalid="ignore"):
-            result = convolved / np.maximum(norm, 1e-10)
+            result: FloatArray = np.asarray(
+                convolved / np.maximum(norm, 1.0e-10),
+                dtype=np.float32,
+            )
 
-        result = np.where(norm > 0.01, result, np.nan)
-
-        return result
+        restored: FloatArray = np.asarray(np.where(norm > 0.01, result, np.nan), dtype=np.float32)
+        return restored

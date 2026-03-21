@@ -48,6 +48,7 @@ from siac.storage.writers import (
     write_cog,
     write_dataset,
     write_netcdf,
+    write_raster,
     write_rgb_quicklook,
     write_zarr,
 )
@@ -204,7 +205,7 @@ class TestReprojectionExtra:
         assert x2.shape == (2,)
         assert y2.shape == (2,)
 
-        assert get_transform(da) is not None
+        assert get_transform(da) == da.rio.transform()
         assert get_crs(da) == "EPSG:32632"
 
         same = align_grids(da)
@@ -399,7 +400,7 @@ class TestWritersExtra:
         write_zarr(ds[["B02"]], zarr_path, chunks={"y": 8, "x": 8})
         assert zarr_path.exists()
 
-    def test_write_netcdf_dataarray_default_compression_and_write_cog_options(
+    def test_write_netcdf_dataarray_default_compression_and_raster_write_options(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -421,20 +422,26 @@ class TestWritersExtra:
         assert captures[-1]["encoding"]["y"]["_FillValue"] is None
         assert captures[-1]["encoding"]["spatial_ref"]["_FillValue"] is None
 
-        cog_calls: list[dict[str, object]] = []
+        raster_calls: list[dict[str, object]] = []
 
         def _fake_to_raster(self, path, **kwargs):  # noqa: ANN001
-            cog_calls.append(kwargs)
+            raster_calls.append(kwargs)
             Path(path).write_bytes(b"x")
 
         monkeypatch.setattr(type(da.rio), "to_raster", _fake_to_raster, raising=False)
+        out_raster = write_raster(da, tmp_path / "plain.tif", compression="deflate", predictor=2)
+        assert out_raster.exists()
         out = write_cog(da, tmp_path / "x.tif", compression="deflate")
         assert out.exists()
-        assert cog_calls
-        assert cog_calls[-1]["driver"] == "COG"
-        assert cog_calls[-1]["compress"] == "deflate"
-        assert cog_calls[-1]["level"] == 6
-        assert "zlevel" not in cog_calls[-1]
+        assert len(raster_calls) == 2
+        assert raster_calls[0]["driver"] == "GTiff"
+        assert raster_calls[0]["compress"] == "deflate"
+        assert raster_calls[0]["zlevel"] == 6
+        assert raster_calls[0]["predictor"] == 2
+        assert raster_calls[1]["driver"] == "COG"
+        assert raster_calls[1]["compress"] == "deflate"
+        assert raster_calls[1]["level"] == 6
+        assert "zlevel" not in raster_calls[1]
 
     def test_write_netcdf_preserves_grid_mapping_encoding(
         self,

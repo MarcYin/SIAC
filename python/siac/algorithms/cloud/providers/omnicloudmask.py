@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from importlib import import_module
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import xarray as xr
@@ -22,7 +23,7 @@ class OmniCloudMaskProvider:
     @staticmethod
     def _default_predictor() -> Callable[[np.ndarray], np.ndarray]:
         try:
-            import omnicloudmask  # type: ignore[import-not-found]
+            omnicloudmask = import_module("omnicloudmask")
         except Exception as exc:
             raise ImportError(
                 "omnicloudmask is required for SIAC cloud masking. "
@@ -35,7 +36,7 @@ class OmniCloudMaskProvider:
                 "omnicloudmask does not expose a callable predict_from_array() entrypoint"
             )
 
-        return predict_from_array
+        return cast("Callable[[np.ndarray], np.ndarray]", predict_from_array)
 
     @staticmethod
     def _normalize_raw_output(raw: np.ndarray, template: xr.DataArray) -> xr.DataArray:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import xarray as xr
 
+import siac.algorithms.surface.spectral_mapping as spectral_mapping_mod
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.algorithms.surface.spectral_mapping import (
     HyperspectralLibrary,
@@ -285,3 +289,136 @@ def test_mapping_requires_explicit_spectral_library(monkeypatch) -> None:
             target_bands=_target_bands(),
             spectral_library=None,
         )
+
+
+def test_spectral_mapper_rejects_missing_band_dimension() -> None:
+    mapper = SpectralMapper(_source_bands(), _target_bands(), spectral_library=_library(), k_neighbors=1)
+    data = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
+
+    with pytest.raises(ValueError, match="'band' dimension"):
+        mapper.map(data)
+
+
+def test_spectral_mapper_rejects_missing_source_bands() -> None:
+    mapper = SpectralMapper(_source_bands(), _target_bands(), spectral_library=_library(), k_neighbors=1)
+    data = xr.DataArray(
+        np.ones((1, 1, 1), dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["Band3"], "y": [0], "x": [0]},
+    )
+
+    with pytest.raises(KeyError, match="missing source bands"):
+        mapper.map(data)
+
+
+def test_spectral_mapper_preserves_original_dim_order() -> None:
+    library = _library()
+    sample0 = xr.DataArray(
+        library.spectra[0].reshape(1, 1, -1),
+        dims=["y", "x", "wavelength"],
+        coords={"y": [0], "x": [0], "wavelength": library.wavelengths_nm},
+    )
+    sample1 = xr.DataArray(
+        library.spectra[1].reshape(1, 1, -1),
+        dims=["y", "x", "wavelength"],
+        coords={"y": [0], "x": [0], "wavelength": library.wavelengths_nm},
+    )
+    source0 = convolve_hyperspectral_reflectance(sample0, library.wavelengths_nm, _source_bands())
+    source1 = convolve_hyperspectral_reflectance(sample1, library.wavelengths_nm, _source_bands())
+    source = xr.concat(
+        [source0, source1],
+        dim=xr.IndexVariable("time", np.array(["2024-07-01", "2024-07-08"], dtype="datetime64[D]")),
+    ).transpose("time", "y", "band", "x")
+    unc = xr.full_like(source, 0.02)
+
+    mapped, mapped_unc = SpectralMapper(
+        _source_bands(),
+        _target_bands(),
+        spectral_library=library,
+        k_neighbors=1,
+    ).map(source, source_uncertainty=unc)
+
+    assert mapped.dims == ("time", "y", "band", "x")
+    assert mapped_unc.dims == mapped.dims
+    assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
+
+
+def test_prepare_runtime_reuses_existing_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    prepare_calls = {"count": 0}
+    siac_root = tmp_path / "siac-library"
+    siac_root.mkdir()
+
+    def _fake_prepare(*, siac_root: Path, srf_root: Path, output_root: Path, source_sensors):  # noqa: ANN001
+        prepare_calls["count"] += 1
+        output_root.mkdir(parents=True, exist_ok=True)
+        (output_root / "manifest.json").write_text("{}", encoding="utf-8")
+        assert siac_root.exists()
+        assert srf_root.exists()
+        assert source_sensors
+
+    class _FakePackageMapper:
+        def __init__(self, prepared_root: Path, *, verify_checksums: bool = False) -> None:
+            assert verify_checksums is False
+            self._prepared_root = prepared_root
+            self._schemas = {}
+            for path in (prepared_root.parent / "srfs").glob("*.json"):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self._schemas[payload["sensor_id"]] = SimpleNamespace(
+                    bands=[SimpleNamespace(band_id=band["band_id"], segment=band["segment"]) for band in payload["bands"]]
+                )
+
+        def get_sensor_schema(self, sensor_id: str):
+            return self._schemas[sensor_id]
+
+    monkeypatch.setattr(spectral_mapping_mod, "prepare_package_mapping_library", _fake_prepare)
+    monkeypatch.setattr(spectral_mapping_mod, "PackageSpectralMapper", _FakePackageMapper)
+
+    config = spectral_mapping_mod.SpectralMappingConfig(
+        cache_dir=tmp_path,
+        siac_library_root=siac_root,
+    )
+    mapper0 = SpectralMapper(_source_bands(), _target_bands(), spectral_library=config, k_neighbors=1)
+    mapper1 = SpectralMapper(_source_bands(), _target_bands(), spectral_library=config, k_neighbors=1)
+
+    assert mapper0._runtime is not None
+    assert mapper1._runtime is not None
+    assert prepare_calls["count"] == 1
+
+
+def test_canonicalize_curve_sorts_and_deduplicates_samples() -> None:
+    wavelengths, response = spectral_mapping_mod._canonicalize_curve(
+        np.array([500.0, 490.0, 490.0, 510.0], dtype=np.float32),
+        np.array([0.0, 0.2, 0.5, 0.0], dtype=np.float32),
+    )
+
+    np.testing.assert_allclose(wavelengths, np.array([490.0, 500.0], dtype=np.float32))
+    np.testing.assert_allclose(response, np.array([0.2, 0.0], dtype=np.float32))
+
+
+def test_segmentize_curve_raises_when_support_is_outside_segment() -> None:
+    with pytest.raises(ValueError, match="does not overlap"):
+        spectral_mapping_mod._segmentize_curve(
+            np.array([1600.0, 1610.0, 1620.0], dtype=np.float32),
+            np.array([0.0, 1.0, 0.0], dtype=np.float32),
+            segment="vnir",
+        )
+
+
+def test_estimate_uncertainty_falls_back_to_floor_for_mapped_bands() -> None:
+    mapper = object.__new__(SpectralMapper)
+    mapper.target_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
+    mapper._package_mapper = SimpleNamespace()
+    mapper._runtime = SimpleNamespace(target_sensor_id="target")
+    mapper._target_internal_to_output_index = {"B02": 0}
+    mapper._target_schema_by_band_id = {"B02": SimpleNamespace(band_id="B02", segment="vnir")}
+    mapper._source_retrieval_indices_by_segment = {"vnir": np.array([0], dtype=np.int32), "swir": np.array([], dtype=np.int32)}
+
+    result = SimpleNamespace(
+        target_reflectance=[0.2],
+        target_band_ids=["B02"],
+        diagnostics={},
+    )
+
+    output = mapper._estimate_uncertainty(result, source_uncertainty=None)
+
+    np.testing.assert_allclose(output, np.array([0.005], dtype=np.float32))

@@ -77,6 +77,24 @@ class TestBRDFKernels:
         assert isinstance(k_vol, xr.DataArray)
         assert k_vol.shape == shape
 
+    def test_compute_mixed_xarray_and_numpy_input_uses_dataarray_template(self, kernels):
+        shape = (4, 3)
+        vza = xr.DataArray(
+            np.full(shape, 0.1, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": [10, 11, 12, 13], "x": [20, 21, 22]},
+        )
+        sza = np.full(shape, 0.5, dtype=np.float32)
+        raa = xr.DataArray(np.full(shape, 1.0, dtype=np.float32), dims=["y", "x"], coords=vza.coords)
+
+        k_vol, k_geo = kernels.compute(vza, sza, raa)
+
+        assert isinstance(k_vol, xr.DataArray)
+        assert isinstance(k_geo, xr.DataArray)
+        assert k_vol.dims == ("y", "x")
+        assert np.array_equal(k_vol.coords["y"].values, vza.coords["y"].values)
+        assert np.array_equal(k_geo.coords["x"].values, vza.coords["x"].values)
+
     def test_compute_batch(self, kernels):
         """Should handle batched inputs efficiently."""
         shape = (100, 100)

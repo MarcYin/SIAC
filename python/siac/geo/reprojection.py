@@ -18,13 +18,16 @@ Example:
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
 from pyproj import CRS, Transformer
 from rasterio.enums import Resampling
+
+if TYPE_CHECKING:
+    from affine import Affine
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +334,8 @@ def transform_bounds(
     """
     from rasterio.warp import transform_bounds as rio_transform_bounds
 
-    return rio_transform_bounds(source_crs, target_crs, *bounds)
+    xmin, ymin, xmax, ymax = rio_transform_bounds(source_crs, target_crs, *bounds)
+    return (float(xmin), float(ymin), float(xmax), float(ymax))
 
 
 def transform_points(
@@ -383,10 +387,10 @@ def get_bounds(data: xr.DataArray) -> tuple[float, float, float, float]:
         Bounds as (xmin, ymin, xmax, ymax)
     """
     bounds = data.rio.bounds()
-    return (bounds[0], bounds[1], bounds[2], bounds[3])
+    return (float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3]))
 
 
-def get_transform(data: xr.DataArray) -> tuple:
+def get_transform(data: xr.DataArray) -> Affine:
     """
     Get the affine transform of a DataArray.
 
@@ -394,7 +398,7 @@ def get_transform(data: xr.DataArray) -> tuple:
         data: DataArray with spatial coordinates
 
     Returns:
-        Affine transform as tuple
+        Affine transform
     """
     return data.rio.transform()
 

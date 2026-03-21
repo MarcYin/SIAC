@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import rioxarray  # noqa: F401 - needed for .rio accessor
@@ -30,9 +30,16 @@ import xarray as xr
 from rasterio.enums import Resampling
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import MutableMapping, Sequence
 
 logger = logging.getLogger(__name__)
+
+
+def _get_remote_zarr_mapper(path: str) -> MutableMapping[str, bytes]:
+    """Open a typed fsspec mapping for remote Zarr stores."""
+    import fsspec  # type: ignore[import-untyped]
+
+    return cast("MutableMapping[str, bytes]", fsspec.get_mapper(path))
 
 
 # =============================================================================
@@ -374,8 +381,7 @@ def read_zarr_array(
 
     # Handle remote URLs
     if path.startswith(("http://", "https://", "s3://")):
-        import fsspec
-        mapper = fsspec.get_mapper(path)
+        mapper = _get_remote_zarr_mapper(path)
         ds = xr.open_zarr(mapper, chunks=chunks)
     else:
         ds = xr.open_zarr(path, chunks=chunks)

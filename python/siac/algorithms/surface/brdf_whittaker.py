@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import xarray as xr
 
-from siac._rust import whittaker_smooth_cube
+from siac._rust_compat import whittaker_smooth_cube
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectance
@@ -16,6 +16,8 @@ from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary, SpectralMappingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,28 +47,50 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         self,
         brdf_weights: BRDFKernelWeights,
         geometry: GeometryAngles,
+        psf_params: tuple[float, float] | None = None,
         *,
-        obs_time: datetime | None = None,
         source_bands: list | tuple | None = None,
         target_bands: list | tuple | None = None,
         spectral_library: object | None = None,
         spectral_k_neighbors: int = 5,
+        **kwargs: Any,
     ) -> SurfacePrior:
+        obs_time = kwargs.pop("obs_time", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
+        obs_time = cast("datetime | None", obs_time)
+        spectral_mapping_library = cast(
+            "HyperspectralLibrary | SpectralMappingConfig | None",
+            spectral_library,
+        )
         if "time" not in brdf_weights.f0.dims:
             raise ValueError("Whittaker BRDF derivation requires BRDF weights with a 'time' dimension")
+        if psf_params is not None:
+            sigma_x, sigma_y = psf_params
+        else:
+            sigma_x, sigma_y = self.psf_sigma_x, self.psf_sigma_y
 
         ref = brdf_weights.f0.isel(time=0, drop=True)
         k_vol, k_geo = self._kernels.compute(geometry.vza, geometry.sza, geometry.raa)
+        k_vol = self._require_data_array(k_vol, name="k_vol")
+        k_geo = self._require_data_array(k_geo, name="k_geo")
         k_vol, k_geo = self._align_kernels_to_brdf_grid(k_vol, k_geo, ref)
 
-        reflectance = compute_reflectance(
-            brdf_weights.f0,
-            brdf_weights.f1,
-            brdf_weights.f2,
-            k_vol,
-            k_geo,
+        reflectance = self._require_data_array(
+            compute_reflectance(
+                brdf_weights.f0,
+                brdf_weights.f1,
+                brdf_weights.f2,
+                k_vol,
+                k_geo,
+            ),
+            name="reflectance",
         ).transpose("time", "band", "y", "x")
-        reflectance_unc = brdf_weights.compute_reflectance_uncertainty(k_vol, k_geo).transpose(
+        reflectance_unc = self._require_data_array(
+            brdf_weights.compute_reflectance_uncertainty(k_vol, k_geo),
+            name="reflectance_unc",
+        ).transpose(
             "time", "band", "y", "x"
         )
 
@@ -131,13 +155,13 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
                 source_bands=source_bands,
                 target_bands=target_bands,
                 source_uncertainty=boa_unc,
-                spectral_library=spectral_library,
+                spectral_library=spectral_mapping_library,
                 k_neighbors=spectral_k_neighbors,
             )
 
-        if self.apply_psf and self.psf_sigma_x > 0 and self.psf_sigma_y > 0:
-            boa = self._apply_psf(boa, self.psf_sigma_x, self.psf_sigma_y)
-            boa_unc = self._apply_psf(boa_unc, self.psf_sigma_x, self.psf_sigma_y)
+        if self.apply_psf and sigma_x > 0 and sigma_y > 0:
+            boa = self._apply_psf(boa, sigma_x, sigma_y)
+            boa_unc = self._apply_psf(boa_unc, sigma_x, sigma_y)
 
         mask = xr.DataArray(
             np.all(np.isfinite(boa.values), axis=0) & np.all(np.isfinite(boa_unc.values), axis=0),
@@ -150,6 +174,12 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             kernels=None,
             mask=mask,
         )
+
+    @staticmethod
+    def _require_data_array(value: xr.DataArray | np.ndarray[Any, Any], *, name: str) -> xr.DataArray:
+        if not isinstance(value, xr.DataArray):
+            raise TypeError(f"{name} must be an xarray.DataArray")
+        return value
 
     @staticmethod
     def _target_index(time_values: np.ndarray, obs_time: datetime | None) -> int:

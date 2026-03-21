@@ -20,7 +20,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 import rioxarray  # noqa: F401
@@ -28,8 +28,10 @@ import xarray as xr
 
 logger = logging.getLogger(__name__)
 
+CompressionSettings: TypeAlias = dict[str, str | int]
+
 # Compression settings for GTiff/GeoTIFF drivers.
-GTIFF_COMPRESSION_SETTINGS = {
+GTIFF_COMPRESSION_SETTINGS: dict[str, CompressionSettings] = {
     "deflate": {"compress": "deflate", "zlevel": 6},
     "lzw": {"compress": "lzw"},
     "zstd": {"compress": "zstd", "zstd_level": 9},
@@ -37,7 +39,7 @@ GTIFF_COMPRESSION_SETTINGS = {
 }
 
 # Compression settings accepted by GDAL's COG driver.
-COG_COMPRESSION_SETTINGS = {
+COG_COMPRESSION_SETTINGS: dict[str, CompressionSettings] = {
     "deflate": {"compress": "deflate", "level": 6},
     "lzw": {"compress": "lzw"},
     "zstd": {"compress": "zstd", "level": 9},
@@ -128,10 +130,11 @@ def write_raster(
     data = _prepare_for_write(data, dtype, nodata)
 
     # Build write options
-    write_kwargs = {
+    compression_options = GTIFF_COMPRESSION_SETTINGS.get(compression, {})
+    write_kwargs: dict[str, Any] = {
         "driver": "GTiff",
         "tiled": tiled,
-        **GTIFF_COMPRESSION_SETTINGS.get(compression, {}),
+        **compression_options,
         **kwargs,
     }
 
@@ -182,11 +185,12 @@ def write_cog(
     data = _prepare_for_write(data, dtype, nodata)
 
     # Build COG write options
-    write_kwargs = {
+    compression_options = COG_COMPRESSION_SETTINGS.get(compression, {})
+    write_kwargs: dict[str, Any] = {
         "driver": "COG",
         "blocksize": blocksize,
         "overview_resampling": overview_resampling,
-        **COG_COMPRESSION_SETTINGS.get(compression, {}),
+        **compression_options,
         **kwargs,
     }
 

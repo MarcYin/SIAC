@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -111,6 +111,52 @@ def test_mcd19_provider_returns_default_prior_without_probe():
     assert state.tco3_unc.shape == (2, 2)
 
 
+def test_vnp19_provider_tries_product_keys_until_a_short_name_returns_granules(tmp_path: Path):
+    granule = tmp_path / "VNP19A2.A2024001.h29v07.002.fake.h5"
+
+    class _FallbackSource:
+        def __init__(self) -> None:
+            self.search_calls: list[dict[str, object]] = []
+            self.download_calls: list[tuple[list[object], Path]] = []
+
+        def search_granules(self, **kwargs):
+            self.search_calls.append(kwargs)
+            short_name = kwargs["short_name"]
+            if short_name == "VNP19A2":
+                return []
+            if short_name == "VJ119A2":
+                return [{"id": "granule"}]
+            return []
+
+        def download_granules(self, granules, dest_dir):
+            self.download_calls.append((list(granules), dest_dir))
+            return [granule]
+
+    class _FallbackCatalog:
+        def resolve_short_name(self, key: str) -> str:
+            mapping = {
+                "vnp19_aod": "VNP19A2",
+                "vj119_aod": "VJ119A2",
+                "vj219_aod": "VJ219A2",
+            }
+            return mapping[key]
+
+    source = _FallbackSource()
+    provider = VNP19AODProvider(source=source, catalog=_FallbackCatalog(), probe_earthdata=True)
+    provider._select_candidate_paths = staticmethod(lambda paths, *_args, **_kwargs: paths)  # type: ignore[method-assign]
+
+    paths, short_name = provider._download_granules(
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        obs_time=datetime(2024, 1, 1, 12, 0, 0),
+    )
+
+    assert paths == [granule]
+    assert short_name == "VJ119A2"
+    assert [call["short_name"] for call in source.search_calls] == ["VNP19A2", "VJ119A2"]
+    assert source.download_calls[0][1].name == "VJ119A2"
+
+
 def test_mcd43_provider_returns_default_weights_without_probe():
     provider = MCD43EarthAccessProvider(probe_earthdata=False)
     assert [band.name for band in provider.source_bands] == [
@@ -151,6 +197,31 @@ def test_vnp43_provider_returns_default_weights_without_probe():
     assert provider.source_name == "VNP43"
     assert weights.f0.shape == (1, 2, 2)
     assert float(weights.f2.mean()) == pytest.approx(0.02)
+
+
+def test_mcd43_provider_falls_back_to_default_weights_when_granule_parsing_fails(tmp_path: Path, monkeypatch):
+    granule = tmp_path / "MCD43A1.A2024001.h29v07.061.fake.hdf"
+    provider = MCD43EarthAccessProvider(
+        source=_StubEarthAccessSource([granule]),
+        probe_earthdata=True,
+    )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(provider, "_load_from_granules", _boom)
+
+    weights = provider.get_brdf_parameters(
+        bounds=(0.0, 0.0, 1000.0, 1000.0),
+        crs="EPSG:4326",
+        obs_time=datetime(2024, 1, 1, 12, 0, 0),
+        target_resolution=500.0,
+        bands=[1],
+        temporal_window=16,
+    )
+
+    assert weights.f0.shape == (1, 2, 2)
+    assert float(weights.f0.mean()) == pytest.approx(0.20)
 
 
 def test_mcd43_provider_returns_temporal_kernel_stack(monkeypatch):
@@ -393,6 +464,23 @@ def test_mcd43_provider_merges_contiguous_routeb_search_windows() -> None:
     ]
 
 
+def test_mcd43_provider_coerces_mixed_sample_date_types() -> None:
+    axis = MCD43EarthAccessProvider._coerce_sample_time_axis(
+        [
+            datetime(2024, 1, 8, 12, 0, 0),
+            date(2024, 1, 1),
+            np.datetime64("2024-01-08"),
+            np.datetime64("2024-01-15T06:00:00"),
+        ]
+    )
+
+    assert list(axis) == [
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-08"),
+        np.datetime64("2024-01-15"),
+    ]
+
+
 def test_mcd43_provider_parses_real_kernel_fields(monkeypatch):
     granule = Path("/tmp/MCD43A1.A2024001.h29v07.061.fake.hdf")
     provider = MCD43EarthAccessProvider(
@@ -560,3 +648,26 @@ def test_vnp19_provider_parses_aod_and_defaults_tcwv(monkeypatch):
 
     assert float(state.aot.mean()) == pytest.approx(0.2)
     assert float(state.tcwv.mean()) == pytest.approx(1.5)
+
+
+def test_mcd19_provider_falls_back_to_default_prior_when_granule_parsing_fails(tmp_path: Path, monkeypatch):
+    granule = tmp_path / "MCD19A2.A2024001.h29v07.061.fake.hdf"
+    provider = MCD19AODProvider(
+        source=_StubEarthAccessSource([granule]),
+        probe_earthdata=True,
+    )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(provider, "_load_from_granules", _boom)
+
+    state = provider.get_prior(
+        bounds=(0.0, 0.0, 1000.0, 1000.0),
+        crs="EPSG:4326",
+        obs_time=datetime(2024, 1, 1, 12, 0, 0),
+        resolution=500.0,
+    )
+
+    assert state.aot.shape == (2, 2)
+    assert float(state.aot.mean()) == pytest.approx(0.12)

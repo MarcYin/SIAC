@@ -4,31 +4,134 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import json
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 import numpy as np
-import rsrf
 import xarray as xr
-from spectral_library import SpectralMapper as PackageSpectralMapper
-from spectral_library import prepare_mapping_library as prepare_package_mapping_library
+from numpy import typing as npt
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from siac.domain import SensorBand
 
 
 logger = logging.getLogger(__name__)
 
+
+Float32Array: TypeAlias = npt.NDArray[np.float32]
+Float64Array: TypeAlias = npt.NDArray[np.float64]
+BoolArray: TypeAlias = npt.NDArray[np.bool_]
+Int32Array: TypeAlias = npt.NDArray[np.int32]
+Int64Array: TypeAlias = npt.NDArray[np.int64]
+
+
+class _RSRFCurveProtocol(Protocol):
+    wavelength_nm: object
+    response: object
+
+
+class _RSRFModuleProtocol(Protocol):
+    def load_response_definition(
+        self,
+        sensor_unit_id: str,
+        band_id: str,
+        representation_variant: str,
+        *,
+        root: Path | None = None,
+    ) -> object: ...
+
+    def realize_curve(self, response_definition: object) -> _RSRFCurveProtocol: ...
+
+
+class _PackageSchemaBandProtocol(Protocol):
+    band_id: str
+    segment: str
+
+
+class _PackageSensorSchemaProtocol(Protocol):
+    bands: Sequence[_PackageSchemaBandProtocol]
+
+
+class _PackageResultProtocol(Protocol):
+    target_reflectance: Sequence[float] | None
+    target_band_ids: Sequence[str]
+    diagnostics: Mapping[str, object]
+
+
+class _PackageBatchProtocol(Protocol):
+    results: Sequence[_PackageResultProtocol]
+
+
+class _PackageMapperProtocol(Protocol):
+    _row_index_by_id: Mapping[str, int]
+
+    def get_sensor_schema(self, sensor_id: str) -> _PackageSensorSchemaProtocol: ...
+
+    def map_reflectance_batch(
+        self,
+        *,
+        source_sensor: str,
+        reflectance_rows: Float64Array,
+        valid_mask_rows: BoolArray,
+        output_mode: str,
+        target_sensor: str,
+        k: int,
+        min_valid_bands: int,
+        neighbor_estimator: str,
+        knn_backend: str,
+        knn_eps: float,
+    ) -> _PackageBatchProtocol: ...
+
+    def _load_hyperspectral(self, segment: str) -> object: ...
+
+    def _band_response(
+        self,
+        sensor_id: str,
+        schema_band: _PackageSchemaBandProtocol,
+        *,
+        segment_only: bool = False,
+    ) -> object: ...
+
+
+class _PackageSpectralMapperFactory(Protocol):
+    def __call__(self, prepared_root: Path, *, verify_checksums: bool = False) -> _PackageMapperProtocol: ...
+
+
+class _PackagePrepareMappingLibrary(Protocol):
+    def __call__(
+        self,
+        *,
+        siac_root: Path,
+        srf_root: Path,
+        output_root: Path,
+        source_sensors: Sequence[str],
+    ) -> object: ...
+
+
+class _SpectralLibraryModuleProtocol(Protocol):
+    SpectralMapper: _PackageSpectralMapperFactory
+    prepare_mapping_library: _PackagePrepareMappingLibrary
+
+
+rsrf = cast("_RSRFModuleProtocol", importlib.import_module("rsrf"))
+_spectral_library_module = cast(
+    "_SpectralLibraryModuleProtocol",
+    importlib.import_module("spectral_library"),
+)
+PackageSpectralMapper = _spectral_library_module.SpectralMapper
+prepare_package_mapping_library = _spectral_library_module.prepare_mapping_library
+
 _VISIBLE_UPPER_NM = 700.0
 _DEFAULT_K_NEIGHBORS = 5
 _UNCERTAINTY_FLOOR = 0.005
-_CANONICAL_WAVELENGTHS_NM = np.arange(400.0, 2501.0, 1.0, dtype=np.float32)
+_CANONICAL_WAVELENGTHS_NM: Float32Array = np.arange(400.0, 2501.0, 1.0, dtype=np.float32)
 _RSRF_ROOT_ENV = "RSRF_ROOT"
 _SIAC_SPECTRAL_LIBRARY_ROOT_ENV = "SIAC_SPECTRAL_LIBRARY_ROOT"
 _SIAC_SPECTRAL_MAPPING_CACHE_DIR_ENV = "SIAC_SPECTRAL_MAPPING_CACHE_DIR"
@@ -120,12 +223,31 @@ class _PreparedRuntime:
     source_bands: tuple[_SchemaBand, ...]
     target_bands: tuple[_SchemaBand, ...]
 
-def _normalized_band_response(band: SensorBand, wavelengths_nm: np.ndarray) -> np.ndarray:
+
+@dataclass(frozen=True)
+class _FlattenedSourceCube:
+    original_dims: tuple[str, ...]
+    transpose_dims: tuple[str, ...]
+    spatial_dims: tuple[str, ...]
+    source_data: xr.DataArray
+    flat_values: Float32Array
+    valid_rows: BoolArray
+
+
+@dataclass(frozen=True)
+class _PreparedSegmentDiagnostics:
+    neighbor_ids: tuple[str, ...]
+    neighbor_weights: Float64Array
+    query_valid_mask: BoolArray
+    source_fit_rmse: float
+
+
+def _normalized_band_response(band: SensorBand, wavelengths_nm: Float32Array) -> Float32Array:
     response = np.asarray(band.effective_response(wavelengths_nm), dtype=np.float32)
     area = _trapezoid(response, wavelengths_nm)
     if not np.isfinite(area) or area <= 0.0:
         raise ValueError(f"Band {band.name!r} has zero support on the requested wavelength grid")
-    return response / area
+    return np.asarray(response / area, dtype=np.float32)
 
 
 def _classify_band_region(band: SensorBand) -> str:
@@ -259,13 +381,13 @@ def _segment_for_band(band: SensorBand) -> str:
 
 
 def _segmentize_curve(
-    wavelengths_nm: np.ndarray,
-    response: np.ndarray,
+    wavelengths_nm: Float32Array,
+    response: Float32Array,
     *,
     segment: str,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Float32Array, Float32Array]:
     segment_min_nm, segment_max_nm = _SEGMENT_RANGES_NM[segment]
-    segment_wavelengths = np.arange(
+    segment_wavelengths: Float32Array = np.arange(
         segment_min_nm,
         segment_max_nm + 1.0,
         1.0,
@@ -305,9 +427,9 @@ def _primary_nir_band_index(bands: Sequence[SensorBand]) -> int | None:
 
 
 def _canonicalize_curve(
-    wavelengths_nm: np.ndarray,
-    response: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    wavelengths_nm: Float32Array,
+    response: Float32Array,
+) -> tuple[Float32Array, Float32Array]:
     wavelengths = np.asarray(wavelengths_nm, dtype=np.float32).reshape(-1)
     weights = np.asarray(response, dtype=np.float32).reshape(-1)
     if wavelengths.size != weights.size or wavelengths.size < 2:
@@ -326,7 +448,7 @@ def _canonicalize_curve(
     return wavelengths[start:stop], weights[start:stop]
 
 
-def _gaussian_curve_from_band(band: SensorBand) -> tuple[np.ndarray, np.ndarray]:
+def _gaussian_curve_from_band(band: SensorBand) -> tuple[Float32Array, Float32Array]:
     sigma_nm = float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     half_window = max(1.0, 4.0 * sigma_nm)
     start = max(350.0, float(band.center_wavelength) - half_window)
@@ -343,7 +465,7 @@ def _rsrf_curve_for_band(
     band: SensorBand,
     *,
     rsrf_root: Path | None,
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> tuple[Float32Array, Float32Array] | None:
     if band.rsrf_sensor_unit_id is None:
         return None
 
@@ -376,7 +498,7 @@ def _curve_for_band(
     band: SensorBand,
     *,
     rsrf_root: Path | None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Float32Array, Float32Array]:
     if band.has_rsrf:
         return _canonicalize_curve(
             np.asarray(band.rsrf_wavelengths_nm, dtype=np.float32),
@@ -391,7 +513,8 @@ def _curve_for_band(
 def _sensor_id_for_bands(bands: Sequence[SensorBand], *, prefix: str) -> str:
     sensor_unit_ids = {band.rsrf_sensor_unit_id for band in bands if band.rsrf_sensor_unit_id}
     if len(sensor_unit_ids) == 1:
-        return next(iter(sensor_unit_ids))
+        sensor_id = next(iter(sensor_unit_ids))
+        return str(sensor_id)
     payload = [
         {
             "name": band.name,
@@ -500,10 +623,10 @@ def _export_hyperspectral_library_root(root: Path, library: HyperspectralLibrary
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for sample_id, spectrum in zip(library.sample_ids, canonical, strict=True):
-            row = {
-                "source_id": library.source_id,
-                "spectrum_id": sample_id,
-                "sample_name": sample_id,
+            row: dict[str, object] = {
+                "source_id": str(library.source_id),
+                "spectrum_id": str(sample_id),
+                "sample_name": str(sample_id),
             }
             row.update({f"nm_{int(wl)}": float(value) for wl, value in zip(_CANONICAL_WAVELENGTHS_NM, spectrum, strict=True)})
             writer.writerow(row)
@@ -553,12 +676,12 @@ def _prepare_runtime(
     source_payload, source_schema_bands = _schema_payload_for_bands(
         source_sensor_id,
         source_bands,
-        rsrf_root=normalized_config.rsrf_root,
+        rsrf_root=cast("Path | None", normalized_config.rsrf_root),
     )
     target_payload, target_schema_bands = _schema_payload_for_bands(
         target_sensor_id,
         target_bands,
-        rsrf_root=normalized_config.rsrf_root,
+        rsrf_root=cast("Path | None", normalized_config.rsrf_root),
     )
 
     signature = _hash_bytes(
@@ -631,10 +754,10 @@ class SpectralMapper:
         self._mapping_config = mapping_config.normalized()
         self._spectral_library = library
         self._runtime: _PreparedRuntime | None = None
-        self._package_mapper: Any | None = None
+        self._package_mapper: _PackageMapperProtocol | None = None
         self._target_internal_to_output_index: dict[str, int] = {}
-        self._source_retrieval_indices_by_segment: dict[str, np.ndarray] = {}
-        self._target_schema_by_band_id: dict[str, Any] = {}
+        self._source_retrieval_indices_by_segment: dict[str, Int32Array] = {}
+        self._target_schema_by_band_id: dict[str, _PackageSchemaBandProtocol] = {}
 
         if not self._identity:
             self._runtime = _prepare_runtime(
@@ -690,22 +813,12 @@ class SpectralMapper:
         if self._package_mapper is None or self._runtime is None:
             raise RuntimeError("spectral-library runtime was not initialized")
 
-        transpose_dims = ["band", *[dim for dim in source_data.dims if dim != "band"]]
-        source_values = np.asarray(source_data.transpose(*transpose_dims).values, dtype=np.float32)
-        spatial_dims = transpose_dims[1:]
-        flat = source_values.reshape(source_values.shape[0], -1).T
-        valid_rows = np.any(np.isfinite(flat), axis=1)
-
-        if source_unc is not None:
-            unc_values = np.asarray(source_unc.transpose(*transpose_dims).values, dtype=np.float32)
-            unc_flat = unc_values.reshape(unc_values.shape[0], -1).T
-        else:
-            unc_flat = None
-
-        target_flat = np.full((flat.shape[0], len(self.target_bands)), np.nan, dtype=np.float32)
+        flattened = self._flatten_source_cube(source_data)
+        unc_flat = self._flatten_optional_uncertainty(source_unc, flattened.transpose_dims)
+        target_flat = np.full((flattened.flat_values.shape[0], len(self.target_bands)), np.nan, dtype=np.float32)
         target_unc_flat = np.full_like(target_flat, np.nan)
-        if np.any(valid_rows):
-            valid_queries = np.asarray(flat[valid_rows], dtype=np.float64)
+        if np.any(flattened.valid_rows):
+            valid_queries = np.asarray(flattened.flat_values[flattened.valid_rows], dtype=np.float64)
             valid_masks = np.isfinite(valid_queries)
             batch = self._package_mapper.map_reflectance_batch(
                 source_sensor=self._runtime.source_sensor_id,
@@ -720,7 +833,7 @@ class SpectralMapper:
                 knn_eps=self._mapping_config.knn_eps,
             )
 
-            valid_indices = np.flatnonzero(valid_rows)
+            valid_indices = np.flatnonzero(flattened.valid_rows)
             for row_index, result in zip(valid_indices, batch.results, strict=True):
                 if result.target_reflectance is not None:
                     for band_id, value in zip(result.target_band_ids, result.target_reflectance, strict=True):
@@ -731,14 +844,12 @@ class SpectralMapper:
                     source_uncertainty=None if unc_flat is None else unc_flat[row_index],
                 )
 
-        shape = (len(self.target_bands), *[source_data.sizes[dim] for dim in spatial_dims])
-        reflectance = target_flat.T.reshape(shape)
-        uncertainty = target_unc_flat.T.reshape(shape)
-        coords = {"band": self._target_band_names}
-        coords.update({dim: source_data.coords[dim] for dim in spatial_dims if dim in source_data.coords})
-        reflectance_da = xr.DataArray(reflectance, dims=transpose_dims, coords=coords).astype(np.float32)
-        uncertainty_da = xr.DataArray(uncertainty, dims=transpose_dims, coords=coords).astype(np.float32)
-        return reflectance_da.transpose(*original_dims), uncertainty_da.transpose(*original_dims)
+        reflectance_da = self._restore_target_cube(target_flat, flattened)
+        uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
+        return (
+            reflectance_da.transpose(*original_dims).astype(np.float32),
+            uncertainty_da.transpose(*original_dims).astype(np.float32),
+        )
 
     def _align_source_data(self, data: xr.DataArray) -> xr.DataArray:
         if "band" not in data.dims:
@@ -748,76 +859,88 @@ class SpectralMapper:
             raise KeyError(f"source_reflectance is missing source bands: {missing}")
         return data.sel(band=[band.name for band in self.source_bands])
 
+    def _flatten_source_cube(self, source_data: xr.DataArray) -> _FlattenedSourceCube:
+        transpose_dims = ("band", *[dim for dim in source_data.dims if dim != "band"])
+        source_values = np.asarray(source_data.transpose(*transpose_dims).values, dtype=np.float32)
+        flat_values = np.asarray(source_values.reshape(source_values.shape[0], -1).T, dtype=np.float32)
+        valid_rows = np.asarray(np.any(np.isfinite(flat_values), axis=1), dtype=np.bool_)
+        return _FlattenedSourceCube(
+            original_dims=tuple(source_data.dims),
+            transpose_dims=transpose_dims,
+            spatial_dims=transpose_dims[1:],
+            source_data=source_data,
+            flat_values=flat_values,
+            valid_rows=valid_rows,
+        )
+
+    @staticmethod
+    def _flatten_optional_uncertainty(
+        source_uncertainty: xr.DataArray | None,
+        transpose_dims: tuple[str, ...],
+    ) -> Float32Array | None:
+        if source_uncertainty is None:
+            return None
+        unc_values = np.asarray(source_uncertainty.transpose(*transpose_dims).values, dtype=np.float32)
+        return np.asarray(unc_values.reshape(unc_values.shape[0], -1).T, dtype=np.float32)
+
+    def _restore_target_cube(
+        self,
+        flat_values: Float32Array,
+        flattened: _FlattenedSourceCube,
+    ) -> xr.DataArray:
+        shape = (len(self.target_bands), *[flattened.source_data.sizes[dim] for dim in flattened.spatial_dims])
+        values = np.asarray(flat_values.T.reshape(shape), dtype=np.float32)
+        coords: dict[str, object] = {"band": self._target_band_names}
+        coords.update(
+            {
+                dim: flattened.source_data.coords[dim]
+                for dim in flattened.spatial_dims
+                if dim in flattened.source_data.coords
+            }
+        )
+        return xr.DataArray(values, dims=flattened.transpose_dims, coords=coords)
+
     def _estimate_uncertainty(
         self,
-        result: Any,
+        result: _PackageResultProtocol,
         *,
-        source_uncertainty: np.ndarray | None,
-    ) -> np.ndarray:
+        source_uncertainty: Float32Array | None,
+    ) -> Float32Array:
         if self._package_mapper is None or self._runtime is None:
             raise RuntimeError("spectral-library runtime was not initialized")
 
-        output = np.full(len(self.target_bands), np.nan, dtype=np.float32)
-        target_values_by_band_id = {}
-        if result.target_reflectance is not None:
-            target_values_by_band_id = {
-                band_id: float(value)
-                for band_id, value in zip(result.target_band_ids, result.target_reflectance, strict=True)
-            }
-
+        output: Float32Array = np.full(len(self.target_bands), np.nan, dtype=np.float32)
+        target_values_by_band_id = self._target_values_by_band_id(result)
         diagnostics = result.diagnostics.get("segments", {})
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
         for segment in ("vnir", "swir"):
-            segment_diag = diagnostics.get(segment)
-            if not isinstance(segment_diag, dict) or segment_diag.get("status") != "ok":
+            prepared = self._prepare_segment_diagnostics(diagnostics.get(segment))
+            if prepared is None:
                 continue
-
-            neighbor_ids = tuple(str(value) for value in segment_diag.get("neighbor_ids", ()))
-            if not neighbor_ids:
-                continue
-            neighbor_weights = np.asarray(segment_diag.get("neighbor_weights", ()), dtype=np.float64)
-            if neighbor_weights.size == 0:
-                continue
-            weight_sum = float(np.sum(neighbor_weights))
-            if weight_sum <= 0.0:
-                continue
-            neighbor_weights = neighbor_weights / weight_sum
-
-            row_indices = np.asarray(
-                [self._package_mapper._row_index_by_id[row_id] for row_id in neighbor_ids],  # noqa: SLF001
-                dtype=np.int64,
+            neighbor_spectra = self._load_neighbor_spectra(
+                prepared.neighbor_ids,
+                segment,
             )
-            neighbor_spectra = np.asarray(self._package_mapper._load_hyperspectral(segment)[row_indices], dtype=np.float64)  # noqa: SLF001
-
-            if source_uncertainty is not None:
-                retrieval_indices = self._source_retrieval_indices_by_segment[segment]
-                query_valid_mask = np.asarray(segment_diag.get("query_valid_mask", ()), dtype=bool)
-                valid_indices = retrieval_indices[query_valid_mask]
-                if valid_indices.size > 0:
-                    input_unc = float(np.sqrt(np.mean(np.square(source_uncertainty[valid_indices]), dtype=np.float64)))
-                else:
-                    input_unc = 0.0
-            else:
-                input_unc = 0.0
-            source_fit_rmse = float(segment_diag.get("source_fit_rmse") or 0.0)
+            neighbor_weights = prepared.neighbor_weights
+            input_unc = self._segment_input_uncertainty(
+                segment,
+                prepared.query_valid_mask,
+                source_uncertainty,
+            )
 
             for band_id, target_schema_band in self._target_schema_by_band_id.items():
-                if getattr(target_schema_band, "segment", None) != segment:
+                if target_schema_band.segment != segment:
                     continue
                 target_index = self._target_internal_to_output_index.get(band_id)
                 if target_index is None:
                     continue
-                response = np.asarray(
-                    self._package_mapper._band_response(  # noqa: SLF001
-                        self._runtime.target_sensor_id,
-                        target_schema_band,
-                        segment_only=True,
-                    ),
-                    dtype=np.float64,
+                neighbor_target = self._neighbor_target_projection(
+                    neighbor_spectra,
+                    target_schema_band,
                 )
-                denominator = float(np.sum(response))
-                if denominator <= 0.0:
+                if neighbor_target is None:
                     continue
-                neighbor_target = neighbor_spectra @ response / denominator
                 estimate = target_values_by_band_id.get(band_id)
                 if estimate is None:
                     estimate = float(np.dot(neighbor_weights, neighbor_target))
@@ -825,7 +948,7 @@ class SpectralMapper:
                     np.sqrt(np.dot(neighbor_weights, np.square(neighbor_target - estimate, dtype=np.float64)))
                 )
                 output[target_index] = np.float32(
-                    np.sqrt(max(spread, _UNCERTAINTY_FLOOR) ** 2 + source_fit_rmse**2 + input_unc**2)
+                    np.sqrt(max(spread, _UNCERTAINTY_FLOOR) ** 2 + prepared.source_fit_rmse**2 + input_unc**2)
                 )
 
         mapped_positions = [
@@ -837,6 +960,93 @@ class SpectralMapper:
             if not np.isfinite(output[position]):
                 output[position] = _UNCERTAINTY_FLOOR
         return output
+
+    @staticmethod
+    def _target_values_by_band_id(result: _PackageResultProtocol) -> dict[str, float]:
+        if result.target_reflectance is None:
+            return {}
+        return {
+            str(band_id): float(value)
+            for band_id, value in zip(result.target_band_ids, result.target_reflectance, strict=True)
+        }
+
+    @staticmethod
+    def _prepare_segment_diagnostics(segment_diag: object) -> _PreparedSegmentDiagnostics | None:
+        if not isinstance(segment_diag, dict) or segment_diag.get("status") != "ok":
+            return None
+        neighbor_ids = tuple(str(value) for value in segment_diag.get("neighbor_ids", ()))
+        if not neighbor_ids:
+            return None
+        neighbor_weights = np.asarray(segment_diag.get("neighbor_weights", ()), dtype=np.float64)
+        if neighbor_weights.size == 0:
+            return None
+        weight_sum = float(np.sum(neighbor_weights))
+        if weight_sum <= 0.0:
+            return None
+        normalized_weights = np.asarray(neighbor_weights / weight_sum, dtype=np.float64)
+        query_valid_mask = np.asarray(segment_diag.get("query_valid_mask", ()), dtype=np.bool_)
+        source_fit_rmse = float(segment_diag.get("source_fit_rmse") or 0.0)
+        return _PreparedSegmentDiagnostics(
+            neighbor_ids=neighbor_ids,
+            neighbor_weights=normalized_weights,
+            query_valid_mask=query_valid_mask,
+            source_fit_rmse=source_fit_rmse,
+        )
+
+    def _load_neighbor_spectra(
+        self,
+        neighbor_ids: tuple[str, ...],
+        segment: str,
+    ) -> Float64Array:
+        if self._package_mapper is None:
+            raise RuntimeError("spectral-library runtime was not initialized")
+        row_indices: Int64Array = np.asarray(
+            [self._package_mapper._row_index_by_id[row_id] for row_id in neighbor_ids],  # noqa: SLF001
+            dtype=np.int64,
+        )
+        neighbor_spectra = np.asarray(
+            self._package_mapper._load_hyperspectral(segment),  # noqa: SLF001
+            dtype=np.float64,
+        )
+        return np.asarray(neighbor_spectra[row_indices], dtype=np.float64)
+
+    def _segment_input_uncertainty(
+        self,
+        segment: str,
+        query_valid_mask: BoolArray,
+        source_uncertainty: Float32Array | None,
+    ) -> float:
+        if source_uncertainty is None:
+            return 0.0
+        retrieval_indices = self._source_retrieval_indices_by_segment[segment]
+        if query_valid_mask.size == 0:
+            return 0.0
+        valid_indices = retrieval_indices[query_valid_mask]
+        if valid_indices.size == 0:
+            return 0.0
+        return float(
+            np.sqrt(np.mean(np.square(source_uncertainty[valid_indices], dtype=np.float64)))
+        )
+
+    def _neighbor_target_projection(
+        self,
+        neighbor_spectra: Float64Array,
+        target_schema_band: _PackageSchemaBandProtocol,
+    ) -> Float64Array | None:
+        if self._package_mapper is None or self._runtime is None:
+            raise RuntimeError("spectral-library runtime was not initialized")
+        response = np.asarray(
+            self._package_mapper._band_response(  # noqa: SLF001
+                self._runtime.target_sensor_id,
+                target_schema_band,
+                segment_only=True,
+            ),
+            dtype=np.float64,
+        )
+        denominator = float(np.sum(response))
+        if denominator <= 0.0:
+            return None
+        return np.asarray(neighbor_spectra @ response / denominator, dtype=np.float64)
 
 
 def map_multispectral_reflectance(

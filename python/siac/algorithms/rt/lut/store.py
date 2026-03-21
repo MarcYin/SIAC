@@ -7,10 +7,13 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
 from siac.algorithms.rt.lut.http_zip_store import build_readonly_zip_mapper
+
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +177,7 @@ def _write_reference_document(reference_path: Path, document: dict[str, Any]) ->
 
 
 def _load_reference_document(reference_path: Path) -> dict[str, Any]:
-    return json.loads(reference_path.read_text(encoding="utf-8"))
+    return cast("dict[str, Any]", json.loads(reference_path.read_text(encoding="utf-8")))
 
 
 def _reference_remote(path: str, storage_options: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
@@ -201,8 +204,8 @@ def _open_reference_mapper(
     storage_options: dict[str, Any],
     reference_path: Path,
     document: dict[str, Any] | None = None,
-) -> Any:
-    import fsspec
+) -> MutableMapping[str, bytes]:
+    import fsspec  # type: ignore[import-untyped]
 
     doc = document or _load_reference_document(reference_path)
     refs = doc.get("refs")
@@ -216,10 +219,14 @@ def _open_reference_mapper(
     if remote_options:
         kwargs["remote_options"] = remote_options
 
-    return fsspec.get_mapper("reference://", **kwargs)
+    return cast("MutableMapping[str, bytes]", fsspec.get_mapper("reference://", **kwargs))
 
 
-def _build_remote_zip_reference_mapper(path: str, storage_options: dict[str, Any], reference_options: _ReferenceOptions) -> Any:
+def _build_remote_zip_reference_mapper(
+    path: str,
+    storage_options: dict[str, Any],
+    reference_options: _ReferenceOptions,
+) -> MutableMapping[str, bytes]:
     """Build/open a cached reference mapper for remote ZIP LUTs."""
     reference_path = _reference_json_path(path, reference_options)
 
@@ -255,7 +262,7 @@ def _build_remote_zip_reference_mapper(path: str, storage_options: dict[str, Any
     )
 
 
-def build_lut_store(path: str, storage_options: dict[str, Any]) -> Any:
+def build_lut_store(path: str, storage_options: dict[str, Any]) -> str | MutableMapping[str, bytes]:
     """Build a zarr-readable store from local/HTTP/S3 path or zip archive."""
     import fsspec
 
@@ -274,9 +281,12 @@ def build_lut_store(path: str, storage_options: dict[str, Any]) -> Any:
         return build_readonly_zip_mapper(path_or_url, resolved_storage_options)
 
     if is_remote_path(path):
-        return fsspec.get_mapper(path, **resolved_storage_options)
+        return cast("MutableMapping[str, bytes]", fsspec.get_mapper(path, **resolved_storage_options))
 
     if resolved_storage_options:
-        return fsspec.get_mapper(path_or_url, **resolved_storage_options)
+        return cast(
+            "MutableMapping[str, bytes]",
+            fsspec.get_mapper(path_or_url, **resolved_storage_options),
+        )
 
     return path_or_url

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from siac._rust import TwoLayerNN as _RustNN
+from siac._rust_compat import TwoLayerNN as _RustNN
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ class TwoLayerNNEmulator:
         emulator_dir: str | Path,
         sensor_id: str,
         satellite_id: str,
-    ):
+    ) -> None:
         self.emulator_dir = Path(emulator_dir)
         self.sensor_id = sensor_id
         self.satellite_id = satellite_id
@@ -87,7 +87,7 @@ class TwoLayerNNEmulator:
             f"{self.satellite_id}_B*.npz",
         ]
 
-        found_files = set()
+        found_files: set[Path] = set()
         for pattern in patterns:
             found_files.update(self.emulator_dir.glob(pattern))
 

@@ -17,12 +17,27 @@ where:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import xarray as xr
 
-from siac._rust import RossThickLiSparse as _RustKernels
+from siac._rust_compat import RossThickLiSparse as _RustKernels
+
+FloatArray = np.ndarray[Any, np.dtype[np.float64]]
+
+
+def _data_array_template(*arrays: object) -> xr.DataArray | None:
+    for array in arrays:
+        if isinstance(array, xr.DataArray):
+            return array
+    return None
+
+
+def _to_numpy(array: np.ndarray | xr.DataArray) -> FloatArray:
+    if isinstance(array, xr.DataArray):
+        return cast("FloatArray", np.asarray(array.values, dtype=np.float64))
+    return cast("FloatArray", np.asarray(array, dtype=np.float64))
 
 
 class BRDFKernels:
@@ -41,7 +56,7 @@ class BRDFKernels:
         self,
         hb: float = 2.0,
         br: float = 1.0,
-    ):
+    ) -> None:
         self.hb = hb
         self.br = br
         self._rust_kernels = _RustKernels(hb, br)
@@ -63,18 +78,10 @@ class BRDFKernels:
         Returns:
             Tuple of (Ross kernel, Li kernel) arrays
         """
-        # Convert xarray to numpy if needed
-        is_xarray = isinstance(vza, xr.DataArray)
-        if is_xarray:
-            vza_np = vza.values
-            sza_np = sza.values
-            raa_np = raa.values
-            template = vza
-        else:
-            vza_np = np.asarray(vza)
-            sza_np = np.asarray(sza)
-            raa_np = np.asarray(raa)
-            template = None
+        template = _data_array_template(vza, sza, raa)
+        vza_np = _to_numpy(vza)
+        sza_np = _to_numpy(sza)
+        raa_np = _to_numpy(raa)
 
         if vza_np.shape != sza_np.shape or vza_np.shape != raa_np.shape:
             raise ValueError("vza, sza, and raa must have the same shape")
@@ -88,12 +95,11 @@ class BRDFKernels:
         k_geo = np.asarray(k_geo, dtype=np.float64).reshape(original_shape)
 
         # Convert back to xarray if needed
-        if is_xarray:
+        if template is not None:
             k_vol = xr.DataArray(k_vol, dims=template.dims, coords=template.coords)
             k_geo = xr.DataArray(k_geo, dims=template.dims, coords=template.coords)
 
         return k_vol, k_geo
-
 
 def compute_kernels(
     vza: np.ndarray | xr.DataArray,
@@ -120,7 +126,6 @@ def compute_kernels(
 
     return kernels.compute(vza, sza, raa)
 
-
 def compute_reflectance(
     f0: np.ndarray | xr.DataArray,
     f1: np.ndarray | xr.DataArray,
@@ -141,8 +146,8 @@ def compute_reflectance(
     Returns:
         Surface reflectance
     """
-    return f0 + f1 * k_vol + f2 * k_geo
-
+    reflectance: np.ndarray | xr.DataArray = f0 + f1 * k_vol + f2 * k_geo
+    return reflectance
 
 def compute_white_sky_albedo(
     f0: np.ndarray | xr.DataArray,
@@ -166,8 +171,8 @@ def compute_white_sky_albedo(
     g1 = 0.189184  # Integral of Ross-Thick kernel
     g2 = -1.377622  # Integral of Li-Sparse kernel
 
-    return f0 * g0 + f1 * g1 + f2 * g2
-
+    albedo: np.ndarray | xr.DataArray = f0 * g0 + f1 * g1 + f2 * g2
+    return albedo
 
 def compute_black_sky_albedo(
     f0: np.ndarray | xr.DataArray,
@@ -191,15 +196,16 @@ def compute_black_sky_albedo(
     # a_k(sza) = g0_k + g1_k * sza + g2_k * sza^2 + g3_k * sza^3
 
     # Ross-Thick polynomial coefficients
-    g_ross = np.array([-0.007574, -0.070987, 0.307588, 0.0])
+    g_ross = np.asarray([-0.007574, -0.070987, 0.307588, 0.0], dtype=np.float64)
 
     # Li-Sparse polynomial coefficients
-    g_li = np.array([-1.284909, -0.166314, 0.041840, 0.0])
+    g_li = np.asarray([-1.284909, -0.166314, 0.041840, 0.0], dtype=np.float64)
 
-    sza2 = sza**2
-    sza3 = sza**3
+    sza2: np.ndarray | xr.DataArray = sza * sza
+    sza3: np.ndarray | xr.DataArray = sza2 * sza
 
     a_ross = g_ross[0] + g_ross[1] * sza + g_ross[2] * sza2 + g_ross[3] * sza3
     a_li = g_li[0] + g_li[1] * sza + g_li[2] * sza2 + g_li[3] * sza3
 
-    return f0 + f1 * a_ross + f2 * a_li
+    albedo: np.ndarray | xr.DataArray = f0 + f1 * a_ross + f2 * a_li
+    return albedo
