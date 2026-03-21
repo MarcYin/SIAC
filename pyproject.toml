@@ -94,6 +94,7 @@ docs = [
     "sphinx>=7.2.0",
     "sphinx-rtd-theme>=2.0.0",
     "myst-parser>=2.0.0",
+    "sphinxcontrib-mermaid>=1.0.0",
 ]
 all = [
     "siac[dev,gee,py6s,docs]",

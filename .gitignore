@@ -29,6 +29,7 @@ htmlcov/
 .coverage
 coverage.xml
 coverage.json
+docs/_build/
 
 # OS
 .DS_Store
