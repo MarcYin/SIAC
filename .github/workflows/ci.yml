@@ -27,6 +27,9 @@ jobs:
       - name: Install environment
         run: pixi install
 
+      - name: Build Rust extension
+        run: pixi run build-rust
+
       - name: Lint
         run: pixi run lint
 
@@ -42,9 +45,6 @@ jobs:
             tests/integration/test_e2e_synthetic.py \
             tests/integration/test_pipeline.py \
             tests/integration/test_injection.py -q
-
-      - name: Build Rust extension
-        run: pixi run build-rust
 
       - name: Import smoke
         run: |
