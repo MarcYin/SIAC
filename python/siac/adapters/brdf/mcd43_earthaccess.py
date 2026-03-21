@@ -393,15 +393,13 @@ class _EarthAccessBRDFProvider:
         temporal_window: int,
         sample_dates: np.ndarray | None = None,
     ) -> list[Path]:
-        short_name = self.short_name or self.catalog.resolve_short_name(self.product_key)
+        short_name = self._resolved_short_name()
         temporal = self._temporal_search_window(obs_time, temporal_window, sample_dates)
-        granules = self.source.search_granules(
+        granules = self._search_granules(
             short_name=short_name,
             bounds=bounds,
             crs=crs,
             temporal=temporal,
-            provider=self.provider,
-            count=self.max_granules,
         )
         if not granules:
             logger.warning(
@@ -410,17 +408,15 @@ class _EarthAccessBRDFProvider:
             )
             return []
 
-        if sample_dates is not None:
-            granules = self._filter_granules_to_sample_dates(granules, sample_dates)
-            if not granules:
-                logger.warning(
-                    "%s granule probe returned no sampled results for AOI/time window",
-                    self._source_name,
-                )
-                return []
+        granules = self._filter_sampled_granules(
+            granules,
+            sample_dates,
+            empty_message="%s granule probe returned no sampled results for AOI/time window",
+        )
+        if not granules:
+            return []
 
-        dest = earthaccess_cache_dir(self.cache_dir, short_name)
-        downloaded = self.source.download_granules(granules, dest)
+        downloaded = self._download_granules_to_cache(granules, short_name=short_name)
         return self._select_candidate_paths(
             downloaded,
             obs_time,
@@ -437,24 +433,22 @@ class _EarthAccessBRDFProvider:
         request_specs: Sequence[tuple[datetime, np.ndarray]],
         temporal_windows: Sequence[int],
     ) -> list[Path]:
-        short_name = self.short_name or self.catalog.resolve_short_name(self.product_key)
+        short_name = self._resolved_short_name()
         unique_granules: dict[str, object] = {}
         for start_day, end_day, sample_dates in self._merge_search_batches(request_specs, temporal_windows):
             temporal = (
                 f"{str(start_day)}T00:00:00Z",
                 f"{str(end_day)}T23:59:59Z",
             )
-            granules = self.source.search_granules(
-                short_name=short_name,
-                bounds=bounds,
-                crs=crs,
-                temporal=temporal,
-                provider=self.provider,
-                count=self.max_granules,
+            granules = self._filter_sampled_granules(
+                self._search_granules(
+                    short_name=short_name,
+                    bounds=bounds,
+                    crs=crs,
+                    temporal=temporal,
+                ),
+                sample_dates,
             )
-            if not granules:
-                continue
-            granules = self._filter_granules_to_sample_dates(granules, sample_dates)
             for granule in granules:
                 unique_granules[_granule_key(granule)] = granule
 
@@ -465,9 +459,53 @@ class _EarthAccessBRDFProvider:
             )
             return []
 
+        return self._download_granules_to_cache(list(unique_granules.values()), short_name=short_name)
+
+    def _resolved_short_name(self) -> str:
+        return self.short_name or self.catalog.resolve_short_name(self.product_key)
+
+    def _search_granules(
+        self,
+        *,
+        short_name: str,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        temporal: tuple[str, str],
+    ) -> list[object]:
+        return cast(
+            "list[object]",
+            self.source.search_granules(
+                short_name=short_name,
+                bounds=bounds,
+                crs=crs,
+                temporal=temporal,
+                provider=self.provider,
+                count=self.max_granules,
+            ),
+        )
+
+    def _filter_sampled_granules(
+        self,
+        granules: list[object],
+        sample_dates: np.ndarray | None,
+        *,
+        empty_message: str | None = None,
+    ) -> list[object]:
+        if sample_dates is None:
+            return granules
+        filtered = self._filter_granules_to_sample_dates(granules, sample_dates)
+        if not filtered and empty_message is not None:
+            logger.warning(empty_message, self._source_name)
+        return filtered
+
+    def _download_granules_to_cache(
+        self,
+        granules: list[object],
+        *,
+        short_name: str,
+    ) -> list[Path]:
         dest = earthaccess_cache_dir(self.cache_dir, short_name)
-        downloaded: list[Path] = self.source.download_granules(list(unique_granules.values()), dest)
-        return downloaded
+        return cast("list[Path]", self.source.download_granules(granules, dest))
 
     @staticmethod
     def _merge_search_batches(

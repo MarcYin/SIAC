@@ -175,13 +175,7 @@ class ZarrLUTBackend:
         """
         template = self._require_matching_grid_shapes(geometry, atmo_state)
 
-        # Convert geometry to degrees for LUT
-        sza_deg = np.rad2deg(geometry.sza.values)
-        vza_deg = np.rad2deg(geometry.vza.values)
-        raa_deg = np.abs(np.rad2deg(geometry.raa.values))
-
-        # Normalize RAA to [0, 180]
-        raa_deg = np.where(raa_deg > 180, 360 - raa_deg, raa_deg)
+        sza_deg, vza_deg, raa_deg = self._geometry_to_lut_inputs(geometry)
 
         # Get atmospheric parameters
         aot = atmo_state.aot.values
@@ -435,6 +429,45 @@ class ZarrLUTBackend:
             raise ValueError(f"{name} must contain only finite values for LUT interpolation")
         return cast("np.ndarray", arr)
 
+    @staticmethod
+    def _point_indexer(values: np.ndarray) -> xr.DataArray:
+        """Wrap flattened interpolation values in the LUT point dimension."""
+        return xr.DataArray(np.asarray(values, dtype=np.float32), dims=["point"])
+
+    @classmethod
+    def _required_point_indexer(
+        cls,
+        values: np.ndarray,
+        *,
+        name: str,
+    ) -> xr.DataArray:
+        """Build a point indexer for a required LUT interpolation axis."""
+        return cls._point_indexer(cls._require_finite_values(values, name=name))
+
+    def _normalize_ozone_point_values(self, tco3: np.ndarray) -> np.ndarray:
+        """Normalize ozone values to the LUT unit convention when needed."""
+        ozone = np.asarray(tco3, dtype=np.float32)
+        ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
+        # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
+        finite_ozone = ozone[np.isfinite(ozone)]
+        if ozone_axis.size and finite_ozone.size and np.nanmax(np.abs(ozone_axis)) > 20 and np.nanmax(
+            np.abs(finite_ozone)
+        ) < 10:
+            return cast("np.ndarray", ozone * 1000.0)
+        return cast("np.ndarray", ozone)
+
+    def _sanitize_point_indexers(self, coords: dict[str, xr.DataArray]) -> dict[str, xr.DataArray]:
+        """Clamp available point indexers to the finite domain of each LUT axis."""
+        sanitized = dict(coords)
+        for name, coord in list(sanitized.items()):
+            if name not in self._lut_coords:
+                continue
+            axis = np.asarray(self._lut_coords[name], dtype=np.float32)
+            if axis.size == 0:
+                continue
+            sanitized[name] = self._point_indexer(self._sanitize_point_values(coord.values, axis))
+        return sanitized
+
     def _build_point_coords(
         self,
         *,
@@ -448,47 +481,28 @@ class ZarrLUTBackend:
     ) -> dict[str, xr.DataArray]:
         """Build point-indexer coordinates for interpolation."""
         coords: dict[str, xr.DataArray] = {
-            "sza": xr.DataArray(self._require_finite_values(sza, name="sza"), dims=["point"]),
-            "vza": xr.DataArray(self._require_finite_values(vza, name="vza"), dims=["point"]),
-            "raa": xr.DataArray(self._require_finite_values(raa, name="raa"), dims=["point"]),
-            "aot": xr.DataArray(self._require_finite_values(aot, name="aot"), dims=["point"]),
-            "tcwv": xr.DataArray(self._require_finite_values(tcwv, name="tcwv"), dims=["point"]),
+            "sza": self._required_point_indexer(sza, name="sza"),
+            "vza": self._required_point_indexer(vza, name="vza"),
+            "raa": self._required_point_indexer(raa, name="raa"),
+            "aot": self._required_point_indexer(aot, name="aot"),
+            "tcwv": self._required_point_indexer(tcwv, name="tcwv"),
         }
 
         if "ozone" in self._lut_coords:
-            ozone = np.asarray(tco3, dtype=np.float32)
-            ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
-            # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
-            finite_ozone = ozone[np.isfinite(ozone)]
-            if ozone_axis.size and finite_ozone.size and np.nanmax(np.abs(ozone_axis)) > 20 and np.nanmax(np.abs(finite_ozone)) < 10:
-                ozone = ozone * 1000.0
-            coords["ozone"] = xr.DataArray(ozone, dims=["point"])
+            coords["ozone"] = self._point_indexer(self._normalize_ozone_point_values(tco3))
 
         if "altitude" in self._lut_coords:
-            coords["altitude"] = xr.DataArray(
-                np.asarray(elevation, dtype=np.float32),
-                dims=["point"],
-            )
+            coords["altitude"] = self._point_indexer(elevation)
 
-        for name, coord in list(coords.items()):
-            if name not in self._lut_coords:
-                continue
-            axis = np.asarray(self._lut_coords[name], dtype=np.float32)
-            if axis.size == 0:
-                continue
-            coords[name] = xr.DataArray(self._sanitize_point_values(coord.values, axis), dims=["point"])
-
-        return coords
+        return self._sanitize_point_indexers(coords)
 
     @staticmethod
-    def _require_matching_grid_shapes(
+    def _grid_arrays(
         geometry: GeometryAngles,
         atmo_state: AtmosphericState,
-    ) -> xr.DataArray:
-        """Validate that geometry and atmospheric fields share the same retrieval grid."""
-        template = geometry.sza
-        expected_shape = tuple(template.shape)
-        arrays = {
+    ) -> dict[str, xr.DataArray]:
+        """Return the retrieval-grid fields that must align for LUT evaluation."""
+        return {
             "geometry.sza": geometry.sza,
             "geometry.vza": geometry.vza,
             "geometry.raa": geometry.raa,
@@ -497,17 +511,33 @@ class ZarrLUTBackend:
             "atmo_state.tco3": atmo_state.tco3,
             "atmo_state.elevation": atmo_state.elevation,
         }
-        mismatches = [
+
+    @staticmethod
+    def _grid_shape_mismatches(
+        arrays: dict[str, xr.DataArray],
+        *,
+        expected_shape: tuple[int, ...],
+    ) -> list[str]:
+        """Describe shape mismatches against the geometry template grid."""
+        return [
             f"{name}={tuple(array.shape)}"
             for name, array in arrays.items()
             if tuple(array.shape) != expected_shape
         ]
+
+    @staticmethod
+    def _grid_alignment_mismatches(
+        template: xr.DataArray,
+        arrays: dict[str, xr.DataArray],
+    ) -> tuple[list[str], list[str]]:
+        """Describe dim-order and coordinate mismatches against the template grid."""
         dim_mismatches = [
             f"{name}.dims={array.dims}"
             for name, array in arrays.items()
             if array.dims != template.dims
         ]
         coord_mismatches: list[str] = []
+        expected_shape = tuple(template.shape)
         for name, array in arrays.items():
             if tuple(array.shape) != expected_shape or array.dims != template.dims:
                 continue
@@ -523,6 +553,19 @@ class ZarrLUTBackend:
                 array_values = np.asarray(array.coords[axis].values)
                 if not np.array_equal(template_values, array_values, equal_nan=True):
                     coord_mismatches.append(f"{name}.{axis}")
+        return dim_mismatches, coord_mismatches
+
+    @staticmethod
+    def _require_matching_grid_shapes(
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+    ) -> xr.DataArray:
+        """Validate that geometry and atmospheric fields share the same retrieval grid."""
+        template = geometry.sza
+        expected_shape = tuple(template.shape)
+        arrays = ZarrLUTBackend._grid_arrays(geometry, atmo_state)
+        mismatches = ZarrLUTBackend._grid_shape_mismatches(arrays, expected_shape=expected_shape)
+        dim_mismatches, coord_mismatches = ZarrLUTBackend._grid_alignment_mismatches(template, arrays)
         if mismatches:
             details = ", ".join(mismatches)
             raise ValueError(
@@ -536,6 +579,16 @@ class ZarrLUTBackend:
                 f"expected dims {template.dims} from geometry.sza but got {details}"
             )
         return template
+
+    @staticmethod
+    def _geometry_to_lut_inputs(
+        geometry: GeometryAngles,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Convert geometry angles to LUT-ready degrees with normalized relative azimuth."""
+        sza_deg = np.rad2deg(geometry.sza.values)
+        vza_deg = np.rad2deg(geometry.vza.values)
+        raa_deg = np.abs(np.rad2deg(geometry.raa.values))
+        return sza_deg, vza_deg, np.where(raa_deg > 180, 360 - raa_deg, raa_deg)
 
     def _compute_spectral_with_retry(
         self,
@@ -588,7 +641,7 @@ class ZarrLUTBackend:
         tco3: np.ndarray,
         elevation: np.ndarray,
         band: SensorBand,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Derive standard RT coefficients from dense spectral LUT terms."""
         if "wavelength" not in self._lut_coords:
             raise ValueError("Spectral LUT must define a wavelength coordinate")
@@ -601,22 +654,21 @@ class ZarrLUTBackend:
             elevation=elevation,
         )
         if not self._scene_subset_logged:
-            tco3_bounds = self._finite_range(
-                np.asarray(tco3, dtype=np.float32),
-                fallback=(0.0, 0.0),
-            )
-            elevation_bounds = self._finite_range(
-                np.asarray(elevation, dtype=np.float32),
-                fallback=(0.0, 0.0),
+            _, _, _, tco3_bounds, elevation_bounds = self._spectral_scene_summary(
+                sza=sza,
+                vza=vza,
+                raa=raa,
+                tco3=tco3,
+                elevation=elevation,
             )
             logger.info(
                 (
                     "Scene LUT subset: sza=%.3f deg, vza=%.3f deg, raa=%.3f deg, "
                     "ozone=[%.3f, %.3f], altitude=[%.3f, %.3f]"
                 ),
-                self._finite_mean(sza, fallback=0.0),
-                self._finite_mean(vza, fallback=0.0),
-                self._finite_mean(raa, fallback=0.0),
+                round(self._finite_mean(sza, fallback=0.0), 3),
+                round(self._finite_mean(vza, fallback=0.0), 3),
+                round(self._finite_mean(raa, fallback=0.0), 3),
                 tco3_bounds[0],
                 tco3_bounds[1],
                 elevation_bounds[0],
@@ -684,16 +736,48 @@ class ZarrLUTBackend:
         elevation: np.ndarray,
     ) -> tuple[float, ...]:
         """Build a stable scene cache key from summary geometry/atmosphere stats."""
+        sza_mean, vza_mean, raa_mean, tco3_bounds, elevation_bounds = cls._spectral_scene_summary(
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+        return (
+            sza_mean,
+            vza_mean,
+            raa_mean,
+            tco3_bounds[0],
+            tco3_bounds[1],
+            elevation_bounds[0],
+            elevation_bounds[1],
+        )
+
+    @classmethod
+    def _spectral_scene_summary(
+        cls,
+        *,
+        sza: np.ndarray,
+        vza: np.ndarray,
+        raa: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+    ) -> tuple[float, float, float, tuple[float, float], tuple[float, float]]:
+        """Summarize the scene geometry and optional axes for cache/logging reuse."""
         tco3_arr = np.asarray(tco3, dtype=np.float32)
         elevation_arr = np.asarray(elevation, dtype=np.float32)
         return (
             round(cls._finite_mean(sza, fallback=0.0), 3),
             round(cls._finite_mean(vza, fallback=0.0), 3),
             round(cls._finite_mean(raa, fallback=0.0), 3),
-            round(cls._finite_range(tco3_arr, fallback=(0.0, 0.0))[0], 3),
-            round(cls._finite_range(tco3_arr, fallback=(0.0, 0.0))[1], 3),
-            round(cls._finite_range(elevation_arr, fallback=(0.0, 0.0))[0], 3),
-            round(cls._finite_range(elevation_arr, fallback=(0.0, 0.0))[1], 3),
+            (
+                round(cls._finite_range(tco3_arr, fallback=(0.0, 0.0))[0], 3),
+                round(cls._finite_range(tco3_arr, fallback=(0.0, 0.0))[1], 3),
+            ),
+            (
+                round(cls._finite_range(elevation_arr, fallback=(0.0, 0.0))[0], 3),
+                round(cls._finite_range(elevation_arr, fallback=(0.0, 0.0))[1], 3),
+            ),
         )
 
     @staticmethod
@@ -806,10 +890,7 @@ class ZarrLUTBackend:
             return
         self._require_matching_grid_shapes(geometry, atmo_state)
 
-        sza = np.rad2deg(geometry.sza.values)
-        vza = np.rad2deg(geometry.vza.values)
-        raa = np.abs(np.rad2deg(geometry.raa.values))
-        raa = np.where(raa > 180, 360 - raa, raa)
+        sza, vza, raa = self._geometry_to_lut_inputs(geometry)
         tco3 = atmo_state.tco3.values
         elevation = atmo_state.elevation.values
 
