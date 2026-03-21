@@ -30,7 +30,7 @@ The codebase follows the same broad pattern as the paper:
 5. solve for atmospheric state
 6. apply correction at the output resolution
 
-```{mermaid}
+```mermaid
 flowchart LR
     TOA["TOA reflectance + geometry"] --> PriorA["Atmospheric prior"]
     TOA --> PriorS["Surface prior"]

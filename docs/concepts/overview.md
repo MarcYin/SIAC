@@ -24,7 +24,7 @@ SIAC is designed so the correction logic is not hard-coded to one sensor's exact
 | M5 | Solve atmospheric parameters | `SolvedAtmosphere` |
 | M6 | Apply atmospheric correction at output resolution | `CorrectionResult` |
 
-```{mermaid}
+```mermaid
 flowchart TD
     Input["SAFE path or S2 query"] --> M1["M1 Preprocess"]
     M1 --> Obs["ObservationBundle"]

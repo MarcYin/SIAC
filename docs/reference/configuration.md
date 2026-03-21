@@ -14,7 +14,7 @@ SIAC resolves configuration in this order:
 | Per-run request fields | Apply `sensor`, `aoi`, `input_path`, `output_path`, and `s2_query` |
 | Resolution step | Produce a final `ResolvedConfig` used by assembly and workflows |
 
-```{mermaid}
+```mermaid
 flowchart TD
     Defaults["Schema defaults"] --> File["TOML config"]
     File --> Env["Environment secret overlay"]

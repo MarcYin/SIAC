@@ -1,8 +1,19 @@
+<div class="siac-hero" markdown>
+
 # SIAC Documentation
 
-Sensor-Invariant Atmospheric Correction (SIAC) is a modular atmospheric correction framework for medium-resolution optical satellite data. The current codebase is organized around a small public API, a typed configuration system, a staged runtime pipeline, and pluggable adapters and algorithms for data access, priors, radiative transfer, and output writing.
+Sensor-Invariant Atmospheric Correction (SIAC) is a modular framework for atmospheric correction of medium-resolution optical satellite data. The codebase is organized around a compact public API, a typed configuration system, a staged runtime pipeline, and pluggable adapters for data access, priors, radiative transfer, and outputs.
 
-```{mermaid}
+<div class="siac-hero-actions" markdown>
+
+[Get Started](getting-started/installation.md){ .md-button .md-button--primary }
+[Read the Theory](science/theory.md){ .md-button }
+
+</div>
+
+</div>
+
+```mermaid
 flowchart LR
     User["Users and scripts"] --> API["API / CLI"]
     API --> Config["Config load + resolve"]
@@ -15,73 +26,50 @@ flowchart LR
     Algorithms --> Rust["Rust acceleration"]
 ```
 
-## Choose a path
+<div class="siac-section-note" markdown>
 
-- **First-time user**: start with installation, first run, and running SIAC.
-- **Scientific user**: start with the overview, theory, priors/mapping, and paper companion.
-- **Operator/engineer**: start with configuration basics, outputs, troubleshooting, and developer setup.
-- **Developer**: start with the package map, execution flow, data flow, and extension guide.
+Choose the track that matches your job: first run, scientific background, operational setup, or internal extension work.
 
-## Documentation map
+</div>
 
-```{toctree}
-:maxdepth: 2
-:caption: Concepts
+<div class="siac-card-grid" markdown>
 
-concepts/overview
-concepts/glossary
-```
+<div class="siac-card" markdown>
+### First-Time Users
+Install SIAC, run a Sentinel-2 scene, and understand the output layout.
 
-```{toctree}
-:maxdepth: 2
-:caption: Getting Started
+[Open Getting Started](getting-started/installation.md)
+</div>
 
-getting-started/installation
-getting-started/first-run
-```
+<div class="siac-card" markdown>
+### Scientific Users
+Follow the retrieval logic, priors, and paper-to-code mapping.
 
-```{toctree}
-:maxdepth: 2
-:caption: User Guide
+[Open Science Docs](science/theory.md)
+</div>
 
-user-guide/configuration-basics
-user-guide/running-siac
-user-guide/outputs
-user-guide/troubleshooting
-```
+<div class="siac-card" markdown>
+### Operators
+Find configuration, output, and troubleshooting guidance for real runs.
 
-```{toctree}
-:maxdepth: 2
-:caption: Science
+[Open User Guide](user-guide/configuration-basics.md)
+</div>
 
-science/theory
-science/priors-and-mapping
-science/paper-companion
-science/validation-and-limitations
-```
+<div class="siac-card" markdown>
+### Developers
+Trace packages, runtime flow, and extension points inside the repository.
 
-```{toctree}
-:maxdepth: 2
-:caption: Reference
+[Open Developer Docs](developer/dev-setup.md)
+</div>
 
-reference/configuration
-reference/public-api
-```
+</div>
 
-```{toctree}
-:maxdepth: 2
-:caption: Architecture
+## Documentation Sections
 
-architecture/package-map
-architecture/execution-flow
-architecture/data-flow
-architecture/rust-integration
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Developer
-
-developer/dev-setup
-developer/extending-siac
-```
+- [Concepts](concepts/overview.md): overview and glossary for the SIAC domain model.
+- [Getting Started](getting-started/installation.md): installation and a first successful run.
+- [User Guide](user-guide/configuration-basics.md): runtime configuration, outputs, and troubleshooting.
+- [Science](science/theory.md): retrieval framing, priors, and validation context.
+- [Reference](reference/configuration.md): public configuration and API surface.
+- [Architecture](architecture/package-map.md): package boundaries, execution flow, and data flow.
+- [Developer](developer/dev-setup.md): local setup and extension guidance.

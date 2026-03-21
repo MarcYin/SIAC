@@ -101,4 +101,4 @@ flowchart LR
 
 ## GitHub Pages
 
-The repository is set up to build the docs in GitHub Actions and deploy them to GitHub Pages on pushes to `master`. Repository Pages must be configured to publish from GitHub Actions.
+The repository is set up to build a MkDocs Material site in GitHub Actions and deploy it to GitHub Pages. Repository Pages must be configured to publish from GitHub Actions.

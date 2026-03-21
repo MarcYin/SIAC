@@ -65,7 +65,7 @@ Sentinel-2 input resolution follows this logic:
 5. Search or download through the configured backend and cache.
 6. Feed the resolved local path into the normal scene pipeline.
 
-```{mermaid}
+```mermaid
 flowchart TD
     Query["SAFE path / product ID / tile-date"] --> Local{"Local path exists?"}
     Local -->|Yes| Scene["Process local scene"]
