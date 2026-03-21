@@ -264,6 +264,17 @@ class TestZarrLUTBackend:
         assert coeffs.d_xcp is not None
         assert coeffs.d_xap.sizes["param"] == 2
 
+    def test_compute_coefficients_rejects_mismatched_geometry_and_atmo_grids(self, tmp_path: Path):
+        lut_path = _write_small_lut(tmp_path / "lut_bad_shape.zarr")
+        geom = _geometry((2, 2))
+        atmo = _atmo((3, 3))
+        band = SensorBand("B02", 490.0, 65.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+
+        with pytest.raises(ValueError, match="must share the same grid shape"):
+            backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+
     def test_load_local_zipped_zarr(self, tmp_path: Path):
         lut_dir = _write_small_lut(tmp_path / "lut_zip.zarr")
         zip_path = tmp_path / "lut_zip.zarr.zip"
