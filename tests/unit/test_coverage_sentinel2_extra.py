@@ -351,3 +351,41 @@ class TestSentinel2Internals:
         (aws / "metadata.xml").write_text("<root/>")
         p2._resolve_paths(aws)
         assert p2._get_img_data_path() == aws
+
+    def test_load_toa_rejects_invalid_quantification_value(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        safe = _safe_tree(tmp_path)
+        p = Sentinel2Preprocessor()
+
+        monkeypatch.setattr(
+            "siac.adapters.satellite.sentinel2.read_raster",
+            lambda _path: _da((4, 4), value=1000.0),
+        )
+
+        _write(
+            safe / "MTD_MSIL1C.xml",
+            "<root><QUANTIFICATION_VALUE>0</QUANTIFICATION_VALUE></root>",
+        )
+
+        with pytest.raises(ValueError, match="quantification_value must be finite and > 0"):
+            p.load_toa(safe)
+
+    def test_get_metadata_warns_and_falls_back_when_sensing_time_is_invalid(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        safe = _safe_tree(tmp_path, "S2A_MSIL1C_20260102T024121_BAD.SAFE")
+        p = Sentinel2Preprocessor()
+
+        _write(safe / "MTD_MSIL1C.xml", "<root><QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE></root>")
+        _write(
+            safe / "GRANULE" / "L1C_TILE" / "MTD_TL.xml",
+            "<root><SENSING_TIME>not-a-time</SENSING_TIME><TILE_ID>T31UDQ</TILE_ID></root>",
+        )
+
+        with caplog.at_level("WARNING"):
+            metadata = p.get_metadata(safe)
+
+        assert metadata["tile_id"] == "T31UDQ"
+        assert metadata["observation_time"] == datetime(2026, 1, 2, 2, 41, 21)
+        assert "Could not parse Sentinel-2 sensing time" in caplog.text
