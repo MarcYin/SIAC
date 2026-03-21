@@ -91,7 +91,8 @@ flowchart LR
 
 ## Documentation
 
-- Full documentation portal: [docs/index.md](docs/index.md)
+- Hosted docs: [marcyin.github.io/SIAC](https://marcyin.github.io/SIAC/)
+- Documentation portal source: [docs/index.md](docs/index.md)
 - Installation guide: [docs/getting-started/installation.md](docs/getting-started/installation.md)
 - First run: [docs/getting-started/first-run.md](docs/getting-started/first-run.md)
 - Configuration basics: [docs/user-guide/configuration-basics.md](docs/user-guide/configuration-basics.md)
@@ -102,3 +103,10 @@ flowchart LR
 ## GitHub Pages
 
 The repository is set up to build a MkDocs Material site in GitHub Actions and deploy it to GitHub Pages. Repository Pages must be configured to publish from GitHub Actions.
+
+### Local docs workflow
+
+```bash
+pixi run docs-serve
+pixi run docs-check
+```

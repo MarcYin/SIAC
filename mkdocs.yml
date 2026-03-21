@@ -2,6 +2,7 @@ site_name: SIAC
 site_description: Sensor-Invariant Atmospheric Correction documentation
 site_url: https://marcyin.github.io/SIAC/
 repo_url: https://github.com/MarcYin/SIAC
+repo_name: MarcYin/SIAC
 docs_dir: docs
 site_dir: site
 
@@ -30,6 +31,7 @@ theme:
     - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.indexes
     - toc.follow
     - content.code.copy
     - search.suggest
@@ -65,7 +67,6 @@ extra_css:
 
 exclude_docs: |
   _build/
-  conf.py
   EARTHACCESS_PLAN.md
   PLANS.md
   PLANS_CLOUD_MASK.md

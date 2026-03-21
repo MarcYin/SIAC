@@ -91,8 +91,8 @@ py6s = [
     "Py6S>=1.9.0",
 ]
 docs = [
-    "mkdocs>=1.6.0",
-    "mkdocs-material>=9.5.0",
+    "mkdocs>=1.6.0,<2.0",
+    "mkdocs-material>=9.5.0,<10.0",
     "pymdown-extensions>=10.0.0",
 ]
 all = [
@@ -101,7 +101,7 @@ all = [
 
 [project.urls]
 Homepage = "https://github.com/MarcYin/SIAC"
-Documentation = "https://siac.readthedocs.io"
+Documentation = "https://marcyin.github.io/SIAC/"
 Repository = "https://github.com/MarcYin/SIAC"
 Issues = "https://github.com/MarcYin/SIAC/issues"
 

@@ -33,7 +33,7 @@ jobs:
         run: pixi install
 
       - name: Build docs
-        run: pixi run docs-build
+        run: pixi run docs-check
 
       - name: Configure Pages
         if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/refactor')
