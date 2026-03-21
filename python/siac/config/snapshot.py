@@ -5,11 +5,12 @@ Diagnostic snapshots for SIAC config objects.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
-import yaml
+yaml = cast("Any", import_module("yaml"))
 
 if TYPE_CHECKING:
     from siac.config.schema import ResolvedConfig, SystemConfig
@@ -50,7 +51,7 @@ def _path_state(value: Any) -> dict[str, Any]:
 
 
 def _redact_auth(payload: dict[str, Any]) -> dict[str, Any]:
-    redacted = _normalize(payload)
+    redacted = {str(key): _normalize(item) for key, item in payload.items()}
     for provider, secret_keys in (
         ("cdse", ("username", "password")),
         ("cds", ("api_key",)),
@@ -71,11 +72,12 @@ def snapshot_system_config(
     redact_secrets: bool = True,
     source_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    payload = config.model_dump(mode="json")
+    resolved_source = None if source_path is None else str(Path(source_path).expanduser())
+    payload: dict[str, Any] = config.model_dump(mode="json")
     if redact_secrets:
         payload["auth"] = _redact_auth(payload["auth"])
     return {
-        "source_path": None if source_path is None else str(source_path),
+        "source_path": resolved_source,
         "config": payload,
     }
 
@@ -86,11 +88,12 @@ def snapshot_resolved_config(
     redact_secrets: bool = True,
     source_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    payload = config.model_dump(mode="json")
+    resolved_source = None if source_path is None else str(Path(source_path).expanduser())
+    payload: dict[str, Any] = config.model_dump(mode="json")
     if redact_secrets:
         payload["auth"] = _redact_auth(payload["auth"])
     return {
-        "source_path": None if source_path is None else str(source_path),
+        "source_path": resolved_source,
         "config": payload,
         "path_states": {
             "paths.dem": _path_state(config.paths.dem),
@@ -123,7 +126,7 @@ def write_runtime_snapshot(
             source_path=source_path,
         ),
     }
-    resolved = Path(path)
+    resolved = Path(path).expanduser()
     resolved.parent.mkdir(parents=True, exist_ok=True)
     with resolved.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(payload, handle, default_flow_style=False, sort_keys=False)

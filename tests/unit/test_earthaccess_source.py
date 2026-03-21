@@ -6,8 +6,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+import siac.adapters.earthdata as earthdata_mod
+from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 from siac.adapters.data.earthaccess_source import EarthAccessSource
 
 
@@ -161,3 +164,73 @@ class TestEarthAccessSource:
         out = EarthAccessSource.normalize_bounds_to_wgs84(bounds, "EPSG:4326")
         assert out == bounds
         assert EarthAccessSource.to_cmr_bounding_box(out) == "1.0,2.0,3.0,4.0"
+
+
+def test_earthaccess_source_from_auth_without_manager_uses_plain_source():
+    source = earthdata_mod.earthaccess_source_from_auth(None, provider="LPDAAC_ECS")
+
+    assert isinstance(source, EarthAccessSource)
+    assert source.provider == "LPDAAC_ECS"
+
+
+def test_earthaccess_source_from_auth_uses_manager_builder():
+    expected = EarthAccessSource(provider="LPDAAC_ECS")
+
+    class _FakeEarthdataAuth:
+        def build_earthaccess_source(self, *, provider: str | None = None) -> EarthAccessSource:
+            assert provider == "LPDAAC_ECS"
+            return expected
+
+    class _FakeManager:
+        def earthdata(self) -> _FakeEarthdataAuth:
+            return _FakeEarthdataAuth()
+
+    assert earthdata_mod.earthaccess_source_from_auth(_FakeManager(), provider="LPDAAC_ECS") is expected
+
+
+def test_build_earthaccess_runtime_normalizes_cache_dir_and_keeps_supplied_dependencies(tmp_path: Path):
+    source = EarthAccessSource(provider="LPDAAC_ECS")
+    catalog = EarthAccessCatalog(source=source)
+
+    runtime = earthdata_mod.build_earthaccess_runtime(
+        cache_dir=tmp_path / "cache",
+        source=source,
+        catalog=catalog,
+        provider="IGNORED",
+    )
+
+    assert runtime.cache_dir == (tmp_path / "cache").expanduser()
+    assert runtime.source is source
+    assert runtime.catalog is catalog
+    assert earthdata_mod.earthaccess_cache_dir(runtime.cache_dir, "MCD43A1") == (tmp_path / "cache").expanduser()
+
+
+def test_select_candidate_paths_orders_tiles_and_filters_sample_days(monkeypatch, tmp_path: Path):
+    p1 = tmp_path / "tile_a.hdf"
+    p2 = tmp_path / "tile_b.hdf"
+    p3 = tmp_path / "tile_c.hdf"
+
+    timestamps = {
+        p1: datetime(2024, 1, 8, 12, 0, 0),
+        p2: datetime(2024, 1, 1, 12, 0, 0),
+        p3: datetime(2024, 1, 8, 10, 0, 0),
+    }
+    tiles = {
+        p1: (30, 7),
+        p2: (29, 7),
+        p3: (29, 7),
+    }
+
+    monkeypatch.setattr(earthdata_mod, "parse_granule_date", lambda path: timestamps[path])
+    monkeypatch.setattr(earthdata_mod, "granule_intersects_bounds", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(earthdata_mod, "parse_tile_indices", lambda path: tiles[path])
+
+    selected = earthdata_mod.select_candidate_paths(
+        [p1, p2, p3],
+        obs_time=datetime(2024, 1, 8, 11, 0, 0),
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        sample_dates=np.array(["2024-01-08"], dtype="datetime64[D]"),
+    )
+
+    assert selected == [p3, p1]

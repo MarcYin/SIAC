@@ -22,7 +22,10 @@ from siac.config import (
     S2DataAccessConfig,
     SIACConfig,
     SolverConfig,
+    get_jasmin_config,
     get_lut_config,
+    load_system_config,
+    overlay_env_secrets,
 )
 
 
@@ -127,6 +130,15 @@ class TestSIACConfig:
         assert loaded.brdf.temporal_window == 8
         assert loaded.surface_prior.spectral_mapping.k_neighbors == 7
 
+    def test_load_system_config_expands_user_paths(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('paths = { lut_path = "s3://bucket/lut.zarr" }\n', encoding="utf-8")
+
+        loaded = load_system_config(Path("~/config.toml"))
+
+        assert loaded.paths.lut_path == "s3://bucket/lut.zarr"
+
     def test_from_yaml_is_rejected(self, tmp_path: Path):
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text("sensor: s2\n")
@@ -166,6 +178,7 @@ class TestSIACConfig:
             auth={
                 "earthdata": {"username": "user", "password": "secret"},
                 "cds": {"api_key": "uid:key"},
+                "gcs": {"credentials_file": "/tmp/creds.json"},
             }
         )
 
@@ -174,6 +187,24 @@ class TestSIACConfig:
         assert snapshot["config"]["auth"]["earthdata"]["username"] == "<redacted>"
         assert snapshot["config"]["auth"]["earthdata"]["password"] == "<redacted>"
         assert snapshot["config"]["auth"]["cds"]["api_key"] == "<redacted>"
+        assert snapshot["config"]["auth"]["gcs"]["credentials_file"] == "<redacted>"
+
+    def test_overlay_env_secrets_expands_gcs_credentials(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "~/creds.json")
+        config = SIACConfig()
+
+        updated = overlay_env_secrets(config)
+
+        assert updated.auth.gcs.credentials_file == tmp_path / "creds.json"
+
+    def test_get_jasmin_config_uses_nested_models(self):
+        cfg = get_jasmin_config()
+
+        assert cfg.runtime.n_jobs == 8
+        assert cfg.providers.atmo.kind == "cams"
+        assert cfg.providers.brdf.kind == "mcd43"
+        assert cfg.paths.dem.startswith("/vsicurl/")
 
     def test_write_default_config(self, tmp_path: Path):
         written = SIACConfig.write_default_config(tmp_path / "siac.toml")

@@ -8,7 +8,7 @@ resolution, and snapshotting live in sibling modules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -20,6 +20,8 @@ DEFAULT_LUT_URL = (
 
 SensorName = Literal["s2", "l8", "l9", "auto"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+AtmoProviderKind = Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"]
+BRDFProviderKind = Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"]
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 
@@ -130,7 +132,7 @@ class AuthConfig(SIACBaseModel):
 
 
 class AtmoProviderConfig(SIACBaseModel):
-    kind: Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"] = Field(
+    kind: AtmoProviderKind = Field(
         default="cams",
         validation_alias=AliasChoices("kind", "provider"),
         serialization_alias="kind",
@@ -162,16 +164,19 @@ class AtmoProviderConfig(SIACBaseModel):
         return self
 
     @property
-    def provider(self) -> str:
+    def provider(self) -> AtmoProviderKind:
         return self.kind
 
     @provider.setter
     def provider(self, value: str) -> None:
-        self.kind = value
+        allowed = {"cams", "merra2", "mcd19", "vnp19", "era5", "user"}
+        if value not in allowed:
+            raise ValueError(f"Invalid atmo provider {value!r}; expected one of {sorted(allowed)!r}.")
+        self.kind = cast("AtmoProviderKind", value)
 
 
 class BRDFProviderConfig(SIACBaseModel):
-    kind: Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"] = Field(
+    kind: BRDFProviderKind = Field(
         default="mcd43",
         validation_alias=AliasChoices("kind", "provider"),
         serialization_alias="kind",
@@ -194,12 +199,15 @@ class BRDFProviderConfig(SIACBaseModel):
         return _coerce_pathlike(value)
 
     @property
-    def provider(self) -> str:
+    def provider(self) -> BRDFProviderKind:
         return self.kind
 
     @provider.setter
     def provider(self, value: str) -> None:
-        self.kind = value
+        allowed = {"mcd43", "vnp43", "mcd19", "gee", "zarr", "user"}
+        if value not in allowed:
+            raise ValueError(f"Invalid brdf provider {value!r}; expected one of {sorted(allowed)!r}.")
+        self.kind = cast("BRDFProviderKind", value)
 
 
 class S2ProviderConfig(SIACBaseModel):
@@ -418,7 +426,7 @@ class RunRequest(SIACBaseModel):
     input_path: Path | None = None
     output_path: Path | None = None
     sensor: SensorName | None = None
-    aoi: Path | str | tuple[float, float, float, float] | list[float] | None = None
+    aoi: dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None = None
     s2_query: str | Path | None = None
 
     @field_validator("input_path", "output_path", mode="before")
@@ -522,7 +530,7 @@ class ResolvedRunConfig(SIACBaseModel):
     input_path: Path | None = None
     output_path: Path | None = None
     sensor: SensorName = "auto"
-    aoi: Path | str | tuple[float, float, float, float] | list[float] | None = None
+    aoi: dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None = None
     s2_query: str | Path | None = None
 
 
@@ -540,7 +548,7 @@ class ResolvedConfig(SIACBaseModel):
         return self.run.sensor
 
     @property
-    def aoi(self) -> Path | str | tuple[float, float, float, float] | list[float] | None:
+    def aoi(self) -> dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None:
         return self.run.aoi
 
     @property

@@ -17,7 +17,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
@@ -68,7 +68,10 @@ def _safe_prefix_from_product_id(product_id: str) -> str:
 def _http_json(url: str, timeout: int = 60) -> dict[str, Any]:
     req = urllib.request.Request(url, headers={"User-Agent": "siac-gcs-s2/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
+        payload = json.load(resp)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Unexpected JSON payload from {url!r}: expected an object")
+    return cast("dict[str, Any]", payload)
 
 
 def _list_api(

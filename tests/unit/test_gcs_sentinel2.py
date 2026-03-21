@@ -73,6 +73,23 @@ def test_search_gcs_by_product_id_uses_prefix_exists(monkeypatch):
     assert out[0].product_id.endswith("_T31UDQ_20240103T120000")
 
 
+def test_http_json_rejects_non_object_payload(monkeypatch):
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def read(self, _size=-1):  # noqa: ANN001
+            return b"[]"
+
+    monkeypatch.setattr(gcs_mod.urllib.request, "urlopen", lambda *args, **kwargs: _FakeResp())  # noqa: ARG005
+
+    with pytest.raises(ValueError, match="expected an object"):
+        gcs_mod._http_json("https://example.com/json")
+
+
 def test_search_gcs_bbox_only_raises():
     query = S2Query(bbox=(1.0, 2.0, 3.0, 4.0))
     with pytest.raises(ValueError, match="product_id or mgrs_tile"):

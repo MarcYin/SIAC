@@ -5,7 +5,7 @@ Public config facade built on the categorized SIAC config package.
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003
-from typing import Any
+from typing import Any, cast
 
 from pydantic import Field
 
@@ -20,6 +20,7 @@ from siac.config.load import (
 from siac.config.resolve import resolve_config
 from siac.config.schema import (
     DEFAULT_LUT_URL,
+    AlgorithmsConfig,
     AtmoProviderConfig,
     AuthConfig,
     BRDFProviderConfig,
@@ -27,8 +28,10 @@ from siac.config.schema import (
     ExecutionRuntimeConfig,
     OutputDefaultsConfig,
     PathsConfig,
+    ProvidersConfig,
     RTAlgorithmConfig,
     RunRequest,
+    RuntimeConfig,
     S2ProviderConfig,
     SensorName,
     SolverAlgorithmConfig,
@@ -58,13 +61,13 @@ class SIACConfig(SystemConfig):
     """
 
     sensor: SensorName = "auto"
-    aoi: Path | str | tuple[float, float, float, float] | list[float] | None = Field(default=None)
+    aoi: dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None = Field(default=None)
 
     @classmethod
     def from_file(cls, path: Path | str) -> SIACConfig:
         system = load_system_config(path)
         payload = system.model_dump(mode="python")
-        return cls.model_validate(payload)
+        return cast("SIACConfig", cls.model_validate(payload))
 
     @classmethod
     def from_toml(cls, path: Path | str) -> SIACConfig:
@@ -76,8 +79,13 @@ class SIACConfig(SystemConfig):
 
     @classmethod
     def load(cls, path: Path | str | None = None, **overrides: Any) -> SIACConfig:
-        config = cls.from_file(path) if path is not None else cls.model_validate(
-            load_system_config_from_default().model_dump(mode="python")
+        config = (
+            cls.from_file(path)
+            if path is not None
+            else cast(
+                "SIACConfig",
+                cls.model_validate(load_system_config_from_default().model_dump(mode="python")),
+            )
         )
         if not overrides:
             return config
@@ -93,18 +101,18 @@ class SIACConfig(SystemConfig):
         raise ValueError("YAML config files are no longer supported; use TOML.")
 
     def to_dict(self) -> dict[str, Any]:
-        return self._system_only().model_dump(mode="python")
+        return cast("dict[str, Any]", self._system_only().model_dump(mode="python"))
 
     def with_overrides(self, **kwargs: Any) -> SIACConfig:
         payload = self.model_dump(mode="python")
-        return type(self).model_validate(_deep_merge(payload, kwargs))
+        return cast("SIACConfig", type(self).model_validate(_deep_merge(payload, kwargs)))
 
     def with_env_overlay(self) -> SIACConfig:
         system = overlay_env_secrets(self._system_only())
         payload = system.model_dump(mode="python")
         payload["sensor"] = self.sensor
         payload["aoi"] = self.aoi
-        return type(self).model_validate(payload)
+        return cast("SIACConfig", type(self).model_validate(payload))
 
     def resolve(self, request: RunRequest) -> Any:
         return resolve_config(self.with_env_overlay(), request)
@@ -121,11 +129,14 @@ class SIACConfig(SystemConfig):
         return write_default_system_config(path)
 
     def _system_only(self) -> SystemConfig:
-        return SystemConfig.model_validate(
-            self.model_dump(
-                mode="python",
-                exclude={"sensor", "aoi"},
-            )
+        return cast(
+            "SystemConfig",
+            SystemConfig.model_validate(
+                self.model_dump(
+                    mode="python",
+                    exclude={"sensor", "aoi"},
+                )
+            ),
         )
 
 
@@ -147,27 +158,27 @@ def get_default_config() -> SIACConfig:
 
 def get_jasmin_config() -> SIACConfig:
     return SIACConfig(
-        providers={
-            "atmo": {
-                "kind": "cams",
-                "data_path": "/work/scratch-pw3/marc/CAMS/",
-            },
-            "brdf": {
-                "kind": "mcd43",
-                "data_path": "/gws/nopw/j04/nceo_ard/public/MCD43/",
-            },
-        },
-        paths={
-            "dem": "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt",
-        },
-        runtime={"n_jobs": 8},
+        providers=ProvidersConfig(
+            atmo=AtmoProviderConfig(
+                kind="cams",
+                data_path="/work/scratch-pw3/marc/CAMS/",
+            ),
+            brdf=BRDFProviderConfig(
+                kind="mcd43",
+                data_path="/gws/nopw/j04/nceo_ard/public/MCD43/",
+            ),
+        ),
+        paths=PathsConfig(
+            dem="/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt",
+        ),
+        runtime=RuntimeConfig(n_jobs=8),
     )
 
 
 def get_lut_config(lut_path: str | Path) -> SIACConfig:
     return SIACConfig(
-        algorithms={"rt": {"backend": "lut"}},
-        paths={"lut_path": lut_path},
+        algorithms=AlgorithmsConfig(rt=RTAlgorithmConfig(backend="lut")),
+        paths=PathsConfig(lut_path=lut_path),
     )
 
 

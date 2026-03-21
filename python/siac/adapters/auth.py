@@ -10,14 +10,19 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-import requests
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import quote
 
 from siac.errors import AuthenticationError
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from siac.adapters.data.earthaccess_source import EarthAccessSource
     from siac.config import SIACConfig
+
+requests = cast("Any", import_module("requests"))
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,20 @@ class CDSES3Credentials:
             "secret": self.secret_access_key,
             "client_kwargs": {"endpoint_url": self.endpoint_url},
         }
+
+
+def _load_optional_dependency(module_name: str, install_hint: str) -> Any:
+    try:
+        return import_module(module_name)
+    except ModuleNotFoundError as exc:  # pragma: no cover - env-dependent
+        raise AuthenticationError(install_hint) from exc
+
+
+def _response_json_object(response: Any, error_message: str) -> dict[str, Any]:
+    body = response.json()
+    if not isinstance(body, dict):
+        raise AuthenticationError(error_message)
+    return cast("dict[str, Any]", body)
 
 
 class _ProviderAuthBase:
@@ -124,7 +143,10 @@ class CDSEAuth(_ProviderAuthBase):
             timeout=timeout,
         )
         resp.raise_for_status()
-        body = resp.json()
+        body = _response_json_object(
+            resp,
+            "CDSE temporary S3 credential response must be a JSON object.",
+        )
         access_id = body.get("access_id")
         secret = body.get("secret")
         if not isinstance(access_id, str) or not access_id:
@@ -135,7 +157,7 @@ class CDSEAuth(_ProviderAuthBase):
 
     def revoke_temporary_s3_credentials(self, access_key_id: str, timeout: int = 60) -> None:
         resp = requests.delete(
-            f"{_CDSE_S3_CREDENTIALS_URL}/access_id/{access_key_id}",
+            f"{_CDSE_S3_CREDENTIALS_URL}/access_id/{quote(access_key_id, safe='')}",
             headers={
                 **self.authorization_header(),
                 "Accept": "application/json",
@@ -149,10 +171,10 @@ class CDSEAuth(_ProviderAuthBase):
         credentials: CDSES3Credentials,
         activation_delays: tuple[int, ...] = (0, 1, 2, 4),
     ) -> None:
-        try:
-            import s3fs  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover
-            raise AuthenticationError("s3fs is required to verify CDSE S3 credentials.") from exc
+        s3fs = _load_optional_dependency(
+            "s3fs",
+            "s3fs is required to verify CDSE S3 credentials.",
+        )
 
         last_exc: Exception | None = None
         for delay in activation_delays:
@@ -174,7 +196,7 @@ class CDSEAuth(_ProviderAuthBase):
         timeout: int = 60,
         activation_delays: tuple[int, ...] = (0, 1, 2, 4),
         verify: bool = True,
-    ) -> Any:
+    ) -> Iterator[CDSES3Credentials]:
         credentials = self.create_temporary_s3_credentials(timeout=timeout)
         try:
             if verify:
@@ -206,10 +228,7 @@ class CDSAuth(_ProviderAuthBase):
             raise AuthenticationError(
                 "CDS credentials are not configured; populate config.auth.cds.api_key."
             )
-        try:
-            import cdsapi  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover
-            raise AuthenticationError("cdsapi is not installed.") from exc
+        cdsapi = _load_optional_dependency("cdsapi", "cdsapi is not installed.")
 
         client_kwargs = self.client_kwargs()
         client_kwargs.update(kwargs)
@@ -260,7 +279,7 @@ class EarthdataAuth(_ProviderAuthBase):
         )
 
     @contextmanager
-    def activate_environment(self) -> Any:
+    def activate_environment(self) -> Iterator[None]:
         cred = self._complete_credentials()
         if cred is None:
             yield
@@ -299,7 +318,12 @@ class EarthdataAuth(_ProviderAuthBase):
             )
         return kwargs
 
-    def build_earthaccess_source(self, *, provider: str | None = None, **kwargs: Any) -> Any:
+    def build_earthaccess_source(
+        self,
+        *,
+        provider: str | None = None,
+        **kwargs: Any,
+    ) -> EarthAccessSource:
         from siac.adapters.data.earthaccess_source import EarthAccessSource
 
         source_kwargs = self.source_kwargs(provider=provider)
@@ -384,11 +408,15 @@ def _cdse_token_exchange(username: str, password: str, timeout: int = 60) -> tup
         timeout=timeout,
     )
     resp.raise_for_status()
-    body = resp.json()
+    body = _response_json_object(resp, "CDSE token response must be a JSON object.")
     token = body.get("access_token")
     if not isinstance(token, str) or not token:
         raise AuthenticationError("CDSE token response does not contain access_token.")
-    expires_in = int(body.get("expires_in", 300))
+    expires_in_raw = body.get("expires_in", 300)
+    try:
+        expires_in = int(expires_in_raw)
+    except (TypeError, ValueError) as exc:
+        raise AuthenticationError("CDSE token response contains an invalid expires_in value.") from exc
     return token, expires_in
 
 
@@ -422,6 +450,7 @@ def _load_from_auth_config(manager: CredentialManager, auth_config: Any) -> None
         gcs_file = getattr(gcs, "credentials_file", None)
         if gcs_file is not None:
             _maybe_set(manager, "gcs", str(gcs_file), None)
+
 
 def _maybe_set(
     manager: CredentialManager,

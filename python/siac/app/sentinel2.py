@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from siac.adapters.auth import CredentialManager
 from siac.app.planning import resolve_run_config
@@ -12,10 +12,11 @@ from siac.config import SIACConfig
 from siac.errors import DataNotFoundError
 
 if TYPE_CHECKING:
+    from siac.adapters.data.s2_data_source import S2Product, S2Query
     from siac.app.requests import Sentinel2ResolveRequest, Sentinel2SearchRequest
 
 
-def coerce_date(value: date | str | None) -> date | None:
+def coerce_date(value: date | datetime | str | None) -> date | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -25,7 +26,7 @@ def coerce_date(value: date | str | None) -> date | None:
     return datetime.strptime(str(value), "%Y-%m-%d").date()
 
 
-def apply_s2_query_defaults(query, *, config):
+def apply_s2_query_defaults(query: S2Query, *, config: Any) -> S2Query:
     if query.max_cloud_cover == 100.0:
         query.max_cloud_cover = config.s2_data.max_cloud_cover
     if query.processing_level == "L1C" and config.s2_data.processing_level != "L1C":
@@ -33,7 +34,7 @@ def apply_s2_query_defaults(query, *, config):
     return query
 
 
-def coerce_s2_query(query, *, config):
+def coerce_s2_query(query: Any, *, config: Any) -> S2Query:
     from siac.adapters.data.s2_data_source import S2Query
 
     if isinstance(query, S2Query):
@@ -51,14 +52,14 @@ def coerce_s2_query(query, *, config):
     return apply_s2_query_defaults(resolved, config=config)
 
 
-def _as_local_candidate(query) -> Path:
+def _as_local_candidate(query: Any) -> Path:
     return Path(query).expanduser() if isinstance(query, Path) else Path(str(query)).expanduser()
 
 
 def resolve_s2_input(
     request: Sentinel2ResolveRequest,
     *,
-    resolve_s2_backend_fn=None,
+    resolve_s2_backend_fn: Any | None = None,
 ) -> Path:
     local_candidate = _as_local_candidate(request.query)
     if local_candidate.exists():
@@ -66,14 +67,15 @@ def resolve_s2_input(
 
     if resolve_s2_backend_fn is None:
         from siac.app.assembly import resolve_s2_backend as resolve_s2_backend_fn
+    resolve_s2_backend = cast("Any", resolve_s2_backend_fn)
 
     resolved_config = resolve_run_config(
         request.config,
         sensor=request.config.sensor if request.config.sensor != "auto" else "s2",
-        s2_query=request.query,
+        s2_query=cast("Any", request.query),
     )
     auth_obj = request.auth or CredentialManager.from_config(resolved_config)
-    backend = resolve_s2_backend_fn(resolved_config, auth=auth_obj)
+    backend = resolve_s2_backend(resolved_config, auth=auth_obj)
     if backend is None:
         raise DataNotFoundError(
             "S2 backend is 'local', but input path does not exist. "
@@ -85,10 +87,10 @@ def resolve_s2_input(
     cache_dir = resolved_config.s2_data.cache_dir
     accessor = S2DataAccess(backend=backend, cache_dir=cache_dir)
     query = coerce_s2_query(request.query, config=resolved_config)
-    return accessor.get(query, dest_dir=cache_dir)
+    return cast("Path", accessor.get(query, dest_dir=cache_dir))
 
 
-def _resolve_search_config(request: Sentinel2SearchRequest):
+def _resolve_search_config(request: Sentinel2SearchRequest) -> Any:
     config = request.config or SIACConfig(sensor="s2")
     config = config.with_overrides(
         sensor="s2",
@@ -100,8 +102,8 @@ def _resolve_search_config(request: Sentinel2SearchRequest):
 def search_sentinel2(
     request: Sentinel2SearchRequest,
     *,
-    resolve_s2_backend_fn=None,
-):
+    resolve_s2_backend_fn: Any | None = None,
+) -> list[S2Product]:
     from siac.adapters.data.s2_data_source import S2Query, search_s2
 
     resolved_config = _resolve_search_config(request)
@@ -109,8 +111,9 @@ def search_sentinel2(
 
     if resolve_s2_backend_fn is None:
         from siac.app.assembly import resolve_s2_backend as resolve_s2_backend_fn
+    resolve_s2_backend = cast("Any", resolve_s2_backend_fn)
 
-    backend_obj = resolve_s2_backend_fn(resolved_config, auth=auth_obj)
+    backend_obj = resolve_s2_backend(resolved_config, auth=auth_obj)
     if backend_obj is None:
         raise ValueError("search_sentinel2 does not support backend='local'.")
 
@@ -123,7 +126,7 @@ def search_sentinel2(
         max_cloud_cover=request.max_cloud_cover,
         processing_level=resolved_config.s2_data.processing_level,
     )
-    return search_s2(backend_obj, query)
+    return cast("list[S2Product]", search_s2(backend_obj, query))
 
 
 __all__ = [

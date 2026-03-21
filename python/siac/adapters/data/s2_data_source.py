@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date as Date
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -22,15 +23,16 @@ logger = logging.getLogger(__name__)
 
 # ── Data types ─────────────────────────────────────────────────────────
 
+
 @dataclass
 class S2Query:
     """Flexible query for Sentinel-2 products."""
 
     product_id: str | None = None
     mgrs_tile: str | None = None
-    date: date | None = None
-    start_date: date | None = None
-    end_date: date | None = None
+    date: Date | None = None
+    start_date: Date | None = None
+    end_date: Date | None = None
     bbox: tuple[float, float, float, float] | None = None  # (W, S, E, N) WGS84
     max_cloud_cover: float = 100.0
     processing_level: str = "L1C"
@@ -65,14 +67,15 @@ class S2Query:
         Raises:
             ValueError: If the query has no spatial constraint.
         """
-        if not any([
-            self.product_id,
-            self.mgrs_tile,
-            self.bbox,
-        ]):
+        if not any(
+            [
+                self.product_id,
+                self.mgrs_tile,
+                self.bbox,
+            ]
+        ):
             raise ValueError(
-                "S2Query must have at least one spatial constraint "
-                "(product_id, mgrs_tile, or bbox)"
+                "S2Query must have at least one spatial constraint (product_id, mgrs_tile, or bbox)"
             )
 
 
@@ -98,6 +101,7 @@ class S2Product:
 
 # ── Backend protocol ──────────────────────────────────────────────────
 
+
 class S2DataBackend(Protocol):
     """Backend for searching and fetching S2 SAFE directories."""
 
@@ -108,15 +112,19 @@ class S2DataBackend(Protocol):
 
 # ── Plain helper functions (the real logic) ────────────────────────────
 
+
 def deduplicate_products(products: list[S2Product]) -> list[S2Product]:
     """Group by (mgrs_tile, sensing_date), keep highest baseline_number.
 
     When multiple processing baselines exist for the same tile+date
     (e.g. N0301, N0400, N0500), only the newest baseline is kept.
     """
-    best: dict[tuple[str, date], S2Product] = {}
+    best: dict[tuple[str, Date], S2Product] = {}
     for p in products:
-        key = (p.mgrs_tile, p.sensing_date.date() if isinstance(p.sensing_date, datetime) else p.sensing_date)
+        key = (
+            p.mgrs_tile,
+            p.sensing_date.date() if isinstance(p.sensing_date, datetime) else p.sensing_date,
+        )
         existing = best.get(key)
         if existing is None or p.baseline_number > existing.baseline_number:
             best[key] = p
@@ -176,6 +184,7 @@ def fetch_s2(
 
 
 # ── Orchestrator class ─────────────────────────────────────────────────
+
 
 class S2DataAccess:
     """Unified S2 data access — search, select, download.

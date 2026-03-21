@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -35,12 +35,16 @@ from siac.runtime import (
     ObservationBundle,
     SolvedAtmosphere,
     SolverInputBundle,
+    SurfacePrior,
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import xarray as xr
 
     from siac.adapters.auth import CredentialManager
+    from siac.domain.protocols import AtmosphericPriorProvider
     from siac.domain.sensors import SensorConfig
     from siac.workflows.pipeline import (
         AtmoPriorFn,
@@ -54,6 +58,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class SurfacePriorCallable(Protocol):
+        requires_atmo_prior: bool
+
+        def __call__(
+            self,
+            observation: ObservationBundle,
+            atmo_prior: AtmosphericState | None,
+            rt_model: Any,
+            resolution: float,
+        ) -> SurfacePrior:
+            ...
+
+
 @dataclass(frozen=True)
 class PreprocessorRuntime:
     """Preprocessor callable plus its sensor configuration."""
@@ -65,10 +85,11 @@ class PreprocessorRuntime:
 def _select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]:
     if sensor_config is None:
         return list(range(1, 8))
-    bands = sensor_config.select_bands_in_range(400.0, 520.0)
-    if not bands:
-        bands = list(sensor_config.bands[:2])
-    return bands
+    selected: list[Any] = list(sensor_config.select_bands_in_range(400.0, 520.0))
+    if selected:
+        return selected
+    fallback: list[Any] = list(sensor_config.bands[:2])
+    return fallback
 
 
 def _select_visible_surface_prior_bands(sensor_config: SensorConfig) -> list[Any]:
@@ -100,12 +121,12 @@ def _select_route_b_query_bands(sensor_config: SensorConfig) -> list[Any]:
 
 
 def _surface_spectral_mapping_runtime(
-    config,
+    config: Any,
     *,
     source_bands: list[Any] | tuple[Any, ...] | None = None,
     target_bands: list[Any] | tuple[Any, ...] | None = None,
     context: str = "surface priors",
-) -> tuple[object | None, int]:
+) -> tuple[Any | None, int]:
     settings = config.surface_prior.spectral_mapping
     paths = getattr(config, "paths", None)
     cache_paths = getattr(paths, "caches", None)
@@ -149,14 +170,19 @@ def _surface_spectral_mapping_runtime(
     )
 
 
+def _mark_surface_prior_metadata(provider: SurfacePriorFn, *, requires_atmo_prior: bool) -> SurfacePriorFn:
+    cast("SurfacePriorCallable", provider).requires_atmo_prior = requires_atmo_prior
+    return provider
+
+
 def build_preprocessor_runtime(
-    config,
+    config: Any,
     *,
-    input_path=None,
+    input_path: Path | None = None,
     sensor: str | None = None,
-    default_aoi_resolver=None,
-    detect_sensor_fn=None,
-    get_preprocessor_fn=None,
+    default_aoi_resolver: Any | None = None,
+    detect_sensor_fn: Any | None = None,
+    get_preprocessor_fn: Any | None = None,
 ) -> PreprocessorRuntime:
     """Build the M1 preprocessor runtime."""
     if detect_sensor_fn is None:
@@ -192,12 +218,12 @@ def build_preprocessor_runtime(
 
     sensor_config = preprocessor_obj.sensor_config
 
-    def _resolve_default_aoi(toa: xr.Dataset):
+    def _resolve_default_aoi(toa: xr.Dataset) -> AOI:
         if callable(default_aoi_resolver):
-            return default_aoi_resolver(toa)
+            return cast("AOI", default_aoi_resolver(toa))
         return AOI.from_raster(toa[list(toa.data_vars)[0]])
 
-    def _preprocessor(path, aoi=None) -> ObservationBundle:
+    def _preprocessor(path: Path, aoi: AOI | None = None) -> ObservationBundle:
         raw = preprocessor_obj.preprocess(path)
         toa = raw["toa"]
         resolved_aoi = aoi or _resolve_default_aoi(toa)
@@ -214,7 +240,13 @@ def build_preprocessor_runtime(
     return PreprocessorRuntime(preprocessor=_preprocessor, sensor_config=sensor_config)
 
 
-def resolve_preprocessor(config, *, input_path=None, sensor: str | None = None, default_aoi_resolver=None) -> PreprocessorFn:
+def resolve_preprocessor(
+    config: Any,
+    *,
+    input_path: Path | None = None,
+    sensor: str | None = None,
+    default_aoi_resolver: Any | None = None,
+) -> PreprocessorFn:
     return build_preprocessor_runtime(
         config,
         input_path=input_path,
@@ -223,12 +255,15 @@ def resolve_preprocessor(config, *, input_path=None, sensor: str | None = None, 
     ).preprocessor
 
 
-def resolve_output_writer(config):
+def resolve_output_writer(config: Any) -> ConfiguredOutputWriter:
     return ConfiguredOutputWriter(config.output.defaults)
 
 
 @ATMO_PROVIDER_REGISTRY.register("cams")
-def _build_cams_provider(config, auth: CredentialManager | None = None):
+def _build_cams_provider(
+    config: Any,
+    auth: CredentialManager | None = None,
+) -> AtmosphericPriorProvider:
     return CAMSProvider(
         config.atmo_prior.data_path,
         temporal_interp=config.atmo_prior.temporal_interpolation == "linear",
@@ -239,7 +274,10 @@ def _build_cams_provider(config, auth: CredentialManager | None = None):
 
 
 @ATMO_PROVIDER_REGISTRY.register("merra2")
-def _build_merra2_provider(config, auth: CredentialManager | None = None):
+def _build_merra2_provider(
+    config: Any,
+    auth: CredentialManager | None = None,
+) -> AtmosphericPriorProvider:
     from siac.adapters.atmo.merra2 import MERRA2Provider
 
     return MERRA2Provider(
@@ -249,7 +287,10 @@ def _build_merra2_provider(config, auth: CredentialManager | None = None):
 
 
 @ATMO_PROVIDER_REGISTRY.register("mcd19")
-def _build_mcd19_provider(config, auth: CredentialManager | None = None):
+def _build_mcd19_provider(
+    config: Any,
+    auth: CredentialManager | None = None,
+) -> AtmosphericPriorProvider:
     from siac.adapters.atmo.mcd19_earthaccess import MCD19AODProvider
 
     return MCD19AODProvider(
@@ -259,7 +300,10 @@ def _build_mcd19_provider(config, auth: CredentialManager | None = None):
 
 
 @ATMO_PROVIDER_REGISTRY.register("vnp19")
-def _build_vnp19_provider(config, auth: CredentialManager | None = None):
+def _build_vnp19_provider(
+    config: Any,
+    auth: CredentialManager | None = None,
+) -> AtmosphericPriorProvider:
     from siac.adapters.atmo.mcd19_earthaccess import VNP19AODProvider
 
     return VNP19AODProvider(
@@ -269,7 +313,7 @@ def _build_vnp19_provider(config, auth: CredentialManager | None = None):
 
 
 @BRDF_PROVIDER_REGISTRY.register("mcd43")
-def _build_mcd43_provider(config, auth: CredentialManager | None = None):
+def _build_mcd43_provider(config: Any, auth: CredentialManager | None = None) -> Any:
     from siac.adapters.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
 
     return MCD43EarthAccessProvider(
@@ -279,7 +323,7 @@ def _build_mcd43_provider(config, auth: CredentialManager | None = None):
 
 
 @BRDF_PROVIDER_REGISTRY.register("vnp43")
-def _build_vnp43_provider(config, auth: CredentialManager | None = None):
+def _build_vnp43_provider(config: Any, auth: CredentialManager | None = None) -> Any:
     from siac.adapters.brdf.vnp43_earthaccess import VNP43EarthAccessProvider
 
     return VNP43EarthAccessProvider(
@@ -289,7 +333,7 @@ def _build_vnp43_provider(config, auth: CredentialManager | None = None):
 
 
 @BRDF_PROVIDER_REGISTRY.register("mcd19")
-def _build_mcd19_brdf_provider(config, auth: CredentialManager | None = None):
+def _build_mcd19_brdf_provider(config: Any, auth: CredentialManager | None = None) -> Any:
     from siac.adapters.brdf.mcd43_earthaccess import MCD19EarthAccessProvider
 
     return MCD19EarthAccessProvider(
@@ -299,26 +343,31 @@ def _build_mcd19_brdf_provider(config, auth: CredentialManager | None = None):
 
 
 @BRDF_PROVIDER_REGISTRY.register("gee")
-def _build_gee_brdf_provider(_config, _auth: CredentialManager | None = None):
+def _build_gee_brdf_provider(_config: Any, _auth: CredentialManager | None = None) -> Any:
     from siac.adapters.brdf.gee_stub import GEEBRDFProvider
 
     return GEEBRDFProvider()
 
 
-def resolve_brdf_provider(config, *, auth: CredentialManager | None = None):
+def resolve_brdf_provider(config: Any, *, auth: CredentialManager | None = None) -> Any:
     provider_name = getattr(config.brdf, "provider", "mcd43")
     return BRDF_PROVIDER_REGISTRY.get(provider_name)(config, auth)
 
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("kernel_model")
-def _build_kernel_surface_prior(config, brdf_prov) -> SurfacePriorFn:
+def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
     deriver = KernelModelDeriver(
         psf_sigma_x=config.surface_prior.psf_sigma_x,
         psf_sigma_y=config.surface_prior.psf_sigma_y,
         apply_psf=config.surface_prior.apply_psf,
     )
 
-    def _surface_prior(observation, atmo_prior, rt_model, resolution):
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
         _ = (atmo_prior, rt_model)
         target_bands = _select_surface_prior_bands(observation.sensor_config)
         spectral_library, spectral_k_neighbors = _surface_spectral_mapping_runtime(
@@ -344,12 +393,11 @@ def _build_kernel_surface_prior(config, brdf_prov) -> SurfacePriorFn:
             spectral_k_neighbors=spectral_k_neighbors,
         )
 
-    _surface_prior.requires_atmo_prior = False
-    return _surface_prior
+    return _mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
 
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("whittaker")
-def _build_whittaker_surface_prior(config, brdf_prov) -> SurfacePriorFn:
+def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
     deriver = BRDFWhittakerDeriver(
         temporal_lambda=config.surface_prior.whittaker_lambda,
         psf_sigma_x=config.surface_prior.psf_sigma_x,
@@ -357,7 +405,12 @@ def _build_whittaker_surface_prior(config, brdf_prov) -> SurfacePriorFn:
         apply_psf=config.surface_prior.apply_psf,
     )
 
-    def _surface_prior(observation, atmo_prior, rt_model, resolution):
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
         _ = (atmo_prior, rt_model)
         target_bands = _select_surface_prior_bands(observation.sensor_config)
         spectral_library, spectral_k_neighbors = _surface_spectral_mapping_runtime(
@@ -384,19 +437,23 @@ def _build_whittaker_surface_prior(config, brdf_prov) -> SurfacePriorFn:
             spectral_k_neighbors=spectral_k_neighbors,
         )
 
-    _surface_prior.requires_atmo_prior = False
-    return _surface_prior
+    return _mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
 
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("monthly_database")
-def _build_monthly_surface_prior(config, brdf_prov) -> SurfacePriorFn:
+def _build_monthly_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
     fallback_deriver = KernelModelDeriver(
         psf_sigma_x=config.surface_prior.psf_sigma_x,
         psf_sigma_y=config.surface_prior.psf_sigma_y,
         apply_psf=config.surface_prior.apply_psf,
     )
 
-    def _surface_prior(observation, atmo_prior, rt_model, resolution):
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
         if atmo_prior is None:
             raise ValueError("Route-B monthly_database surface prior requires an atmospheric prior")
 
@@ -452,20 +509,19 @@ def _build_monthly_surface_prior(config, brdf_prov) -> SurfacePriorFn:
             spectral_k_neighbors=spectral_k_neighbors,
         )
 
-    _surface_prior.requires_atmo_prior = True
-    return _surface_prior
+    return _mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=True)
 
 
-def resolve_atmo_provider(config, auth: CredentialManager | None = None) -> AtmoPriorFn:
+def resolve_atmo_provider(config: Any, auth: CredentialManager | None = None) -> AtmoPriorFn:
     provider_name = config.atmo_prior.provider
     provider = ATMO_PROVIDER_REGISTRY.get(provider_name)(config, auth)
-    return provider.get_prior
+    return cast("AtmosphericPriorProvider", provider).get_prior
 
 
-def resolve_surface_prior_provider(config, auth: CredentialManager | None = None) -> SurfacePriorFn:
+def resolve_surface_prior_provider(config: Any, auth: CredentialManager | None = None) -> SurfacePriorFn:
     brdf_prov = resolve_brdf_provider(config, auth=auth)
     method = getattr(config.surface_prior, "method", "kernel_model")
-    return SURFACE_PRIOR_METHOD_REGISTRY.get(method)(config, brdf_prov)
+    return cast("SurfacePriorFn", SURFACE_PRIOR_METHOD_REGISTRY.get(method)(config, brdf_prov))
 
 
 def resolve_grid_assembler() -> GridAssemblerFn:
@@ -474,8 +530,8 @@ def resolve_grid_assembler() -> GridAssemblerFn:
     return assemble_grids
 
 
-def resolve_solver(config) -> SolverFn:
-    def _default_solver(inputs: SolverInputBundle, _config) -> SolvedAtmosphere:
+def resolve_solver(config: Any) -> SolverFn:
+    def _default_solver(inputs: SolverInputBundle, _config: Any) -> SolvedAtmosphere:
         solver_config = MultiGridConfig(
             aot_gamma=config.solver.aot_gamma,
             tcwv_gamma=config.solver.tcwv_gamma,
@@ -512,7 +568,7 @@ def resolve_solver(config) -> SolverFn:
     return _default_solver
 
 
-def _resample_field_to_template(field, template):
+def _resample_field_to_template(field: Any, template: Any) -> Any:
     if field.shape == template.shape:
         return field
     if (
@@ -535,12 +591,12 @@ def _resample_field_to_template(field, template):
     h_out = int(template.sizes["y"])
     w_out = int(template.sizes["x"])
     if src.shape[0] == 0 or src.shape[1] == 0:
-        out = np.full((h_out, w_out), np.nan, dtype=np.float32)
+        out: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
     else:
         out = ndimage.zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=1)
         out = out[:h_out, :w_out]
         if out.shape != (h_out, w_out):
-            padded = np.full((h_out, w_out), np.nan, dtype=np.float32)
+            padded: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
             padded[: out.shape[0], : out.shape[1]] = out
             out = padded
 
@@ -551,8 +607,12 @@ def _resample_field_to_template(field, template):
     )
 
 
-def resolve_corrector(_config) -> CorrectorFn:
-    def _default_corrector(obs: ObservationBundle, solved: SolvedAtmosphere, rt_model) -> CorrectionResult:
+def resolve_corrector(_config: Any) -> CorrectorFn:
+    def _default_corrector(
+        obs: ObservationBundle,
+        solved: SolvedAtmosphere,
+        rt_model: Any,
+    ) -> CorrectionResult:
         corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
         first_band = obs.toa[next(iter(obs.toa.data_vars))]
         atmo = solved.atmo_state
@@ -571,26 +631,31 @@ def resolve_corrector(_config) -> CorrectorFn:
 
 
 @S2_BACKEND_REGISTRY.register("cdse")
-def _build_cdse_s2_backend(config, auth: CredentialManager | None = None):
+def _build_cdse_s2_backend(config: Any, auth: CredentialManager | None = None) -> Any:
     return build_s2_backend(config, auth=auth)
 
 
 @S2_BACKEND_REGISTRY.register("gcs")
-def _build_gcs_s2_backend(config, auth: CredentialManager | None = None):
+def _build_gcs_s2_backend(config: Any, auth: CredentialManager | None = None) -> Any:
     return build_s2_backend(config, auth=auth)
 
 
 @S2_BACKEND_REGISTRY.register("local")
-def _build_local_s2_backend(config, auth: CredentialManager | None = None):
+def _build_local_s2_backend(config: Any, auth: CredentialManager | None = None) -> Any:
     _ = auth
     return build_s2_backend(config, auth=None)
 
 
-def resolve_s2_backend(config, *, auth: CredentialManager | None = None):
+def resolve_s2_backend(config: Any, *, auth: CredentialManager | None = None) -> Any:
     return S2_BACKEND_REGISTRY.get(config.s2_data.backend)(config, auth)
 
 
-def resolve_rt_model_for_pipeline(config, auth: CredentialManager | None = None, *, sensor_config: SensorConfig | None = None):
+def resolve_rt_model_for_pipeline(
+    config: Any,
+    auth: CredentialManager | None = None,
+    *,
+    sensor_config: SensorConfig | None = None,
+) -> Any:
     return build_rt_model(config, auth=auth, sensor_config=sensor_config)
 
 

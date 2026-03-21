@@ -12,13 +12,16 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyproj import Transformer
 
 logger = logging.getLogger(__name__)
 
 _EARTHACCESS_DOWNLOAD_THREADS = 8
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class EarthAccessSource:
@@ -93,7 +96,7 @@ class EarthAccessSource:
         self._authenticated = True
 
     @contextmanager
-    def _temporary_environment_credentials(self):
+    def _temporary_environment_credentials(self) -> Iterator[None]:
         if not (self.earthdata_username and self.earthdata_password):
             yield
             return
@@ -205,8 +208,16 @@ class EarthAccessSource:
 
         if temporal is not None:
             if isinstance(temporal, tuple) and len(temporal) == 2:
-                t0 = temporal[0].isoformat() if hasattr(temporal[0], "isoformat") else str(temporal[0])
-                t1 = temporal[1].isoformat() if hasattr(temporal[1], "isoformat") else str(temporal[1])
+                t0 = (
+                    temporal[0].isoformat()
+                    if hasattr(temporal[0], "isoformat")
+                    else str(temporal[0])
+                )
+                t1 = (
+                    temporal[1].isoformat()
+                    if hasattr(temporal[1], "isoformat")
+                    else str(temporal[1])
+                )
                 query["temporal"] = (t0, t1)
             elif isinstance(temporal, str):
                 if "," in temporal:

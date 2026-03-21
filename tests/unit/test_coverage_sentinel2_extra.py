@@ -195,6 +195,14 @@ class TestSentinel2Internals:
         out = p._angles_to_grid(np.full((23, 23), 30.0, dtype=np.float32), _da((8, 8), 1.0))
         assert out.shape == (8, 8)
 
+    def test_extract_geometry_requires_granule_metadata(self, tmp_path: Path):
+        p = Sentinel2Preprocessor()
+        safe = _safe_tree(tmp_path)
+        p._resolve_paths(safe)
+
+        with pytest.raises(FileNotFoundError, match="No granule metadata XML found"):
+            p.extract_geometry(safe)
+
     def test_load_toa_extract_geometry_cloud_and_metadata(self, tmp_path: Path, monkeypatch):
         safe = _safe_tree(tmp_path)
         p = Sentinel2Preprocessor()
@@ -282,6 +290,14 @@ class TestSentinel2Internals:
         settings = p._cloud_mask_settings(safe)
         assert settings["external_mask_path"] == safe / "masks" / "cloud.tif"
         assert p._get_namespace(ET.fromstring("<root/>")) == ""
+
+    def test_cloud_mask_settings_expands_user_paths(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        safe = _safe_tree(tmp_path)
+        p = Sentinel2Preprocessor(config={"cloud_mask": {"external_mask_path": "~/clouds/mask.tif"}})
+
+        settings = p._cloud_mask_settings(safe)
+        assert settings["external_mask_path"] == tmp_path / "clouds" / "mask.tif"
 
     def test_finders_and_img_data_fallback_paths(self, tmp_path: Path):
         p = Sentinel2Preprocessor()

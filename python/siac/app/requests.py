@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from siac.domain.aoi import AOI
 
 
-AOISpec: TypeAlias = "AOI | Path | str | tuple[float, float, float, float] | list[float] | None"
+AOISpec: TypeAlias = (
+    "AOI | dict[str, object] | Path | str | tuple[float, float, float, float] | list[float] | None"
+)
 DateSpec: TypeAlias = date | datetime | str | None
 PathLike: TypeAlias = str | Path
 Sentinel2QuerySpec: TypeAlias = "S2Query | str | Path"

@@ -33,11 +33,14 @@ class ProductValidationResult:
 def _extract_short_name(dataset: Any) -> str | None:
     """Best-effort short-name extraction from earthaccess dataset objects."""
     if isinstance(dataset, dict):
-        if isinstance(dataset.get("short_name"), str):
-            return dataset["short_name"]
+        short_name = dataset.get("short_name")
+        if isinstance(short_name, str):
+            return short_name
         umm = dataset.get("umm")
-        if isinstance(umm, dict) and isinstance(umm.get("ShortName"), str):
-            return umm["ShortName"]
+        if isinstance(umm, dict):
+            umm_short_name = umm.get("ShortName")
+            if isinstance(umm_short_name, str):
+                return umm_short_name
 
     short_name = getattr(dataset, "short_name", None)
     if isinstance(short_name, str):

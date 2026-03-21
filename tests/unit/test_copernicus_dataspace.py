@@ -319,6 +319,11 @@ def test_search_payload_and_next_link_helpers():
         "rel": "next",
         "href": "https://example.test/n",
     }
+    assert cdse._next_link({"links": ["not-a-link", {"rel": "next", "href": "https://example.test/n"}]}) == {
+        "rel": "next",
+        "href": "https://example.test/n",
+    }
+    assert cdse._next_link({"links": "not-a-list"}) is None
 
 
 def test_auth_header_resolution_modes(monkeypatch):
@@ -343,6 +348,22 @@ def test_token_from_credentials_missing_token_raises(monkeypatch):
     monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
     with pytest.raises(DataNotFoundError, match="access_token"):
         cdse._token_from_credentials("user", "pass")
+
+
+def test_json_helpers_reject_non_object_payloads(monkeypatch):
+    def _fake_get(url: str, timeout: int = 60, **kwargs):  # noqa: ARG001
+        return _FakeResponse(json_data=["not", "an", "object"])
+
+    def _fake_post(url: str, json: dict, timeout: int = 60, **kwargs):  # noqa: ARG001
+        return _FakeResponse(json_data=["still", "not", "an", "object"])
+
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
+
+    with pytest.raises(DataNotFoundError, match="was not an object"):
+        cdse._get_json("https://example.test/get")
+    with pytest.raises(DataNotFoundError, match="was not an object"):
+        cdse._post_json("https://example.test/post", {})
 
 
 def test_search_cdse_processing_level_filter_and_product_lookup_error(monkeypatch):

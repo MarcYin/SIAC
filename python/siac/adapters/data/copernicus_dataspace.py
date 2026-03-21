@@ -15,7 +15,7 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
@@ -61,7 +61,9 @@ def _to_datetime_range(query: S2Query) -> str | None:
     if query.start_date is not None:
         start_dt = datetime.combine(query.start_date, time.min)
     else:
-        return f"../{_iso_datetime(datetime.combine(query.end_date, time.max).replace(microsecond=0))}"
+        end_date = query.end_date
+        assert end_date is not None
+        return f"../{_iso_datetime(datetime.combine(end_date, time.max).replace(microsecond=0))}"
 
     if query.end_date is not None:
         end_dt = datetime.combine(query.end_date, time.max).replace(microsecond=0)
@@ -138,6 +140,13 @@ def _pick_product_href(item: dict[str, Any]) -> tuple[str, float | None]:
     return href, size_mb
 
 
+def _json_object_from_response(response: Any, *, url: str) -> dict[str, Any]:
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise DataNotFoundError(f"CDSE JSON response from {url!r} was not an object.")
+    return payload
+
+
 def _item_to_product(item: dict[str, Any]) -> S2Product:
     product_id = str(item["id"]).replace(".SAFE", "")
     props = item.get("properties", {})
@@ -159,7 +168,13 @@ def _item_to_product(item: dict[str, Any]) -> S2Product:
 
 
 def _next_link(page: dict[str, Any]) -> dict[str, Any] | None:
-    for link in page.get("links", []):
+    links = page.get("links", [])
+    if not isinstance(links, list):
+        return None
+
+    for link in links:
+        if not isinstance(link, dict):
+            continue
         if link.get("rel") == "next":
             href = link.get("href")
             if isinstance(href, str) and href:
@@ -201,13 +216,13 @@ def _search_payload(query: S2Query, limit: int = 100) -> dict[str, Any]:
 def _post_json(url: str, payload: dict[str, Any], timeout: int = 60) -> dict[str, Any]:
     resp = requests.post(url, json=payload, timeout=timeout)
     resp.raise_for_status()
-    return resp.json()
+    return _json_object_from_response(resp, url=url)
 
 
 def _get_json(url: str, timeout: int = 60) -> dict[str, Any]:
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
-    return resp.json()
+    return _json_object_from_response(resp, url=url)
 
 
 def _load_page_from_link(link: dict[str, Any], timeout: int = 60) -> dict[str, Any]:

@@ -99,7 +99,9 @@ class TestResolveSurfacePriorProvider:
             surface_prior = _FakeSurfacePrior()
             paths = None
 
-        assert callable(resolve_surface_prior_provider(_FakeConfig()))
+        fn = resolve_surface_prior_provider(_FakeConfig())
+        assert callable(fn)
+        assert getattr(fn, "requires_atmo_prior", None) is False
 
     def test_mcd19_returns_callable(self):
         class _FakeBrdf:
@@ -130,7 +132,43 @@ class TestResolveSurfacePriorProvider:
             surface_prior = _FakeSurfacePrior()
             paths = None
 
-        assert callable(resolve_surface_prior_provider(_FakeConfig()))
+        fn = resolve_surface_prior_provider(_FakeConfig())
+        assert callable(fn)
+        assert getattr(fn, "requires_atmo_prior", None) is False
+
+    def test_monthly_database_marks_atmo_dependency(self):
+        class _FakeBrdf:
+            provider = "mcd19"
+            cache_dir = None
+            temporal_window = 16
+
+        class _FakeSurfacePrior:
+            method = "monthly_database"
+            psf_sigma_x = 29.75
+            psf_sigma_y = 39.0
+            apply_psf = True
+            whittaker_lambda = 10.0
+            spectral_mapping = type(
+                "SpectralMapping",
+                (),
+                {
+                    "enabled": False,
+                    "k_neighbors": 5,
+                    "neighbor_estimator": "distance_weighted_mean",
+                    "knn_backend": "numpy",
+                    "knn_eps": 0.0,
+                    "min_valid_bands": 1,
+                },
+            )()
+
+        class _FakeConfig:
+            brdf = _FakeBrdf()
+            surface_prior = _FakeSurfacePrior()
+            paths = None
+
+        fn = resolve_surface_prior_provider(_FakeConfig())
+        assert callable(fn)
+        assert getattr(fn, "requires_atmo_prior", None) is True
 
 
 class TestResolveSolver:

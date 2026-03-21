@@ -36,7 +36,9 @@ class TestFunctionInjection:
             return mock_observation_bundle
 
         result = run_pipeline(
-            Path("/fake"), None, None,
+            Path("/fake"),
+            None,
+            None,
             preprocessor=my_loader,
             atmo_provider=mock_atmo_provider,
             surface_prior_provider=mock_surface_prior_provider,
@@ -65,7 +67,9 @@ class TestFunctionInjection:
             return mock_atmospheric_state
 
         result = run_pipeline(
-            Path("/fake"), None, None,
+            Path("/fake"),
+            None,
+            None,
             preprocessor=mock_preprocessor,
             atmo_provider=constant_atmo,
             surface_prior_provider=mock_surface_prior_provider,
@@ -95,7 +99,9 @@ class TestFunctionInjection:
             return mock_solved_atmosphere
 
         result = run_pipeline(
-            Path("/fake"), None, None,
+            Path("/fake"),
+            None,
+            None,
             preprocessor=mock_preprocessor,
             atmo_provider=mock_atmo_provider,
             surface_prior_provider=mock_surface_prior_provider,
@@ -110,6 +116,7 @@ class TestFunctionInjection:
     def test_inject_corrector_function(
         self,
         mock_preprocessor,
+        mock_observation_bundle,
         mock_atmo_provider,
         mock_surface_prior_provider,
         mock_grid_assembler,
@@ -131,7 +138,9 @@ class TestFunctionInjection:
             )
 
         result = run_pipeline(
-            Path("/fake"), None, None,
+            Path("/fake"),
+            None,
+            None,
             preprocessor=mock_preprocessor,
             atmo_provider=mock_atmo_provider,
             surface_prior_provider=mock_surface_prior_provider,
@@ -141,8 +150,7 @@ class TestFunctionInjection:
             rt_model=mock_rt_model,
         )
         assert called["corrector"]
-        # BOA should equal TOA since we used identity corrector
-        assert set(result.boa.data_vars) == set(result.boa.data_vars)
+        assert result.boa.identical(mock_observation_bundle.toa)
 
 
 @pytest.mark.integration
@@ -160,8 +168,9 @@ class TestContractViolationByCustomProvider:
         mock_rt_model,
     ):
         """Custom preprocessor returns ObservationBundle missing observation_time."""
-        bad_meta = {k: v for k, v in mock_observation_bundle.metadata.items()
-                    if k != "observation_time"}
+        bad_meta = {
+            k: v for k, v in mock_observation_bundle.metadata.items() if k != "observation_time"
+        }
         bad_obs = dataclasses.replace(mock_observation_bundle, metadata=bad_meta)
 
         def bad_pp(path, aoi=None):
@@ -169,7 +178,9 @@ class TestContractViolationByCustomProvider:
 
         with pytest.raises(ValidationError, match="observation_time"):
             run_pipeline(
-                Path("/fake"), None, None,
+                Path("/fake"),
+                None,
+                None,
                 preprocessor=bad_pp,
                 atmo_provider=mock_atmo_provider,
                 surface_prior_provider=mock_surface_prior_provider,
@@ -195,7 +206,9 @@ class TestContractViolationByCustomProvider:
 
         with pytest.raises((AttributeError, AssertionError)):
             run_pipeline(
-                Path("/fake"), None, None,
+                Path("/fake"),
+                None,
+                None,
                 preprocessor=mock_preprocessor,
                 atmo_provider=bad_atmo,
                 surface_prior_provider=mock_surface_prior_provider,

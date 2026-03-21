@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import xarray as xr
 
 if TYPE_CHECKING:
     from siac.domain.sensors import SensorBand, SensorConfig
+
+
+def _as_data_array(value: object) -> xr.DataArray:
+    return cast("xr.DataArray", value)
 
 
 @dataclass(frozen=True)
@@ -23,19 +27,19 @@ class GeometryAngles:
 
     @property
     def raa(self) -> xr.DataArray:
-        return self.vaa - self.saa
+        return _as_data_array(self.vaa - self.saa)
 
     @property
     def cos_sza(self) -> xr.DataArray:
-        return np.cos(self.sza)
+        return _as_data_array(np.cos(self.sza))
 
     @property
     def cos_vza(self) -> xr.DataArray:
-        return np.cos(self.vza)
+        return _as_data_array(np.cos(self.vza))
 
     @property
     def cos_raa(self) -> xr.DataArray:
-        return np.cos(self.raa)
+        return _as_data_array(np.cos(self.raa))
 
     def to_emulator_input(self) -> xr.Dataset:
         return xr.Dataset(
@@ -56,10 +60,10 @@ class GeometryAngles:
     ) -> GeometryAngles:
         deg_to_rad = np.pi / 180.0
         return cls(
-            sza=sza_deg * deg_to_rad,
-            saa=saa_deg * deg_to_rad,
-            vza=vza_deg * deg_to_rad,
-            vaa=vaa_deg * deg_to_rad,
+            sza=_as_data_array(sza_deg * deg_to_rad),
+            saa=_as_data_array(saa_deg * deg_to_rad),
+            vza=_as_data_array(vza_deg * deg_to_rad),
+            vaa=_as_data_array(vaa_deg * deg_to_rad),
         )
 
 
@@ -122,8 +126,8 @@ class RTCoefficients:
         return self.d_xap is not None
 
     def apply_correction(self, toa: xr.DataArray) -> xr.DataArray:
-        y = self.xap * toa - self.xbp
-        return y / (1.0 + self.xcp * y)
+        y = _as_data_array(self.xap * toa - self.xbp)
+        return _as_data_array(y / (1.0 + self.xcp * y))
 
     def compute_boa_jacobian(
         self,
@@ -131,18 +135,23 @@ class RTCoefficients:
     ) -> tuple[xr.DataArray, xr.DataArray]:
         if not self.has_jacobian:
             raise ValueError("RTCoefficients does not have Jacobian information")
+        assert self.d_xap is not None
+        assert self.d_xbp is not None
+        assert self.d_xcp is not None
 
-        y = self.xap * toa - self.xbp
-        denom = 1.0 + self.xcp * y
+        y = _as_data_array(self.xap * toa - self.xbp)
+        denom = _as_data_array(1.0 + self.xcp * y)
 
-        d_y_aot = self.d_xap.sel(param="aot") * toa - self.d_xbp.sel(param="aot")
-        d_y_tcwv = self.d_xap.sel(param="tcwv") * toa - self.d_xbp.sel(param="tcwv")
+        d_y_aot = _as_data_array(self.d_xap.sel(param="aot") * toa - self.d_xbp.sel(param="aot"))
+        d_y_tcwv = _as_data_array(
+            self.d_xap.sel(param="tcwv") * toa - self.d_xbp.sel(param="tcwv")
+        )
 
-        d_denom_aot = self.d_xcp.sel(param="aot") * y
-        d_denom_tcwv = self.d_xcp.sel(param="tcwv") * y
+        d_denom_aot = _as_data_array(self.d_xcp.sel(param="aot") * y)
+        d_denom_tcwv = _as_data_array(self.d_xcp.sel(param="tcwv") * y)
 
-        d_boa_aot = (d_y_aot * denom - y * d_denom_aot) / (denom**2)
-        d_boa_tcwv = (d_y_tcwv * denom - y * d_denom_tcwv) / (denom**2)
+        d_boa_aot = _as_data_array((d_y_aot * denom - y * d_denom_aot) / (denom**2))
+        d_boa_tcwv = _as_data_array((d_y_tcwv * denom - y * d_denom_tcwv) / (denom**2))
 
         return d_boa_aot, d_boa_tcwv
 
@@ -164,7 +173,7 @@ class BRDFKernelWeights:
         k_vol: xr.DataArray,
         k_geo: xr.DataArray,
     ) -> xr.DataArray:
-        return self.f0 + self.f1 * k_vol + self.f2 * k_geo
+        return _as_data_array(self.f0 + self.f1 * k_vol + self.f2 * k_geo)
 
     def compute_reflectance_uncertainty(
         self,
@@ -174,7 +183,7 @@ class BRDFKernelWeights:
         if self.reflectance_unc is not None:
             return self.reflectance_unc
         var = self.f0_unc**2 + (k_vol * self.f1_unc) ** 2 + (k_geo * self.f2_unc) ** 2
-        return np.sqrt(var)
+        return _as_data_array(np.sqrt(var))
 
 
 @dataclass(frozen=True)

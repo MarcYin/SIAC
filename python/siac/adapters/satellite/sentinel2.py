@@ -12,7 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import xarray as xr
@@ -87,7 +87,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def load_toa(self, input_path: str | Path) -> xr.Dataset:
         """Load TOA reflectance from Sentinel-2 SAFE directory."""
-        input_path = Path(input_path)
+        input_path = Path(input_path).expanduser()
         self._resolve_paths(input_path)
 
         # Get scaling parameters
@@ -175,11 +175,15 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def extract_geometry(self, input_path: str | Path) -> GeometryAngles:
         """Extract sun and view angles from metadata."""
-        input_path = Path(input_path)
+        input_path = Path(input_path).expanduser()
         self._resolve_paths(input_path)
 
         # Parse angle grids from XML
         granule_xml = self._find_granule_xml()
+        if granule_xml is None:
+            raise FileNotFoundError(
+                f"No granule metadata XML found under {self._require_granule_path()}"
+            )
         tree = ET.parse(granule_xml)
         root = tree.getroot()
 
@@ -191,7 +195,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         # Get reference band for grid
         img_data_path = self._get_img_data_path()
-        ref_file = list(img_data_path.glob("*B04*.jp2"))[0]
+        ref_file = next((path for path in img_data_path.glob("*B04*.jp2")), None)
+        if ref_file is None:
+            raise FileNotFoundError(f"No B04 reference band found under {img_data_path}")
         ref_da = read_raster(ref_file)
 
         # Resample angles to image grid
@@ -218,7 +224,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         """
         Generate boolean cloud mask from standardized cloud classes.
         """
-        input_path = Path(input_path)
+        input_path = Path(input_path).expanduser()
 
         if toa is None:
             toa = self.load_toa(input_path)
@@ -255,10 +261,10 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def get_metadata(self, input_path: str | Path) -> dict[str, Any]:
         """Extract metadata from SAFE directory."""
-        input_path = Path(input_path)
+        input_path = Path(input_path).expanduser()
         self._resolve_paths(input_path)
 
-        metadata = {
+        metadata: dict[str, Any] = {
             "sensor": "MSI",
             "satellite": self._satellite_id,
             "input_path": str(input_path),
@@ -323,10 +329,11 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def _get_img_data_path(self) -> Path:
         """Get path to IMG_DATA directory."""
-        img_data = self._granule_path / "IMG_DATA"
+        granule_path = self._require_granule_path()
+        img_data = granule_path / "IMG_DATA"
         if not img_data.exists():
             # AWS format
-            img_data = self._granule_path
+            img_data = granule_path
         return img_data
 
     def _find_product_xml(self, input_path: Path) -> Path | None:
@@ -342,8 +349,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def _find_granule_xml(self) -> Path | None:
         """Find granule metadata XML."""
-        candidates = list(self._granule_path.glob("MTD_TL.xml"))
-        candidates += list(self._granule_path.glob("*MTD*.xml"))
+        granule_path = self._require_granule_path()
+        candidates = list(granule_path.glob("MTD_TL.xml"))
+        candidates += list(granule_path.glob("*MTD*.xml"))
 
         for path in candidates:
             if path.exists():
@@ -352,26 +360,26 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def _parse_product_metadata(self, root: ET.Element) -> dict[str, Any]:
         """Parse product-level metadata."""
-        metadata = {}
+        metadata: dict[str, Any] = {}
 
         # Find namespace
         ns = self._get_namespace(root)
 
         # Processing baseline
         baseline_elem = root.find(f".//{ns}PROCESSING_BASELINE")
-        if baseline_elem is not None:
-            metadata["processing_baseline"] = baseline_elem.text
+        if baseline_elem is not None and baseline_elem.text is not None:
+            metadata["processing_baseline"] = baseline_elem.text.strip()
 
         # Quantification value
         quant_elem = root.find(f".//{ns}QUANTIFICATION_VALUE")
-        if quant_elem is not None:
+        if quant_elem is not None and quant_elem.text is not None:
             metadata["quantification_value"] = float(quant_elem.text)
 
         # Radiometric offsets (Processing Baseline >= 04.00)
-        offsets = {}
+        offsets: dict[str, float] = {}
         for offset_elem in root.findall(f".//{ns}RADIO_ADD_OFFSET"):
             band_id = offset_elem.get("band_id")
-            if band_id:
+            if band_id and offset_elem.text is not None:
                 offsets[f"B{int(band_id):02d}"] = float(offset_elem.text)
         if offsets:
             metadata["radiometric_offsets"] = offsets
@@ -380,25 +388,22 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def _parse_granule_metadata(self, root: ET.Element) -> dict[str, Any]:
         """Parse granule-level metadata."""
-        metadata = {}
+        metadata: dict[str, Any] = {}
         ns = self._get_namespace(root)
 
         # Sensing time
         time_elem = root.find(f".//{ns}SENSING_TIME")
         if time_elem is not None and time_elem.text:
+            time_text = time_elem.text.strip()
             try:
-                metadata["observation_time"] = datetime.strptime(
-                    time_elem.text, "%Y-%m-%dT%H:%M:%S.%fZ"
-                )
+                metadata["observation_time"] = datetime.strptime(time_text, "%Y-%m-%dT%H:%M:%S.%fZ")
             except ValueError:
-                metadata["observation_time"] = datetime.fromisoformat(
-                    time_elem.text.replace("Z", "+00:00")
-                )
+                metadata["observation_time"] = datetime.fromisoformat(time_text.replace("Z", "+00:00"))
 
         # Tile ID
         tile_elem = root.find(f".//{ns}TILE_ID")
-        if tile_elem is not None:
-            metadata["tile_id"] = tile_elem.text
+        if tile_elem is not None and tile_elem.text is not None:
+            metadata["tile_id"] = tile_elem.text.strip()
 
         return metadata
 
@@ -446,25 +451,26 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         ns = self._get_namespace(root)
 
         # Get mean viewing angles
-        mean_vza = None
-        mean_vaa = None
+        mean_vza: float | None = None
+        mean_vaa: float | None = None
 
         # Look for Mean_Viewing_Incidence_Angle
         for mean_elem in root.findall(f".//{ns}Mean_Viewing_Incidence_Angle"):
             zenith = mean_elem.find(f"{ns}ZENITH_ANGLE")
             azimuth = mean_elem.find(f"{ns}AZIMUTH_ANGLE")
 
-            if zenith is not None and azimuth is not None:
+            if zenith is not None and azimuth is not None and zenith.text is not None and azimuth.text is not None:
                 if mean_vza is None:
                     mean_vza = float(zenith.text)
                     mean_vaa = float(azimuth.text)
                 else:
+                    assert mean_vaa is not None
                     # Average across bands
                     mean_vza = (mean_vza + float(zenith.text)) / 2
                     mean_vaa = (mean_vaa + float(azimuth.text)) / 2
 
         # Fallback values
-        if mean_vza is None:
+        if mean_vza is None or mean_vaa is None:
             mean_vza = 5.0
             mean_vaa = 100.0
 
@@ -487,7 +493,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             # Return default grid
             return np.full((23, 23), 30.0)
 
-        rows = []
+        rows: list[list[float]] = []
         for values in values_list.findall(f"{ns}VALUES"):
             if values is None:
                 values = values_list.find("VALUES")
@@ -498,7 +504,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if not rows:
             return np.full((23, 23), 30.0)
 
-        return np.array(rows)
+        return cast("np.ndarray[Any, np.dtype[np.float32]]", np.asarray(rows, dtype=np.float32))
 
     def _angles_to_grid(
         self,
@@ -543,12 +549,17 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             defaults.update(cloud_mask_config)
         # Resolve external file path relative to SAFE directory when needed.
         external = defaults.get("external_mask_path")
-        if isinstance(external, str) and external:
-            p = Path(external)
+        if isinstance(external, (str, Path)) and str(external):
+            p = Path(external).expanduser()
             if not p.is_absolute():
                 p = input_path / p
             defaults["external_mask_path"] = p
         return defaults
+
+    def _require_granule_path(self) -> Path:
+        if self._granule_path is None:
+            raise RuntimeError("Sentinel-2 granule path is not resolved; call _resolve_paths() first.")
+        return self._granule_path
 
     @staticmethod
     def _coords_match(a: xr.DataArray, b: xr.DataArray) -> bool:

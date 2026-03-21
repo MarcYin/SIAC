@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from siac.adapters.auth import CredentialManager
 from siac.api.requests import (
+    AOISpec,
+    PathLike,
     SceneProcessRequest,
     Sentinel2ProcessRequest,
+    Sentinel2QuerySpec,
     Sentinel2ResolveRequest,
     Sentinel2SearchRequest,
 )
@@ -34,6 +37,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from siac.adapters.data.s2_data_source import S2Product
+    from siac.config.schema import SensorName
     from siac.runtime import CorrectionResult
 
 
@@ -49,7 +53,7 @@ class SIAC:
         return cls(SIACConfig.from_file(config_path))
 
     @classmethod
-    def from_defaults(cls, sensor: str = "auto") -> SIAC:
+    def from_defaults(cls, sensor: SensorName = "auto") -> SIAC:
         return cls(SIACConfig(sensor=sensor))
 
     def process(
@@ -57,7 +61,7 @@ class SIAC:
         input_path: str | Path,
         output_path: str | Path | None = None,
         *,
-        aoi=None,
+        aoi: AOISpec = None,
     ) -> CorrectionResult:
         request = SceneProcessRequest(
             config=self.config,
@@ -72,7 +76,7 @@ class SIAC:
 
 
 def resolve_s2_input(
-    query,
+    query: Sentinel2QuerySpec,
     config: SIACConfig,
     *,
     auth: CredentialManager | None = None,
@@ -109,20 +113,28 @@ def search_sentinel2(
     return app_search_sentinel2(request)
 
 
-def process_sentinel2(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:
+def process_sentinel2(
+    input_path: PathLike,
+    output_path: PathLike | None = None,
+    **kwargs: Any,
+) -> CorrectionResult:
     return SIAC.from_defaults(sensor="s2").process(input_path, output_path, **kwargs)
 
 
-def process_landsat8(input_path: str, output_path: str | None = None, **kwargs) -> CorrectionResult:
+def process_landsat8(
+    input_path: PathLike,
+    output_path: PathLike | None = None,
+    **kwargs: Any,
+) -> CorrectionResult:
     return SIAC.from_defaults(sensor="l8").process(input_path, output_path, **kwargs)
 
 
 def siac_process_s2(
     config: SIACConfig,
-    query,
+    query: Sentinel2QuerySpec,
     *,
     output_path: str | Path | None = None,
-    aoi=None,
+    aoi: AOISpec = None,
     auth: CredentialManager | None = None,
 ) -> CorrectionResult:
     request = Sentinel2ProcessRequest(
@@ -137,9 +149,9 @@ def siac_process_s2(
 
 def siac_process(
     config: SIACConfig,
-    input_path: Path,
+    input_path: PathLike,
     *,
-    aoi=None,
+    aoi: AOISpec = None,
     auth: CredentialManager | None = None,
 ) -> CorrectionResult:
     request = SceneProcessRequest(

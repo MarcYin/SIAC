@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 try:
-    import tomllib
+    import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
@@ -26,12 +26,12 @@ CONFIG_PATH_ENV = "SIAC_CONFIG_FILE"
 
 def load_system_config(path: Path | str) -> SystemConfig:
     """Load a system config from TOML without applying environment overlays."""
-    resolved = Path(path)
+    resolved = Path(path).expanduser()
     with resolved.open("rb") as handle:
         loaded = tomllib.load(handle) or {}
     if not isinstance(loaded, dict):
         raise ValueError("System config TOML must contain a table/object at the top level.")
-    return SystemConfig.model_validate(loaded)
+    return cast("SystemConfig", SystemConfig.model_validate(loaded))
 
 
 def load_system_config_from_default() -> SystemConfig:
@@ -47,7 +47,7 @@ def overlay_env_secrets(
 ) -> SystemConfig:
     """Fill missing auth values from environment variables."""
     resolved_env = dict(os.environ if env is None else env)
-    updated = config.model_copy(deep=True)
+    updated = cast("SystemConfig", config.model_copy(deep=True))
 
     if updated.auth.cdse.username is None:
         updated.auth.cdse.username = resolved_env.get(updated.auth.cdse.username_env)
@@ -77,7 +77,7 @@ def overlay_env_secrets(
 
 def write_system_config(config: SystemConfig, path: Path | str) -> None:
     """Write a system config to TOML."""
-    resolved = Path(path)
+    resolved = Path(path).expanduser()
     resolved.parent.mkdir(parents=True, exist_ok=True)
     payload = config.model_dump(mode="json", exclude_none=True)
     with resolved.open("wb") as handle:
@@ -86,7 +86,7 @@ def write_system_config(config: SystemConfig, path: Path | str) -> None:
 
 def write_default_system_config(path: Path | str = DEFAULT_CONFIG_PATH) -> Path:
     """Write a default TOML config file."""
-    resolved = Path(path)
+    resolved = Path(path).expanduser()
     if not resolved.suffix:
         resolved = resolved.with_suffix(".toml")
     write_system_config(SystemConfig(), resolved)

@@ -9,6 +9,7 @@ from siac.app.planning import build_execution_plan
 from siac.workflows.pipeline import run_pipeline
 
 if TYPE_CHECKING:
+    from siac.app.planning import ExecutionPlan
     from siac.app.requests import SceneProcessRequest
     from siac.domain.protocols import OutputWriter
     from siac.runtime import CorrectionResult
@@ -24,7 +25,7 @@ def write_output(
     output_writer.write(result, Path(output_path))
 
 
-def execute_plan(plan) -> CorrectionResult:
+def execute_plan(plan: ExecutionPlan) -> CorrectionResult:
     """Execute a fully resolved :class:`ExecutionPlan`."""
     return run_pipeline(
         plan.input_path,
@@ -43,21 +44,21 @@ def execute_plan(plan) -> CorrectionResult:
 def process_scene(
     request: SceneProcessRequest,
     *,
-    preprocessor=None,
-    atmo_provider=None,
-    surface_prior_provider=None,
-    grid_assembler=None,
-    solver=None,
-    corrector=None,
+    preprocessor: Any | None = None,
+    atmo_provider: Any | None = None,
+    surface_prior_provider: Any | None = None,
+    grid_assembler: Any | None = None,
+    solver: Any | None = None,
+    corrector: Any | None = None,
     rt_model: Any | None = None,
-    aoi_resolver=None,
-    build_preprocessor_runtime_fn=None,
-    resolve_atmo_provider_fn=None,
-    resolve_surface_prior_provider_fn=None,
-    resolve_grid_assembler_fn=None,
-    resolve_solver_fn=None,
-    resolve_corrector_fn=None,
-    resolve_rt_model_fn=None,
+    aoi_resolver: Any | None = None,
+    build_preprocessor_runtime_fn: Any | None = None,
+    resolve_atmo_provider_fn: Any | None = None,
+    resolve_surface_prior_provider_fn: Any | None = None,
+    resolve_grid_assembler_fn: Any | None = None,
+    resolve_solver_fn: Any | None = None,
+    resolve_corrector_fn: Any | None = None,
+    resolve_rt_model_fn: Any | None = None,
 ) -> CorrectionResult:
     """Build a runtime plan and execute it for one scene."""
     plan = build_execution_plan(
