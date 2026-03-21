@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import numpy as np
 import xarray as xr
@@ -381,6 +381,60 @@ class ZarrLUTBackend:
             sph_alb.values.astype(np.float32),
         )
 
+    @staticmethod
+    def _axis_bounds(axis: np.ndarray) -> tuple[float, float]:
+        axis_values = np.asarray(axis, dtype=np.float32)
+        return float(np.nanmin(axis_values)), float(np.nanmax(axis_values))
+
+    @classmethod
+    def _axis_midpoint(cls, axis: np.ndarray) -> float:
+        lo, hi = cls._axis_bounds(axis)
+        return (lo + hi) * 0.5
+
+    @staticmethod
+    def _finite_range(
+        values: np.ndarray,
+        *,
+        fallback: tuple[float, float],
+    ) -> tuple[float, float]:
+        arr = np.asarray(values, dtype=np.float32)
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return fallback
+        return float(np.min(finite)), float(np.max(finite))
+
+    @staticmethod
+    def _finite_mean(values: np.ndarray, *, fallback: float) -> float:
+        arr = np.asarray(values, dtype=np.float32)
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return fallback
+        return float(np.mean(finite))
+
+    @classmethod
+    def _sanitize_point_values(
+        cls,
+        values: np.ndarray,
+        axis: np.ndarray,
+    ) -> np.ndarray:
+        axis_min, axis_max = cls._axis_bounds(axis)
+        midpoint = cls._axis_midpoint(axis)
+        arr = np.asarray(values, dtype=np.float32)
+        sanitized = np.where(np.isfinite(arr), arr, midpoint)
+        clipped = np.asarray(np.clip(sanitized, axis_min, axis_max), dtype=np.float32)
+        return cast("np.ndarray", clipped)
+
+    @staticmethod
+    def _require_finite_values(
+        values: np.ndarray,
+        *,
+        name: str,
+    ) -> np.ndarray:
+        arr = np.asarray(values, dtype=np.float32)
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"{name} must contain only finite values for LUT interpolation")
+        return cast("np.ndarray", arr)
+
     def _build_point_coords(
         self,
         *,
@@ -394,18 +448,19 @@ class ZarrLUTBackend:
     ) -> dict[str, xr.DataArray]:
         """Build point-indexer coordinates for interpolation."""
         coords: dict[str, xr.DataArray] = {
-            "sza": xr.DataArray(sza, dims=["point"]),
-            "vza": xr.DataArray(vza, dims=["point"]),
-            "raa": xr.DataArray(raa, dims=["point"]),
-            "aot": xr.DataArray(aot, dims=["point"]),
-            "tcwv": xr.DataArray(tcwv, dims=["point"]),
+            "sza": xr.DataArray(self._require_finite_values(sza, name="sza"), dims=["point"]),
+            "vza": xr.DataArray(self._require_finite_values(vza, name="vza"), dims=["point"]),
+            "raa": xr.DataArray(self._require_finite_values(raa, name="raa"), dims=["point"]),
+            "aot": xr.DataArray(self._require_finite_values(aot, name="aot"), dims=["point"]),
+            "tcwv": xr.DataArray(self._require_finite_values(tcwv, name="tcwv"), dims=["point"]),
         }
 
         if "ozone" in self._lut_coords:
             ozone = np.asarray(tco3, dtype=np.float32)
             ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
             # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
-            if ozone_axis.size and np.nanmax(np.abs(ozone_axis)) > 20 and np.nanmax(np.abs(ozone)) < 10:
+            finite_ozone = ozone[np.isfinite(ozone)]
+            if ozone_axis.size and finite_ozone.size and np.nanmax(np.abs(ozone_axis)) > 20 and np.nanmax(np.abs(finite_ozone)) < 10:
                 ozone = ozone * 1000.0
             coords["ozone"] = xr.DataArray(ozone, dims=["point"])
 
@@ -421,10 +476,7 @@ class ZarrLUTBackend:
             axis = np.asarray(self._lut_coords[name], dtype=np.float32)
             if axis.size == 0:
                 continue
-            coords[name] = xr.DataArray(
-                np.clip(coord.values, float(np.nanmin(axis)), float(np.nanmax(axis))),
-                dims=["point"],
-            )
+            coords[name] = xr.DataArray(self._sanitize_point_values(coord.values, axis), dims=["point"])
 
         return coords
 
@@ -522,18 +574,26 @@ class ZarrLUTBackend:
             elevation=elevation,
         )
         if not self._scene_subset_logged:
+            tco3_bounds = self._finite_range(
+                np.asarray(tco3, dtype=np.float32),
+                fallback=(0.0, 0.0),
+            )
+            elevation_bounds = self._finite_range(
+                np.asarray(elevation, dtype=np.float32),
+                fallback=(0.0, 0.0),
+            )
             logger.info(
                 (
                     "Scene LUT subset: sza=%.3f deg, vza=%.3f deg, raa=%.3f deg, "
                     "ozone=[%.3f, %.3f], altitude=[%.3f, %.3f]"
                 ),
-                float(np.nanmean(sza)),
-                float(np.nanmean(vza)),
-                float(np.nanmean(raa)),
-                float(np.nanmin(np.asarray(tco3, dtype=np.float32))),
-                float(np.nanmax(np.asarray(tco3, dtype=np.float32))),
-                float(np.nanmin(np.asarray(elevation, dtype=np.float32))),
-                float(np.nanmax(np.asarray(elevation, dtype=np.float32))),
+                self._finite_mean(sza, fallback=0.0),
+                self._finite_mean(vza, fallback=0.0),
+                self._finite_mean(raa, fallback=0.0),
+                tco3_bounds[0],
+                tco3_bounds[1],
+                elevation_bounds[0],
+                elevation_bounds[1],
             )
             self._scene_subset_logged = True
 
@@ -586,8 +646,9 @@ class ZarrLUTBackend:
             xcp.reshape(target_shape).astype(np.float32),
         )
 
-    @staticmethod
+    @classmethod
     def _spectral_scene_cache_key(
+        cls,
         *,
         sza: np.ndarray,
         vza: np.ndarray,
@@ -596,14 +657,16 @@ class ZarrLUTBackend:
         elevation: np.ndarray,
     ) -> tuple[float, ...]:
         """Build a stable scene cache key from summary geometry/atmosphere stats."""
+        tco3_arr = np.asarray(tco3, dtype=np.float32)
+        elevation_arr = np.asarray(elevation, dtype=np.float32)
         return (
-            round(float(np.nanmean(sza)), 3),
-            round(float(np.nanmean(vza)), 3),
-            round(float(np.nanmean(raa)), 3),
-            round(float(np.nanmin(np.asarray(tco3, dtype=np.float32))), 3),
-            round(float(np.nanmax(np.asarray(tco3, dtype=np.float32))), 3),
-            round(float(np.nanmin(np.asarray(elevation, dtype=np.float32))), 3),
-            round(float(np.nanmax(np.asarray(elevation, dtype=np.float32))), 3),
+            round(cls._finite_mean(sza, fallback=0.0), 3),
+            round(cls._finite_mean(vza, fallback=0.0), 3),
+            round(cls._finite_mean(raa, fallback=0.0), 3),
+            round(cls._finite_range(tco3_arr, fallback=(0.0, 0.0))[0], 3),
+            round(cls._finite_range(tco3_arr, fallback=(0.0, 0.0))[1], 3),
+            round(cls._finite_range(elevation_arr, fallback=(0.0, 0.0))[0], 3),
+            round(cls._finite_range(elevation_arr, fallback=(0.0, 0.0))[1], 3),
         )
 
     @staticmethod
@@ -772,35 +835,25 @@ class ZarrLUTBackend:
         """Subset spectral LUT using scene-angle means and ozone/elevation ranges."""
         out = lut
 
-        angle_means = {
-            "sza": float(np.nanmean(sza)),
-            "vza": float(np.nanmean(vza)),
-            "raa": float(np.nanmean(raa)),
-        }
-        for dim, value in angle_means.items():
+        for dim, scene_values in {"sza": sza, "vza": vza, "raa": raa}.items():
             if dim in out.coords:
+                axis = np.asarray(out.coords[dim].values, dtype=np.float32)
+                finite_scene_values = self._require_finite_values(scene_values, name=dim)
+                value = self._finite_mean(finite_scene_values, fallback=self._axis_midpoint(axis))
                 out = out.sel({dim: value}, method="nearest")
             if dim in out.dims and out.sizes.get(dim, 0) == 1:
                 out = out.squeeze(dim=dim, drop=True)
 
-        ranges = {
-            "ozone": (
-                float(np.nanmin(np.asarray(tco3, dtype=np.float32))),
-                float(np.nanmax(np.asarray(tco3, dtype=np.float32))),
-            ),
-            "altitude": (
-                float(np.nanmin(np.asarray(elevation, dtype=np.float32))),
-                float(np.nanmax(np.asarray(elevation, dtype=np.float32))),
-            ),
-        }
-        for dim, (vmin, vmax) in ranges.items():
+        for dim, scene_values in {"ozone": tco3, "altitude": elevation}.items():
             if dim not in out.coords:
                 continue
             axis = np.asarray(out.coords[dim].values, dtype=np.float32)
             if axis.size == 0:
                 continue
-            lo = float(np.clip(min(vmin, vmax), float(np.nanmin(axis)), float(np.nanmax(axis))))
-            hi = float(np.clip(max(vmin, vmax), float(np.nanmin(axis)), float(np.nanmax(axis))))
+            axis_min, axis_max = self._axis_bounds(axis)
+            vmin, vmax = self._finite_range(scene_values, fallback=(axis_min, axis_max))
+            lo = float(np.clip(min(vmin, vmax), axis_min, axis_max))
+            hi = float(np.clip(max(vmin, vmax), axis_min, axis_max))
             subset = out.sel({dim: slice(lo, hi)})
             if subset.sizes.get(dim, 0) == 0:
                 subset = out.sel({dim: (lo + hi) * 0.5}, method="nearest")
@@ -821,8 +874,8 @@ class ZarrLUTBackend:
     ) -> dict[str, xr.DataArray]:
         """Build point interpolation coordinates for variables solved per-pixel."""
         coords = {
-            "aot": xr.DataArray(np.asarray(aot, dtype=np.float32), dims=["point"]),
-            "tcwv": xr.DataArray(np.asarray(tcwv, dtype=np.float32), dims=["point"]),
+            "aot": xr.DataArray(ZarrLUTBackend._require_finite_values(aot, name="aot"), dims=["point"]),
+            "tcwv": xr.DataArray(ZarrLUTBackend._require_finite_values(tcwv, name="tcwv"), dims=["point"]),
         }
         for name in ("aot", "tcwv"):
             if name not in lut.coords:
@@ -830,10 +883,7 @@ class ZarrLUTBackend:
             axis = np.asarray(lut.coords[name].values, dtype=np.float32)
             if axis.size == 0:
                 continue
-            coords[name] = xr.DataArray(
-                np.clip(coords[name].values, float(np.nanmin(axis)), float(np.nanmax(axis))),
-                dims=["point"],
-            )
+            coords[name] = xr.DataArray(ZarrLUTBackend._sanitize_point_values(coords[name].values, axis), dims=["point"])
         return coords
 
     def _subset_wavelength_for_band(

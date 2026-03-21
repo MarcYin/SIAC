@@ -323,7 +323,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             self._granule_path = granule_dirs[0]
 
         # Detect satellite platform.
-        self._satellite_id = self._resolve_satellite_id(input_path.name)
+        self._satellite_id = self._detect_satellite_id(input_path)
 
     def _get_img_data_path(self) -> Path:
         """Get path to IMG_DATA directory."""
@@ -419,13 +419,28 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         except ValueError:
             return None
 
+    def _detect_satellite_id(self, input_path: Path) -> str:
+        """Resolve satellite platform from SAFE and granule names with explicit fallback logging."""
+        candidates = [input_path.name]
+        if self._granule_path is not None:
+            candidates.append(self._granule_path.name)
+        for candidate in candidates:
+            satellite_id = self._resolve_satellite_id(candidate)
+            if satellite_id is not None:
+                return satellite_id
+        logger.warning(
+            "Could not infer Sentinel-2 platform from %s; defaulting to S2A",
+            ", ".join(repr(candidate) for candidate in candidates),
+        )
+        return "S2A"
+
     @staticmethod
-    def _resolve_satellite_id(name: str) -> str:
+    def _resolve_satellite_id(name: str) -> str | None:
         """Infer Sentinel-2 platform identifier from a SAFE or granule name."""
         for satellite_id in ("S2A", "S2B", "S2C"):
             if satellite_id in name:
                 return satellite_id
-        return "S2A"
+        return None
 
     def _parse_sun_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
         """Parse sun angle grids from XML."""

@@ -83,6 +83,23 @@ def test_build_aot_tcwv_point_coords_clips_to_lut_axes():
     np.testing.assert_allclose(coords["tcwv"].values, np.array([0.1, 3.0, 6.0], dtype=np.float32))
 
 
+def test_build_aot_tcwv_point_coords_rejects_nonfinite_values():
+    backend = ZarrLUTBackend("dummy")
+    lut = xr.Dataset(
+        coords={
+            "aot": np.array([0.01, 0.5, 1.0], dtype=np.float32),
+            "tcwv": np.array([0.1, 2.0, 6.0], dtype=np.float32),
+        }
+    )
+
+    with pytest.raises(ValueError, match="aot must contain only finite values"):
+        backend._build_aot_tcwv_point_coords(
+            lut,
+            aot=np.array([np.nan, np.inf, -np.inf], dtype=np.float32),
+            tcwv=np.array([np.nan, np.inf, -np.inf], dtype=np.float32),
+        )
+
+
 def test_subset_wavelength_for_band_trims_lut():
     backend = ZarrLUTBackend("dummy")
     lut = _spectral_lut()
@@ -98,6 +115,43 @@ def test_subset_wavelength_for_band_trims_lut():
 
     assert "wavelength" in subset.dims
     assert subset.sizes["wavelength"] < lut.sizes["wavelength"]
+
+
+def test_subset_spectral_lut_for_scene_handles_nonfinite_optional_scene_inputs():
+    backend = ZarrLUTBackend("dummy")
+    lut = _spectral_lut()
+
+    subset = backend._subset_spectral_lut_for_scene(
+        lut,
+        sza=np.full((2, 2), 20.0, dtype=np.float32),
+        vza=np.full((2, 2), 10.0, dtype=np.float32),
+        raa=np.full((2, 2), 90.0, dtype=np.float32),
+        tco3=np.full((2, 2), np.nan, dtype=np.float32),
+        elevation=np.full((2, 2), np.nan, dtype=np.float32),
+    )
+
+    assert "sza" not in subset.dims
+    assert "vza" not in subset.dims
+    assert "raa" not in subset.dims
+    assert "ozone" not in subset.dims
+    assert "altitude" not in subset.dims
+    assert "aot" in subset.dims
+    assert "tcwv" in subset.dims
+
+
+def test_subset_spectral_lut_for_scene_rejects_nonfinite_required_angles():
+    backend = ZarrLUTBackend("dummy")
+    lut = _spectral_lut()
+
+    with pytest.raises(ValueError, match="sza must contain only finite values"):
+        backend._subset_spectral_lut_for_scene(
+            lut,
+            sza=np.full((2, 2), np.nan, dtype=np.float32),
+            vza=np.full((2, 2), 10.0, dtype=np.float32),
+            raa=np.full((2, 2), 90.0, dtype=np.float32),
+            tco3=np.full((2, 2), 300.0, dtype=np.float32),
+            elevation=np.full((2, 2), 1.0, dtype=np.float32),
+        )
 
 
 def test_subset_wavelength_for_band_uses_tabulated_srf_support():

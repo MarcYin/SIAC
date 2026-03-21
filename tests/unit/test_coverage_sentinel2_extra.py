@@ -108,6 +108,32 @@ class TestSentinel2Internals:
         with pytest.raises(FileNotFoundError, match="does not exist"):
             p._resolve_paths(tmp_path / "missing.SAFE")
 
+    def test_resolve_paths_uses_granule_name_when_safe_name_is_ambiguous(self, tmp_path: Path):
+        p = Sentinel2Preprocessor()
+        safe = tmp_path / "ambiguous_safe"
+        img_data = safe / "GRANULE" / "L1C_S2B_TILE" / "IMG_DATA"
+        img_data.mkdir(parents=True, exist_ok=True)
+
+        p._resolve_paths(safe)
+
+        assert p._satellite_id == "S2B"
+
+    def test_resolve_paths_warns_when_platform_detection_is_ambiguous(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        p = Sentinel2Preprocessor()
+        safe = tmp_path / "ambiguous_safe"
+        img_data = safe / "GRANULE" / "L1C_TILE" / "IMG_DATA"
+        img_data.mkdir(parents=True, exist_ok=True)
+
+        with caplog.at_level("WARNING"):
+            p._resolve_paths(safe)
+
+        assert p._satellite_id == "S2A"
+        assert "Could not infer Sentinel-2 platform" in caplog.text
+
     def test_sensor_config_uses_real_srf_loader(self, monkeypatch: pytest.MonkeyPatch):
         p = Sentinel2Preprocessor(config={"rsrf_root": "/tmp/rsrf-root"})
         p._satellite_id = "S2C"

@@ -231,6 +231,57 @@ class TestZarrLUTBackend:
 
         assert ZarrLUTBackend._store_contains_key(_BrokenContains(), "zarr.json") is False
 
+    def test_build_point_coords_sanitizes_optional_axes_only(self):
+        backend = ZarrLUTBackend("dummy")
+        backend._lut_coords = {
+            "sza": np.array([0.0, 30.0, 60.0], dtype=np.float32),
+            "vza": np.array([0.0, 10.0, 20.0], dtype=np.float32),
+            "raa": np.array([0.0, 90.0, 180.0], dtype=np.float32),
+            "aot": np.array([0.1, 0.5], dtype=np.float32),
+            "tcwv": np.array([1.0, 3.0], dtype=np.float32),
+            "ozone": np.array([250.0, 300.0, 350.0], dtype=np.float32),
+            "altitude": np.array([0.0, 1.0, 2.0], dtype=np.float32),
+        }
+
+        coords = backend._build_point_coords(
+            sza=np.array([15.0], dtype=np.float32),
+            vza=np.array([12.0], dtype=np.float32),
+            raa=np.array([100.0], dtype=np.float32),
+            aot=np.array([0.2], dtype=np.float32),
+            tcwv=np.array([2.0], dtype=np.float32),
+            tco3=np.array([np.nan], dtype=np.float32),
+            elevation=np.array([np.nan], dtype=np.float32),
+        )
+
+        assert float(coords["sza"].values[0]) == pytest.approx(15.0)
+        assert float(coords["vza"].values[0]) == pytest.approx(12.0)
+        assert float(coords["raa"].values[0]) == pytest.approx(100.0)
+        assert float(coords["aot"].values[0]) == pytest.approx(0.2)
+        assert float(coords["tcwv"].values[0]) == pytest.approx(2.0)
+        assert float(coords["ozone"].values[0]) == pytest.approx(300.0)
+        assert float(coords["altitude"].values[0]) == pytest.approx(1.0)
+
+    def test_build_point_coords_rejects_nonfinite_required_values(self):
+        backend = ZarrLUTBackend("dummy")
+        backend._lut_coords = {
+            "sza": np.array([0.0, 30.0, 60.0], dtype=np.float32),
+            "vza": np.array([0.0, 10.0, 20.0], dtype=np.float32),
+            "raa": np.array([0.0, 90.0, 180.0], dtype=np.float32),
+            "aot": np.array([0.1, 0.5], dtype=np.float32),
+            "tcwv": np.array([1.0, 3.0], dtype=np.float32),
+        }
+
+        with pytest.raises(ValueError, match="sza must contain only finite values"):
+            backend._build_point_coords(
+                sza=np.array([np.nan], dtype=np.float32),
+                vza=np.array([10.0], dtype=np.float32),
+                raa=np.array([90.0], dtype=np.float32),
+                aot=np.array([0.2], dtype=np.float32),
+                tcwv=np.array([2.0], dtype=np.float32),
+                tco3=np.array([0.3], dtype=np.float32),
+                elevation=np.array([0.1], dtype=np.float32),
+            )
+
     def test_linear_and_nearest_paths(self, tmp_path: Path):
         lut_path = _write_small_lut(tmp_path / "lut.zarr")
         geom = _geometry()
@@ -419,6 +470,59 @@ class TestZarrLUTBackend:
         assert np.isfinite(coeffs.xap.values).all()
         np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
 
+    def test_spectral_lut_compute_coefficients_allows_nonfinite_optional_scene_axes(self, tmp_path: Path):
+        lut_path, expected = _write_small_spectral_lut(tmp_path / "lut_spectral_nonfinite_optional.zarr")
+        geom = GeometryAngles(
+            sza=xr.DataArray(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full((2, 2), np.deg2rad(10.0), dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full((2, 2), np.deg2rad(90.0), dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), np.inf, dtype=np.float32), dims=["y", "x"]),
+        )
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+        coeffs = backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+
+        assert np.isfinite(coeffs.xap.values).all()
+        assert np.isfinite(coeffs.xbp.values).all()
+        assert np.isfinite(coeffs.xcp.values).all()
+        np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
+        np.testing.assert_allclose(coeffs.xbp.values, expected["xbp"], rtol=1e-5)
+        np.testing.assert_allclose(coeffs.xcp.values, expected["xcp"], rtol=1e-5)
+
+    def test_spectral_lut_compute_coefficients_rejects_nonfinite_required_scene_inputs(self, tmp_path: Path):
+        lut_path, _ = _write_small_spectral_lut(tmp_path / "lut_spectral_nonfinite_required.zarr")
+        geom = GeometryAngles(
+            sza=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+
+        with pytest.raises(ValueError, match="sza must contain only finite values"):
+            backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+
     def test_spectral_scene_preload_reuses_subset_and_band_grids(self, tmp_path: Path, monkeypatch):
         lut_path, _ = _write_small_spectral_lut(tmp_path / "lut_spectral_preload.zarr")
         geom = _geometry((2, 2))
@@ -452,6 +556,74 @@ class TestZarrLUTBackend:
 
         assert calls["scene_subset"] == 1
         assert calls["band_subset"] == 1
+
+    def test_spectral_scene_preload_handles_nonfinite_optional_scene_axes(self, tmp_path: Path, monkeypatch):
+        lut_path, expected = _write_small_spectral_lut(tmp_path / "lut_spectral_preload_nonfinite_optional.zarr")
+        geom = GeometryAngles(
+            sza=xr.DataArray(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full((2, 2), np.deg2rad(10.0), dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full((2, 2), np.deg2rad(90.0), dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), -np.inf, dtype=np.float32), dims=["y", "x"]),
+        )
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+        calls = {"scene_subset": 0, "band_subset": 0}
+
+        orig_scene_subset = backend._subset_spectral_lut_for_scene
+        orig_band_subset = backend._subset_wavelength_for_band
+
+        def _count_scene_subset(*args, **kwargs):  # noqa: ANN002, ANN003
+            calls["scene_subset"] += 1
+            return orig_scene_subset(*args, **kwargs)
+
+        def _count_band_subset(*args, **kwargs):  # noqa: ANN002, ANN003
+            calls["band_subset"] += 1
+            return orig_band_subset(*args, **kwargs)
+
+        monkeypatch.setattr(backend, "_subset_spectral_lut_for_scene", _count_scene_subset)
+        monkeypatch.setattr(backend, "_subset_wavelength_for_band", _count_band_subset)
+
+        backend.preload_scene_subset(geom, atmo, [band])
+        coeffs = backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
+
+        assert calls["scene_subset"] == 1
+        assert calls["band_subset"] == 1
+        assert np.isfinite(coeffs.xap.values).all()
+        np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
+
+    def test_spectral_scene_preload_rejects_nonfinite_required_scene_inputs(self, tmp_path: Path):
+        lut_path, _ = _write_small_spectral_lut(tmp_path / "lut_spectral_preload_nonfinite_required.zarr")
+        geom = GeometryAngles(
+            sza=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        band = SensorBand("B02", 490.0, 20.0, 10.0, 0)
+
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+
+        with pytest.raises(ValueError, match="sza must contain only finite values"):
+            backend.preload_scene_subset(geom, atmo, [band])
 
     def test_unsupported_lut_representation_raises(self):
         backend = ZarrLUTBackend("unused.zarr")

@@ -8,7 +8,7 @@ MERRA-2 granule parsing is implemented.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import xarray as xr
 
@@ -103,10 +103,12 @@ class MERRA2Provider:
 
     @staticmethod
     def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
-        return cast(
-            "tuple[np.ndarray, np.ndarray]",
-            target_grid_coords(bounds, resolution, resolution_name="resolution"),
+        coords: tuple[np.ndarray, np.ndarray] = target_grid_coords(
+            bounds,
+            resolution,
+            resolution_name="resolution",
         )
+        return coords
 
     def _constant_array(
         self,
