@@ -8,18 +8,25 @@ MERRA-2 granule parsing is implemented.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-import numpy as np
 import xarray as xr
 
-from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 from siac.adapters.data.earthaccess_source import EarthAccessSource
+from siac.adapters.earthdata import (
+    build_earthaccess_runtime,
+    constant_target_array,
+    target_grid_coords,
+)
 from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
     from datetime import datetime
+    from pathlib import Path
+
+    import numpy as np
+
+    from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +45,15 @@ class MERRA2Provider:
         probe_earthdata: bool = True,
         temporal_window_days: int = 1,
     ) -> None:
-        self.cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else None
-        self.source = source or EarthAccessSource(provider=provider)
-        self.catalog = catalog or EarthAccessCatalog(source=self.source)
+        runtime = build_earthaccess_runtime(
+            cache_dir=cache_dir,
+            source=source,
+            catalog=catalog,
+            provider=provider,
+        )
+        self.cache_dir = runtime.cache_dir
+        self.source = runtime.source
+        self.catalog = runtime.catalog
         self.short_name = short_name
         self.provider = provider
         self.probe_earthdata = probe_earthdata
@@ -90,15 +103,10 @@ class MERRA2Provider:
 
     @staticmethod
     def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
-        xmin, ymin, xmax, ymax = bounds
-        if resolution <= 0:
-            raise ValueError(f"resolution must be > 0, got {resolution}")
-
-        nx = max(1, int(np.ceil((xmax - xmin) / resolution)))
-        ny = max(1, int(np.ceil((ymax - ymin) / resolution)))
-        x = xmin + (np.arange(nx, dtype=np.float32) + 0.5) * resolution
-        y = ymax - (np.arange(ny, dtype=np.float32) + 0.5) * resolution
-        return y, x
+        return cast(
+            "tuple[np.ndarray, np.ndarray]",
+            target_grid_coords(bounds, resolution, resolution_name="resolution"),
+        )
 
     def _constant_array(
         self,
@@ -106,9 +114,7 @@ class MERRA2Provider:
         resolution: float,
         value: float,
     ) -> xr.DataArray:
-        y, x = self._grid(bounds, resolution)
-        arr = np.full((y.size, x.size), value, dtype=np.float32)
-        return xr.DataArray(arr, dims=["y", "x"], coords={"y": y, "x": x})
+        return constant_target_array(bounds, resolution, value, resolution_name="resolution")
 
     def _default_prior(
         self,

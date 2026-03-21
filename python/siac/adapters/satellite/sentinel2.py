@@ -65,6 +65,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         self._satellite_id: str | None = None
         self._granule_path: Path | None = None
         self._last_cloud_classes: xr.DataArray | None = None
+        self._resolved_input_path: Path | None = None
 
     @property
     def sensor_config(self) -> SensorConfig:
@@ -92,7 +93,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         # Get scaling parameters
         metadata = self.get_metadata(input_path)
-        quantification = metadata.get("quantification_value", 10000.0)
+        quantification = self._quantification_value(metadata)
         offsets = metadata.get("radiometric_offsets", {})
 
         # Find and read band files
@@ -301,11 +302,17 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def _resolve_paths(self, input_path: Path) -> None:
         """Resolve SAFE directory structure."""
-        if self._granule_path is not None:
+        if self._resolved_input_path == input_path and self._granule_path is not None:
             return
+        if self._resolved_input_path != input_path:
+            self._granule_path = None
+            self._satellite_id = None
+            self._resolved_input_path = input_path
+        if not input_path.exists():
+            raise FileNotFoundError(f"Sentinel-2 input path does not exist: {input_path}")
 
         # Find granule directory
-        granule_dirs = list(input_path.glob("GRANULE/L1C_*"))
+        granule_dirs = sorted(input_path.glob("GRANULE/L1C_*"))
         if not granule_dirs:
             # Try AWS format
             if (input_path / "metadata.xml").exists():
@@ -316,16 +323,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             self._granule_path = granule_dirs[0]
 
         # Detect satellite platform.
-        safe_name = input_path.name
-        if "S2A" in safe_name:
-            self._satellite_id = "S2A"
-        elif "S2B" in safe_name:
-            self._satellite_id = "S2B"
-        elif "S2C" in safe_name:
-            self._satellite_id = "S2C"
-        else:
-            # Try to detect from metadata
-            self._satellite_id = "S2A"  # Default
+        self._satellite_id = self._resolve_satellite_id(input_path.name)
 
     def _get_img_data_path(self) -> Path:
         """Get path to IMG_DATA directory."""
@@ -398,7 +396,10 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             try:
                 metadata["observation_time"] = datetime.strptime(time_text, "%Y-%m-%dT%H:%M:%S.%fZ")
             except ValueError:
-                metadata["observation_time"] = datetime.fromisoformat(time_text.replace("Z", "+00:00"))
+                try:
+                    metadata["observation_time"] = datetime.fromisoformat(time_text.replace("Z", "+00:00"))
+                except ValueError:
+                    logger.warning("Could not parse Sentinel-2 sensing time %r", time_text)
 
         # Tile ID
         tile_elem = root.find(f".//{ns}TILE_ID")
@@ -417,6 +418,14 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             return datetime.strptime(match.group(1), "%Y%m%dT%H%M%S")
         except ValueError:
             return None
+
+    @staticmethod
+    def _resolve_satellite_id(name: str) -> str:
+        """Infer Sentinel-2 platform identifier from a SAFE or granule name."""
+        for satellite_id in ("S2A", "S2B", "S2C"):
+            if satellite_id in name:
+                return satellite_id
+        return "S2A"
 
     def _parse_sun_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
         """Parse sun angle grids from XML."""
@@ -555,6 +564,16 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 p = input_path / p
             defaults["external_mask_path"] = p
         return defaults
+
+    @staticmethod
+    def _quantification_value(metadata: dict[str, Any]) -> float:
+        raw = metadata.get("quantification_value", 10000.0)
+        quantification = float(raw)
+        if not np.isfinite(quantification) or quantification <= 0.0:
+            raise ValueError(
+                f"Sentinel-2 quantification_value must be finite and > 0, got {raw!r}"
+            )
+        return quantification
 
     def _require_granule_path(self) -> Path:
         if self._granule_path is None:

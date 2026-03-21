@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
+from numpy import typing as npt
 
 from siac._rust_compat import whittaker_smooth_cube
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
@@ -15,11 +16,14 @@ from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectan
 from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime
 
     from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary, SpectralMappingConfig
+    from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
+Float32Array: TypeAlias = npt.NDArray[np.float32]
 
 
 class BRDFWhittakerDeriver(KernelModelDeriver):
@@ -49,27 +53,16 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         geometry: GeometryAngles,
         psf_params: tuple[float, float] | None = None,
         *,
-        source_bands: list | tuple | None = None,
-        target_bands: list | tuple | None = None,
-        spectral_library: object | None = None,
+        source_bands: Sequence[SensorBand] | None = None,
+        target_bands: Sequence[SensorBand] | None = None,
+        spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
         spectral_k_neighbors: int = 5,
         **kwargs: Any,
     ) -> SurfacePrior:
-        obs_time = kwargs.pop("obs_time", None)
-        if kwargs:
-            unexpected = ", ".join(sorted(kwargs))
-            raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
-        obs_time = cast("datetime | None", obs_time)
-        spectral_mapping_library = cast(
-            "HyperspectralLibrary | SpectralMappingConfig | None",
-            spectral_library,
-        )
+        obs_time = self._pop_obs_time(kwargs)
         if "time" not in brdf_weights.f0.dims:
             raise ValueError("Whittaker BRDF derivation requires BRDF weights with a 'time' dimension")
-        if psf_params is not None:
-            sigma_x, sigma_y = psf_params
-        else:
-            sigma_x, sigma_y = self.psf_sigma_x, self.psf_sigma_y
+        sigma_x, sigma_y = self._resolve_psf_sigmas(psf_params)
 
         ref = brdf_weights.f0.isel(time=0, drop=True)
         k_vol, k_geo = self._kernels.compute(geometry.vza, geometry.sza, geometry.raa)
@@ -102,15 +95,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             reflectance_values.shape[1],
             "" if reflectance_values.shape[1] == 1 else "s",
         )
-        weights = np.where(
-            np.isfinite(reflectance_values) & np.isfinite(unc_values) & (unc_values > 0.0),
-            1.0 / np.maximum(unc_values**2, 1.0e-6),
-            0.0,
-        ).astype(np.float32)
-        max_weight = np.max(weights, axis=0, keepdims=True)
-        normalized_weights = np.zeros_like(weights, dtype=np.float32)
-        np.divide(weights, max_weight, out=normalized_weights, where=max_weight > 0.0)
-        weights = normalized_weights
+        weights = self._normalized_temporal_weights(reflectance_values, unc_values)
 
         smoothed = whittaker_smooth_cube(
             np.ascontiguousarray(reflectance_values, dtype=np.float32),
@@ -123,20 +108,13 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         has_data = np.any(weights > 0.0, axis=0)
         prior = smoothed[target_index]
 
-        target_unc = unc_values[target_index]
-        fallback_unc = np.full(target_unc.shape, np.nan, dtype=np.float32)
-        finite_any = np.any(np.isfinite(unc_values), axis=0)
-        if np.any(finite_any):
-            fallback_unc[finite_any] = np.nanmin(unc_values[:, finite_any], axis=0)
-        target_unc = np.where(np.isfinite(target_unc), target_unc, fallback_unc)
-
-        residual = np.where(weights > 0.0, reflectance_values - smoothed, np.nan)
-        weighted_var = np.sum(np.where(np.isfinite(residual), weights * residual**2, 0.0), axis=0)
-        weight_sum = np.sum(weights, axis=0)
-        residual_ratio = np.full(weighted_var.shape, np.nan, dtype=np.float32)
-        np.divide(weighted_var, weight_sum, out=residual_ratio, where=weight_sum > 0.0)
-        residual_std = np.sqrt(residual_ratio).astype(np.float32)
-        prior_unc = np.sqrt(np.maximum(target_unc, 0.0) ** 2 + np.nan_to_num(residual_std, nan=0.0) ** 2)
+        prior_unc = self._prior_uncertainty(
+            reflectance_values,
+            unc_values,
+            smoothed,
+            weights,
+            target_index,
+        )
 
         prior = np.where(has_data, prior, 0.20).astype(np.float32)
         prior_unc = np.where(has_data, prior_unc, 0.08).astype(np.float32)
@@ -155,7 +133,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
                 source_bands=source_bands,
                 target_bands=target_bands,
                 source_uncertainty=boa_unc,
-                spectral_library=spectral_mapping_library,
+                spectral_library=spectral_library,
                 k_neighbors=spectral_k_neighbors,
             )
 
@@ -173,6 +151,79 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             boa_unc=boa_unc,
             kernels=None,
             mask=mask,
+        )
+
+    @staticmethod
+    def _pop_obs_time(kwargs: dict[str, Any]) -> datetime | None:
+        obs_time_value = kwargs.pop("obs_time", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
+        return cast("datetime | None", obs_time_value)
+
+    def _resolve_psf_sigmas(
+        self,
+        psf_params: tuple[float, float] | None,
+    ) -> tuple[float, float]:
+        if psf_params is None:
+            return self.psf_sigma_x, self.psf_sigma_y
+        return psf_params
+
+    @staticmethod
+    def _normalized_temporal_weights(
+        reflectance_values: Float32Array,
+        unc_values: Float32Array,
+    ) -> Float32Array:
+        weights = np.where(
+            np.isfinite(reflectance_values) & np.isfinite(unc_values) & (unc_values > 0.0),
+            1.0 / np.maximum(unc_values**2, 1.0e-6),
+            0.0,
+        ).astype(np.float32)
+        max_weight = np.max(weights, axis=0, keepdims=True)
+        normalized_weights = np.zeros_like(weights, dtype=np.float32)
+        np.divide(weights, max_weight, out=normalized_weights, where=max_weight > 0.0)
+        return normalized_weights
+
+    @staticmethod
+    def _target_uncertainty(
+        unc_values: Float32Array,
+        target_index: int,
+    ) -> Float32Array:
+        target_unc = np.asarray(unc_values[target_index], dtype=np.float32)
+        fallback_unc = np.full(target_unc.shape, np.nan, dtype=np.float32)
+        finite_any = np.any(np.isfinite(unc_values), axis=0)
+        if np.any(finite_any):
+            fallback_unc[finite_any] = np.asarray(
+                np.nanmin(unc_values[:, finite_any], axis=0),
+                dtype=np.float32,
+            )
+        return np.asarray(np.where(np.isfinite(target_unc), target_unc, fallback_unc), dtype=np.float32)
+
+    @classmethod
+    def _prior_uncertainty(
+        cls,
+        reflectance_values: Float32Array,
+        unc_values: Float32Array,
+        smoothed: Float32Array,
+        weights: Float32Array,
+        target_index: int,
+    ) -> Float32Array:
+        target_unc = cls._target_uncertainty(unc_values, target_index)
+        residual = np.asarray(
+            np.where(weights > 0.0, reflectance_values - smoothed, np.nan),
+            dtype=np.float32,
+        )
+        weighted_var = np.asarray(
+            np.sum(np.where(np.isfinite(residual), weights * residual**2, 0.0), axis=0),
+            dtype=np.float32,
+        )
+        weight_sum = np.asarray(np.sum(weights, axis=0), dtype=np.float32)
+        residual_ratio = np.full(weighted_var.shape, np.nan, dtype=np.float32)
+        np.divide(weighted_var, weight_sum, out=residual_ratio, where=weight_sum > 0.0)
+        residual_std = np.sqrt(residual_ratio).astype(np.float32)
+        return np.asarray(
+            np.sqrt(np.maximum(target_unc, 0.0) ** 2 + np.nan_to_num(residual_std, nan=0.0) ** 2),
+            dtype=np.float32,
         )
 
     @staticmethod

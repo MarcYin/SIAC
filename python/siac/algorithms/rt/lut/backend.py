@@ -173,6 +173,8 @@ class ZarrLUTBackend:
         Returns:
             RTCoefficients with xap, xbp, xcp and optional Jacobians.
         """
+        template = self._require_matching_grid_shapes(geometry, atmo_state)
+
         # Convert geometry to degrees for LUT
         sza_deg = np.rad2deg(geometry.sza.values)
         vza_deg = np.rad2deg(geometry.vza.values)
@@ -245,7 +247,6 @@ class ZarrLUTBackend:
             )
 
         # Create DataArrays
-        template = geometry.sza
         xap_da = xr.DataArray(xap, dims=template.dims, coords=template.coords)
         xbp_da = xr.DataArray(xbp, dims=template.dims, coords=template.coords)
         xcp_da = xr.DataArray(xcp, dims=template.dims, coords=template.coords)
@@ -426,6 +427,36 @@ class ZarrLUTBackend:
             )
 
         return coords
+
+    @staticmethod
+    def _require_matching_grid_shapes(
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+    ) -> xr.DataArray:
+        """Validate that geometry and atmospheric fields share the same retrieval grid."""
+        template = geometry.sza
+        expected_shape = tuple(template.shape)
+        arrays = {
+            "geometry.sza": geometry.sza,
+            "geometry.vza": geometry.vza,
+            "geometry.raa": geometry.raa,
+            "atmo_state.aot": atmo_state.aot,
+            "atmo_state.tcwv": atmo_state.tcwv,
+            "atmo_state.tco3": atmo_state.tco3,
+            "atmo_state.elevation": atmo_state.elevation,
+        }
+        mismatches = [
+            f"{name}={tuple(array.shape)}"
+            for name, array in arrays.items()
+            if tuple(array.shape) != expected_shape
+        ]
+        if mismatches:
+            details = ", ".join(mismatches)
+            raise ValueError(
+                "Geometry and atmospheric fields must share the same grid shape; "
+                f"expected {expected_shape} from geometry.sza but got {details}"
+            )
+        return template
 
     def _compute_spectral_with_retry(
         self,
@@ -683,6 +714,7 @@ class ZarrLUTBackend:
         _ = self.lut
         if not self._supports_spectral_lut():
             return
+        self._require_matching_grid_shapes(geometry, atmo_state)
 
         sza = np.rad2deg(geometry.sza.values)
         vza = np.rad2deg(geometry.vza.values)

@@ -84,6 +84,30 @@ class TestSentinel2Internals:
         with pytest.raises(FileNotFoundError):
             p4._resolve_paths(bad)
 
+    def test_resolve_paths_refreshes_cached_state_for_new_input(self, tmp_path: Path):
+        p = Sentinel2Preprocessor()
+
+        safe_a = _safe_tree(tmp_path, "S2A_FIRST.SAFE")
+        safe_b = _safe_tree(tmp_path, "S2B_SECOND.SAFE")
+
+        p._resolve_paths(safe_a)
+        first_granule = p._granule_path
+        assert first_granule is not None
+        assert p.sensor_config.satellite_id == "S2A"
+
+        p._resolve_paths(safe_b)
+
+        assert p._resolved_input_path == safe_b
+        assert p._granule_path == safe_b / "GRANULE" / "L1C_TILE"
+        assert p._granule_path != first_granule
+        assert p.sensor_config.satellite_id == "S2B"
+
+    def test_resolve_paths_rejects_missing_input_path(self, tmp_path: Path):
+        p = Sentinel2Preprocessor()
+
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            p._resolve_paths(tmp_path / "missing.SAFE")
+
     def test_sensor_config_uses_real_srf_loader(self, monkeypatch: pytest.MonkeyPatch):
         p = Sentinel2Preprocessor(config={"rsrf_root": "/tmp/rsrf-root"})
         p._satellite_id = "S2C"

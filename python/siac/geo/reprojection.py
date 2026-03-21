@@ -27,7 +27,7 @@ from pyproj import CRS, Transformer
 from rasterio.enums import Resampling
 
 if TYPE_CHECKING:
-    from affine import Affine
+    from rasterio.transform import Affine
 
 logger = logging.getLogger(__name__)
 

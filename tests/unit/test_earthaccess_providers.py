@@ -16,6 +16,7 @@ from siac.adapters.brdf.mcd43_earthaccess import (
     MCD43EarthAccessProvider,
     VNP43EarthAccessProvider,
 )
+from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata_common import MODLAND_SINUSOIDAL_CRS, modland_tile_coords
 from siac.domain import SensorBand
 
@@ -94,6 +95,83 @@ def test_merra2_provider_returns_default_prior_without_probe():
     assert state.aot.shape == (2, 2)
     assert float(state.aot.mean()) == pytest.approx(0.15)
     assert state.aot_unc.shape == (2, 2)
+
+
+def test_merra2_provider_probe_uses_runtime_search_contract(tmp_path: Path):
+    obs_time = datetime(2024, 1, 1, 12, 0, 0)
+    source = _StubEarthAccessSource(downloaded_paths=[])
+
+    class _StubCatalog:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        def resolve_short_name(self, key: str) -> str:
+            self.keys.append(key)
+            return f"SN:{key}"
+
+    catalog = _StubCatalog()
+    provider = MERRA2Provider(
+        cache_dir=tmp_path,
+        source=source,
+        catalog=catalog,
+        provider="GES_DISC",
+        probe_earthdata=True,
+        temporal_window_days=2,
+    )
+
+    state = provider.get_prior(
+        bounds=(0.0, 0.0, 1000.0, 1000.0),
+        crs="EPSG:4326",
+        obs_time=obs_time,
+        resolution=500.0,
+    )
+
+    assert provider.cache_dir == tmp_path
+    assert provider.source is source
+    assert provider.catalog is catalog
+    assert catalog.keys == ["merra2_atmo"]
+    assert float(state.tcwv.mean()) == pytest.approx(1.5)
+    assert source.search_calls == [
+        {
+            "short_name": "SN:merra2_atmo",
+            "bounds": (0.0, 0.0, 1000.0, 1000.0),
+            "crs": "EPSG:4326",
+            "temporal": EarthAccessSource.temporal_window(obs_time, 2),
+            "provider": "GES_DISC",
+            "count": 1,
+        }
+    ]
+
+
+def test_merra2_provider_probe_failure_warns_and_returns_defaults(caplog: pytest.LogCaptureFixture):
+    class _FailingSource:
+        def search_granules(self, **_kwargs):
+            raise RuntimeError("boom")
+
+    provider = MERRA2Provider(source=_FailingSource(), probe_earthdata=True)
+
+    with caplog.at_level("WARNING"):
+        state = provider.get_prior(
+            bounds=(0.0, 0.0, 1000.0, 1000.0),
+            crs="EPSG:4326",
+            obs_time=datetime(2024, 1, 1, 12, 0, 0),
+            resolution=500.0,
+        )
+
+    assert float(state.aot.mean()) == pytest.approx(0.15)
+    assert "MERRA-2 Earthaccess probe failed; using defaults" in caplog.text
+
+
+def test_merra2_provider_rejects_non_positive_resolution() -> None:
+    provider = MERRA2Provider(probe_earthdata=False)
+
+    with pytest.raises(ValueError, match="resolution must be > 0"):
+        provider.get_prior(
+            bounds=(0.0, 0.0, 1000.0, 1000.0),
+            crs="EPSG:4326",
+            obs_time=datetime(2024, 1, 1, 12, 0, 0),
+            resolution=0.0,
+        )
 
 
 def test_mcd19_provider_returns_default_prior_without_probe():
