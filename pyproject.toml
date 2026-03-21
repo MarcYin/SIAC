@@ -112,6 +112,7 @@ siac = "siac.cli:main"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "siac._rust"
+include = [{ path = "siac/adapters/output.py", format = ["sdist", "wheel"] }]
 
 # ============================================================================
 # pytest configuration

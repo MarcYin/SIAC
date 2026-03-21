@@ -39,3 +39,5 @@ Thumbs.db
 
 #outputs
 *output*
+!python/siac/adapters/output.py
+!tests/unit/test_output_adapter.py

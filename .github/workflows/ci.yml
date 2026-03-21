@@ -45,7 +45,37 @@ jobs:
           import siac._rust
 
           from siac import SIAC, SIACConfig
+          from siac.adapters.output import ConfiguredOutputWriter
 
           print(siac.__version__)
-          print(SIAC.__name__, SIACConfig.__name__)
+          print(SIAC.__name__, SIACConfig.__name__, ConfiguredOutputWriter.__name__)
+          PY
+
+      - name: Build wheel artifact
+        run: pixi run maturin build --release --manifest-path src/siac_rs/Cargo.toml --out dist
+
+      - name: Wheel install smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wheel="$(ls dist/siac-*.whl)"
+          ls -lh "$wheel"
+
+          smoke_dir="$(mktemp -d)"
+          pixi run python -m venv --system-site-packages "$smoke_dir/venv"
+          "$smoke_dir/venv/bin/python" -m pip install --upgrade pip
+          "$smoke_dir/venv/bin/python" -m pip install --force-reinstall --no-deps "$wheel"
+
+          cd "$smoke_dir"
+          "$smoke_dir/venv/bin/siac" --version
+          "$smoke_dir/venv/bin/python" - <<'PY'
+          import siac
+          import siac._rust
+
+          from siac import SIAC, SIACConfig
+          from siac.adapters.output import ConfiguredOutputWriter
+
+          print(siac.__version__)
+          print(SIAC.__name__, SIACConfig.__name__, ConfiguredOutputWriter.__name__)
           PY
