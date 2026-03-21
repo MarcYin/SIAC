@@ -502,11 +502,38 @@ class ZarrLUTBackend:
             for name, array in arrays.items()
             if tuple(array.shape) != expected_shape
         ]
+        dim_mismatches = [
+            f"{name}.dims={array.dims}"
+            for name, array in arrays.items()
+            if array.dims != template.dims
+        ]
+        coord_mismatches: list[str] = []
+        for name, array in arrays.items():
+            if tuple(array.shape) != expected_shape or array.dims != template.dims:
+                continue
+            for axis in template.dims:
+                template_has_coord = axis in template.coords
+                array_has_coord = axis in array.coords
+                if template_has_coord != array_has_coord:
+                    coord_mismatches.append(f"{name}.{axis}=missing")
+                    continue
+                if not template_has_coord:
+                    continue
+                template_values = np.asarray(template.coords[axis].values)
+                array_values = np.asarray(array.coords[axis].values)
+                if not np.array_equal(template_values, array_values, equal_nan=True):
+                    coord_mismatches.append(f"{name}.{axis}")
         if mismatches:
             details = ", ".join(mismatches)
             raise ValueError(
                 "Geometry and atmospheric fields must share the same grid shape; "
                 f"expected {expected_shape} from geometry.sza but got {details}"
+            )
+        if dim_mismatches or coord_mismatches:
+            details = ", ".join(dim_mismatches + coord_mismatches)
+            raise ValueError(
+                "Geometry and atmospheric fields must share the same grid shape and coordinates; "
+                f"expected dims {template.dims} from geometry.sza but got {details}"
             )
         return template
 

@@ -326,6 +326,76 @@ class TestZarrLUTBackend:
         with pytest.raises(ValueError, match="must share the same grid shape"):
             backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
 
+    def test_compute_coefficients_rejects_same_shape_but_misaligned_coordinates(self, tmp_path: Path):
+        lut_path = _write_small_lut(tmp_path / "lut_bad_coords.zarr")
+        y = np.array([10.0, 0.0], dtype=np.float32)
+        x_geom = np.array([0.0, 10.0], dtype=np.float32)
+        x_atmo = np.array([100.0, 110.0], dtype=np.float32)
+
+        def _coord_array(values: np.ndarray, x: np.ndarray) -> xr.DataArray:
+            return xr.DataArray(values, dims=["y", "x"], coords={"y": y, "x": x})
+
+        geometry = GeometryAngles(
+            sza=_coord_array(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32), x_geom),
+            saa=_coord_array(np.full((2, 2), np.deg2rad(150.0), dtype=np.float32), x_geom),
+            vza=_coord_array(np.full((2, 2), np.deg2rad(10.0), dtype=np.float32), x_geom),
+            vaa=_coord_array(np.full((2, 2), np.deg2rad(60.0), dtype=np.float32), x_geom),
+        )
+        atmo = AtmosphericState(
+            aot=_coord_array(np.full((2, 2), 0.2, dtype=np.float32), x_atmo),
+            tcwv=_coord_array(np.full((2, 2), 2.0, dtype=np.float32), x_atmo),
+            tco3=_coord_array(np.full((2, 2), 0.3, dtype=np.float32), x_atmo),
+            aot_unc=_coord_array(np.full((2, 2), 0.05, dtype=np.float32), x_atmo),
+            tcwv_unc=_coord_array(np.full((2, 2), 0.3, dtype=np.float32), x_atmo),
+            tco3_unc=_coord_array(np.full((2, 2), 0.01, dtype=np.float32), x_atmo),
+            elevation=_coord_array(np.full((2, 2), 0.1, dtype=np.float32), x_atmo),
+        )
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+
+        with pytest.raises(ValueError, match="grid shape and coordinates"):
+            backend.compute_coefficients(
+                geometry,
+                atmo,
+                SensorBand("B02", 490.0, 65.0, 10.0, 0),
+                compute_jacobian=False,
+            )
+
+    def test_compute_coefficients_rejects_same_shape_with_missing_coordinates(self, tmp_path: Path):
+        lut_path = _write_small_lut(tmp_path / "lut_missing_coords.zarr")
+        y = np.array([10.0, 0.0], dtype=np.float32)
+        x = np.array([0.0, 10.0], dtype=np.float32)
+
+        def _coord_array(values: np.ndarray) -> xr.DataArray:
+            return xr.DataArray(values, dims=["y", "x"], coords={"y": y, "x": x})
+
+        def _dim_only_array(values: np.ndarray) -> xr.DataArray:
+            return xr.DataArray(values, dims=["y", "x"])
+
+        geometry = GeometryAngles(
+            sza=_coord_array(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32)),
+            saa=_coord_array(np.full((2, 2), np.deg2rad(150.0), dtype=np.float32)),
+            vza=_coord_array(np.full((2, 2), np.deg2rad(10.0), dtype=np.float32)),
+            vaa=_coord_array(np.full((2, 2), np.deg2rad(60.0), dtype=np.float32)),
+        )
+        atmo = AtmosphericState(
+            aot=_dim_only_array(np.full((2, 2), 0.2, dtype=np.float32)),
+            tcwv=_dim_only_array(np.full((2, 2), 2.0, dtype=np.float32)),
+            tco3=_dim_only_array(np.full((2, 2), 0.3, dtype=np.float32)),
+            aot_unc=_dim_only_array(np.full((2, 2), 0.05, dtype=np.float32)),
+            tcwv_unc=_dim_only_array(np.full((2, 2), 0.3, dtype=np.float32)),
+            tco3_unc=_dim_only_array(np.full((2, 2), 0.01, dtype=np.float32)),
+            elevation=_dim_only_array(np.full((2, 2), 0.1, dtype=np.float32)),
+        )
+        backend = ZarrLUTBackend(lut_path, interpolation_method="linear")
+
+        with pytest.raises(ValueError, match="grid shape and coordinates"):
+            backend.compute_coefficients(
+                geometry,
+                atmo,
+                SensorBand("B02", 490.0, 65.0, 10.0, 0),
+                compute_jacobian=False,
+            )
+
     def test_load_local_zipped_zarr(self, tmp_path: Path):
         lut_dir = _write_small_lut(tmp_path / "lut_zip.zarr")
         zip_path = tmp_path / "lut_zip.zarr.zip"
