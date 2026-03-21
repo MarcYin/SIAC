@@ -36,17 +36,17 @@ jobs:
         run: pixi run docs-build
 
       - name: Configure Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/refactor')
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/refactor')
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_build/html
 
   deploy-docs:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/refactor')
     needs: build-docs
     runs-on: ubuntu-latest
     timeout-minutes: 15
