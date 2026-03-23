@@ -249,11 +249,30 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
     assert p_auth._download_cams_file(datetime(2024, 1, 3)) is None
 
 
-def test_cams_download_missing_credentials_branch(monkeypatch, tmp_path: Path):
-    monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=lambda **_kwargs: None))
+def test_cams_download_missing_credentials_uses_cdsapi_defaults(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class _FakeRequest:
+        def download(self, path: str) -> str:
+            captured["download_path"] = path
+            return path
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def retrieve(self, dataset: str, request: dict[str, object]) -> _FakeRequest:
+            captured["dataset"] = dataset
+            captured["request"] = request
+            return _FakeRequest()
+
+    monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=_FakeClient))
 
     p = CAMSProvider(tmp_path, auth=CredentialManager())
-    assert p._download_cams_file(datetime(2024, 1, 4)) is None
+    out = p._download_cams_file(datetime(2024, 1, 4))
+    assert out == tmp_path / "CAMS_2024-01-04.nc"
+    assert captured["kwargs"] == {}
+    assert captured["download_path"] == str(out)
 
 
 def test_cams_download_uses_cache_dir_for_remote_source(monkeypatch, tmp_path: Path):

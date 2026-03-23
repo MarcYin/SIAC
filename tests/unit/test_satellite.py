@@ -192,6 +192,21 @@ class TestSentinel2Preprocessor:
         assert ds["B11"].shape == (4, 4)
         assert np.isfinite(ds["B11"].values).all()
 
+    def test_discover_band_files_distinguishes_b08_and_b8a(self, tmp_path):
+        from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
+
+        img_data = tmp_path / "IMG_DATA"
+        img_data.mkdir()
+        (img_data / "T50QLD_TEST_B08.jp2").touch()
+        (img_data / "T50QLD_TEST_B8A.jp2").touch()
+        (img_data / "T50QLD_TEST_B11.jp2").touch()
+
+        discovered = Sentinel2Preprocessor._discover_band_files(img_data)
+
+        assert discovered["B08"].name.endswith("B08.jp2")
+        assert discovered["B8A"].name.endswith("B8A.jp2")
+        assert discovered["B11"].name.endswith("B11.jp2")
+
 
 class TestDetectSensor:
     """Tests for sensor detection."""

@@ -66,3 +66,51 @@ def test_build_aligned_rsrf_kernel_rejects_non_monotonic_lut_axis():
             lut_wavelengths_nm=np.array([440.0, 460.0, 450.0], dtype=np.float32),
             lut_id="lut-v1",
         )
+
+
+def test_build_aligned_rsrf_kernel_rejects_short_axis_and_negative_padding():
+    with pytest.raises(ValueError, match="at least two samples"):
+        build_aligned_rsrf_kernel(
+            _rsrf(),
+            lut_wavelengths_nm=np.array([460.0], dtype=np.float32),
+            lut_id="lut-v1",
+        )
+
+    with pytest.raises(ValueError, match="non-negative"):
+        build_aligned_rsrf_kernel(
+            _rsrf(),
+            lut_wavelengths_nm=np.array([440.0, 450.0], dtype=np.float32),
+            lut_id="lut-v1",
+            support_padding=-1,
+        )
+
+
+def test_build_aligned_rsrf_kernel_rejects_zero_overlap_and_bad_solar_shape():
+    with pytest.raises(ValueError, match="zero overlap"):
+        build_aligned_rsrf_kernel(
+            _rsrf(),
+            lut_wavelengths_nm=np.array([1000.0, 1010.0], dtype=np.float32),
+            lut_id="lut-v1",
+            support_padding=0,
+        )
+
+    with pytest.raises(ValueError, match="must match the full LUT wavelength axis"):
+        build_aligned_rsrf_kernel(
+            _rsrf(),
+            lut_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+            lut_id="lut-v1",
+            solar_irradiance=np.array([1.0, 2.0], dtype=np.float32),
+        )
+
+
+def test_build_aligned_rsrf_kernel_leaves_zero_weighted_solar_response_unset():
+    kernel = build_aligned_rsrf_kernel(
+        _rsrf(),
+        lut_wavelengths_nm=np.array([440.0, 450.0, 460.0, 470.0, 480.0], dtype=np.float32),
+        lut_id="lut-v1",
+        solar_irradiance=np.zeros(5, dtype=np.float32),
+        support_padding=0,
+    )
+
+    assert kernel.solar_weighted_response_on_lut is None
+    assert kernel.wavelength_axis_hash

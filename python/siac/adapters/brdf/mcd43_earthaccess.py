@@ -180,7 +180,7 @@ class _EarthAccessBRDFProvider:
                 band_index=index,
                 rsrf_sensor_unit_id=self._rsrf_sensor_unit_id,
                 rsrf_representation_variant=self._rsrf_representation_variant,
-                rsrf_band_id=band.label,
+                rsrf_band_id=band.rsrf_band_id or band.label,
             )
             for index, band in enumerate(self._product_bands)
         )
@@ -810,35 +810,26 @@ class _EarthAccessBRDFProvider:
             "" if len(time_axis) == 1 else "s",
         )
 
-        f0_list: list[xr.DataArray] = []
-        f1_list: list[xr.DataArray] = []
-        f2_list: list[xr.DataArray] = []
-        f0_unc_list: list[xr.DataArray] = []
-        f1_unc_list: list[xr.DataArray] = []
-        f2_unc_list: list[xr.DataArray] = []
-        reflectance_unc_list: list[xr.DataArray] = []
+        y_coords, x_coords = self._grid(bounds, target_resolution)
+        output_shape = (len(time_axis), len(requested), y_coords.size, x_coords.size)
+        f0_values = np.full(output_shape, np.nan, dtype=np.float32)
+        f1_values = np.full(output_shape, np.nan, dtype=np.float32)
+        f2_values = np.full(output_shape, np.nan, dtype=np.float32)
+        f0_unc_values = np.full(output_shape, np.nan, dtype=np.float32)
+        f1_unc_values = np.full(output_shape, np.nan, dtype=np.float32)
+        f2_unc_values = np.full(output_shape, np.nan, dtype=np.float32)
+        reflectance_unc_values = np.full(output_shape, np.nan, dtype=np.float32)
 
-        for band_coord, product_band in requested:
-            band_f0_days: list[xr.DataArray] = []
-            band_f1_days: list[xr.DataArray] = []
-            band_f2_days: list[xr.DataArray] = []
-            band_f0_unc_days: list[xr.DataArray] = []
-            band_f1_unc_days: list[xr.DataArray] = []
-            band_f2_unc_days: list[xr.DataArray] = []
-            band_reflectance_unc_days: list[xr.DataArray] = []
+        def _coerce_daily(data: xr.DataArray) -> np.ndarray:
+            extra_coords = [name for name in data.coords if name not in data.dims]
+            if extra_coords:
+                data = data.drop_vars(extra_coords, errors="ignore")
+            return np.asarray(data.values, dtype=np.float32)
 
-            for day in time_axis:
+        for band_index, (_band_coord, product_band) in enumerate(requested):
+            for time_index, day in enumerate(time_axis):
                 day_paths = grouped_paths.get(day, [])
                 if not day_paths:
-                    empty = self._empty_spatial_array(bounds, target_resolution)
-                    unc = self._empty_spatial_array(bounds, target_resolution)
-                    band_f0_days.append(empty.expand_dims(time=[day]))
-                    band_f1_days.append(empty.expand_dims(time=[day]))
-                    band_f2_days.append(empty.expand_dims(time=[day]))
-                    band_f0_unc_days.append(unc.expand_dims(time=[day]))
-                    band_f1_unc_days.append(unc.expand_dims(time=[day]))
-                    band_f2_unc_days.append(unc.expand_dims(time=[day]))
-                    band_reflectance_unc_days.append(unc.expand_dims(time=[day]))
                     continue
 
                 param_tiles: list[tuple[xr.DataArray, xr.DataArray, xr.DataArray]] = []
@@ -856,7 +847,7 @@ class _EarthAccessBRDFProvider:
                     resampling=Resampling.bilinear,
                     nodata=np.nan,
                 )
-                f0 = self._coerce_to_target_grid(f0, bounds, target_resolution)
+                f0_values[time_index, band_index] = _coerce_daily(f0)
                 f1 = self._merge_reprojected_tiles(
                     [params[1] for params in param_tiles],
                     bounds=bounds,
@@ -865,7 +856,7 @@ class _EarthAccessBRDFProvider:
                     resampling=Resampling.bilinear,
                     nodata=np.nan,
                 )
-                f1 = self._coerce_to_target_grid(f1, bounds, target_resolution)
+                f1_values[time_index, band_index] = _coerce_daily(f1)
                 f2 = self._merge_reprojected_tiles(
                     [params[2] for params in param_tiles],
                     bounds=bounds,
@@ -874,7 +865,7 @@ class _EarthAccessBRDFProvider:
                     resampling=Resampling.bilinear,
                     nodata=np.nan,
                 )
-                f2 = self._coerce_to_target_grid(f2, bounds, target_resolution)
+                f2_values[time_index, band_index] = _coerce_daily(f2)
                 qa = self._merge_reprojected_tiles(
                     qa_tiles,
                     bounds=bounds,
@@ -883,32 +874,31 @@ class _EarthAccessBRDFProvider:
                     resampling=Resampling.nearest,
                     nodata=np.nan,
                 )
-                qa = self._coerce_to_target_grid(qa, bounds, target_resolution)
-                unc = self._qa_to_uncertainty(qa).fillna(np.nan)
-                band_f0_days.append(f0.expand_dims(time=[day]))
-                band_f1_days.append(f1.expand_dims(time=[day]))
-                band_f2_days.append(f2.expand_dims(time=[day]))
-                band_f0_unc_days.append(unc.expand_dims(time=[day]))
-                band_f1_unc_days.append((unc * 1.1).expand_dims(time=[day]))
-                band_f2_unc_days.append((unc * 1.1).expand_dims(time=[day]))
-                band_reflectance_unc_days.append(unc.expand_dims(time=[day]))
+                unc_values = _coerce_daily(self._qa_to_uncertainty(qa).fillna(np.nan))
+                f0_unc_values[time_index, band_index] = unc_values
+                scaled_unc = unc_values * np.float32(1.1)
+                f1_unc_values[time_index, band_index] = scaled_unc
+                f2_unc_values[time_index, band_index] = scaled_unc
+                reflectance_unc_values[time_index, band_index] = unc_values
 
-            f0_list.append(xr.concat(band_f0_days, dim="time").expand_dims(band=[band_coord]))
-            f1_list.append(xr.concat(band_f1_days, dim="time").expand_dims(band=[band_coord]))
-            f2_list.append(xr.concat(band_f2_days, dim="time").expand_dims(band=[band_coord]))
-            f0_unc_list.append(xr.concat(band_f0_unc_days, dim="time").expand_dims(band=[band_coord]))
-            f1_unc_list.append(xr.concat(band_f1_unc_days, dim="time").expand_dims(band=[band_coord]))
-            f2_unc_list.append(xr.concat(band_f2_unc_days, dim="time").expand_dims(band=[band_coord]))
-            reflectance_unc_list.append(xr.concat(band_reflectance_unc_days, dim="time").expand_dims(band=[band_coord]))
+        coords = {
+            "time": xr.IndexVariable("time", time_axis),
+            "band": xr.IndexVariable("band", [band_coord for band_coord, _band in requested]),
+            "y": y_coords,
+            "x": x_coords,
+        }
+
+        def _wrap(values: np.ndarray) -> xr.DataArray:
+            return xr.DataArray(values, dims=["time", "band", "y", "x"], coords=coords)
 
         temporal = BRDFKernelWeights(
-            f0=xr.concat(f0_list, dim="band").transpose("time", "band", "y", "x"),
-            f1=xr.concat(f1_list, dim="band").transpose("time", "band", "y", "x"),
-            f2=xr.concat(f2_list, dim="band").transpose("time", "band", "y", "x"),
-            f0_unc=xr.concat(f0_unc_list, dim="band").transpose("time", "band", "y", "x"),
-            f1_unc=xr.concat(f1_unc_list, dim="band").transpose("time", "band", "y", "x"),
-            f2_unc=xr.concat(f2_unc_list, dim="band").transpose("time", "band", "y", "x"),
-            reflectance_unc=xr.concat(reflectance_unc_list, dim="band").transpose("time", "band", "y", "x"),
+            f0=_wrap(f0_values),
+            f1=_wrap(f1_values),
+            f2=_wrap(f2_values),
+            f0_unc=_wrap(f0_unc_values),
+            f1_unc=_wrap(f1_unc_values),
+            f2_unc=_wrap(f2_unc_values),
+            reflectance_unc=_wrap(reflectance_unc_values),
         )
         if np.isfinite(temporal.f0.values).any():
             return temporal
@@ -1011,13 +1001,13 @@ class MCD43EarthAccessProvider(_StackParameterProvider):
     _source_name = "MCD43"
     _rsrf_sensor_unit_id = "terra_modis"
     _product_bands = (
-        ProductBandDefinition("Band1", 645.0, 50.0, "BRDF_Albedo_Parameters_Band1", "BRDF_Albedo_Band_Mandatory_Quality_Band1"),
-        ProductBandDefinition("Band2", 858.5, 35.0, "BRDF_Albedo_Parameters_Band2", "BRDF_Albedo_Band_Mandatory_Quality_Band2"),
-        ProductBandDefinition("Band3", 469.0, 20.0, "BRDF_Albedo_Parameters_Band3", "BRDF_Albedo_Band_Mandatory_Quality_Band3"),
-        ProductBandDefinition("Band4", 555.0, 20.0, "BRDF_Albedo_Parameters_Band4", "BRDF_Albedo_Band_Mandatory_Quality_Band4"),
-        ProductBandDefinition("Band5", 1240.0, 20.0, "BRDF_Albedo_Parameters_Band5", "BRDF_Albedo_Band_Mandatory_Quality_Band5"),
-        ProductBandDefinition("Band6", 1640.0, 24.0, "BRDF_Albedo_Parameters_Band6", "BRDF_Albedo_Band_Mandatory_Quality_Band6"),
-        ProductBandDefinition("Band7", 2130.0, 50.0, "BRDF_Albedo_Parameters_Band7", "BRDF_Albedo_Band_Mandatory_Quality_Band7"),
+        ProductBandDefinition("Band1", 645.0, 50.0, "BRDF_Albedo_Parameters_Band1", "BRDF_Albedo_Band_Mandatory_Quality_Band1", rsrf_band_id="B1"),
+        ProductBandDefinition("Band2", 858.5, 35.0, "BRDF_Albedo_Parameters_Band2", "BRDF_Albedo_Band_Mandatory_Quality_Band2", rsrf_band_id="B2"),
+        ProductBandDefinition("Band3", 469.0, 20.0, "BRDF_Albedo_Parameters_Band3", "BRDF_Albedo_Band_Mandatory_Quality_Band3", rsrf_band_id="B3"),
+        ProductBandDefinition("Band4", 555.0, 20.0, "BRDF_Albedo_Parameters_Band4", "BRDF_Albedo_Band_Mandatory_Quality_Band4", rsrf_band_id="B4"),
+        ProductBandDefinition("Band5", 1240.0, 20.0, "BRDF_Albedo_Parameters_Band5", "BRDF_Albedo_Band_Mandatory_Quality_Band5", rsrf_band_id="B5"),
+        ProductBandDefinition("Band6", 1640.0, 24.0, "BRDF_Albedo_Parameters_Band6", "BRDF_Albedo_Band_Mandatory_Quality_Band6", rsrf_band_id="B6"),
+        ProductBandDefinition("Band7", 2130.0, 50.0, "BRDF_Albedo_Parameters_Band7", "BRDF_Albedo_Band_Mandatory_Quality_Band7", rsrf_band_id="B7"),
     )
     _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
 
@@ -1112,14 +1102,14 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
     _source_name = "MCD19"
     _rsrf_sensor_unit_id = "terra_modis"
     _product_bands = (
-        ProductBandDefinition("Band1", 645.0, 50.0, "Kiso_Band1", "Status_QA"),
-        ProductBandDefinition("Band2", 858.5, 35.0, "Kiso_Band2", "Status_QA"),
-        ProductBandDefinition("Band3", 469.0, 20.0, "Kiso_Band3", "Status_QA"),
-        ProductBandDefinition("Band4", 555.0, 20.0, "Kiso_Band4", "Status_QA"),
-        ProductBandDefinition("Band5", 1240.0, 20.0, "Kiso_Band5", "Status_QA"),
-        ProductBandDefinition("Band6", 1640.0, 24.0, "Kiso_Band6", "Status_QA"),
-        ProductBandDefinition("Band7", 2130.0, 50.0, "Kiso_Band7", "Status_QA"),
-        ProductBandDefinition("Band8", 412.0, 20.0, "Kiso_Band8", "Status_QA"),
+        ProductBandDefinition("Band1", 645.0, 50.0, "Kiso_Band1", "Status_QA", rsrf_band_id="B1"),
+        ProductBandDefinition("Band2", 858.5, 35.0, "Kiso_Band2", "Status_QA", rsrf_band_id="B2"),
+        ProductBandDefinition("Band3", 469.0, 20.0, "Kiso_Band3", "Status_QA", rsrf_band_id="B3"),
+        ProductBandDefinition("Band4", 555.0, 20.0, "Kiso_Band4", "Status_QA", rsrf_band_id="B4"),
+        ProductBandDefinition("Band5", 1240.0, 20.0, "Kiso_Band5", "Status_QA", rsrf_band_id="B5"),
+        ProductBandDefinition("Band6", 1640.0, 24.0, "Kiso_Band6", "Status_QA", rsrf_band_id="B6"),
+        ProductBandDefinition("Band7", 2130.0, 50.0, "Kiso_Band7", "Status_QA", rsrf_band_id="B7"),
+        ProductBandDefinition("Band8", 412.0, 20.0, "Kiso_Band8", "Status_QA", rsrf_band_id="B8"),
     )
     _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
 

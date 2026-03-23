@@ -246,6 +246,15 @@ def test_mcd43_provider_returns_default_weights_without_probe():
         "Band6",
         "Band7",
     ]
+    assert [band.rsrf_band_id for band in provider.source_bands] == [
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+    ]
     weights = provider.get_brdf_parameters(
         bounds=(0.0, 0.0, 1000.0, 1000.0),
         crs="EPSG:4326",
@@ -259,6 +268,20 @@ def test_mcd43_provider_returns_default_weights_without_probe():
     assert weights.f0.shape == (2, 2, 2)
     assert list(weights.f0.coords["band"].values) == [1, 2]
     assert float(weights.f0.mean()) == pytest.approx(0.20)
+
+
+def test_mcd19_provider_exposes_modis_rsrf_band_ids() -> None:
+    provider = MCD19EarthAccessProvider(probe_earthdata=False)
+    assert [band.rsrf_band_id for band in provider.source_bands] == [
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+    ]
 
 
 def test_vnp43_provider_returns_default_weights_without_probe():

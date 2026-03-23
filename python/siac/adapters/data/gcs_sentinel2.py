@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -232,9 +234,15 @@ def _object_download_url(object_name: str) -> str:
     return GCS_DOWNLOAD_BASE + urllib.parse.quote(object_name, safe="/")
 
 
+def _temporary_download_path(target: Path) -> Path:
+    token = f"{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}"
+    return target.parent / f".{target.name}.{token}.part"
+
+
 def _download_url_to_file(url: str, target: Path, timeout: int = 300) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "siac-gcs-s2/1.0"})
-    tmp = target.with_suffix(target.suffix + ".part")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _temporary_download_path(target)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp, tmp.open("wb") as fh:
             while True:
@@ -282,6 +290,9 @@ def _download_with_retry(
     retries: int = GCS_DOWNLOAD_MAX_RETRIES,
     backoff_sec: float = GCS_DOWNLOAD_RETRY_BACKOFF_SEC,
 ) -> None:
+    if _is_fully_downloaded(target, expected_size):
+        return
+
     attempts = max(0, int(retries)) + 1
     for attempt in range(1, attempts + 1):
         try:
@@ -293,7 +304,10 @@ def _download_with_retry(
                 )
             return
         except Exception as exc:
-            target.unlink(missing_ok=True)
+            if _is_fully_downloaded(target, expected_size):
+                return
+            if target.exists() and not _is_fully_downloaded(target, expected_size):
+                target.unlink(missing_ok=True)
             if attempt >= attempts:
                 raise RuntimeError(f"Failed downloading {url} after {attempts} attempts") from exc
 
@@ -402,6 +416,7 @@ def download_gcs(product: S2Product, dest_dir: Path) -> Path:
 
     safe_dir.mkdir(parents=True, exist_ok=True)
     jobs: list[tuple[str, Path, int | None]] = []
+    scheduled_targets: set[Path] = set()
     for item in objects:
         name = item.get("name")
         if not isinstance(name, str):
@@ -416,8 +431,11 @@ def download_gcs(product: S2Product, dest_dir: Path) -> Path:
         size_bytes = int(size_raw) if isinstance(size_raw, str) and size_raw.isdigit() else None
         if _is_fully_downloaded(target, size_bytes):
             continue
+        if target in scheduled_targets:
+            continue
 
         jobs.append((_object_download_url(name), target, size_bytes))
+        scheduled_targets.add(target)
 
     _download_jobs_parallel(jobs)
     downloaded = len(jobs)

@@ -59,6 +59,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         "B11": "*B11*.jp2",
         "B12": "*B12*.jp2",
     }
+    _BAND_TOKEN_BY_NAME = {band_name: f"_{band_name}" for band_name in BAND_PATTERNS}
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
@@ -66,6 +67,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         self._granule_path: Path | None = None
         self._last_cloud_classes: xr.DataArray | None = None
         self._resolved_input_path: Path | None = None
+        self._reference_grid: xr.DataArray | None = None
 
     @property
     def sensor_config(self) -> SensorConfig:
@@ -98,51 +100,51 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         # Find and read band files
         img_data_path = self._get_img_data_path()
-        data_vars = {}
-
-        for band_name, pattern in self.BAND_PATTERNS.items():
-            band_files = list(img_data_path.glob(pattern))
-            if not band_files:
-                logger.warning(f"Band {band_name} not found")
-                continue
-
-            band_file = band_files[0]
-            logger.debug(f"Reading {band_name} from {band_file}")
-
-            # Read DN values
-            da = read_raster(band_file)
-
-            # Apply radiometric calibration
-            offset = offsets.get(band_name, 0.0)
-            da = (da.astype(np.float32) + offset) / quantification
-
-            # Clip to valid range
-            da = da.clip(0, 1.5)
-
-            # Set band name
-            da.name = band_name
-            data_vars[band_name] = da
-
-        if not data_vars:
+        band_files = self._discover_band_files(img_data_path)
+        if not band_files:
             raise RuntimeError(f"No Sentinel-2 bands found under {img_data_path}")
+
+        ref_name = next(
+            (name for name in ("B04", "B03", "B02", "B08") if name in band_files),
+            next(iter(band_files)),
+        )
+        ref_file = band_files[ref_name]
+        logger.debug(f"Reading reference band {ref_name} from {ref_file}")
+        ref_da = self._calibrate_band(
+            read_raster(ref_file),
+            band_name=ref_name,
+            quantification=quantification,
+            offset=float(offsets.get(ref_name, 0.0)),
+        )
+        self._reference_grid = self._ensure_float32(ref_da, name=ref_name)
+        aligned_vars: dict[str, xr.DataArray] = {}
+        aligned_vars[ref_name] = self._reference_grid
 
         # Align all bands to a single high-resolution reference grid before creating
         # the Dataset. Building a Dataset from mixed-resolution coordinates causes
         # xarray to align on the union grid, introducing sparse/warped coordinates.
-        ref_name = next(
-            (name for name in ("B04", "B03", "B02", "B08") if name in data_vars),
-            next(iter(data_vars)),
-        )
-        ref_da = data_vars[ref_name]
-        aligned_vars: dict[str, xr.DataArray] = {}
+        for band_name in self.BAND_PATTERNS:
+            band_file = band_files.get(band_name)
+            if band_file is None:
+                logger.warning(f"Band {band_name} not found")
+                continue
+            if band_name == ref_name:
+                continue
 
-        for band_name, da in data_vars.items():
-            if self._coords_match(da, ref_da):
+            logger.debug(f"Reading {band_name} from {band_file}")
+            da = self._calibrate_band(
+                read_raster(band_file),
+                band_name=band_name,
+                quantification=quantification,
+                offset=float(offsets.get(band_name, 0.0)),
+            )
+
+            if self._coords_match(da, self._reference_grid):
                 aligned_vars[band_name] = da
                 continue
 
             try:
-                aligned = reproject_match(da, ref_da, resampling="bilinear")
+                aligned = reproject_match(da, self._reference_grid, resampling="bilinear")
             except Exception as exc:
                 logger.debug(
                     "Failed to reproject %s onto %s grid; falling back to interp (%s)",
@@ -151,13 +153,13 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                     exc,
                 )
                 aligned = da.interp(
-                    y=ref_da.coords["y"],
-                    x=ref_da.coords["x"],
+                    y=self._reference_grid.coords["y"],
+                    x=self._reference_grid.coords["x"],
                     method="linear",
                 )
 
             aligned.name = band_name
-            aligned_vars[band_name] = aligned.astype(np.float32)
+            aligned_vars[band_name] = self._ensure_float32(aligned, name=band_name)
 
         ds = xr.Dataset(aligned_vars)
 
@@ -173,6 +175,49 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             ds.attrs["observation_time"] = ""
 
         return ds
+
+    @classmethod
+    def _discover_band_files(cls, img_data_path: Path) -> dict[str, Path]:
+        discovered: dict[str, Path] = {}
+        for band_file in sorted(img_data_path.glob("*.jp2")):
+            name = band_file.name.upper()
+            for band_name, token in cls._BAND_TOKEN_BY_NAME.items():
+                if band_name in discovered:
+                    continue
+                if token in name:
+                    discovered[band_name] = band_file
+                    break
+        return discovered
+
+    @staticmethod
+    def _ensure_float32(da: xr.DataArray, *, name: str | None = None) -> xr.DataArray:
+        values = np.asarray(da.data, dtype=np.float32)
+        if values is da.data and (name is None or da.name == name):
+            return da
+        out = da.copy(deep=False)
+        out.data = values
+        if name is not None:
+            out.name = name
+        return out
+
+    def _calibrate_band(
+        self,
+        da: xr.DataArray,
+        *,
+        band_name: str,
+        quantification: float,
+        offset: float,
+    ) -> xr.DataArray:
+        values = np.array(da.data, dtype=np.float32, copy=True)
+        if offset != 0.0:
+            np.add(values, np.float32(offset), out=values)
+        np.divide(values, np.float32(quantification), out=values)
+        np.clip(values, np.float32(0.0), np.float32(1.5), out=values)
+
+        out = da.copy(deep=False)
+        out.data = values
+        out.name = band_name
+        return out
 
     def extract_geometry(self, input_path: str | Path) -> GeometryAngles:
         """Extract sun and view angles from metadata."""
@@ -195,11 +240,17 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         view_angles = self._parse_view_angles(root)
 
         # Get reference band for grid
-        img_data_path = self._get_img_data_path()
-        ref_file = next((path for path in img_data_path.glob("*B04*.jp2")), None)
-        if ref_file is None:
-            raise FileNotFoundError(f"No B04 reference band found under {img_data_path}")
-        ref_da = read_raster(ref_file)
+        ref_da = self._reference_grid
+        if ref_da is None:
+            img_data_path = self._get_img_data_path()
+            band_files = self._discover_band_files(img_data_path)
+            ref_name = next(
+                (name for name in ("B04", "B03", "B02", "B08") if name in band_files),
+                None,
+            )
+            if ref_name is None:
+                raise FileNotFoundError(f"No reference band found under {img_data_path}")
+            ref_da = read_raster(band_files[ref_name])
 
         # Resample angles to image grid
         sza = self._angles_to_grid(sun_angles["zenith"], ref_da)
@@ -307,6 +358,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if self._resolved_input_path != input_path:
             self._granule_path = None
             self._satellite_id = None
+            self._reference_grid = None
             self._resolved_input_path = input_path
         if not input_path.exists():
             raise FileNotFoundError(f"Sentinel-2 input path does not exist: {input_path}")

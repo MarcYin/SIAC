@@ -20,8 +20,8 @@ from siac.algorithms.surface.brdf_monthly_database import (
 )
 from siac.algorithms.surface.spectral_mapping import (
     HyperspectralLibrary,
+    SpectralMapper,
     SpectralMappingConfig,
-    map_multispectral_reflectance,
 )
 from siac.domain import SensorBand
 from siac.runtime import (
@@ -99,6 +99,14 @@ def build_monthly_surface_prior_database(
         temporal_windows=[spec[3] for spec in month_specs],
         sample_date_sets=[spec[4] for spec in month_specs],
     )
+    spectral_mapper: SpectralMapper | None = None
+    if tuple(band.name for band in source_bands) != tuple(band.name for band in required_bands):
+        spectral_mapper = SpectralMapper(
+            source_bands,
+            required_bands,
+            spectral_library=spectral_library,
+            k_neighbors=spectral_k_neighbors,
+        )
     composites = []
     for (year, month, _center_time, _temporal_window, _sample_dates), temporal_weights in zip(
         month_specs,
@@ -111,14 +119,10 @@ def build_monthly_surface_prior_database(
             year=year,
             month=month,
         )
-        if tuple(band.name for band in source_bands) != tuple(band.name for band in required_bands):
-            reflectance, mapped_unc = map_multispectral_reflectance(
+        if spectral_mapper is not None:
+            reflectance, mapped_unc = spectral_mapper.map(
                 reflectance,
-                source_bands=source_bands,
-                target_bands=required_bands,
                 source_uncertainty=reflectance_unc,
-                spectral_library=spectral_library,
-                k_neighbors=spectral_k_neighbors,
             )
             quality = np.sqrt(
                 np.square(quality.values, dtype=np.float32)

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import siac.app.sentinel2 as sentinel2_app
 from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.api.public import resolve_s2_input, search_sentinel2, siac_process_s2
 from siac.config import SIACConfig
@@ -67,7 +68,7 @@ def test_resolve_s2_input_builds_auth_from_config_for_cdse(monkeypatch, tmp_path
         safe.mkdir(parents=True, exist_ok=True)
         return safe
 
-    monkeypatch.setattr("siac.app.sentinel2.CredentialManager.from_config", lambda _cfg: auth_obj)
+    monkeypatch.setattr(sentinel2_app.CredentialManager, "from_config", lambda _cfg: auth_obj)
     monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
     monkeypatch.setattr("siac.adapters.data.s2_data_source.S2DataAccess.get", _fake_get)
 
@@ -134,7 +135,7 @@ def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
         def __init__(self, access_key=None, secret_key=None, auth=None):  # noqa: ANN001
             captured["auth"] = auth
 
-    monkeypatch.setattr("siac.app.sentinel2.CredentialManager.from_config", lambda _cfg: auth_obj)
+    monkeypatch.setattr(sentinel2_app.CredentialManager, "from_config", lambda _cfg: auth_obj)
     monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
     monkeypatch.setattr("siac.adapters.data.s2_data_source.search_s2", lambda backend, query: [fake_product])  # noqa: ARG005
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
+from scipy.spatial import cKDTree
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -43,6 +45,12 @@ class MonthlyCompositeDatabase:
     y_coords: xr.DataArray
     x_coords: xr.DataArray
 
+    @cached_property
+    def _neighbor_index(self) -> cKDTree | None:
+        if self.entries_features.size == 0:
+            return None
+        return cKDTree(self.entries_features, copy_data=False)
+
     def predict_visible(
         self,
         corrected_reflectance: xr.Dataset | xr.DataArray,
@@ -59,43 +67,86 @@ class MonthlyCompositeDatabase:
 
         query_values = np.asarray(query_cube.values, dtype=np.float32)
         median_values = np.asarray(self.median_summary.values, dtype=np.float32)
-        query_features = np.concatenate([query_values, median_values], axis=0)
 
         n_visible = len(self.visible_band_names)
+        n_query = len(self.query_band_names)
         ny = query_cube.sizes["y"]
         nx = query_cube.sizes["x"]
+        n_pixels = ny * nx
         predicted = np.full((n_visible, ny, nx), np.nan, dtype=np.float32)
         uncertainty = np.full((n_visible, ny, nx), np.nan, dtype=np.float32)
 
-        features_flat = query_features.reshape(query_features.shape[0], -1).T
-        valid_entries = np.all(np.isfinite(self.entries_features), axis=1) & np.all(np.isfinite(self.entries_visible), axis=1)
-        database_features = self.entries_features[valid_entries]
-        database_visible = self.entries_visible[valid_entries]
+        features_flat = np.empty((n_pixels, n_query + median_values.shape[0]), dtype=np.float32)
+        features_flat[:, :n_query] = query_values.reshape(n_query, n_pixels).T
+        features_flat[:, n_query:] = median_values.reshape(median_values.shape[0], n_pixels).T
+        valid_query_rows = np.flatnonzero(np.all(np.isfinite(features_flat), axis=1))
+        if valid_query_rows.size == 0 or self.entries_features.size == 0:
+            coords = {"band": list(self.visible_band_names), "y": self.y_coords, "x": self.x_coords}
+            return (
+                xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
+            )
 
-        for flat_index, query_vector in enumerate(features_flat):
-            if not np.all(np.isfinite(query_vector)):
-                continue
-            distances = np.linalg.norm(database_features - query_vector[np.newaxis, :], axis=1)
-            if distances.size == 0:
-                continue
-            order = np.argsort(distances)[: min(k_neighbors, distances.size)]
-            selected_distances = distances[order]
-            selected_visible = database_visible[order]
-            if np.any(selected_distances == 0.0):
-                matched = selected_visible[selected_distances == 0.0]
-                estimate = matched.mean(axis=0)
-                spread = matched.std(axis=0) if matched.shape[0] > 1 else np.zeros(n_visible, dtype=np.float32)
+        neighbor_index = self._neighbor_index
+        if neighbor_index is None:
+            coords = {"band": list(self.visible_band_names), "y": self.y_coords, "x": self.x_coords}
+            return (
+                xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
+            )
+
+        neighbor_count = min(k_neighbors, self.entries_features.shape[0])
+        predicted_flat = predicted.reshape(n_visible, n_pixels).T
+        uncertainty_flat = uncertainty.reshape(n_visible, n_pixels).T
+        chunk_size = 4096
+
+        for start in range(0, valid_query_rows.size, chunk_size):
+            query_rows = valid_query_rows[start : start + chunk_size]
+            distances, neighbor_rows = neighbor_index.query(
+                features_flat[query_rows],
+                k=neighbor_count,
+                workers=1,
+            )
+            if neighbor_count == 1:
+                distances = np.asarray(distances, dtype=np.float32)[:, np.newaxis]
+                neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)[:, np.newaxis]
             else:
+                distances = np.asarray(distances, dtype=np.float32)
+                neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)
+
+            selected_visible = self.entries_visible[neighbor_rows]
+            zero_mask = distances == 0.0
+            nonzero_rows = ~np.any(zero_mask, axis=1)
+
+            if np.any(nonzero_rows):
+                selected_distances = distances[nonzero_rows]
+                weighted_visible = selected_visible[nonzero_rows]
                 weights = 1.0 / np.maximum(selected_distances, 1e-6)
-                weights = weights / np.sum(weights)
-                estimate = np.sum(selected_visible * weights[:, np.newaxis], axis=0)
+                weights = weights / np.sum(weights, axis=1, keepdims=True)
+                estimate = np.sum(weighted_visible * weights[..., np.newaxis], axis=1)
                 spread = np.sqrt(
-                    np.sum(((selected_visible - estimate[np.newaxis, :]) ** 2) * weights[:, np.newaxis], axis=0)
+                    np.sum(
+                        ((weighted_visible - estimate[:, np.newaxis, :]) ** 2)
+                        * weights[..., np.newaxis],
+                        axis=1,
+                    )
                 )
-            row = flat_index // nx
-            col = flat_index % nx
-            predicted[:, row, col] = estimate.astype(np.float32)
-            uncertainty[:, row, col] = spread.astype(np.float32)
+                predicted_flat[query_rows[nonzero_rows]] = estimate.astype(np.float32, copy=False)
+                uncertainty_flat[query_rows[nonzero_rows]] = spread.astype(np.float32, copy=False)
+
+            if np.any(~nonzero_rows):
+                zero_rows = np.flatnonzero(~nonzero_rows)
+                for local_index in zero_rows:
+                    matched = selected_visible[local_index][zero_mask[local_index]]
+                    estimate = matched.mean(axis=0)
+                    spread = (
+                        matched.std(axis=0)
+                        if matched.shape[0] > 1
+                        else np.zeros(n_visible, dtype=np.float32)
+                    )
+                    flat_index = query_rows[local_index]
+                    predicted_flat[flat_index] = estimate.astype(np.float32, copy=False)
+                    uncertainty_flat[flat_index] = spread.astype(np.float32, copy=False)
 
         coords = {"band": list(self.visible_band_names), "y": self.y_coords, "x": self.x_coords}
         return (
@@ -123,28 +174,35 @@ def build_monthly_composite_database(
     first = composites[0].reflectance
     ny = first.sizes["y"]
     nx = first.sizes["x"]
+    n_composites = len(composites)
+    n_query = len(query_names)
+    n_visible = len(visible_names)
+    n_pixels = ny * nx
 
-    query_stack = []
-    visible_stack = []
-    for composite in composites:
+    query_values = np.empty((n_composites, n_query, ny, nx), dtype=np.float32)
+    entries_visible = np.empty((n_composites * n_pixels, n_visible), dtype=np.float32)
+    for index, composite in enumerate(composites):
         if composite.reflectance.sizes.get("y") != ny or composite.reflectance.sizes.get("x") != nx:
             raise ValueError("All monthly composites must share the same spatial shape")
-        query_stack.append(
-            composite.reflectance.sel(band=list(query_names)).values.astype(np.float32)
-        )
-        visible_stack.append(
-            composite.reflectance.sel(band=list(visible_names)).values.astype(np.float32)
-        )
+        query_values[index] = composite.reflectance.sel(band=list(query_names)).values.astype(np.float32)
+        visible_values = composite.reflectance.sel(band=list(visible_names)).values.astype(np.float32)
+        start = index * n_pixels
+        end = start + n_pixels
+        entries_visible[start:end] = visible_values.reshape(n_visible, n_pixels).T
 
-    query_values = np.stack(query_stack, axis=0)
-    visible_values = np.stack(visible_stack, axis=0)
     median_summary = np.nanmedian(query_values, axis=0)
 
-    median_repeated = np.broadcast_to(median_summary[np.newaxis, ...], query_values.shape)
-    feature_stack = np.concatenate([query_values, median_repeated], axis=1)
+    entries_features = np.empty((n_composites * n_pixels, n_query * 2), dtype=np.float32)
+    median_flat = median_summary.reshape(n_query, n_pixels).T
+    for index in range(n_composites):
+        start = index * n_pixels
+        end = start + n_pixels
+        entries_features[start:end, :n_query] = query_values[index].reshape(n_query, n_pixels).T
+        entries_features[start:end, n_query:] = median_flat
 
-    entries_features = feature_stack.transpose(0, 2, 3, 1).reshape(-1, feature_stack.shape[1])
-    entries_visible = visible_values.transpose(0, 2, 3, 1).reshape(-1, visible_values.shape[1])
+    valid_entries = np.all(np.isfinite(entries_features), axis=1) & np.all(np.isfinite(entries_visible), axis=1)
+    entries_features = entries_features[valid_entries]
+    entries_visible = entries_visible[valid_entries]
 
     return MonthlyCompositeDatabase(
         entries_features=entries_features,

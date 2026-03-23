@@ -153,6 +153,82 @@ def test_cams_remote_base_and_remote_file_paths(
     assert remote_file._is_remote_source("s3://eodata/CAMS/GLOBAL") is True
 
 
+def test_cams_remote_url_resolution_prefers_explicit_storage_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provider = CAMSProvider(
+        "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-02.nc",
+        cache_dir=tmp_path / "cache",
+    )
+    cached = tmp_path / "cached.nc"
+    cached.write_text("x")
+    seen: dict[str, object] = {}
+
+    def _cache_remote_file(url: str, storage_options=None):  # noqa: ANN001
+        seen["url"] = url
+        seen["storage_options"] = storage_options
+        return cached
+
+    @contextmanager
+    def _boom_context(_url: str):
+        raise AssertionError("storage-options context should not be used")
+        yield {}
+
+    monkeypatch.setattr(provider, "_cache_remote_file", _cache_remote_file)
+    monkeypatch.setattr(provider, "_remote_storage_options_context", _boom_context)
+
+    resolved = provider._resolve_remote_local_path(
+        "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-02.nc",
+        missing_ok=False,
+        storage_options={"token": "abc"},
+    )
+
+    assert resolved == cached
+    assert seen == {
+        "url": "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-02.nc",
+        "storage_options": {"token": "abc"},
+    }
+
+
+def test_cams_remote_url_resolution_uses_storage_context_when_needed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provider = CAMSProvider(
+        "s3://eodata/CAMS/GLOBAL",
+        cache_dir=tmp_path / "cache",
+    )
+    cached = tmp_path / "cached.nc"
+    cached.write_text("x")
+    seen: dict[str, object] = {}
+
+    @contextmanager
+    def _storage_context(url: str):
+        seen["context_url"] = url
+        yield {"key": "AKIA", "secret": "SECRET"}
+
+    def _cache_remote_file(url: str, storage_options=None):  # noqa: ANN001
+        seen["cache_url"] = url
+        seen["storage_options"] = storage_options
+        return cached
+
+    monkeypatch.setattr(provider, "_remote_storage_options_context", _storage_context)
+    monkeypatch.setattr(provider, "_cache_remote_file", _cache_remote_file)
+
+    resolved = provider._resolve_remote_local_path(
+        "s3://eodata/CAMS/GLOBAL/2024/01/02/file.nc",
+        missing_ok=False,
+    )
+
+    assert resolved == cached
+    assert seen == {
+        "context_url": "s3://eodata/CAMS/GLOBAL/2024/01/02/file.nc",
+        "cache_url": "s3://eodata/CAMS/GLOBAL/2024/01/02/file.nc",
+        "storage_options": {"key": "AKIA", "secret": "SECRET"},
+    }
+
+
 def test_cams_select_cdse_s3_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import fsspec
 
@@ -485,6 +561,34 @@ def test_cams_extract_transforms_projected_bounds(tmp_path: Path) -> None:
     assert out.shape == (1, 1)
     assert float(out.values[0, 0]) == pytest.approx(0.5)
 
+
+
+def test_cams_extract_wraps_0360_longitudes(tmp_path: Path) -> None:
+    provider = CAMSProvider(tmp_path)
+    ds = xr.Dataset(
+        {
+            "aod550": xr.DataArray(
+                np.array([[1.0, 2.0, 3.0, 4.0, 5.0]], dtype=np.float32),
+                dims=["latitude", "longitude"],
+                coords={
+                    "latitude": [0.0],
+                    "longitude": [0.0, 5.0, 10.0, 350.0, 355.0],
+                },
+            )
+        }
+    )
+
+    out = provider._extract_variable(
+        ds,
+        "aod550",
+        (-10.0, -1.0, 10.0, 1.0),
+        "EPSG:4326",
+        1.0,
+        datetime(2024, 1, 1),
+    )
+
+    np.testing.assert_allclose(out.coords["longitude"].values, np.array([350.0, 355.0, 0.0, 5.0, 10.0]))
+    np.testing.assert_allclose(out.values[0], np.array([4.0, 5.0, 1.0, 2.0, 3.0], dtype=np.float32))
 
 
 def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

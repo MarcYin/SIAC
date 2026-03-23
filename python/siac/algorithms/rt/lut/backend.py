@@ -12,6 +12,14 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import numpy as np
 import xarray as xr
 
+from siac.algorithms.rt.lut._spectral_math import (
+    build_point_interpolation_coords,
+    build_spectral_integration_weights,
+    derive_standard_rt_coefficients,
+    finite_mean,
+    finite_range,
+    weighted_spectral_mean,
+)
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 from siac.algorithms.rt.lut.store import as_local_path, build_lut_store
 from siac.domain.spectral import RelativeSpectralResponse
@@ -391,19 +399,11 @@ class ZarrLUTBackend:
         *,
         fallback: tuple[float, float],
     ) -> tuple[float, float]:
-        arr = np.asarray(values, dtype=np.float32)
-        finite = arr[np.isfinite(arr)]
-        if finite.size == 0:
-            return fallback
-        return float(np.min(finite)), float(np.max(finite))
+        return cast("tuple[float, float]", finite_range(values, fallback=fallback))
 
     @staticmethod
     def _finite_mean(values: np.ndarray, *, fallback: float) -> float:
-        arr = np.asarray(values, dtype=np.float32)
-        finite = arr[np.isfinite(arr)]
-        if finite.size == 0:
-            return fallback
-        return float(np.mean(finite))
+        return cast("float", finite_mean(values, fallback=fallback))
 
     @classmethod
     def _sanitize_point_values(
@@ -641,11 +641,50 @@ class ZarrLUTBackend:
         tco3: np.ndarray,
         elevation: np.ndarray,
         band: SensorBand,
-        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Derive standard RT coefficients from dense spectral LUT terms."""
         if "wavelength" not in self._lut_coords:
             raise ValueError("Spectral LUT must define a wavelength coordinate")
 
+        scene_key, lut_scene = self._resolve_spectral_scene_subset(
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+
+        target_shape = aot.shape
+        toa_rho1, toa_rho2, eg_rho1, eg_rho2 = self._interpolate_spectral_band_terms(
+            scene_key,
+            lut_scene,
+            band,
+            aot=aot.ravel(),
+            tcwv=tcwv.ravel(),
+        )
+        xap, xbp, xcp = self._derive_coefficients_from_spectral_terms(
+            toa_rho1=toa_rho1,
+            toa_rho2=toa_rho2,
+            eg_rho1=eg_rho1,
+            eg_rho2=eg_rho2,
+        )
+
+        return (
+            xap.reshape(target_shape).astype(np.float32),
+            xbp.reshape(target_shape).astype(np.float32),
+            xcp.reshape(target_shape).astype(np.float32),
+        )
+
+    def _resolve_spectral_scene_subset(
+        self,
+        *,
+        sza: np.ndarray,
+        vza: np.ndarray,
+        raa: np.ndarray,
+        tco3: np.ndarray,
+        elevation: np.ndarray,
+    ) -> tuple[tuple[float, ...], xr.Dataset]:
+        """Return the cached spectral scene subset and emit the one-time summary log."""
         scene_key, lut_scene = self._get_or_build_spectral_scene_subset(
             sza=sza,
             vza=vza,
@@ -653,76 +692,79 @@ class ZarrLUTBackend:
             tco3=tco3,
             elevation=elevation,
         )
-        if not self._scene_subset_logged:
-            _, _, _, tco3_bounds, elevation_bounds = self._spectral_scene_summary(
-                sza=sza,
-                vza=vza,
-                raa=raa,
-                tco3=tco3,
-                elevation=elevation,
-            )
-            logger.info(
-                (
-                    "Scene LUT subset: sza=%.3f deg, vza=%.3f deg, raa=%.3f deg, "
-                    "ozone=[%.3f, %.3f], altitude=[%.3f, %.3f]"
-                ),
-                round(self._finite_mean(sza, fallback=0.0), 3),
-                round(self._finite_mean(vza, fallback=0.0), 3),
-                round(self._finite_mean(raa, fallback=0.0), 3),
-                tco3_bounds[0],
-                tco3_bounds[1],
-                elevation_bounds[0],
-                elevation_bounds[1],
-            )
-            self._scene_subset_logged = True
+        if self._scene_subset_logged:
+            return scene_key, lut_scene
 
-        target_shape = aot.shape
+        sza_mean, vza_mean, raa_mean, tco3_bounds, elevation_bounds = self._spectral_scene_summary(
+            sza=sza,
+            vza=vza,
+            raa=raa,
+            tco3=tco3,
+            elevation=elevation,
+        )
+        logger.info(
+            (
+                "Scene LUT subset: sza=%.3f deg, vza=%.3f deg, raa=%.3f deg, "
+                "ozone=[%.3f, %.3f], altitude=[%.3f, %.3f]"
+            ),
+            sza_mean,
+            vza_mean,
+            raa_mean,
+            tco3_bounds[0],
+            tco3_bounds[1],
+            elevation_bounds[0],
+            elevation_bounds[1],
+        )
+        self._scene_subset_logged = True
+        return scene_key, lut_scene
+
+    def _interpolate_spectral_band_terms(
+        self,
+        scene_key: tuple[float, ...],
+        lut_scene: xr.Dataset,
+        band: SensorBand,
+        *,
+        aot: np.ndarray,
+        tcwv: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Interpolate band-compressed spectral LUT terms for each retrieval point."""
         coords = self._build_aot_tcwv_point_coords(
             lut_scene,
-            aot=aot.ravel(),
-            tcwv=tcwv.ravel(),
+            aot=aot,
+            tcwv=tcwv,
         )
         toa_rho1_grid, toa_rho2_grid, eg_rho1_grid, eg_rho2_grid = self._get_or_build_spectral_band_grids(
             scene_key,
             lut_scene,
             band,
         )
-
-        toa_rho1 = self._interpolate_variable(toa_rho1_grid, coords, self.interpolation_method).values.astype(
-            np.float32
-        )
-        toa_rho2 = self._interpolate_variable(toa_rho2_grid, coords, self.interpolation_method).values.astype(
-            np.float32
-        )
-        eg_rho1 = self._interpolate_variable(eg_rho1_grid, coords, self.interpolation_method).values.astype(
-            np.float32
-        )
-        eg_rho2 = self._interpolate_variable(eg_rho2_grid, coords, self.interpolation_method).values.astype(
-            np.float32
-        )
-
-        rho1, rho2 = self._spectral_reference_reflectances()
-        eps = 1e-10
-
-        denom = rho2 * eg_rho2 - rho1 * eg_rho1
-        denom = np.where(np.abs(denom) < eps, eps, denom)
-
-        s_term = (eg_rho2 - eg_rho1) / denom
-        path_ref = (
-            toa_rho2 * rho1 * eg_rho1 - toa_rho1 * rho2 * eg_rho2
-        ) / np.where(np.abs(rho1 * eg_rho1 - rho2 * eg_rho2) < eps, eps, rho1 * eg_rho1 - rho2 * eg_rho2)
-        t_up = (toa_rho2 - toa_rho1) / denom
-        eg0 = eg_rho1 * (1.0 - rho1 * s_term)
-        t_total = np.maximum(eg0 * t_up, eps)
-
-        xap = 1.0 / t_total
-        xbp = path_ref / t_total
-        xcp = s_term
-
         return (
-            xap.reshape(target_shape).astype(np.float32),
-            xbp.reshape(target_shape).astype(np.float32),
-            xcp.reshape(target_shape).astype(np.float32),
+            self._interpolate_variable(toa_rho1_grid, coords, self.interpolation_method).values.astype(np.float32),
+            self._interpolate_variable(toa_rho2_grid, coords, self.interpolation_method).values.astype(np.float32),
+            self._interpolate_variable(eg_rho1_grid, coords, self.interpolation_method).values.astype(np.float32),
+            self._interpolate_variable(eg_rho2_grid, coords, self.interpolation_method).values.astype(np.float32),
+        )
+
+    def _derive_coefficients_from_spectral_terms(
+        self,
+        *,
+        toa_rho1: np.ndarray,
+        toa_rho2: np.ndarray,
+        eg_rho1: np.ndarray,
+        eg_rho2: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Convert dense spectral radiative terms into standard RT coefficients."""
+        rho1, rho2 = self._spectral_reference_reflectances()
+        return cast(
+            "tuple[np.ndarray, np.ndarray, np.ndarray]",
+            derive_standard_rt_coefficients(
+                toa_rho1=toa_rho1,
+                toa_rho2=toa_rho2,
+                eg_rho1=eg_rho1,
+                eg_rho2=eg_rho2,
+                rho1=rho1,
+                rho2=rho2,
+            ),
         )
 
     @classmethod
@@ -981,18 +1023,16 @@ class ZarrLUTBackend:
         tcwv: np.ndarray,
     ) -> dict[str, xr.DataArray]:
         """Build point interpolation coordinates for variables solved per-pixel."""
-        coords = {
-            "aot": xr.DataArray(ZarrLUTBackend._require_finite_values(aot, name="aot"), dims=["point"]),
-            "tcwv": xr.DataArray(ZarrLUTBackend._require_finite_values(tcwv, name="tcwv"), dims=["point"]),
-        }
-        for name in ("aot", "tcwv"):
-            if name not in lut.coords:
-                continue
-            axis = np.asarray(lut.coords[name].values, dtype=np.float32)
-            if axis.size == 0:
-                continue
-            coords[name] = xr.DataArray(ZarrLUTBackend._sanitize_point_values(coords[name].values, axis), dims=["point"])
-        return coords
+        return cast(
+            "dict[str, xr.DataArray]",
+            build_point_interpolation_coords(
+                lut,
+                aot=aot,
+                tcwv=tcwv,
+                require_finite_values=ZarrLUTBackend._require_finite_values,
+                sanitize_point_values=ZarrLUTBackend._sanitize_point_values,
+            ),
+        )
 
     def _subset_wavelength_for_band(
         self,
@@ -1033,69 +1073,13 @@ class ZarrLUTBackend:
     def _spectral_integration_weights(self, band: SensorBand, lut: xr.Dataset | None = None) -> xr.DataArray:
         """Build wavelength weights for spectral convolution (bandpass * optional solar spectrum)."""
         source = lut if lut is not None else self.lut
-        if "wavelength" not in source.coords:
-            raise ValueError("Spectral LUT must define a wavelength coordinate")
-
-        wl_axis = np.asarray(source.coords["wavelength"].values, dtype=np.float32)
-        wavelength = xr.DataArray(
-            wl_axis,
-            dims=["wavelength"],
-            coords={"wavelength": wl_axis},
+        return build_spectral_integration_weights(
+            source,
+            band,
+            lut_path=self.lut_path,
+            solar_irradiance_names=self._SOLAR_IRRADIANCE_NAMES,
+            band_rsrf=self._band_rsrf,
         )
-        if band.has_rsrf:
-            solar_values = None
-            for name in self._SOLAR_IRRADIANCE_NAMES:
-                if name not in source:
-                    continue
-                solar = source[name]
-                if "wavelength" not in solar.dims:
-                    continue
-                extra_dims = [dim for dim in solar.dims if dim != "wavelength"]
-                if extra_dims:
-                    solar = solar.mean(dim=extra_dims)
-                solar_values = np.asarray(solar.values, dtype=np.float32)
-                break
-
-            kernel = build_aligned_rsrf_kernel(
-                self._band_rsrf(band),
-                lut_wavelengths_nm=wl_axis,
-                lut_id=self.lut_path,
-                solar_irradiance=solar_values,
-                support_padding=0,
-            )
-            rsrf_weights = kernel.solar_weighted_response_on_lut
-            if rsrf_weights is None:
-                rsrf_weights = kernel.response_on_lut
-            full_weights = np.zeros_like(wl_axis, dtype=np.float32)
-            full_weights[kernel.start_index:kernel.end_index] = rsrf_weights
-            return xr.DataArray(
-                full_weights,
-                dims=["wavelength"],
-                coords={"wavelength": wl_axis},
-            )
-
-        sigma = max(
-            float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))),
-            1e-6,
-        )
-        bandpass = np.exp(
-            -0.5 * np.square((wavelength - float(band.center_wavelength)) / sigma)
-        ).astype(np.float32)
-        weights: xr.DataArray = bandpass
-
-        for name in self._SOLAR_IRRADIANCE_NAMES:
-            if name not in source:
-                continue
-            solar = source[name]
-            if "wavelength" not in solar.dims:
-                continue
-            extra_dims = [dim for dim in solar.dims if dim != "wavelength"]
-            if extra_dims:
-                solar = solar.mean(dim=extra_dims)
-            weights = bandpass * solar.astype(np.float32)
-            break
-
-        return weights
 
     @staticmethod
     def _band_rsrf(band: SensorBand) -> RelativeSpectralResponse:
@@ -1113,19 +1097,7 @@ class ZarrLUTBackend:
     @staticmethod
     def _weighted_spectral_mean(data: xr.DataArray, weights: xr.DataArray) -> xr.DataArray:
         """Weighted mean over wavelength with coordinate-aware integration."""
-        if "wavelength" not in data.dims:
-            return data
-
-        local_weights = weights.reindex(wavelength=data["wavelength"], fill_value=0.0)
-        if data.sizes["wavelength"] == 1:
-            numerator = (data * local_weights).isel(wavelength=0, drop=True)
-            denominator = local_weights.isel(wavelength=0, drop=True)
-            return numerator / xr.where(np.abs(denominator) < 1e-10, 1e-10, denominator)
-
-        numerator = (data * local_weights).integrate("wavelength")
-        denominator = local_weights.integrate("wavelength")
-        denominator = xr.where(np.abs(denominator) < 1e-10, 1e-10, denominator)
-        return numerator / denominator
+        return weighted_spectral_mean(data, weights)
 
     def _spectral_reference_reflectances(self) -> tuple[float, float]:
         """Return reference surface reflectances used by dense spectral LUT variables."""

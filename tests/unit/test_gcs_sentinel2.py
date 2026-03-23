@@ -244,6 +244,45 @@ def test_download_gcs_retries_failed_transfer(monkeypatch, tmp_path: Path):
     assert attempts["count"] == 2
 
 
+def test_download_with_retry_skips_existing_complete_target(monkeypatch, tmp_path: Path):
+    target = tmp_path / "done.bin"
+    target.write_bytes(b"ok")
+
+    def _unexpected(*_args, **_kwargs):  # noqa: ANN001
+        raise AssertionError("download should not be attempted")
+
+    monkeypatch.setattr(gcs_mod, "_download_url_to_file", _unexpected)
+    gcs_mod._download_with_retry(
+        "https://example.com/x",
+        target,
+        expected_size=2,
+        retries=1,
+        backoff_sec=0.0,
+    )
+
+
+def test_download_with_retry_accepts_concurrent_completion(monkeypatch, tmp_path: Path):
+    target = tmp_path / "done.bin"
+    attempts = {"count": 0}
+
+    def _fake_download(_url, path: Path, timeout=300):  # noqa: ANN001, ARG001
+        attempts["count"] += 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ok")
+        raise OSError("rename race")
+
+    monkeypatch.setattr(gcs_mod, "_download_url_to_file", _fake_download)
+    gcs_mod._download_with_retry(
+        "https://example.com/x",
+        target,
+        expected_size=2,
+        retries=1,
+        backoff_sec=0.0,
+    )
+    assert target.read_bytes() == b"ok"
+    assert attempts["count"] == 1
+
+
 def test_gcs_backend_delegates(monkeypatch, tmp_path: Path):
     product_id = "S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000"
     product = _product(product_id)

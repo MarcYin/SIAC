@@ -182,8 +182,13 @@ class CAMSProvider:
         if source_is_explicit:
             if source_is_remote and self.download_missing:
                 return self._complete_cams_dataset(None, obs_time)
-            if not source_is_remote:
-                logger.warning(f"CAMS file does not exist: {self.data_dir}")
+            if not source_is_remote and isinstance(self.data_dir, Path):
+                if not self.data_dir.exists():
+                    logger.warning(f"CAMS file does not exist: {self.data_dir}")
+                elif not self.data_dir.is_file():
+                    logger.warning(f"CAMS path is not a file: {self.data_dir}")
+                if self.download_missing:
+                    return self._complete_cams_dataset(None, obs_time)
             return None
 
         if source_is_remote:
@@ -380,23 +385,49 @@ class CAMSProvider:
 
                 xmin, ymin, xmax, ymax = transform_bounds(bounds, crs, "EPSG:4326")
 
-            xmin, xmax = sorted((float(xmin), float(xmax)))
+            xmin = float(xmin)
+            xmax = float(xmax)
             ymin, ymax = sorted((float(ymin), float(ymax)))
 
             latitude_vals = var.coords["latitude"].values
             lat_descending = bool(latitude_vals[0] > latitude_vals[-1])
             lat_slice = slice(ymax, ymin) if lat_descending else slice(ymin, ymax)
 
-            longitude_vals = var.coords["longitude"].values
-            if float(np.nanmin(longitude_vals)) >= 0.0 and xmax <= 180.0:
+            longitude_vals = np.asarray(var.coords["longitude"].values, dtype=np.float32)
+            if float(np.nanmin(longitude_vals)) >= 0.0:
                 xmin = xmin % 360.0
                 xmax = xmax % 360.0
-            lon_descending = bool(longitude_vals[0] > longitude_vals[-1])
-            lon_slice = slice(xmax, xmin) if lon_descending else slice(xmin, xmax)
-
-            var = var.sel(latitude=lat_slice, longitude=lon_slice)
+            var = var.sel(latitude=lat_slice)
+            var = self._select_longitude_window(var, xmin=xmin, xmax=xmax)
 
         return var
+
+    @staticmethod
+    def _select_longitude_window(
+        var: xr.DataArray,
+        *,
+        xmin: float,
+        xmax: float,
+    ) -> xr.DataArray:
+        """Select a longitude window, wrapping across the coordinate edge when needed."""
+        longitude_vals = np.asarray(var.coords["longitude"].values, dtype=np.float32)
+        if longitude_vals.size == 0:
+            return var
+
+        if xmin <= xmax:
+            mask = (longitude_vals >= xmin) & (longitude_vals <= xmax)
+            indices = np.flatnonzero(mask)
+            if indices.size == 0:
+                return var.isel(longitude=slice(0, 0))
+            return var.isel(longitude=indices)
+
+        left_indices = np.flatnonzero(longitude_vals >= xmin)
+        right_indices = np.flatnonzero(longitude_vals <= xmax)
+        if left_indices.size == 0:
+            return var.isel(longitude=right_indices)
+        if right_indices.size == 0:
+            return var.isel(longitude=left_indices)
+        return var.isel(longitude=np.concatenate([left_indices, right_indices]))
 
     def _standardize_temporal_dims(self, var: xr.DataArray, obs_time: datetime) -> xr.DataArray:
         """Normalize forecast-style CAMS time axes to a simple ``time`` axis."""
@@ -629,6 +660,47 @@ class CAMSProvider:
         )
         return cached_path
 
+    def _resolve_remote_local_path(
+        self,
+        url: str,
+        *,
+        missing_ok: bool,
+        storage_options: dict | None = None,
+    ) -> Path | None:
+        """Resolve a remote CAMS URL to a cached local file path."""
+        if storage_options is not None:
+            return self._cache_remote_path_with_options(
+                url,
+                missing_ok=missing_ok,
+                storage_options=storage_options,
+            )
+
+        with self._remote_storage_options_context(url) as resolved_storage_options:
+            return self._cache_remote_path_with_options(
+                url,
+                missing_ok=missing_ok,
+                storage_options=resolved_storage_options,
+            )
+
+    def _cache_remote_path_with_options(
+        self,
+        url: str,
+        *,
+        missing_ok: bool,
+        storage_options: dict[str, object],
+    ) -> Path | None:
+        """Cache a remote CAMS URL with explicit storage options."""
+        try:
+            return self._cache_remote_file(url, storage_options=storage_options)
+        except FileNotFoundError:
+            if not missing_ok:
+                logger.warning(f"CAMS remote file not found: {url}")
+            return None
+        except Exception as exc:
+            log = logger.debug if missing_ok else logger.warning
+            log(f"Failed to cache remote CAMS file {url}: {exc}")
+            return None
+
     def _load_from_remote_url(
         self,
         url: str,
@@ -642,29 +714,13 @@ class CAMSProvider:
                 logger.warning(f"Unsupported CAMS remote file extension: {url}")
             return None
 
-        if storage_options is not None:
-            try:
-                local_path = self._cache_remote_file(url, storage_options=storage_options)
-            except FileNotFoundError:
-                if not missing_ok:
-                    logger.warning(f"CAMS remote file not found: {url}")
-                return None
-            except Exception as exc:
-                log = logger.debug if missing_ok else logger.warning
-                log(f"Failed to cache remote CAMS file {url}: {exc}")
-                return None
-        else:
-            with self._remote_storage_options_context(url) as resolved_storage_options:
-                try:
-                    local_path = self._cache_remote_file(url, storage_options=resolved_storage_options)
-                except FileNotFoundError:
-                    if not missing_ok:
-                        logger.warning(f"CAMS remote file not found: {url}")
-                    return None
-                except Exception as exc:
-                    log = logger.debug if missing_ok else logger.warning
-                    log(f"Failed to cache remote CAMS file {url}: {exc}")
-                    return None
+        local_path = self._resolve_remote_local_path(
+            url,
+            missing_ok=missing_ok,
+            storage_options=storage_options,
+        )
+        if local_path is None:
+            return None
 
         return self._load_from_local_explicit_path(
             local_path,
@@ -869,11 +925,11 @@ class CAMSProvider:
         cds_auth = self._auth.cds() if self._auth is not None else CredentialManager().cds()
         client_kwargs = cds_auth.client_kwargs()
 
-        if not cds_auth.has_credentials():
-            logger.warning("CDS credentials are not configured; cannot auto-download CAMS data")
-            return None
-
         try:
+            if not client_kwargs:
+                logger.info(
+                    "No SIAC CDS credentials configured; relying on cdsapi defaults such as ~/.cdsapirc."
+                )
             cdsapi.Client(**client_kwargs).retrieve(self._CDS_DATASET, request).download(str(output_path))
         except Exception as e:
             logger.warning(f"Failed to download CAMS data for {obs_time:%Y-%m-%d}: {e}")

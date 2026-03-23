@@ -49,6 +49,7 @@ class ProductBandDefinition:
     bandwidth_nm: float
     parameter_dataset: str
     qa_dataset: str | None = None
+    rsrf_band_id: str | None = None
 
 
 @dataclass(frozen=True)
