@@ -36,8 +36,8 @@ Instead, `python/siac/_rust_compat.py` acts as the compatibility layer:
 - raises a targeted `ImportError` when a required native symbol is missing
 
 This pattern keeps import failures readable and makes it obvious how to recover:
-build the extension with `maturin develop --release` or install a wheel that
-contains the native module.
+build the extension with `pixi run build-rust` or install a wheel that contains
+the native module.
 
 ## Why This Boundary Matters
 
@@ -76,11 +76,14 @@ Typical local build path:
 pixi run build-rust
 ```
 
-That task runs:
+That task runs the underlying native build command:
 
 ```bash
 maturin develop --release --manifest-path src/siac_rs/Cargo.toml
 ```
+
+Use the Pixi task in normal development. Call `maturin` directly only when you
+are debugging the native build in a non-Pixi environment.
 
 Relevant validation already exists in CI and tests:
 

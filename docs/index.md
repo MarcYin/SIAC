@@ -4,6 +4,10 @@
 
 Sensor-Invariant Atmospheric Correction (SIAC) is a modular framework for atmospheric correction of medium-resolution optical satellite data. The codebase is organized around a compact public API, a typed configuration system, a staged runtime pipeline, and pluggable adapters for data access, priors, radiative transfer, and outputs.
 
+For local development and validation, the repository is Pixi-first: use the
+tasks defined in `pixi.toml` for install, lint, type checking, tests, coverage,
+and docs.
+
 <div class="siac-hero-actions" markdown>
 
 [Get Started](getting-started/installation.md){ .md-button .md-button--primary }

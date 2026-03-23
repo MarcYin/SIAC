@@ -26,9 +26,11 @@ venv/
 # Testing / Coverage
 .pytest_cache/
 htmlcov/
-.coverage
+.coverage*
 coverage.xml
 coverage.json
+tmp/
+data/registry/*.parquet
 docs/_build/
 site/
 

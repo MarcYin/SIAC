@@ -4,15 +4,17 @@
 
 ### `siac._rust` cannot be imported
 
-The Rust extension has not been built in the active environment. Rebuild it with:
+The Rust extension has not been built in the active environment. Rebuild it in
+the Pixi workspace with:
 
 ```bash
-maturin develop --release --manifest-path src/siac_rs/Cargo.toml
+pixi run build-rust
 ```
 
 ### Geospatial dependencies are difficult to install
 
-Prefer the Pixi environment. It is the easiest way to match the repo's tested setup.
+Prefer the Pixi environment. It is the easiest way to match the repo's tested
+setup for SIAC development, validation, and docs.
 
 ## Credentials and backends
 

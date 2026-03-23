@@ -30,6 +30,10 @@ Build the native extension when you need the Rust-backed code paths:
 pixi run build-rust
 ```
 
+Run that build before `pixi run test`, `pixi run test-no-cov`, or
+`pixi run coverage` in a fresh environment; those suites import `siac._rust`
+during collection.
+
 ## Common Commands
 
 | Goal | Command |
@@ -38,6 +42,7 @@ pixi run build-rust
 | run full test suite | `pixi run test` |
 | run fast test slice | `pixi run test-fast` |
 | run tests without coverage | `pixi run test-no-cov` |
+| run coverage gate | `pixi run coverage` |
 | run lint | `pixi run lint` |
 | format code | `pixi run format` |
 | type-check main scoped targets | `pixi run typecheck-scoped` |
@@ -47,11 +52,14 @@ pixi run build-rust
 
 1. `pixi install`
 2. `pixi run bootstrap`
-3. make changes
-4. `pixi run lint`
-5. `pixi run typecheck-scoped`
-6. `pixi run test-fast` or a narrower targeted test set
-7. `pixi run build-rust` if your change depends on native code
+3. `pixi run build-rust`
+4. make changes
+5. `pixi run lint`
+6. `pixi run typecheck-scoped`
+7. `pixi run test-fast` or a narrower targeted test set
+8. `pixi run test` before landing a broader change
+9. `pixi run coverage` when you need to verify the enforced threshold
+10. rerun `pixi run build-rust` after changing the native extension
 
 ## Test Layout
 
@@ -63,9 +71,9 @@ pixi run build-rust
 | `tests/benchmarks/` | performance checks |
 
 The CI pipeline currently runs unit tests, an integration slice, Rust build
-smoke, and wheel install smoke checks. If you change public entry points,
-configuration behavior, or runtime orchestration, update tests in the matching
-layer.
+smoke, wheel install smoke checks, and the coverage gate. If you change public
+entry points, configuration behavior, or runtime orchestration, update tests in
+the matching layer.
 
 ## Docs Build Commands
 
@@ -76,14 +84,14 @@ same local command. Prefer the project task when it exists:
 pixi run docs-build
 ```
 
-If you need a direct fallback, use:
+If you need to run the underlying command directly, use:
 
 ```bash
-sphinx-build -M html docs docs/_build -W
+mkdocs build --strict
 ```
 
-Use the fallback when debugging the docs toolchain or before a dedicated task is
-available locally.
+Use the direct command when debugging the docs toolchain or when you need to
+confirm the same build outside a task wrapper.
 
 ## Working With The Layered Architecture
 

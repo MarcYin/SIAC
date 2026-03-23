@@ -585,27 +585,29 @@ mock_sensor_config
 ## 14. Running the Tests
 
 ```bash
+# Build the native module first in a fresh environment.
+pixi run build-rust
+
 # All fast tests (Layers 1–7)
-pytest tests/ -m "not benchmark and not real_data"
+pixi run test-fast
 
 # Quick smoke test (< 10 s)
-pytest tests/unit/test_contracts.py tests/unit/test_validation.py -x -q
+pixi run pytest tests/unit/test_contracts.py tests/unit/test_validation.py -x -q
 
 # Integration only
-pytest tests/integration/ -m integration
+pixi run pytest tests/integration/ -m integration
 
 # Regression only
-pytest tests/regression/ -m regression
+pixi run pytest tests/regression/ -m regression
 
 # Performance benchmarks (informational)
-pytest tests/benchmarks/ -m benchmark --benchmark-only
+pixi run pytest tests/benchmarks/ -m benchmark --benchmark-only
 
 # Full suite
-pytest tests/ --tb=short
+pixi run test
 
 # With strict coverage gates (global >=95%, each file >90%)
-pytest tests/ --cov=siac --cov-report=term-missing --cov-report=json:coverage.json --cov-report=xml:coverage.xml
-python tools/check_coverage_thresholds.py --min-total 95 --min-file 90
+pixi run coverage
 ```
 
 ### CI Configuration
@@ -617,9 +619,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: pytest tests/ -m "not benchmark and not real_data" --tb=short -q
+      - uses: prefix-dev/setup-pixi@v0
+      - run: pixi install
+      - run: pixi run build-rust
+      - run: pixi run test-fast
 ```

@@ -39,29 +39,48 @@ The scientific reference for the method is:
 
 ## Fast Install
 
-### Python package
-
-```bash
-pip install -e ".[dev,docs]"
-maturin develop --release --manifest-path src/siac_rs/Cargo.toml
-```
-
 ### Pixi workspace
 
 ```bash
 pixi install
+pixi run bootstrap
 pixi run build-rust
+```
+
+Pixi is the canonical local setup for SIAC development and validation. It
+matches the repository tasks used for linting, type checking, tests, coverage,
+and the Rust-backed code paths.
+
+Build the Rust extension before running the full test or coverage tasks in a
+fresh environment; the suite imports `siac._rust` during collection.
+
+### Python package
+
+If you are not using Pixi, install the editable package and build the Rust
+extension manually:
+
+```bash
+python -m pip install -e ".[dev,docs]"
+maturin develop --release --manifest-path src/siac_rs/Cargo.toml
 ```
 
 ## Fast Run
 
-### CLI
+### Canonical developer workflow
 
 ```bash
-siac process-s2 T31UDQ_20240101 --output-path ./outputs/example
+pixi run build-rust
+pixi run lint
+pixi run typecheck-scoped
+pixi run test-fast
+pixi run test
+pixi run coverage
 ```
 
-### Python
+Run `pixi run build-rust` after bootstrapping a fresh environment, and rerun it
+before the full test or coverage commands when you change the native extension.
+
+### Python API
 
 ```python
 from siac import SIAC
@@ -72,6 +91,14 @@ result = SIAC(config).process("/path/to/S2_SAFE/")
 
 print(result.boa)
 print(float(result.aot.mean()))
+```
+
+### CLI
+
+For a direct scene run, the CLI entry point is:
+
+```bash
+siac process-s2 T31UDQ_20240101 --output-path ./outputs/example
 ```
 
 ## Runtime Flow

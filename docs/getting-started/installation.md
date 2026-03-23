@@ -1,6 +1,8 @@
 # Installation
 
-SIAC can be installed in a minimal Python environment, in the repository development layout, or through the Pixi workspace used by CI and local development.
+SIAC can be installed in a minimal Python environment, but the canonical
+development and validation workflow uses the Pixi workspace in the repository
+root.
 
 ## Choose an installation track
 
@@ -8,13 +10,46 @@ SIAC can be installed in a minimal Python environment, in the repository develop
 | --- | --- | --- |
 | Runtime user | `pip install -e ".[docs]"` in a checked-out repo | Good if you mainly want to run SIAC and read docs locally |
 | Scientific power user | Editable install plus Rust build | Best when testing algorithms and reproducing workflows |
-| Developer | Pixi workspace plus Rust build | Closest match to CI and the repo's local tooling |
+| Developer | Pixi workspace plus Rust build | Matches the repo tasks used for lint, type checking, tests, coverage, and docs |
 
 ## Prerequisites
 
 - Python 3.10 to 3.12
 - Rust toolchain for the native extension
 - GDAL/raster stack as provided through the package environment
+
+## Pixi workspace
+
+```bash
+pixi install
+pixi run bootstrap
+pixi run build-rust
+```
+
+This gives you:
+
+- the `siac` package
+- development tools such as `pytest`, `ruff`, and `mypy`
+- docs tooling including MkDocs Material and Mermaid rendering
+- the Rust extension compiled into the active environment
+
+The standard validation commands are:
+
+```bash
+pixi run build-rust
+pixi run lint
+pixi run typecheck-scoped
+pixi run test-fast
+pixi run test
+pixi run coverage
+```
+
+The Pixi workspace is the easiest way to reproduce CI locally because it
+installs the same general toolchain used for tests, coverage, and documentation
+builds.
+
+Run `pixi run build-rust` first in a fresh workspace so the test suite can
+import `siac._rust` during collection.
 
 ## Editable install
 
@@ -23,21 +58,7 @@ python -m pip install -e ".[dev,docs]"
 maturin develop --release --manifest-path src/siac_rs/Cargo.toml
 ```
 
-This gives you:
-
-- the `siac` package
-- development tools such as `pytest`, `ruff`, and `mypy`
-- docs tooling including Sphinx, MyST, and Mermaid rendering
-- the Rust extension compiled into the active environment
-
-## Pixi workspace
-
-```bash
-pixi install
-pixi run build-rust
-```
-
-The Pixi workspace is the easiest way to reproduce CI locally because it installs the same general toolchain used for tests and documentation builds.
+Use this only when you specifically want a non-Pixi environment.
 
 ## Optional extras
 
@@ -50,10 +71,11 @@ The Pixi workspace is the easiest way to reproduce CI locally because it install
 
 ### Rust extension not built
 
-If imports work but `siac._rust` is missing, rebuild the extension:
+If imports work but `siac._rust` is missing, rebuild the extension in the Pixi
+environment:
 
 ```bash
-maturin develop --release --manifest-path src/siac_rs/Cargo.toml
+pixi run build-rust
 ```
 
 ### Native geospatial stack problems
