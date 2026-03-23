@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -86,6 +87,66 @@ def test_process_s2_reports_errors_non_zero(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "siac: error: boom" in captured.err
+
+
+def test_process_s2_honors_runtime_log_level_per_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    configs = {
+        "quiet.toml": SIACConfig(sensor="s2", runtime={"log_level": "ERROR"}),
+        "info.toml": SIACConfig(sensor="s2", runtime={"log_level": "INFO"}),
+    }
+
+    def _fake_from_file(cls, path: Path) -> SIACConfig:
+        _ = cls
+        return configs[path.name]
+
+    def _fake_process(config_obj, query, **kwargs):  # noqa: ANN001
+        _ = (config_obj, query, kwargs)
+        logging.getLogger("siac.test.workflow").info("workflow info")
+        return SimpleNamespace(aot=SimpleNamespace(mean=lambda: 0.1234))
+
+    monkeypatch.setattr(cli.SIACConfig, "from_file", classmethod(_fake_from_file))
+    monkeypatch.setattr("siac.api.public.siac_process_s2", _fake_process)
+
+    quiet_code = cli.main(["process-s2", "T31UDQ_20240101", "--config", str(tmp_path / "quiet.toml")])
+    quiet_output = capsys.readouterr()
+
+    info_code = cli.main(["process-s2", "T31UDQ_20240101", "--config", str(tmp_path / "info.toml")])
+    info_output = capsys.readouterr()
+
+    assert quiet_code == 0
+    assert "workflow info" not in quiet_output.err
+    assert "Sentinel-2 processing complete" in quiet_output.out
+    assert info_code == 0
+    assert "INFO:siac.test.workflow:workflow info" in info_output.err
+    assert "Sentinel-2 processing complete" in info_output.out
+
+
+def test_process_s2_uses_default_info_logging_without_config(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def _fake_load(cls) -> SIACConfig:
+        _ = cls
+        return SIACConfig(sensor="s2")
+
+    def _fake_process(config_obj, query, **kwargs):  # noqa: ANN001
+        _ = (config_obj, query, kwargs)
+        logging.getLogger("siac.test.default").info("default info")
+        return SimpleNamespace(aot=SimpleNamespace(mean=lambda: 0.1234))
+
+    monkeypatch.setattr(cli.SIACConfig, "load", classmethod(_fake_load))
+    monkeypatch.setattr("siac.api.public.siac_process_s2", _fake_process)
+
+    exit_code = cli.main(["process-s2", "T31UDQ_20240101"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "INFO:siac.test.default:default info" in captured.err
+    assert "Sentinel-2 processing complete" in captured.out
 
 
 def test_process_s2_requires_query(capsys: pytest.CaptureFixture[str]) -> None:

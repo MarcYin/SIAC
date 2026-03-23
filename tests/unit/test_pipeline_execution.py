@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
+import xarray as xr
 
 import siac.workflows.pipeline as pipeline
-from siac.runtime import CorrectionResult
+from siac.runtime import AtmosphericState, CorrectionResult
 
 
 def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success") -> Any:
@@ -148,6 +151,8 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
             dashboard_address=":8787",
             performance_report_path=str(tmp_path / "reports" / "perf.html"),
             show_progress=1,
+            profiling_sample_interval_s="2.5",
+            progress_heartbeat_s="12",
         )
     )
 
@@ -164,6 +169,8 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
     assert settings["dashboard"] is True
     assert settings["show_progress"] is True
     assert isinstance(settings["performance_report_path"], Path)
+    assert settings["profiling_sample_interval_s"] == 2.5
+    assert settings["progress_heartbeat_s"] == 12.0
 
 
 @pytest.mark.parametrize(
@@ -173,6 +180,8 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
         ({"max_workers": 0}, "max_workers must be >= 1"),
         ({"retries": -1}, "retries must be >= 0"),
         ({"stage_timeout_s": 0}, "stage_timeout_s must be > 0"),
+        ({"profiling_sample_interval_s": 0}, "profiling_sample_interval_s must be > 0"),
+        ({"progress_heartbeat_s": 0}, "progress_heartbeat_s must be > 0"),
     ],
 )
 def test_resolve_execution_settings_rejects_invalid_values(
@@ -404,3 +413,221 @@ def test_run_pipeline_dask_provider_error_cancels_futures(
     assert len(client.futures) >= 2
     assert client.futures[0].canceled is True
     assert client.futures[1].canceled is True
+
+
+def test_run_pipeline_thread_writes_execution_profile(
+    tmp_path: Path,
+    mock_preprocessor,
+    mock_atmo_provider,
+    mock_surface_prior_provider,
+    mock_grid_assembler,
+    mock_solver_fn,
+    mock_corrector_fn,
+    mock_rt_model,
+) -> None:
+    report_path = tmp_path / "reports" / "execution_profile.json"
+
+    result = pipeline.run_pipeline(
+        Path("/fake"),
+        None,
+        None,
+        preprocessor=mock_preprocessor,
+        atmo_provider=mock_atmo_provider,
+        surface_prior_provider=mock_surface_prior_provider,
+        grid_assembler=mock_grid_assembler,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=mock_rt_model,
+        execution={
+            "backend": "thread",
+            "performance_report_path": report_path,
+            "profiling_sample_interval_s": 0.01,
+            "progress_heartbeat_s": 0.01,
+        },
+    )
+
+    assert isinstance(result, CorrectionResult)
+    assert report_path.exists()
+    summary = json.loads(report_path.read_text(encoding="utf-8"))
+    assert summary["run"]["status"] == "success"
+    assert "M1.preprocessing" in summary["stages"]
+    assert "M2.atmospheric_prior" in summary["stages"]
+    assert "M6.correction" in summary["stages"]
+    assert summary["counters"]["m2_done"] == 1
+    assert summary["counters"]["m3_done"] == 1
+    assert summary["resources"]["peak_threads"] >= 1
+    assert len(summary["resources"]["resource_samples"]) >= 1
+    assert Path(summary["run"]["events_path"]).exists()
+
+
+def test_run_pipeline_thread_failure_writes_execution_profile(
+    tmp_path: Path,
+    mock_preprocessor,
+    mock_surface_prior_provider,
+    mock_grid_assembler,
+    mock_solver_fn,
+    mock_corrector_fn,
+    mock_rt_model,
+) -> None:
+    def bad_atmo(bounds: Any, crs: str, obs_time: Any, res: float) -> Any:
+        _ = (bounds, crs, obs_time, res)
+        raise RuntimeError("atmo boom")
+
+    report_path = tmp_path / "reports" / "execution_profile.json"
+
+    with pytest.raises(RuntimeError, match="atmo boom"):
+        pipeline.run_pipeline(
+            Path("/fake"),
+            None,
+            None,
+            preprocessor=mock_preprocessor,
+            atmo_provider=bad_atmo,
+            surface_prior_provider=mock_surface_prior_provider,
+            grid_assembler=mock_grid_assembler,
+            solver=mock_solver_fn,
+            corrector=mock_corrector_fn,
+            rt_model=mock_rt_model,
+            execution={
+                "backend": "thread",
+                "performance_report_path": report_path,
+                "profiling_sample_interval_s": 0.01,
+            },
+        )
+
+    summary = json.loads(report_path.read_text(encoding="utf-8"))
+    assert summary["run"]["status"] == "error"
+    assert summary["stages"]["M2.atmospheric_prior"]["failed"] == 3
+    assert any(error["error_message"] == "atmo boom" for error in summary["errors"])
+
+
+def test_run_pipeline_thread_preloads_lut_on_atmo_grid(
+    mock_preprocessor,
+    mock_surface_prior_provider,
+    mock_grid_assembler,
+    mock_solver_fn,
+    mock_corrector_fn,
+) -> None:
+    coarse_coords = {"y": np.arange(4), "x": np.arange(4)}
+
+    def _coarse_atmo(bounds: Any, crs: str, obs_time: Any, res: float) -> AtmosphericState:
+        _ = (bounds, crs, obs_time, res)
+        aot = xr.DataArray(np.full((4, 4), 0.2, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        tcwv = xr.DataArray(np.full((4, 4), 2.0, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        tco3 = xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        unc = xr.DataArray(np.full((4, 4), 0.01, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        elevation = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        return AtmosphericState(
+            aot=aot,
+            tcwv=tcwv,
+            tco3=tco3,
+            aot_unc=unc,
+            tcwv_unc=unc,
+            tco3_unc=unc,
+            elevation=elevation,
+        )
+
+    captured: dict[str, Any] = {}
+
+    class _PreloadRTModel:
+        def preload_scene_subset(self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]) -> None:
+            captured["geometry_shape"] = tuple(geometry.sza.shape)
+            captured["atmo_shape"] = tuple(atmo_state.aot.shape)
+            captured["bands"] = [band.name for band in bands]
+
+    result = pipeline.run_pipeline(
+        Path("/fake"),
+        None,
+        None,
+        preprocessor=mock_preprocessor,
+        atmo_provider=_coarse_atmo,
+        surface_prior_provider=mock_surface_prior_provider,
+        grid_assembler=mock_grid_assembler,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=_PreloadRTModel(),
+        execution={"backend": "thread", "retries": 0},
+    )
+
+    assert isinstance(result, CorrectionResult)
+    assert captured["geometry_shape"] == (4, 4)
+    assert captured["atmo_shape"] == (4, 4)
+    assert captured["bands"]
+
+
+def test_run_pipeline_thread_preloads_lut_on_atmo_grid_with_nonstandard_dims(
+    mock_preprocessor,
+    mock_surface_prior_provider,
+    mock_grid_assembler,
+    mock_solver_fn,
+    mock_corrector_fn,
+) -> None:
+    coarse_coords = {
+        "latitude": np.array([51.5, 51.0, 50.5, 50.0], dtype=np.float32),
+        "longitude": np.array([-1.5, -1.0, -0.5, 0.0], dtype=np.float32),
+    }
+
+    def _coarse_atmo(bounds: Any, crs: str, obs_time: Any, res: float) -> AtmosphericState:
+        _ = (bounds, crs, obs_time, res)
+        aot = xr.DataArray(
+            np.full((4, 4), 0.2, dtype=np.float32),
+            dims=("latitude", "longitude"),
+            coords=coarse_coords,
+        )
+        tcwv = xr.DataArray(
+            np.full((4, 4), 2.0, dtype=np.float32),
+            dims=("latitude", "longitude"),
+            coords=coarse_coords,
+        )
+        tco3 = xr.DataArray(
+            np.full((4, 4), 0.3, dtype=np.float32),
+            dims=("latitude", "longitude"),
+            coords=coarse_coords,
+        )
+        unc = xr.DataArray(
+            np.full((4, 4), 0.01, dtype=np.float32),
+            dims=("latitude", "longitude"),
+            coords=coarse_coords,
+        )
+        elevation = xr.DataArray(
+            np.zeros((4, 4), dtype=np.float32),
+            dims=("latitude", "longitude"),
+            coords=coarse_coords,
+        )
+        return AtmosphericState(
+            aot=aot,
+            tcwv=tcwv,
+            tco3=tco3,
+            aot_unc=unc,
+            tcwv_unc=unc,
+            tco3_unc=unc,
+            elevation=elevation,
+        )
+
+    captured: dict[str, Any] = {}
+
+    class _PreloadRTModel:
+        def preload_scene_subset(self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]) -> None:
+            captured["geometry_shape"] = tuple(geometry.sza.shape)
+            captured["geometry_dims"] = tuple(geometry.sza.dims)
+            captured["atmo_dims"] = tuple(atmo_state.aot.dims)
+            captured["bands"] = [band.name for band in bands]
+
+    result = pipeline.run_pipeline(
+        Path("/fake"),
+        None,
+        None,
+        preprocessor=mock_preprocessor,
+        atmo_provider=_coarse_atmo,
+        surface_prior_provider=mock_surface_prior_provider,
+        grid_assembler=mock_grid_assembler,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=_PreloadRTModel(),
+        execution={"backend": "thread", "retries": 0},
+    )
+
+    assert isinstance(result, CorrectionResult)
+    assert captured["geometry_shape"] == (4, 4)
+    assert captured["geometry_dims"] == ("latitude", "longitude")
+    assert captured["atmo_dims"] == ("latitude", "longitude")
+    assert captured["bands"]

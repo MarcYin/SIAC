@@ -14,9 +14,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
+from siac.observability import (
+    ExecutionObserver,
+    bind_execution_observer,
+    current_execution_observer,
+    derive_summary_report_path,
+    observe_stage,
+    resolve_execution_observer,
+)
 from siac.runtime import (
     AtmosphericState,
     CorrectionResult,
+    GeometryAngles,
     ObservationBundle,
     SolvedAtmosphere,
     SolverInputBundle,
@@ -60,6 +71,8 @@ _EXECUTION_KEYS = (
     "dashboard_address",
     "performance_report_path",
     "show_progress",
+    "profiling_sample_interval_s",
+    "progress_heartbeat_s",
 )
 
 
@@ -93,6 +106,8 @@ def _resolve_execution_settings(
         "dashboard_address": None,
         "performance_report_path": None,
         "show_progress": False,
+        "profiling_sample_interval_s": 5.0,
+        "progress_heartbeat_s": 30.0,
     }
 
     settings.update(_execution_values(getattr(config, "execution", None)))
@@ -129,6 +144,16 @@ def _resolve_execution_settings(
 
     settings["dashboard"] = bool(settings.get("dashboard", False))
     settings["show_progress"] = bool(settings.get("show_progress", False))
+
+    sample_interval = float(settings.get("profiling_sample_interval_s", 5.0))
+    if sample_interval <= 0:
+        raise ValueError("profiling_sample_interval_s must be > 0")
+    settings["profiling_sample_interval_s"] = sample_interval
+
+    heartbeat = float(settings.get("progress_heartbeat_s", 30.0))
+    if heartbeat <= 0:
+        raise ValueError("progress_heartbeat_s must be > 0")
+    settings["progress_heartbeat_s"] = heartbeat
     return settings
 
 
@@ -147,6 +172,89 @@ def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
     return list(sensor_config.bands[:2])
 
 
+def _shares_template_grid(field: Any, template: Any) -> bool:
+    if tuple(field.shape) != tuple(template.shape) or field.dims != template.dims:
+        return False
+    for axis in template.dims:
+        template_has_coord = axis in template.coords
+        field_has_coord = axis in field.coords
+        if template_has_coord != field_has_coord:
+            return False
+        if not template_has_coord:
+            continue
+        if not np.array_equal(
+            np.asarray(template.coords[axis].values),
+            np.asarray(field.coords[axis].values),
+            equal_nan=True,
+        ):
+            return False
+    return True
+
+
+def _resample_field_to_template(field: Any, template: Any) -> Any:
+    if _shares_template_grid(field, template):
+        return field
+    field_dims = tuple(getattr(field, "dims", ()))
+    template_dims = tuple(getattr(template, "dims", ()))
+    field_coords = getattr(field, "coords", {})
+    template_coords = getattr(template, "coords", {})
+    if (
+        len(field_dims) == 2
+        and field_dims == template_dims
+        and all(dim in field_coords for dim in field_dims)
+        and all(dim in template_coords for dim in template_dims)
+    ):
+        try:
+            return field.interp(
+                coords={dim: template.coords[dim] for dim in template_dims},
+                method="linear",
+            )
+        except Exception:
+            pass
+
+    src = np.asarray(field.values, dtype=np.float32)
+    if src.ndim != 2 or len(template_dims) != 2:
+        return field
+
+    from scipy import ndimage
+
+    h_out = int(template.sizes[template_dims[0]])
+    w_out = int(template.sizes[template_dims[1]])
+    if src.shape[0] == 0 or src.shape[1] == 0:
+        out: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
+    else:
+        out = ndimage.zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=1)
+        out = out[:h_out, :w_out]
+        if out.shape != (h_out, w_out):
+            padded: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
+            padded[: out.shape[0], : out.shape[1]] = out
+            out = padded
+
+    return field.__class__(
+        out,
+        dims=template.dims,
+        coords={d: template.coords[d] for d in template.dims if d in template.coords},
+    )
+
+
+def _geometry_for_atmo_grid(
+    geometry: GeometryAngles,
+    atmo: AtmosphericState,
+) -> GeometryAngles:
+    template = atmo.aot
+    if all(
+        _shares_template_grid(field, template)
+        for field in (geometry.sza, geometry.saa, geometry.vza, geometry.vaa)
+    ):
+        return geometry
+    return GeometryAngles(
+        sza=_resample_field_to_template(geometry.sza, template),
+        saa=_resample_field_to_template(geometry.saa, template),
+        vza=_resample_field_to_template(geometry.vza, template),
+        vaa=_resample_field_to_template(geometry.vaa, template),
+    )
+
+
 def _maybe_submit_lut_preload(
     executor: Any,
     rt_model: Any,
@@ -154,6 +262,7 @@ def _maybe_submit_lut_preload(
     obs: ObservationBundle,
     atmo: AtmosphericState,
     retries: int,
+    observer_id: str | None = None,
 ) -> Any | None:
     """Start LUT scene preload task when backend supports it."""
     preload_fn = getattr(rt_model, "preload_scene_subset", None)
@@ -161,17 +270,29 @@ def _maybe_submit_lut_preload(
         return None
 
     bands = _select_solver_bands_for_preload(obs.sensor_config)
+    preload_geometry = _geometry_for_atmo_grid(obs.geometry, atmo)
     logger.info(
-        "Starting LUT preload in parallel (scene subset + %d band grid%s).",
+        "Starting LUT preload in parallel on the atmospheric grid (scene subset + %d band grid%s).",
         len(bands),
         "" if len(bands) == 1 else "s",
     )
+    observer = resolve_execution_observer(observer_id)
+    if observer is not None:
+        observer.increment_counter("lut_preload_started", stage="LUT.preload")
+        observer.emit(
+            "progress",
+            stage="LUT.preload",
+            message="Submitting LUT preload task.",
+            band_count=len(bands),
+            geometry_shape=tuple(preload_geometry.sza.shape),
+        )
     return executor.submit(
         _call_with_retries,
         preload_fn,
-        (obs.geometry, atmo, bands),
+        (preload_geometry, atmo, bands),
         retries=retries,
-        stage_name="LUT preload",
+        stage_name="LUT.preload",
+        observer_id=observer_id,
     )
 
 
@@ -186,20 +307,47 @@ def _call_with_retries(
     *,
     retries: int,
     stage_name: str,
+    observer_id: str | None = None,
 ) -> Any:
     """Call a stage function with bounded retries."""
-    for attempt in range(retries + 1):
-        try:
-            return fn(*args)
-        except Exception:
-            if attempt >= retries:
-                raise
-            logger.warning(
-                "%s failed on attempt %d/%d; retrying",
-                stage_name,
-                attempt + 1,
-                retries + 1,
-            )
+    observer = resolve_execution_observer(observer_id)
+    max_attempts = retries + 1
+    with bind_execution_observer(observer):
+        for attempt in range(max_attempts):
+            attempt_index = attempt + 1
+            if observer is not None:
+                observer.increment_counter("attempts_total", stage=stage_name)
+            t0 = time.monotonic()
+            try:
+                with observe_stage(
+                    stage_name,
+                    details={"attempt": attempt_index, "max_attempts": max_attempts},
+                ):
+                    return fn(*args)
+            except Exception as exc:
+                duration = time.monotonic() - t0
+                if observer is not None:
+                    observer.increment_counter("attempts_failed", stage=stage_name)
+                if attempt >= retries:
+                    raise
+                if observer is not None:
+                    observer.record_retry(
+                        stage=stage_name,
+                        attempt=attempt_index,
+                        max_attempts=max_attempts,
+                        duration_s=duration,
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                logger.warning(
+                    "%s failed on attempt %d/%d after %.2fs (%s: %s); retrying",
+                    stage_name,
+                    attempt_index,
+                    max_attempts,
+                    duration,
+                    type(exc).__name__,
+                    exc,
+                )
 
     raise RuntimeError(f"Unreachable retry state for {stage_name}")
 
@@ -213,18 +361,34 @@ def _prepare_observation(
 ) -> tuple[ObservationBundle, tuple[float, float, float, float], str, datetime, float]:
     logger.info("M1: Preprocessing satellite data...")
     t0 = time.monotonic()
-    obs = preprocessor(input_path, aoi)
-    validate_observation_bundle(obs)
+    with observe_stage("M1.preprocessing", details={"input_path": str(input_path)}):
+        obs = preprocessor(input_path, aoi)
+        validate_observation_bundle(obs)
+    elapsed = time.monotonic() - t0
+    band_count = len(list(obs.toa.data_vars))
     logger.info(
         "M1: Preprocessing complete (%.2fs), %d bands.",
-        time.monotonic() - t0,
-        len(list(obs.toa.data_vars)),
+        elapsed,
+        band_count,
     )
 
     bounds = obs.bounds
     crs = obs.crs
     obs_time = obs.metadata["observation_time"]
     resolution = _aerosol_resolution(config)
+    observer = current_execution_observer()
+    if observer is not None:
+        observer.emit(
+            "progress",
+            stage="M1.preprocessing",
+            message="Observation bundle ready.",
+            duration_s=elapsed,
+            band_count=band_count,
+            bounds=bounds,
+            crs=crs,
+            observation_time=obs_time,
+            aerosol_resolution_m=resolution,
+        )
     return obs, bounds, crs, obs_time, resolution
 
 
@@ -244,22 +408,42 @@ def _run_tail(
 
     t0 = time.monotonic()
     logger.info("M4: Assembling solver grids...")
-    solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
+    with observe_stage("M4.grid_assembly"):
+        solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
 
     t0 = time.monotonic()
     logger.info("M5: Solving for aerosol parameters...")
-    solved = solver(solver_inputs, config)
+    with observe_stage("M5.solver"):
+        solved = solver(solver_inputs, config)
     validate_solved_atmosphere(solved)
     logger.info("M5: Solver complete (%.2fs).", time.monotonic() - t0)
+    observer = current_execution_observer()
+    if observer is not None:
+        observer.emit(
+            "progress",
+            stage="M5.solver",
+            message="Solver finished.",
+            converged=solved.converged,
+            iterations=solved.n_iterations,
+            cost_final=solved.cost_final,
+        )
 
     t0 = time.monotonic()
     logger.info("M6: Applying atmospheric correction...")
-    result = corrector(obs, solved, rt_model)
+    with observe_stage("M6.correction"):
+        result = corrector(obs, solved, rt_model)
     validate_correction_result(result)
     logger.info("M6: Correction complete (%.2fs).", time.monotonic() - t0)
 
+    if observer is not None:
+        observer.emit(
+            "progress",
+            stage="M6.correction",
+            message="Correction result ready.",
+            boa_bands=len(list(result.boa.data_vars)),
+        )
     logger.info("Pipeline complete.")
     return result
 
@@ -278,6 +462,8 @@ def _run_pipeline_thread(
     rt_model: Any,
     settings: dict[str, Any],
 ) -> CorrectionResult:
+    observer = current_execution_observer()
+    observer_id = observer.run_id if observer is not None else None
     obs, bounds, crs, obs_time, resolution = _prepare_observation(
         input_path,
         aoi,
@@ -294,8 +480,12 @@ def _run_pipeline_thread(
             atmo_provider,
             (bounds, crs, obs_time, resolution),
             retries=retries,
-            stage_name="M2",
+            stage_name="M2.atmospheric_prior",
+            observer_id=observer_id,
         )
+        if observer is not None:
+            observer.increment_counter("m2_started", stage="M2.atmospheric_prior")
+            observer.emit("progress", stage="M2.atmospheric_prior", message="Atmospheric prior submitted.")
         f_m3 = None
         if not requires_atmo:
             logger.info("M2+M3: Fetching atmospheric & surface priors...")
@@ -304,13 +494,28 @@ def _run_pipeline_thread(
                 surface_prior_provider,
                 (obs, None, rt_model, resolution),
                 retries=retries,
-                stage_name="M3",
+                stage_name="M3.surface_prior",
+                observer_id=observer_id,
             )
+            if observer is not None:
+                observer.increment_counter("m3_started", stage="M3.surface_prior")
+                observer.emit(
+                    "progress",
+                    stage="M3.surface_prior",
+                    message="Surface prior submitted in parallel with atmospheric prior.",
+                )
         else:
             logger.info("M2: Fetching atmospheric prior...")
         f_lut = None
         try:
             atmo = f_m2.result(timeout=timeout)
+            if observer is not None:
+                observer.increment_counter("m2_done", stage="M2.atmospheric_prior")
+                observer.emit(
+                    "progress",
+                    stage="M2.atmospheric_prior",
+                    message="Atmospheric prior ready.",
+                )
             if f_m3 is None:
                 logger.info("M3: Deriving surface prior from observation + atmospheric prior...")
                 f_m3 = executor.submit(
@@ -318,34 +523,76 @@ def _run_pipeline_thread(
                     surface_prior_provider,
                     (obs, atmo, rt_model, resolution),
                     retries=retries,
-                    stage_name="M3",
+                    stage_name="M3.surface_prior",
+                    observer_id=observer_id,
                 )
+                if observer is not None:
+                    observer.increment_counter("m3_started", stage="M3.surface_prior")
+                    observer.emit(
+                        "progress",
+                        stage="M3.surface_prior",
+                        message="Surface prior submitted after atmospheric prior.",
+                    )
             f_lut = _maybe_submit_lut_preload(
                 executor,
                 rt_model,
                 obs=obs,
                 atmo=atmo,
                 retries=retries,
+                observer_id=observer_id,
             )
             surface = f_m3.result(timeout=timeout)
+            if observer is not None:
+                observer.increment_counter("m3_done", stage="M3.surface_prior")
+                observer.emit(
+                    "progress",
+                    stage="M3.surface_prior",
+                    message="Surface prior ready.",
+                )
             if f_lut is not None:
                 try:
                     f_lut.result(timeout=timeout)
+                    if observer is not None:
+                        observer.increment_counter("lut_preload_done", stage="LUT.preload")
+                        observer.emit(
+                            "progress",
+                            stage="LUT.preload",
+                            message="LUT preload complete.",
+                        )
                 except FuturesTimeoutError:
+                    if observer is not None and timeout is not None:
+                        observer.record_timeout(
+                            stage="LUT.preload",
+                            timeout_s=float(timeout),
+                            backend="thread",
+                        )
                     logger.warning(
                         "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
                         float(timeout),
                     )
                 except Exception as exc:
+                    if observer is not None:
+                        observer.record_error(
+                            stage="LUT.preload",
+                            error_type=type(exc).__name__,
+                            error_message=str(exc),
+                        )
                     logger.warning(
                         "LUT preload failed (%s); proceeding with on-demand LUT reads.",
                         exc,
                     )
         except FuturesTimeoutError as exc:
             f_m2.cancel()
-            f_m3.cancel()
+            if f_m3 is not None:
+                f_m3.cancel()
             if f_lut is not None:
                 f_lut.cancel()
+            if observer is not None and timeout is not None:
+                observer.record_timeout(
+                    stage="M2/M3",
+                    timeout_s=float(timeout),
+                    backend="thread",
+                )
             raise TimeoutError(
                 f"M2/M3 timed out after {float(timeout):.1f}s (thread backend)"
             ) from exc
@@ -383,6 +630,8 @@ def _run_pipeline_dask(
     rt_model: Any,
     settings: dict[str, Any],
 ) -> CorrectionResult:
+    observer = current_execution_observer()
+    observer_id = observer.run_id if observer is not None else None
     try:
         from dask.distributed import (  # type: ignore[import-not-found]
             Client,
@@ -408,6 +657,13 @@ def _run_pipeline_dask(
     with LocalCluster(**cluster_kwargs) as cluster, Client(cluster) as client:
         if settings["show_progress"] and getattr(client, "dashboard_link", None):
             logger.info("Dask dashboard: %s", client.dashboard_link)
+            if observer is not None:
+                observer.emit(
+                    "progress",
+                    stage="dask.cluster",
+                    message="Dask dashboard available.",
+                    dashboard_link=client.dashboard_link,
+                )
 
         report_ctx = nullcontext()
         report_path = settings["performance_report_path"]
@@ -429,8 +685,11 @@ def _run_pipeline_dask(
                 atmo_provider,
                 (bounds, crs, obs_time, resolution),
                 retries=retries,
-                stage_name="M2",
+                stage_name="M2.atmospheric_prior",
+                observer_id=observer_id,
             )
+            if observer is not None:
+                observer.increment_counter("m2_started", stage="M2.atmospheric_prior")
             f_m3 = None
             if not requires_atmo:
                 logger.info("M2+M3: Fetching atmospheric & surface priors...")
@@ -439,14 +698,24 @@ def _run_pipeline_dask(
                     surface_prior_provider,
                     (obs, None, rt_model, resolution),
                     retries=retries,
-                    stage_name="M3",
+                    stage_name="M3.surface_prior",
+                    observer_id=observer_id,
                 )
+                if observer is not None:
+                    observer.increment_counter("m3_started", stage="M3.surface_prior")
             else:
                 logger.info("M2: Fetching atmospheric prior...")
             preload_future = None
             preload_executor = ThreadPoolExecutor(max_workers=1)
             try:
                 atmo = f_m2.result(timeout=timeout)
+                if observer is not None:
+                    observer.increment_counter("m2_done", stage="M2.atmospheric_prior")
+                    observer.emit(
+                        "progress",
+                        stage="M2.atmospheric_prior",
+                        message="Atmospheric prior ready.",
+                    )
                 if f_m3 is None:
                     logger.info("M3: Deriving surface prior from observation + atmospheric prior...")
                     f_m3 = client.submit(
@@ -454,25 +723,55 @@ def _run_pipeline_dask(
                         surface_prior_provider,
                         (obs, atmo, rt_model, resolution),
                         retries=retries,
-                        stage_name="M3",
+                        stage_name="M3.surface_prior",
+                        observer_id=observer_id,
                     )
+                    if observer is not None:
+                        observer.increment_counter("m3_started", stage="M3.surface_prior")
                 preload_future = _maybe_submit_lut_preload(
                     preload_executor,
                     rt_model,
                     obs=obs,
                     atmo=atmo,
                     retries=retries,
+                    observer_id=observer_id,
                 )
                 surface = f_m3.result(timeout=timeout)
+                if observer is not None:
+                    observer.increment_counter("m3_done", stage="M3.surface_prior")
+                    observer.emit(
+                        "progress",
+                        stage="M3.surface_prior",
+                        message="Surface prior ready.",
+                    )
                 if preload_future is not None:
                     try:
                         preload_future.result(timeout=timeout)
+                        if observer is not None:
+                            observer.increment_counter("lut_preload_done", stage="LUT.preload")
+                            observer.emit(
+                                "progress",
+                                stage="LUT.preload",
+                                message="LUT preload complete.",
+                            )
                     except FuturesTimeoutError:
+                        if observer is not None and timeout is not None:
+                            observer.record_timeout(
+                                stage="LUT.preload",
+                                timeout_s=float(timeout),
+                                backend="dask",
+                            )
                         logger.warning(
                             "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
                             float(timeout),
                         )
                     except Exception as exc:
+                        if observer is not None:
+                            observer.record_error(
+                                stage="LUT.preload",
+                                error_type=type(exc).__name__,
+                                error_message=str(exc),
+                            )
                         logger.warning(
                             "LUT preload failed (%s); proceeding with on-demand LUT reads.",
                             exc,
@@ -483,6 +782,12 @@ def _run_pipeline_dask(
                     f_m3.cancel()
                 if preload_future is not None:
                     preload_future.cancel()
+                if observer is not None and timeout is not None:
+                    observer.record_timeout(
+                        stage="M2/M3",
+                        timeout_s=float(timeout),
+                        backend="dask",
+                    )
                 raise TimeoutError(
                     f"M2/M3 timed out after {float(timeout):.1f}s (dask backend)"
                 ) from exc
@@ -522,6 +827,7 @@ def run_pipeline(
     rt_model: Any,
     max_workers: int | None = None,
     execution: Any | None = None,
+    observer: ExecutionObserver | None = None,
 ) -> CorrectionResult:
     """Orchestrate module execution with a selectable execution backend."""
     settings = _resolve_execution_settings(
@@ -529,32 +835,70 @@ def run_pipeline(
         execution=execution,
         max_workers=max_workers,
     )
-
-    if settings["backend"] == "dask":
-        return _run_pipeline_dask(
-            input_path,
-            aoi,
-            config,
-            preprocessor=preprocessor,
-            atmo_provider=atmo_provider,
-            surface_prior_provider=surface_prior_provider,
-            grid_assembler=grid_assembler,
-            solver=solver,
-            corrector=corrector,
-            rt_model=rt_model,
-            settings=settings,
-        )
-
-    return _run_pipeline_thread(
-        input_path,
-        aoi,
-        config,
-        preprocessor=preprocessor,
-        atmo_provider=atmo_provider,
-        surface_prior_provider=surface_prior_provider,
-        grid_assembler=grid_assembler,
-        solver=solver,
-        corrector=corrector,
-        rt_model=rt_model,
-        settings=settings,
+    summary_path = derive_summary_report_path(
+        settings["performance_report_path"],
+        backend=settings["backend"],
     )
+    managed_observer = False
+    if observer is None and (summary_path is not None or settings["show_progress"]):
+        observer = ExecutionObserver(
+            backend=settings["backend"],
+            input_path=input_path,
+            summary_path=summary_path,
+            show_progress=settings["show_progress"],
+            sample_interval_s=settings["profiling_sample_interval_s"],
+            heartbeat_interval_s=settings["progress_heartbeat_s"],
+            configured_report_path=settings["performance_report_path"],
+        )
+        managed_observer = True
+
+    if observer is not None:
+        observer.start()
+
+    try:
+        with bind_execution_observer(observer):
+            if observer is not None:
+                observer.emit(
+                    "progress",
+                    stage="pipeline",
+                    message="Pipeline execution started.",
+                    backend=settings["backend"],
+                    max_workers=settings["max_workers"],
+                )
+            if settings["backend"] == "dask":
+                result = _run_pipeline_dask(
+                    input_path,
+                    aoi,
+                    config,
+                    preprocessor=preprocessor,
+                    atmo_provider=atmo_provider,
+                    surface_prior_provider=surface_prior_provider,
+                    grid_assembler=grid_assembler,
+                    solver=solver,
+                    corrector=corrector,
+                    rt_model=rt_model,
+                    settings=settings,
+                )
+            else:
+                result = _run_pipeline_thread(
+                    input_path,
+                    aoi,
+                    config,
+                    preprocessor=preprocessor,
+                    atmo_provider=atmo_provider,
+                    surface_prior_provider=surface_prior_provider,
+                    grid_assembler=grid_assembler,
+                    solver=solver,
+                    corrector=corrector,
+                    rt_model=rt_model,
+                    settings=settings,
+                )
+    except Exception as exc:
+        if observer is not None and managed_observer:
+            status = "timeout" if isinstance(exc, TimeoutError) else "error"
+            observer.finish(status, error=exc)
+        raise
+
+    if observer is not None and managed_observer:
+        observer.finish("success")
+    return result

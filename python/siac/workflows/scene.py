@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from siac.app.planning import build_execution_plan
-from siac.workflows.pipeline import run_pipeline
+from siac.observability import derive_execution_report_path
+from siac.workflows.pipeline import _resolve_execution_settings, run_pipeline
 
 if TYPE_CHECKING:
     from siac.app.planning import ExecutionPlan
@@ -25,7 +26,11 @@ def write_output(
     output_writer.write(result, Path(output_path))
 
 
-def execute_plan(plan: ExecutionPlan) -> CorrectionResult:
+def execute_plan(
+    plan: ExecutionPlan,
+    *,
+    execution: Any | None = None,
+) -> CorrectionResult:
     """Execute a fully resolved :class:`ExecutionPlan`."""
     return run_pipeline(
         plan.input_path,
@@ -38,6 +43,7 @@ def execute_plan(plan: ExecutionPlan) -> CorrectionResult:
         solver=plan.solver,
         corrector=plan.corrector,
         rt_model=plan.rt_model,
+        execution=execution,
     )
 
 
@@ -79,7 +85,15 @@ def process_scene(
         resolve_corrector_fn=resolve_corrector_fn,
         resolve_rt_model_fn=resolve_rt_model_fn,
     )
-    result = execute_plan(plan)
+    execution_override: dict[str, Any] | None = None
+    settings_config = getattr(plan, "config", request.config)
+    settings = _resolve_execution_settings(settings_config, execution=None, max_workers=None)
+    if settings["show_progress"] and settings["performance_report_path"] is None:
+        default_report_path = derive_execution_report_path(plan.output_path)
+        if default_report_path is not None:
+            execution_override = {"performance_report_path": default_report_path}
+
+    result = execute_plan(plan, execution=execution_override)
     if plan.output_path is not None and plan.output_writer is not None:
         write_output(result, plan.output_path, output_writer=plan.output_writer)
     return result

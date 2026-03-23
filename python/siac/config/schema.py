@@ -326,6 +326,8 @@ class ExecutionRuntimeConfig(SIACBaseModel):
     dashboard_address: str | None = None
     performance_report_path: Path | None = None
     show_progress: bool = False
+    profiling_sample_interval_s: float = Field(default=5.0, gt=0.0)
+    progress_heartbeat_s: float = Field(default=30.0, gt=0.0)
 
     @field_validator("performance_report_path", mode="before")
     @classmethod

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,15 @@ def _load_config(config_path: Path | None) -> SIACConfig:
     return SIACConfig.from_file(config_path)
 
 
+def _configure_logging(level_name: str) -> None:
+    level = logging.getLevelNamesMapping().get(str(level_name).upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(levelname)s:%(name)s:%(message)s",
+        force=True,
+    )
+
+
 def _process_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if args.output_path is not None:
@@ -93,6 +103,7 @@ def _run_process_s2(args: argparse.Namespace) -> int:
     from siac.api.public import siac_process_s2
 
     config = _load_config(args.config)
+    _configure_logging(config.log_level)
     result = siac_process_s2(config, args.query, **_process_kwargs(args))
     print(f"Sentinel-2 processing complete. Mean AOT: {float(result.aot.mean()):.3f}")
     return 0
