@@ -16,6 +16,7 @@ xarray = ">=2024.1.0"
 rioxarray = ">=0.15.0"
 rasterio = ">=1.3.0"
 pyproj = ">=3.6.0"
+gdal = ">=3.12.2,<4"
 
 # Scientific computing
 numpy = ">=1.26.0"
@@ -52,6 +53,8 @@ psutil = ">=5.9.0"
 tqdm = ">=4.66.0"
 aiohttp = ">=3.13.3,<4"
 libgdal-jp2openjpeg = ">=3.12.2,<4"
+libgdal-hdf4 = ">=3.12.2,<4"
+libgdal-hdf5 = ">=3.12.2,<4"
 pyhdf = ">=0.11.6,<0.12"
 
 [pypi-dependencies]

@@ -129,13 +129,55 @@ def read_raster_window(
     Returns:
         xr.DataArray clipped to the specified bounds
     """
-    # First read to get CRS info
-    da = read_raster(path, chunks=chunks, masked=masked)
+    del chunks  # Windowed reads are eager for now.
 
-    # Clip to bounds
-    da = da.rio.clip_box(*bounds, crs=bounds_crs)
+    import rasterio
+    from rasterio.transform import xy
+    from rasterio.windows import Window, from_bounds
+    from rasterio.warp import transform_bounds
 
-    return da
+    path = str(path)
+    with rasterio.open(path) as src:
+        target_bounds = bounds
+        if bounds_crs is not None and str(src.crs) != str(bounds_crs):
+            target_bounds = transform_bounds(bounds_crs, src.crs, *bounds)
+
+        window = from_bounds(*target_bounds, transform=src.transform)
+        window = window.intersection(Window(0, 0, src.width, src.height))
+        window = window.round_offsets().round_lengths()
+        if int(window.width) <= 0 or int(window.height) <= 0:
+            raise ValueError(f"Bounds {bounds!r} do not intersect raster {path}")
+
+        values = src.read(window=window, masked=masked)
+        transform = src.window_transform(window)
+        height = int(window.height)
+        width = int(window.width)
+
+        cols = np.arange(width, dtype=np.int32)
+        rows = np.arange(height, dtype=np.int32)
+        x = np.asarray(xy(transform, np.zeros_like(cols), cols, offset="center")[0], dtype=np.float64)
+        y = np.asarray(xy(transform, rows, np.zeros_like(rows), offset="center")[1], dtype=np.float64)
+
+        if np.ma.isMaskedArray(values):
+            values = values.astype(np.float32).filled(np.nan)
+
+        if values.ndim == 3 and values.shape[0] == 1:
+            values = values[0]
+
+        if values.ndim == 3:
+            da = xr.DataArray(
+                np.asarray(values),
+                dims=("band", "y", "x"),
+                coords={"band": np.asarray(src.indexes, dtype=np.int32), "y": y, "x": x},
+            )
+        else:
+            da = xr.DataArray(
+                np.asarray(values),
+                dims=("y", "x"),
+                coords={"y": y, "x": x},
+            )
+        da = da.rio.write_crs(src.crs)
+        return da.rio.write_transform(transform)
 
 
 def read_raster_at_resolution(

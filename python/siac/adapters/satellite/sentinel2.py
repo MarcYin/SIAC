@@ -27,7 +27,7 @@ from siac.algorithms.cloud import build_cloud_classes, classes_to_bool_mask
 from siac.catalog import SENTINEL2A_CONFIG, get_sensor_config
 from siac.geo import reproject_match
 from siac.runtime import GeometryAngles
-from siac.storage.readers import read_raster
+from siac.storage.readers import read_raster, read_raster_window
 
 if TYPE_CHECKING:
     from siac.domain import SensorConfig
@@ -68,6 +68,23 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         self._last_cloud_classes: xr.DataArray | None = None
         self._resolved_input_path: Path | None = None
         self._reference_grid: xr.DataArray | None = None
+        self._subset_bounds: tuple[float, float, float, float] | None = None
+        self._subset_crs: str | None = None
+
+    def set_spatial_subset(
+        self,
+        bounds: tuple[float, float, float, float],
+        *,
+        crs: str,
+    ) -> None:
+        """Restrict raster reads to an AOI window."""
+        self._subset_bounds = tuple(float(value) for value in bounds)
+        self._subset_crs = str(crs)
+
+    def clear_spatial_subset(self) -> None:
+        """Clear any active AOI read window."""
+        self._subset_bounds = None
+        self._subset_crs = None
 
     @property
     def sensor_config(self) -> SensorConfig:
@@ -111,7 +128,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         ref_file = band_files[ref_name]
         logger.debug(f"Reading reference band {ref_name} from {ref_file}")
         ref_da = self._calibrate_band(
-            read_raster(ref_file),
+            self._read_band(ref_file),
             band_name=ref_name,
             quantification=quantification,
             offset=float(offsets.get(ref_name, 0.0)),
@@ -133,7 +150,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
             logger.debug(f"Reading {band_name} from {band_file}")
             da = self._calibrate_band(
-                read_raster(band_file),
+                self._read_band(band_file),
                 band_name=band_name,
                 quantification=quantification,
                 offset=float(offsets.get(band_name, 0.0)),
@@ -250,7 +267,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             )
             if ref_name is None:
                 raise FileNotFoundError(f"No reference band found under {img_data_path}")
-            ref_da = read_raster(band_files[ref_name])
+            ref_da = self._read_band(band_files[ref_name])
 
         # Resample angles to image grid
         sza = self._angles_to_grid(sun_angles["zenith"], ref_da)
@@ -266,6 +283,15 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             saa=degrees_to_radians(saa),
             vza=degrees_to_radians(vza),
             vaa=degrees_to_radians(vaa),
+        )
+
+    def _read_band(self, path: str | Path) -> xr.DataArray:
+        if self._subset_bounds is None or self._subset_crs is None:
+            return read_raster(path)
+        return read_raster_window(
+            path,
+            bounds=self._subset_bounds,
+            bounds_crs=self._subset_crs,
         )
 
     def extract_cloud_mask(

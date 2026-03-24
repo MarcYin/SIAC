@@ -192,6 +192,64 @@ class TestSentinel2Preprocessor:
         assert ds["B11"].shape == (4, 4)
         assert np.isfinite(ds["B11"].values).all()
 
+    def test_load_toa_uses_windowed_reads_when_subset_is_active(self, monkeypatch, tmp_path):
+        """Explicit AOI subsets should read only the requested raster window."""
+        from siac.adapters.satellite import sentinel2 as s2mod
+
+        pre = s2mod.Sentinel2Preprocessor()
+        granule_dir = tmp_path / "GRANULE" / "L1C_TEST"
+        img_data = granule_dir / "IMG_DATA"
+        img_data.mkdir(parents=True)
+        (img_data / "T50QLD_TEST_B02.jp2").touch()
+        (img_data / "T50QLD_TEST_B04.jp2").touch()
+
+        pre._granule_path = granule_dir
+        pre._satellite_id = "S2A"
+        monkeypatch.setattr(pre, "_resolve_paths", lambda _: None)
+        monkeypatch.setattr(
+            pre,
+            "get_metadata",
+            lambda _: {
+                "quantification_value": 10000.0,
+                "radiometric_offsets": {},
+                "observation_time": datetime(2026, 1, 2, 2, 41, 21),
+            },
+        )
+
+        window_calls: list[tuple[str, tuple[float, float, float, float], str]] = []
+        full_calls: list[str] = []
+
+        def _da(values: np.ndarray) -> xr.DataArray:
+            da = xr.DataArray(
+                values.astype(np.float32),
+                dims=("y", "x"),
+                coords={"x": np.array([0.0, 10.0]), "y": np.array([10.0, 0.0])},
+            )
+            return da.rio.write_crs("EPSG:32650")
+
+        def fake_read_raster_window(path, *, bounds, bounds_crs):  # noqa: ANN001
+            window_calls.append((str(path), bounds, bounds_crs))
+            value = 1000.0 if "B02" in str(path) else 2000.0
+            return _da(np.full((2, 2), value, dtype=np.float32))
+
+        def fake_read_raster(path):  # noqa: ANN001
+            full_calls.append(str(path))
+            return _da(np.full((2, 2), 9999.0, dtype=np.float32))
+
+        monkeypatch.setattr(s2mod, "read_raster_window", fake_read_raster_window)
+        monkeypatch.setattr(s2mod, "read_raster", fake_read_raster)
+
+        pre.set_spatial_subset((100.0, 200.0, 300.0, 400.0), crs="EPSG:32650")
+        ds = pre.load_toa(tmp_path)
+        pre.clear_spatial_subset()
+
+        assert full_calls == []
+        assert len(window_calls) == 2
+        assert all(call[1] == (100.0, 200.0, 300.0, 400.0) for call in window_calls)
+        assert all(call[2] == "EPSG:32650" for call in window_calls)
+        assert ds["B02"].shape == (2, 2)
+        assert ds["B04"].shape == (2, 2)
+
     def test_discover_band_files_distinguishes_b08_and_b8a(self, tmp_path):
         from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
 

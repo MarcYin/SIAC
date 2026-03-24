@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import siac.adapters.earthdata as earth_adapter
 import siac.adapters.earthdata_common as earth_mod
 
 if TYPE_CHECKING:
@@ -233,6 +235,85 @@ def test_earthdata_native_grid_reproject_and_dataset_helpers(
     assert unchanged.shape == (1, 2)
 
 
+def test_earthdata_attribute_readers_and_gdal_subdataset_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSDS:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def attributes(self) -> dict[str, object]:
+            return {"units": np.bytes_(self.name.encode("utf-8"))}
+
+    class _FakeSD:
+        def __init__(self, path: str, mode: object) -> None:
+            self.path = path
+            self.mode = mode
+
+        def select(self, dataset_name: str) -> _FakeSDS:
+            return _FakeSDS(dataset_name)
+
+    monkeypatch.setattr(earth_mod, "SD", _FakeSD)
+    monkeypatch.setattr(earth_mod, "SDC", SimpleNamespace(READ="READ"))
+    assert earth_mod.read_hdf4_dataset_attrs("scene.hdf", "band") == {"units": "band"}
+    assert earth_mod.read_hdf4_datasets_attrs("scene.hdf", ("band", "qa")) == {
+        "band": {"units": "band"},
+        "qa": {"units": "qa"},
+    }
+
+    h5_path = tmp_path / "attrs.h5"
+    with h5py.File(h5_path, "w") as handle:
+        band = handle.create_dataset("band", data=np.array([[1]], dtype=np.int16))
+        band.attrs["scale_factor"] = np.array([2.0], dtype=np.float32)
+        qa = handle.create_dataset("qa", data=np.array([[0]], dtype=np.int16))
+        qa.attrs["units"] = np.bytes_(b"bits")
+
+    assert earth_mod.read_hdf5_dataset_attrs(h5_path, "band")["scale_factor"] == 2.0
+    assert earth_mod.read_hdf5_datasets_attrs(h5_path, ("band", "qa")) == {
+        "band": {"scale_factor": 2.0},
+        "qa": {"units": "bits"},
+    }
+
+    earth_mod.resolve_gdal_subdataset_path.cache_clear()
+    fake_gdal = SimpleNamespace(
+        UseExceptions=lambda: None,
+        OF_RASTER=1,
+        OF_READONLY=2,
+        OpenEx=lambda _path, _flags: SimpleNamespace(
+            GetSubDatasets=lambda: [
+                (
+                    'HDF4_EOS:EOS_GRID:"scene.hdf":MOD_Grid_BRDF:BRDF_Albedo_Parameters_Band1',
+                    "[2400x2400x3] BRDF_Albedo_Parameters_Band1",
+                ),
+                (
+                    'HDF4_SDS:UNKNOWN:"scene.hdf":7',
+                    "[2400x2400] Status_QA",
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_gdal))
+    assert earth_mod.gdal_available()
+    assert earth_mod.resolve_gdal_subdataset_path("scene.hdf", "BRDF_Albedo_Parameters_Band1") == (
+        'HDF4_EOS:EOS_GRID:"scene.hdf":MOD_Grid_BRDF:BRDF_Albedo_Parameters_Band1'
+    )
+    assert earth_mod.resolve_gdal_subdataset_path("scene.hdf", "Status_QA") == 'HDF4_SDS:UNKNOWN:"scene.hdf":7'
+
+    earth_mod.resolve_gdal_subdataset_path.cache_clear()
+    fake_empty_gdal = SimpleNamespace(
+        UseExceptions=lambda: None,
+        OF_RASTER=1,
+        OF_READONLY=2,
+        OpenEx=lambda _path, _flags: SimpleNamespace(GetSubDatasets=lambda: []),
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_empty_gdal))
+    assert earth_mod.resolve_gdal_subdataset_path(
+        "scene.h5",
+        "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1",
+    ) == 'HDF5:"scene.h5"://HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1'
+
+
 def test_earthdata_intersection_and_hdf4_reader_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(earth_mod, "granule_geographic_bounds", lambda _path: (-10.0, -10.0, -5.0, -5.0))
     monkeypatch.setattr(earth_mod, "transform_bounds", lambda bounds, src, dst: bounds if src == dst else (0.0, 0.0, 1.0, 1.0))
@@ -264,6 +345,231 @@ def test_earthdata_intersection_and_hdf4_reader_branches(monkeypatch: pytest.Mon
     values, attrs = earth_mod.read_hdf4_dataset("scene.hdf", "band")
     assert values.shape == (2, 2)
     assert attrs["scale_factor"] == 2.0
+
+
+def test_read_virtual_stack_to_target_builds_group_vrts_then_one_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_calls: list[tuple[str, list[str], object | None]] = []
+    unlink_calls: list[str] = []
+
+    class _FakeDataset:
+        def __init__(self, values: np.ndarray) -> None:
+            self._values = values
+
+        def ReadAsArray(self) -> np.ndarray:
+            return self._values
+
+    def _build_vrt(path: str, sources: list[str], options: object | None = None) -> object:
+        build_calls.append((path, list(sources), options))
+        return SimpleNamespace(path=path)
+
+    fake_gdal = SimpleNamespace(
+        UseExceptions=lambda: None,
+        GDT_Float32=6,
+        BuildVRT=_build_vrt,
+        BuildVRTOptions=lambda **kwargs: kwargs,
+        Warp=lambda _dest, _src, **_kwargs: _FakeDataset(
+            np.arange(24, dtype=np.float32).reshape(4, 2, 3)
+        ),
+        Unlink=lambda path: unlink_calls.append(path),
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_gdal))
+
+    out = earth_adapter.read_virtual_stack_to_target(
+        [["left-a.tif", "right-a.tif"], ["left-b.tif"]],
+        group_band_counts=[3, 1],
+        bounds=(0.0, 0.0, 3.0, 2.0),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=np.nan,
+    )
+
+    assert out.dims == ("layer", "y", "x")
+    assert out.shape == (4, 2, 3)
+    assert build_calls[0][1] == ["left-a.tif", "right-a.tif"]
+    assert build_calls[1][1] == ["left-b.tif"]
+    assert build_calls[2][1] == [build_calls[0][0], build_calls[1][0]]
+    assert build_calls[2][2] == {"separate": True}
+    assert len(unlink_calls) == 3
+
+
+def test_merge_reprojected_tiles_handles_single_pixel_target_and_irregular_grid() -> None:
+    ref = xr.DataArray(
+        np.array([[np.nan, 1.0], [1.0, 1.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+    cand = xr.DataArray(
+        np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [1.0, 0.0], "x": [0.0, 2.0]},
+    )
+    ref = ref.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+    cand = cand.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+
+    out = earth_adapter.merge_reprojected_tiles(
+        [ref, cand],
+        bounds=(-0.5, 0.5, 0.5, 1.5),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=None,
+    )
+
+    assert tuple(out.sizes[dim] for dim in ("y", "x")) == (1, 1)
+    np.testing.assert_allclose(out.coords["x"].values, np.array([0.0]))
+    np.testing.assert_allclose(out.coords["y"].values, np.array([1.0]))
+    np.testing.assert_allclose(out.values, np.array([[5.0]], dtype=np.float32))
+    transform = out.rio.transform()
+    assert transform.a == pytest.approx(1.0)
+    assert transform.e == pytest.approx(-1.0)
+    assert transform.c == pytest.approx(-0.5)
+    assert transform.f == pytest.approx(1.5)
+
+
+def test_merge_reprojected_tiles_handles_mixed_crs_sources() -> None:
+    from rasterio.warp import transform
+
+    left = xr.DataArray(
+        np.array([[1.0, np.nan], [3.0, 4.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+    mx, my = transform("EPSG:4326", "EPSG:3857", [1.0, 2.0], [1.0, 0.0])
+    right = xr.DataArray(
+        np.array([[9.0, 10.0], [11.0, 12.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": my, "x": mx},
+    )
+    left = left.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+    right = right.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:3857")
+
+    out = earth_adapter.merge_reprojected_tiles(
+        [left, right],
+        bounds=(-0.5, -0.5, 2.5, 1.5),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=None,
+    )
+
+    assert out.dims == ("y", "x")
+    np.testing.assert_allclose(out.coords["x"].values, np.array([0.0, 1.0, 2.0]))
+    np.testing.assert_allclose(out.coords["y"].values, np.array([1.0, 0.0]))
+    np.testing.assert_allclose(
+        out.values,
+        np.array(
+            [
+                [1.0, 9.0, 10.0],
+                [3.0, 4.0, 12.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_merge_reprojected_tiles_preserves_priority_and_extra_dims() -> None:
+    left = xr.DataArray(
+        np.array(
+            [
+                [[1.0, np.nan], [3.0, 4.0]],
+                [[10.0, 11.0], [12.0, np.nan]],
+            ],
+            dtype=np.float32,
+        ),
+        dims=("parameter", "y", "x"),
+        coords={"parameter": ["f0", "f1"], "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+    right = xr.DataArray(
+        np.array(
+            [
+                [[9.0, 10.0], [11.0, 12.0]],
+                [[19.0, 20.0], [21.0, 22.0]],
+            ],
+            dtype=np.float32,
+        ),
+        dims=("parameter", "y", "x"),
+        coords={"parameter": ["f0", "f1"], "y": [1.0, 0.0], "x": [1.0, 2.0]},
+    )
+    left = left.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+    right = right.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+
+    out = earth_adapter.merge_reprojected_tiles(
+        [left, right],
+        bounds=(-0.5, -0.5, 2.5, 1.5),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=None,
+    )
+
+    assert out.dims == ("parameter", "y", "x")
+    assert list(out.coords["parameter"].values) == ["f0", "f1"]
+    np.testing.assert_allclose(out.coords["x"].values, np.array([0.0, 1.0, 2.0]))
+    np.testing.assert_allclose(out.coords["y"].values, np.array([1.0, 0.0]))
+    np.testing.assert_allclose(
+        out.values,
+        np.array(
+            [
+                [[1.0, 9.0, 10.0], [3.0, 4.0, 12.0]],
+                [[10.0, 11.0, 20.0], [12.0, 21.0, 22.0]],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_merge_reprojected_tiles_passes_full_sources_to_vrt_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    left = xr.DataArray(
+        np.arange(100, dtype=np.float32).reshape(10, 10),
+        dims=("y", "x"),
+        coords={"y": np.arange(9.0, -1.0, -1.0), "x": np.arange(10.0)},
+    )
+    left = left.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+
+    original_writer = earth_adapter._write_dataarray_to_memory_dataset
+    seen_shapes: list[tuple[int, int]] = []
+
+    def _recording_writer(memfile: object, data: xr.DataArray, *, nodata: np.float32) -> None:
+        seen_shapes.append((int(data.sizes["y"]), int(data.sizes["x"])))
+        original_writer(memfile, data, nodata=nodata)
+
+    monkeypatch.setattr(earth_adapter, "_write_dataarray_to_memory_dataset", _recording_writer)
+
+    out = earth_adapter.merge_reprojected_tiles(
+        [left],
+        bounds=(4.5, 4.5, 5.5, 5.5),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=None,
+    )
+
+    assert seen_shapes == [(10, 10)]
+    np.testing.assert_allclose(out.values, np.array([[45.0]], dtype=np.float32))
+
+
+def test_merge_reprojected_tiles_returns_empty_target_when_sources_miss_aoi() -> None:
+    source = xr.DataArray(
+        np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [11.0, 10.0], "x": [10.0, 11.0]},
+    )
+    source = source.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
+
+    out = earth_adapter.merge_reprojected_tiles(
+        [source],
+        bounds=(-0.5, -0.5, 1.5, 1.5),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=np.nan,
+    )
+
+    assert out.shape == (2, 2)
+    assert np.isnan(out.values).all()
 
 
 def test_satellite_base_preprocessor_registry_and_detection_paths(

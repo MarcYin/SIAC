@@ -82,10 +82,64 @@ def build_preprocessor_runtime(
             return cast("AOI", default_aoi_resolver(toa))
         return AOI.from_raster(toa[list(toa.data_vars)[0]])
 
+    def _clip_dataarray_to_aoi(field: object, *, bounds: tuple[float, float, float, float], crs: str) -> object:
+        rio = getattr(field, "rio", None)
+        if rio is None:
+            return field
+        try:
+            return rio.clip_box(*bounds, crs=crs)
+        except Exception:
+            return field
+
+    def _clip_raw_output(raw: dict[str, Any], *, aoi_obj: AOI) -> dict[str, Any]:
+        import xarray as xr
+
+        bounds = aoi_obj.get_bounds()
+        crs = str(aoi_obj.crs)
+        clipped = dict(raw)
+
+        toa = raw.get("toa")
+        if isinstance(toa, xr.Dataset):
+            clipped_vars = {
+                name: cast("xr.DataArray", _clip_dataarray_to_aoi(data, bounds=bounds, crs=crs))
+                for name, data in toa.data_vars.items()
+            }
+            clipped["toa"] = xr.Dataset(clipped_vars, attrs=toa.attrs)
+
+        geometry = raw.get("geometry")
+        if geometry is not None:
+            field_names = ("sza", "saa", "vza", "vaa")
+            if all(hasattr(geometry, name) for name in field_names):
+                clipped["geometry"] = geometry.__class__(
+                    **{
+                        name: _clip_dataarray_to_aoi(getattr(geometry, name), bounds=bounds, crs=crs)
+                        for name in field_names
+                    }
+                )
+
+        cloud_mask = raw.get("cloud_mask")
+        clipped["cloud_mask"] = _clip_dataarray_to_aoi(cloud_mask, bounds=bounds, crs=crs)
+        cloud_classes = raw.get("cloud_classes")
+        if cloud_classes is not None:
+            clipped["cloud_classes"] = _clip_dataarray_to_aoi(cloud_classes, bounds=bounds, crs=crs)
+        return clipped
+
     def _preprocessor(path: Path, aoi: AOI | None = None) -> ObservationBundle:
-        raw = preprocessor_obj.preprocess(path)
+        if aoi is not None:
+            set_subset = getattr(preprocessor_obj, "set_spatial_subset", None)
+            if callable(set_subset):
+                set_subset(aoi.get_bounds(), crs=str(aoi.crs))
+        try:
+            raw = preprocessor_obj.preprocess(path)
+        finally:
+            clear_subset = getattr(preprocessor_obj, "clear_spatial_subset", None)
+            if callable(clear_subset):
+                clear_subset()
         toa = raw["toa"]
         resolved_aoi = aoi or _resolve_default_aoi(toa)
+        if aoi is not None:
+            raw = _clip_raw_output(raw, aoi_obj=resolved_aoi)
+            toa = raw["toa"]
         active_sensor_config = getattr(preprocessor_obj, "sensor_config", sensor_config)
         return ObservationBundle(
             toa=toa,

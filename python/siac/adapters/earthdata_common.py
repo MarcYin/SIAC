@@ -443,6 +443,7 @@ def reproject_native_to_target(
     target_resolution: float,
     resampling: Resampling,
     nodata: float | None = None,
+    target_template: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Clip a native array to the AOI and reproject it to the target grid."""
     clipped = clip_native_to_target_bounds(
@@ -452,7 +453,11 @@ def reproject_native_to_target(
     )
     if nodata is not None:
         clipped = clipped.rio.write_nodata(nodata)
-    target = build_target_template(target_bounds, target_crs, target_resolution)
+    target = (
+        target_template
+        if target_template is not None
+        else build_target_template(target_bounds, target_crs, target_resolution)
+    )
     return clipped.rio.reproject_match(target, resampling=resampling)
 
 
@@ -463,11 +468,157 @@ def read_hdf4_dataset(path: str | Path, dataset_name: str) -> tuple[np.ndarray, 
     return np.asarray(sds.get()), {key: decode_attr(value) for key, value in sds.attributes().items()}
 
 
+def read_hdf4_dataset_attrs(path: str | Path, dataset_name: str) -> dict[str, Any]:
+    """Read decoded attributes for a single HDF4 SDS without materializing the array."""
+    sd = SD(str(path), SDC.READ)
+    try:
+        sds = sd.select(dataset_name)
+        return {key: decode_attr(value) for key, value in sds.attributes().items()}
+    finally:
+        end = getattr(sd, "end", None)
+        if callable(end):
+            end()
+
+
+def read_hdf4_datasets(
+    path: str | Path,
+    dataset_names: list[str] | tuple[str, ...],
+) -> dict[str, tuple[np.ndarray, dict[str, Any]]]:
+    """Read multiple HDF4 SDS datasets with one file open."""
+    sd = SD(str(path), SDC.READ)
+    try:
+        out: dict[str, tuple[np.ndarray, dict[str, Any]]] = {}
+        for dataset_name in dataset_names:
+            sds = sd.select(dataset_name)
+            out[dataset_name] = (
+                np.asarray(sds.get()),
+                {key: decode_attr(value) for key, value in sds.attributes().items()},
+            )
+        return out
+    finally:
+        end = getattr(sd, "end", None)
+        if callable(end):
+            end()
+
+
+def read_hdf4_datasets_attrs(
+    path: str | Path,
+    dataset_names: list[str] | tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Read decoded attributes for multiple HDF4 SDS datasets with one file open."""
+    sd = SD(str(path), SDC.READ)
+    try:
+        out: dict[str, dict[str, Any]] = {}
+        for dataset_name in dataset_names:
+            sds = sd.select(dataset_name)
+            out[dataset_name] = {key: decode_attr(value) for key, value in sds.attributes().items()}
+        return out
+    finally:
+        end = getattr(sd, "end", None)
+        if callable(end):
+            end()
+
+
 def read_hdf5_dataset(path: str | Path, dataset_name: str) -> tuple[np.ndarray, dict[str, Any]]:
     """Read an HDF5 dataset plus decoded attributes."""
     with h5py.File(path, "r") as handle:
         dataset = handle[dataset_name]
         return np.asarray(dataset[...]), {key: decode_attr(value) for key, value in dataset.attrs.items()}
+
+
+def read_hdf5_dataset_attrs(path: str | Path, dataset_name: str) -> dict[str, Any]:
+    """Read decoded attributes for a single HDF5 dataset without materializing the array."""
+    with h5py.File(path, "r") as handle:
+        dataset = handle[dataset_name]
+        return {key: decode_attr(value) for key, value in dataset.attrs.items()}
+
+
+def read_hdf5_datasets(
+    path: str | Path,
+    dataset_names: list[str] | tuple[str, ...],
+) -> dict[str, tuple[np.ndarray, dict[str, Any]]]:
+    """Read multiple HDF5 datasets with one file open."""
+    out: dict[str, tuple[np.ndarray, dict[str, Any]]] = {}
+    with h5py.File(path, "r") as handle:
+        for dataset_name in dataset_names:
+            dataset = handle[dataset_name]
+            out[dataset_name] = (
+                np.asarray(dataset[...]),
+                {key: decode_attr(value) for key, value in dataset.attrs.items()},
+            )
+    return out
+
+
+def read_hdf5_datasets_attrs(
+    path: str | Path,
+    dataset_names: list[str] | tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Read decoded attributes for multiple HDF5 datasets with one file open."""
+    out: dict[str, dict[str, Any]] = {}
+    with h5py.File(path, "r") as handle:
+        for dataset_name in dataset_names:
+            dataset = handle[dataset_name]
+            out[dataset_name] = {key: decode_attr(value) for key, value in dataset.attrs.items()}
+    return out
+
+
+def gdal_available() -> bool:
+    """Return whether the Python GDAL bindings are importable."""
+    try:
+        from osgeo import gdal
+    except ImportError:
+        return False
+
+    gdal.UseExceptions()
+    return True
+
+
+def _subdataset_matches(dataset_name: str, uri: str, description: str) -> bool:
+    normalized = dataset_name.lstrip("/")
+    candidates = (
+        uri,
+        description,
+        uri.replace("//", "/"),
+        description.replace("//", "/"),
+    )
+    return any(
+        candidate.endswith(dataset_name)
+        or candidate.endswith(normalized)
+        or f":{dataset_name}" in candidate
+        or f":{normalized}" in candidate
+        or f"/{dataset_name}" in candidate
+        or f"/{normalized}" in candidate
+        for candidate in candidates
+    )
+
+
+@lru_cache(maxsize=256)
+def resolve_gdal_subdataset_path(path: str | Path, dataset_name: str) -> str:
+    """Resolve a GDAL-openable subdataset URI for an HDF4/HDF5 dataset name."""
+    from osgeo import gdal
+
+    gdal.UseExceptions()
+    dataset = gdal.OpenEx(str(path), gdal.OF_RASTER | gdal.OF_READONLY)
+    if dataset is None:
+        raise RuntimeError(f"GDAL could not open {path!s}")
+
+    subdatasets = dataset.GetSubDatasets()
+    if subdatasets:
+        matches = [
+            uri
+            for uri, description in subdatasets
+            if _subdataset_matches(dataset_name, uri, description)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise KeyError(f"Ambiguous GDAL subdataset match for {dataset_name!r} in {path!s}")
+
+    suffix = Path(path).suffix.lower()
+    normalized = dataset_name.lstrip("/")
+    if suffix in {".h5", ".he5"}:
+        return f'HDF5:"{path}"://{normalized}'
+    raise KeyError(f"Could not resolve GDAL subdataset {dataset_name!r} in {path!s}")
 
 
 def apply_scale_and_mask(
