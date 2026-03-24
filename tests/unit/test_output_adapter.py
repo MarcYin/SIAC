@@ -111,28 +111,22 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
     } <= set(artifacts)
 
 
-@pytest.mark.parametrize(
-    ("fmt", "expected_name"),
-    [("netcdf", "boa.nc"), ("zarr", "boa.zarr")],
-)
-def test_write_routes_array_formats_and_respects_toggles(
+def test_write_netcdf_alias_emits_cog_band_products_and_respects_toggles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    fmt: str,
-    expected_name: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    calls: list[Path] = []
+    dataset_calls: list[tuple[xr.Dataset, Path, dict[str, object]]] = []
 
-    def _fake_writer(dataset: xr.Dataset, path: Path) -> Path:
-        calls.append(path)
-        return path
+    def _fake_write_dataset(dataset: xr.Dataset, output_dir: Path, **kwargs: object) -> dict[str, Path]:
+        dataset_calls.append((dataset, output_dir, kwargs))
+        return {name: output_dir / f"{name}.tif" for name in dataset.data_vars}
 
-    monkeypatch.setattr(output_module, "write_netcdf", _fake_writer)
-    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+    monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
-            format=fmt,
+            format="netcdf",
             include_uncertainty=False,
             include_auxiliary=False,
             include_rgb=False,
@@ -140,8 +134,41 @@ def test_write_routes_array_formats_and_respects_toggles(
     )
     artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
 
-    assert calls == [tmp_path / expected_name]
-    assert artifacts == {"boa": tmp_path / expected_name}
+    assert len(dataset_calls) == 1
+    assert dataset_calls[0][1] == tmp_path / "boa"
+    assert dataset_calls[0][2]["as_cog"] is True
+    assert artifacts == {
+        "boa.B04": tmp_path / "boa" / "B04.tif",
+        "boa.B03": tmp_path / "boa" / "B03.tif",
+        "boa.B02": tmp_path / "boa" / "B02.tif",
+    }
+    assert "treating it as 'cog'" in caplog.text
+
+
+def test_write_zarr_products_route_and_respects_toggles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    def _fake_writer(dataset: xr.Dataset, path: Path) -> Path:
+        calls.append(path)
+        return path
+
+    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="zarr",
+            include_uncertainty=False,
+            include_auxiliary=False,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
+
+    assert calls == [tmp_path / "boa.zarr"]
+    assert artifacts == {"boa": tmp_path / "boa.zarr"}
 
 
 def test_write_rejects_unsupported_format(tmp_path: Path) -> None:

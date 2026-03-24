@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -10,11 +11,13 @@ import numpy as np
 import xarray as xr
 
 from siac.storage.product_writers import write_dataset, write_rgb_quicklook
-from siac.storage.raster_writers import write_cog, write_netcdf, write_raster, write_zarr
+from siac.storage.raster_writers import write_cog, write_raster, write_zarr
 
 if TYPE_CHECKING:
     from siac.config.schema import OutputDefaultsConfig
     from siac.runtime import CorrectionResult
+
+logger = logging.getLogger(__name__)
 
 
 def _uint16_encode(data: xr.DataArray, *, scale: float, nodata: float) -> xr.DataArray:
@@ -54,10 +57,14 @@ class ConfiguredOutputWriter:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
 
-        if self.defaults.format in {"geotiff", "cog"}:
-            return self._write_raster_products(result, destination)
-        if self.defaults.format == "netcdf":
-            return self._write_netcdf_products(result, destination)
+        if self.defaults.format in {"geotiff", "cog", "netcdf"}:
+            as_cog = self.defaults.format in {"cog", "netcdf"}
+            if self.defaults.format == "netcdf":
+                logger.warning(
+                    "Output format 'netcdf' now writes per-band cloud-optimized GeoTIFFs; "
+                    "treating it as 'cog'."
+                )
+            return self._write_raster_products(result, destination, as_cog=as_cog)
         if self.defaults.format == "zarr":
             return self._write_zarr_products(result, destination)
         raise ValueError(f"Unsupported output format: {self.defaults.format!r}")
@@ -66,6 +73,8 @@ class ConfiguredOutputWriter:
         self,
         result: CorrectionResult,
         output_dir: Path,
+        *,
+        as_cog: bool,
     ) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
         raster_dir = output_dir / "boa"
@@ -81,7 +90,7 @@ class ConfiguredOutputWriter:
             raster_dir,
             compression=self.defaults.compression,
             dtype=self.defaults.boa_dtype,
-            as_cog=self.defaults.format == "cog",
+            as_cog=as_cog,
             nodata=nodata,
         )
         artifacts.update({f"boa.{name}": path for name, path in boa_paths.items()})
@@ -99,13 +108,13 @@ class ConfiguredOutputWriter:
                 unc_dir,
                 compression=self.defaults.compression,
                 dtype=self.defaults.boa_dtype,
-                as_cog=self.defaults.format == "cog",
+                as_cog=as_cog,
                 nodata=nodata,
             )
             artifacts.update({f"boa_unc.{name}": path for name, path in unc_paths.items()})
 
         if self.defaults.include_auxiliary:
-            write_fn = write_cog if self.defaults.format == "cog" else write_raster
+            write_fn = write_cog if as_cog else write_raster
             aux_dir = output_dir / "auxiliary"
             aux_dir.mkdir(parents=True, exist_ok=True)
             artifacts["auxiliary.aot"] = write_fn(result.aot.astype(np.float32), aux_dir / "aot.tif")
@@ -119,35 +128,6 @@ class ConfiguredOutputWriter:
                 nodata=255,
             )
 
-        quicklook = self._write_rgb_if_available(result, output_dir)
-        if quicklook is not None:
-            artifacts["quicklook.rgb"] = quicklook
-        return artifacts
-
-    def _write_netcdf_products(
-        self,
-        result: CorrectionResult,
-        output_dir: Path,
-    ) -> dict[str, Path]:
-        artifacts: dict[str, Path] = {}
-        prepared_boa = _cast_dataset(
-            result.boa,
-            dtype="float64" if self.defaults.boa_dtype == "float64" else "float32",
-            scale=self.defaults.boa_scale,
-            nodata=self.defaults.boa_nodata,
-        )
-        artifacts["boa"] = write_netcdf(prepared_boa, output_dir / "boa.nc")
-        if self.defaults.include_uncertainty and result.boa_unc is not None:
-            artifacts["boa_unc"] = write_netcdf(result.boa_unc.astype(np.float32), output_dir / "boa_unc.nc")
-        if self.defaults.include_auxiliary:
-            aux_ds = xr.Dataset(
-                {
-                    "aot": result.aot.astype(np.float32),
-                    "tcwv": result.tcwv.astype(np.float32),
-                    "cloud_mask": result.cloud_mask.astype(np.uint8),
-                }
-            )
-            artifacts["auxiliary"] = write_netcdf(aux_ds, output_dir / "auxiliary.nc")
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
