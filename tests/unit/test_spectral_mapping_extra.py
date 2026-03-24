@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.algorithms.surface import _spectral_curve_utils as curve_utils
 import siac.algorithms.surface.spectral_mapping as spectral_mapping_mod
+from siac.algorithms.surface import _spectral_curve_utils as curve_utils
 from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary, SpectralMapper
 from siac.domain import SensorBand
 

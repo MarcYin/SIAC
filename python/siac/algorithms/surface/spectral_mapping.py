@@ -8,10 +8,10 @@ import importlib
 import json
 import logging
 import os
-from time import perf_counter
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 import numpy as np
@@ -38,7 +38,7 @@ from siac.algorithms.surface._spectral_curve_utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from siac.domain import SensorBand
 
@@ -90,6 +90,15 @@ class _PackageBatchProtocol(Protocol):
     results: Sequence[_PackageResultProtocol]
 
 
+class _PackageRetrievalProtocol(Protocol):
+    success: bool
+    reconstructed: object | None
+    neighbor_ids: Sequence[object]
+    neighbor_weights: object
+    query_valid_mask: object
+    source_fit_rmse: float
+
+
 class _PackageMapperProtocol(Protocol):
     _row_index_by_id: Mapping[str, int]
 
@@ -119,6 +128,25 @@ class _PackageMapperProtocol(Protocol):
         *,
         segment_only: bool = False,
     ) -> object: ...
+
+
+class _PackageMapperMinimalProtocol(_PackageMapperProtocol, Protocol):
+    def _candidate_rows(self, candidate_rows: object | None) -> object: ...
+
+    def _retrieve_segment_batch(
+        self,
+        *,
+        source_sensor: str,
+        segment: str,
+        query_values: Float64Array,
+        valid_mask: BoolArray,
+        k: int,
+        min_valid_bands: int,
+        neighbor_estimator: str,
+        knn_backend: str,
+        knn_eps: float,
+        candidate_row_indices: Int64Array,
+    ) -> Sequence[_PackageRetrievalProtocol]: ...
 
 
 class _PackageSpectralMapperFactory(Protocol):
@@ -166,11 +194,13 @@ def _spectral_library_module() -> _SpectralLibraryModuleProtocol:
 
 
 def PackageSpectralMapper(*args: object, **kwargs: object) -> _PackageMapperProtocol:
-    return _spectral_library_module().SpectralMapper(*args, **kwargs)
+    factory = cast("Callable[..., object]", _spectral_library_module().SpectralMapper)
+    return cast("_PackageMapperProtocol", factory(*args, **kwargs))
 
 
 def prepare_package_mapping_library(*args: object, **kwargs: object) -> object:
-    return _spectral_library_module().prepare_mapping_library(*args, **kwargs)
+    factory = cast("Callable[..., object]", _spectral_library_module().prepare_mapping_library)
+    return factory(*args, **kwargs)
 
 
 rsrf = cast("_RSRFModuleProtocol", _LazyModuleProxy("rsrf"))
@@ -887,12 +917,13 @@ class SpectralMapper:
         if self._package_mapper is None or self._runtime is None:
             raise RuntimeError("spectral-library runtime was not initialized")
 
-        candidate_rows = np.asarray(self._package_mapper._candidate_rows(None), dtype=np.int64)  # noqa: SLF001
-        retrievals_by_segment: dict[str, tuple[object, ...]] = {}
+        package_mapper = cast("_PackageMapperMinimalProtocol", self._package_mapper)
+        candidate_rows = np.asarray(package_mapper._candidate_rows(None), dtype=np.int64)  # noqa: SLF001
+        retrievals_by_segment: dict[str, tuple[_PackageRetrievalProtocol, ...]] = {}
         for segment in ("vnir", "swir"):
             segment_indices = self._source_retrieval_indices_by_segment[segment]
             retrievals_by_segment[segment] = tuple(
-                self._package_mapper._retrieve_segment_batch(  # noqa: SLF001
+                package_mapper._retrieve_segment_batch(  # noqa: SLF001
                     source_sensor=self._runtime.source_sensor_id,
                     segment=segment,
                     query_values=np.asarray(queries[:, segment_indices], dtype=np.float64),
@@ -915,8 +946,8 @@ class SpectralMapper:
                 prepared = self._prepare_segment_retrieval(retrieval)
                 if prepared is not None:
                     prepared_segments[segment] = prepared
-                if bool(getattr(retrieval, "success", False)) and getattr(retrieval, "reconstructed", None) is not None:
-                    segment_outputs[segment] = np.asarray(getattr(retrieval, "reconstructed"), dtype=np.float64)
+                if retrieval.success and retrieval.reconstructed is not None:
+                    segment_outputs[segment] = np.asarray(retrieval.reconstructed, dtype=np.float64)
             target_reflectance, target_band_ids = self._simulate_target_sensor_outputs(segment_outputs)
             results.append(
                 _MinimalMappingResult(
@@ -982,6 +1013,29 @@ class SpectralMapper:
             inverse_indices=np.asarray(inverse_indices, dtype=np.int64),
         )
 
+    def _segment_hyperspectral_cache_store(self) -> dict[str, Float64Array]:
+        cache = getattr(self, "_segment_hyperspectral_cache", None)
+        if cache is None:
+            cache = {}
+            self._segment_hyperspectral_cache = cache
+        return cast("dict[str, Float64Array]", cache)
+
+    def _target_projection_response_cache_store(self) -> dict[str, Float64Array | None]:
+        cache = getattr(self, "_target_projection_response_cache", None)
+        if cache is None:
+            cache = {}
+            self._target_projection_response_cache = cache
+        return cast("dict[str, Float64Array | None]", cache)
+
+    def _segment_target_projection_cache_store(
+        self,
+    ) -> dict[str, tuple[tuple[str, ...], Int32Array, Float64Array] | None]:
+        cache = getattr(self, "_segment_target_projection_cache", None)
+        if cache is None:
+            cache = {}
+            self._segment_target_projection_cache = cache
+        return cast("dict[str, tuple[tuple[str, ...], Int32Array, Float64Array] | None]", cache)
+
     def _restore_target_cube(
         self,
         flat_values: Float32Array,
@@ -1011,9 +1065,8 @@ class SpectralMapper:
         output: Float32Array = np.full(len(self.target_bands), np.nan, dtype=np.float32)
         target_values_by_band_id = self._target_values_by_band_id(result)
         for segment in ("vnir", "swir"):
-            prepared_segments = getattr(result, "prepared_segments", None)
-            if isinstance(prepared_segments, dict):
-                prepared = prepared_segments.get(segment)
+            if isinstance(result, _MinimalMappingResult):
+                prepared = result.prepared_segments.get(segment)
             else:
                 diagnostics = result.diagnostics.get("segments", {})
                 if not isinstance(diagnostics, dict):
@@ -1060,7 +1113,7 @@ class SpectralMapper:
         return output
 
     @staticmethod
-    def _target_values_by_band_id(result: _PackageResultProtocol) -> dict[str, float]:
+    def _target_values_by_band_id(result: _PackageResultProtocol | _MinimalMappingResult) -> dict[str, float]:
         if result.target_reflectance is None:
             return {}
         return {
@@ -1092,21 +1145,21 @@ class SpectralMapper:
         )
 
     @staticmethod
-    def _prepare_segment_retrieval(retrieval: object) -> _PreparedSegmentDiagnostics | None:
-        if not bool(getattr(retrieval, "success", False)):
+    def _prepare_segment_retrieval(retrieval: _PackageRetrievalProtocol) -> _PreparedSegmentDiagnostics | None:
+        if not retrieval.success:
             return None
-        neighbor_ids = tuple(str(value) for value in getattr(retrieval, "neighbor_ids", ()))
+        neighbor_ids = tuple(str(value) for value in retrieval.neighbor_ids)
         if not neighbor_ids:
             return None
-        neighbor_weights = np.asarray(getattr(retrieval, "neighbor_weights", ()), dtype=np.float64)
+        neighbor_weights = np.asarray(retrieval.neighbor_weights, dtype=np.float64)
         if neighbor_weights.size == 0:
             return None
         weight_sum = float(np.sum(neighbor_weights))
         if weight_sum <= 0.0:
             return None
         normalized_weights = np.asarray(neighbor_weights / weight_sum, dtype=np.float64)
-        query_valid_mask = np.asarray(getattr(retrieval, "query_valid_mask", ()), dtype=np.bool_)
-        source_fit_rmse = float(getattr(retrieval, "source_fit_rmse", 0.0) or 0.0)
+        query_valid_mask = np.asarray(retrieval.query_valid_mask, dtype=np.bool_)
+        source_fit_rmse = float(retrieval.source_fit_rmse or 0.0)
         return _PreparedSegmentDiagnostics(
             neighbor_ids=neighbor_ids,
             neighbor_weights=normalized_weights,
@@ -1147,10 +1200,7 @@ class SpectralMapper:
             [self._package_mapper._row_index_by_id[row_id] for row_id in neighbor_ids],  # noqa: SLF001
             dtype=np.int64,
         )
-        cache = getattr(self, "_segment_hyperspectral_cache", None)
-        if cache is None:
-            cache = {}
-            self._segment_hyperspectral_cache = cache
+        cache = self._segment_hyperspectral_cache_store()
         neighbor_spectra = cache.get(segment)
         if neighbor_spectra is None:
             neighbor_spectra = np.asarray(
@@ -1208,10 +1258,7 @@ class SpectralMapper:
             )
             denominator = float(np.sum(response))
             return None if denominator <= 0.0 else np.asarray(response / denominator, dtype=np.float64)
-        cache = getattr(self, "_target_projection_response_cache", None)
-        if cache is None:
-            cache = {}
-            self._target_projection_response_cache = cache
+        cache = self._target_projection_response_cache_store()
         if band_id in cache:
             return cache[band_id]
         response = np.asarray(
@@ -1231,10 +1278,7 @@ class SpectralMapper:
         self,
         segment: str,
     ) -> tuple[tuple[str, ...], Int32Array, Float64Array] | None:
-        cache = getattr(self, "_segment_target_projection_cache", None)
-        if cache is None:
-            cache = {}
-            self._segment_target_projection_cache = cache
+        cache = self._segment_target_projection_cache_store()
         if segment in cache:
             return cache[segment]
 
