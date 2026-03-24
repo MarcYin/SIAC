@@ -78,7 +78,8 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         crs: str,
     ) -> None:
         """Restrict raster reads to an AOI window."""
-        self._subset_bounds = tuple(float(value) for value in bounds)
+        xmin, ymin, xmax, ymax = bounds
+        self._subset_bounds = (float(xmin), float(ymin), float(xmax), float(ymax))
         self._subset_crs = str(crs)
 
     def clear_spatial_subset(self) -> None:

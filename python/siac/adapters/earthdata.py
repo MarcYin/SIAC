@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
-import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import numpy as np
@@ -23,6 +23,7 @@ from siac.adapters.earthdata_common import (
 from siac.geo.reprojection import transform_bounds
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime
 
     from rasterio.enums import Resampling
@@ -193,9 +194,9 @@ def merge_reprojected_tiles(
 
 
 def read_virtual_stack_to_target(
-    source_groups: list[list[str] | tuple[str, ...]],
+    source_groups: Sequence[Sequence[str]],
     *,
-    group_band_counts: list[int] | tuple[int, ...],
+    group_band_counts: Sequence[int],
     bounds: tuple[float, float, float, float],
     crs: str,
     resolution: float,
@@ -209,7 +210,7 @@ def read_virtual_stack_to_target(
     if len(source_groups) != len(group_band_counts):
         raise ValueError("source_groups and group_band_counts must have the same length")
 
-    from osgeo import gdal
+    from osgeo import gdal  # type: ignore[import-untyped]
 
     gdal.UseExceptions()
     target = target_template if target_template is not None else build_target_template(bounds, crs, resolution)
@@ -493,7 +494,7 @@ def _affine_from_coords(
     *,
     x_step: float,
     y_step: float,
-) -> object:
+) -> Any:
     from rasterio.transform import Affine
 
     return Affine.translation(x_values[0] - x_step / 2.0, y_values[0] - y_step / 2.0) * Affine.scale(x_step, y_step)
@@ -516,7 +517,7 @@ def _target_bounds_from_template(
     return (xmin, ymin, xmax, ymax)
 
 
-def _target_transform(data: xr.DataArray, *, resolution: float) -> object:
+def _target_transform(data: xr.DataArray, *, resolution: float) -> Any:
     x_values = np.asarray(data.coords["x"].values, dtype=np.float64)
     y_values = np.asarray(data.coords["y"].values, dtype=np.float64)
     x_step = float(x_values[1] - x_values[0]) if x_values.size > 1 else float(resolution)
@@ -525,7 +526,7 @@ def _target_transform(data: xr.DataArray, *, resolution: float) -> object:
 
 
 def _write_dataarray_to_memory_dataset(
-    memfile: object,
+    memfile: Any,
     data: xr.DataArray,
     *,
     nodata: np.float32,

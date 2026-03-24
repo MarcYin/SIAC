@@ -28,12 +28,12 @@ from siac.adapters.earthdata_common import (
     gdal_available,
     make_native_grid_dataarray,
     parse_granule_date,
-    read_hdf4_datasets_attrs,
-    read_hdf4_datasets,
     read_hdf4_dataset,
-    read_hdf5_datasets_attrs,
-    read_hdf5_datasets,
+    read_hdf4_datasets,
+    read_hdf4_datasets_attrs,
     read_hdf5_dataset,
+    read_hdf5_datasets,
+    read_hdf5_datasets_attrs,
     resolve_gdal_subdataset_path,
 )
 from siac.domain import SensorBand
@@ -737,7 +737,8 @@ class _EarthAccessBRDFProvider:
             _BEST_QA_REFLECTANCE_UNCERTAINTY * np.power(qa_values + 1.0, _QA_UNCERTAINTY_POWER),
             unc,
         )
-        return unc
+        unc_array: np.ndarray = np.asarray(unc, dtype=np.float32)
+        return unc_array
 
     def _empty_spatial_array(
         self,
@@ -806,12 +807,39 @@ class _EarthAccessBRDFProvider:
     def _allocate_temporal_payload_arrays(
         time_axis: np.ndarray,
         requested: Sequence[_RequestedBandSpec],
+        *,
+        y_size: int,
+        x_size: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        params_values: np.ndarray = np.full(
+            (len(time_axis), len(requested), 3, y_size, x_size),
+            np.nan,
+            dtype=np.float32,
+        )
+        unc_values: np.ndarray = np.full(
+            (len(time_axis), len(requested), y_size, x_size),
+            np.nan,
+            dtype=np.float32,
+        )
+        return params_values, unc_values
+
+    @staticmethod
+    def _allocate_spatial_payload_arrays(
+        requested: Sequence[_RequestedBandSpec],
         target_template: xr.DataArray,
     ) -> tuple[np.ndarray, np.ndarray]:
         y_size = int(target_template.sizes["y"])
         x_size = int(target_template.sizes["x"])
-        params_values = np.full((len(time_axis), len(requested), 3, y_size, x_size), np.nan, dtype=np.float32)
-        unc_values = np.full((len(time_axis), len(requested), y_size, x_size), np.nan, dtype=np.float32)
+        params_values: np.ndarray = np.full(
+            (len(requested), 3, y_size, x_size),
+            np.nan,
+            dtype=np.float32,
+        )
+        unc_values: np.ndarray = np.full(
+            (len(requested), y_size, x_size),
+            np.nan,
+            dtype=np.float32,
+        )
         return params_values, unc_values
 
     @staticmethod
@@ -906,15 +934,11 @@ class _EarthAccessBRDFProvider:
         )
         if temporal_payload is None:
             logger.info("%s temporal BRDF stack: direct temporal VRT path unavailable, falling back to per-day merges", self._source_name)
-            params_values = np.full(
-                (len(time_axis), len(requested), 3, y_coords.size, x_coords.size),
-                np.nan,
-                dtype=np.float32,
-            )
-            unc_values = np.full(
-                (len(time_axis), len(requested), y_coords.size, x_coords.size),
-                np.nan,
-                dtype=np.float32,
+            params_values, unc_values = self._allocate_temporal_payload_arrays(
+                time_axis,
+                requested,
+                y_size=y_coords.size,
+                x_size=x_coords.size,
             )
         else:
             logger.info("%s temporal BRDF stack: direct temporal VRT read completed", self._source_name)
@@ -924,7 +948,8 @@ class _EarthAccessBRDFProvider:
             extra_coords = [name for name in data.coords if name not in data.dims]
             if extra_coords:
                 data = data.drop_vars(extra_coords, errors="ignore")
-            return np.asarray(data.transpose("band", "y", "x").values, dtype=np.float32)
+            daily_values: np.ndarray = np.asarray(data.transpose("band", "y", "x").values, dtype=np.float32)
+            return daily_values
 
         if temporal_payload is None:
             for time_index, day in enumerate(time_axis):
@@ -1386,16 +1411,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
             return None
 
         layer_values = np.asarray(stacked.values, dtype=np.float32)
-        params_values = np.full(
-            (len(requested), 3, int(stacked.sizes["y"]), int(stacked.sizes["x"])),
-            np.nan,
-            dtype=np.float32,
-        )
-        unc_values = np.full(
-            (len(requested), int(stacked.sizes["y"]), int(stacked.sizes["x"])),
-            np.nan,
-            dtype=np.float32,
-        )
+        params_values, unc_values = self._allocate_spatial_payload_arrays(requested, target_template)
 
         offset = 0
         for band_index in range(len(requested)):
@@ -1442,7 +1458,12 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
         if not gdal_available():
             return None
 
-        params_values, unc_values = self._allocate_temporal_payload_arrays(time_axis, requested, target_template)
+        params_values, unc_values = self._allocate_temporal_payload_arrays(
+            time_axis,
+            requested,
+            y_size=int(target_template.sizes["y"]),
+            x_size=int(target_template.sizes["x"]),
+        )
         available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
         if not available_days:
             return params_values, unc_values
@@ -1785,11 +1806,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             return None
 
         layer_values = np.asarray(stacked.values, dtype=np.float32)
-        params_values = np.full(
-            (len(requested), 3, int(stacked.sizes["y"]), int(stacked.sizes["x"])),
-            np.nan,
-            dtype=np.float32,
-        )
+        params_values, _unused_unc_values = self._allocate_spatial_payload_arrays(requested, target_template)
         offset = 0
         for band_index, label in enumerate(labels):
             params_values[band_index, 0] = apply_scale_and_mask(layer_values[offset], dataset_attrs[f"Kiso_Band{label}"])
@@ -1841,7 +1858,12 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
         if not gdal_available():
             return None
 
-        params_values, unc_values = self._allocate_temporal_payload_arrays(time_axis, requested, target_template)
+        params_values, unc_values = self._allocate_temporal_payload_arrays(
+            time_axis,
+            requested,
+            y_size=int(target_template.sizes["y"]),
+            x_size=int(target_template.sizes["x"]),
+        )
         available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
         if not available_days:
             return params_values, unc_values

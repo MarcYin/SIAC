@@ -13,7 +13,7 @@ import h5py
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
-from pyhdf.SD import SD, SDC
+from pyhdf.SD import SD, SDC  # type: ignore[import-untyped]
 
 from siac.geo.reprojection import transform_bounds
 
@@ -565,7 +565,7 @@ def read_hdf5_datasets_attrs(
 def gdal_available() -> bool:
     """Return whether the Python GDAL bindings are importable."""
     try:
-        from osgeo import gdal
+        from osgeo import gdal  # type: ignore[import-untyped]
     except ImportError:
         return False
 
@@ -610,7 +610,7 @@ def resolve_gdal_subdataset_path(path: str | Path, dataset_name: str) -> str:
             if _subdataset_matches(dataset_name, uri, description)
         ]
         if len(matches) == 1:
-            return matches[0]
+            return str(matches[0])
         if len(matches) > 1:
             raise KeyError(f"Ambiguous GDAL subdataset match for {dataset_name!r} in {path!s}")
 
@@ -639,17 +639,20 @@ def apply_scale_and_mask(
     scale_factor = float(attr_scalar(attrs, "scale_factor", 1.0) or 1.0)
     add_offset = float(attr_scalar(attrs, "add_offset", 0.0) or 0.0)
     out = out * scale_factor + add_offset
-    return out.astype(np.float32, copy=False)
+    out_array: np.ndarray = np.asarray(out, dtype=np.float32)
+    return out_array
 
 
 def reduce_orbit_stack(values: np.ndarray) -> np.ndarray:
     """Reduce a per-orbit stack to one 2-D field via nanmean."""
     arr = np.asarray(values, dtype=np.float32)
     if arr.ndim <= 2:
-        return arr.astype(np.float32, copy=False)
+        arr_out: np.ndarray = np.asarray(arr, dtype=np.float32)
+        return arr_out
     valid = np.isfinite(arr)
     count = np.sum(valid, axis=0, dtype=np.int32)
     total = np.nansum(arr, axis=0, dtype=np.float32)
     out = np.full(arr.shape[1:], np.nan, dtype=np.float32)
     np.divide(total, count, out=out, where=count > 0)
-    return out
+    out_array: np.ndarray = np.asarray(out, dtype=np.float32)
+    return out_array

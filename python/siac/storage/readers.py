@@ -133,8 +133,8 @@ def read_raster_window(
 
     import rasterio
     from rasterio.transform import xy
-    from rasterio.windows import Window, from_bounds
     from rasterio.warp import transform_bounds
+    from rasterio.windows import Window, from_bounds
 
     path = str(path)
     with rasterio.open(path) as src:
@@ -153,13 +153,27 @@ def read_raster_window(
         height = int(window.height)
         width = int(window.width)
 
-        cols = np.arange(width, dtype=np.int32)
-        rows = np.arange(height, dtype=np.int32)
-        x = np.asarray(xy(transform, np.zeros_like(cols), cols, offset="center")[0], dtype=np.float64)
-        y = np.asarray(xy(transform, rows, np.zeros_like(rows), offset="center")[1], dtype=np.float64)
+        x = np.asarray(
+            xy(
+                transform,
+                np.zeros(width, dtype=np.int32),
+                np.arange(width, dtype=np.int32),
+                offset="center",
+            )[0],
+            dtype=np.float64,
+        )
+        y = np.asarray(
+            xy(
+                transform,
+                np.arange(height, dtype=np.int32),
+                np.zeros(height, dtype=np.int32),
+                offset="center",
+            )[1],
+            dtype=np.float64,
+        )
 
         if np.ma.isMaskedArray(values):
-            values = values.astype(np.float32).filled(np.nan)
+            values = np.asarray(np.ma.filled(np.ma.asarray(values, dtype=np.float32), np.nan), dtype=np.float32)
 
         if values.ndim == 3 and values.shape[0] == 1:
             values = values[0]
