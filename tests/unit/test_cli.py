@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -121,7 +122,10 @@ def test_process_s2_honors_runtime_log_level_per_invocation(
     assert "workflow info" not in quiet_output.err
     assert "Sentinel-2 processing complete" in quiet_output.out
     assert info_code == 0
-    assert "INFO:siac.test.workflow:workflow info" in info_output.err
+    assert re.search(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO:siac\.test\.workflow:workflow info",
+        info_output.err,
+    )
     assert "Sentinel-2 processing complete" in info_output.out
 
 
@@ -145,7 +149,10 @@ def test_process_s2_uses_default_info_logging_without_config(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "INFO:siac.test.default:default info" in captured.err
+    assert re.search(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO:siac\.test\.default:default info",
+        captured.err,
+    )
     assert "Sentinel-2 processing complete" in captured.out
 
 
