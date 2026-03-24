@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import calendar
 import collections.abc
+import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -13,7 +15,10 @@ import xarray as xr
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.correction.atmospheric import AtmosphericCorrector
 from siac.algorithms.grid.assembler import _compute_target_shape, _resample_cloud_mask, _resample_da
-from siac.algorithms.surface.brdf_monthly_composite import build_monthly_best_pixel_composite
+from siac.algorithms.surface.brdf_monthly_composite import (
+    MonthlyBestPixelComposite,
+    build_monthly_best_pixel_composite,
+)
 from siac.algorithms.surface.brdf_monthly_database import (
     MonthlyCompositeDatabase,
     build_monthly_composite_database,
@@ -35,10 +40,13 @@ from siac.runtime import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+logger = logging.getLogger(__name__)
+
 
 _HISTORY_YEARS = 5
 _HISTORY_MONTH_OFFSETS = (-1, 0, 1)
 _WEEKLY_STEP_DAYS = 7
+_BRDF_BATCH_MONTHS = 3
 
 
 class _TemporalBRDFProvider(Protocol):
@@ -55,6 +63,15 @@ class _TemporalBRDFProvider(Protocol):
         temporal_windows: collections.abc.Sequence[int],
         sample_date_sets: collections.abc.Sequence[collections.abc.Sequence[datetime]],
     ) -> collections.abc.Sequence[BRDFKernelWeights]: ...
+
+
+@dataclass(frozen=True)
+class _MonthlyModeledReflectance:
+    year: int
+    month: int
+    reflectance: xr.DataArray
+    quality: xr.DataArray
+    reflectance_unc: xr.DataArray
 
 
 def build_monthly_surface_prior_database(
@@ -76,8 +93,8 @@ def build_monthly_surface_prior_database(
     if resolution <= 0:
         raise ValueError("resolution must be > 0")
 
-    required_bands = _deduplicate_bands([*visible_bands, *query_bands])
-    source_bands = _resolve_provider_source_bands(brdf_provider, required_bands)
+    target_bands = _deduplicate_bands([*visible_bands, *query_bands])
+    source_bands = _resolve_provider_source_bands(brdf_provider, target_bands)
     obs_time = cast("datetime", observation.metadata["observation_time"])
     month_specs = [
         (
@@ -89,68 +106,133 @@ def build_monthly_surface_prior_database(
         )
         for year, month in _iter_history_months(obs_time)
     ]
-    temporal_weights_list = _get_temporal_brdf_parameters_batch(
-        brdf_provider,
-        bounds=observation.bounds,
-        crs=observation.crs,
-        obs_times=[spec[2] for spec in month_specs],
-        target_resolution=resolution,
-        bands=source_bands,
-        temporal_windows=[spec[3] for spec in month_specs],
-        sample_date_sets=[spec[4] for spec in month_specs],
+    logger.info(
+        "Monthly surface-prior database build: obs_time=%s months=%d batch_size=%d required_bands=%d source_bands=%d",
+        obs_time.isoformat(),
+        len(month_specs),
+        _BRDF_BATCH_MONTHS,
+        len(target_bands),
+        len(source_bands),
     )
     spectral_mapper: SpectralMapper | None = None
-    if tuple(band.name for band in source_bands) != tuple(band.name for band in required_bands):
+    if tuple(band.name for band in source_bands) != tuple(band.name for band in target_bands):
         spectral_mapper = SpectralMapper(
             source_bands,
-            required_bands,
+            target_bands,
             spectral_library=spectral_library,
             k_neighbors=spectral_k_neighbors,
         )
-    composites = []
-    for (year, month, _center_time, _temporal_window, _sample_dates), temporal_weights in zip(
-        month_specs,
-        temporal_weights_list,
-        strict=True,
-    ):
-        reflectance, quality, reflectance_unc = _forward_model_monthly_reflectance(
-            temporal_weights,
-            geometry=geometry,
-            year=year,
-            month=month,
+    monthly_inputs: list[_MonthlyModeledReflectance] = []
+    for batch_start in range(0, len(month_specs), _BRDF_BATCH_MONTHS):
+        month_batch = month_specs[batch_start: batch_start + _BRDF_BATCH_MONTHS]
+        logger.info(
+            "Monthly surface-prior database batch %d-%d/%d: fetching temporal BRDF for months=%s",
+            batch_start + 1,
+            batch_start + len(month_batch),
+            len(month_specs),
+            [f"{year:04d}-{month:02d}" for year, month, *_rest in month_batch],
         )
-        if spectral_mapper is not None:
-            reflectance, mapped_unc = spectral_mapper.map(
-                reflectance,
-                source_uncertainty=reflectance_unc,
+        temporal_weights_batch = _get_temporal_brdf_parameters_batch(
+            brdf_provider,
+            bounds=observation.bounds,
+            crs=observation.crs,
+            obs_times=[spec[2] for spec in month_batch],
+            target_resolution=resolution,
+            bands=source_bands,
+            temporal_windows=[spec[3] for spec in month_batch],
+            sample_date_sets=[spec[4] for spec in month_batch],
+        )
+        logger.info(
+            "Monthly surface-prior database batch %d-%d/%d: received %d temporal BRDF stack(s)",
+            batch_start + 1,
+            batch_start + len(month_batch),
+            len(month_specs),
+            len(temporal_weights_batch),
+        )
+        for (year, month, _center_time, _temporal_window, _sample_dates), temporal_weights in zip(
+            month_batch,
+            temporal_weights_batch,
+            strict=True,
+        ):
+            logger.info(
+                "Monthly surface-prior database month %04d-%02d: forward modelling %d sampled day(s)",
+                year,
+                month,
+                int(temporal_weights.f0.sizes["time"]),
             )
-            quality = np.sqrt(
-                np.square(quality.values, dtype=np.float32)
-                + np.square(mapped_unc.mean(dim="band", skipna=True).values, dtype=np.float32)
-            ).astype(np.float32)
-            quality = xr.DataArray(
-                quality,
-                dims=["time", "y", "x"],
-                coords={
-                    "time": reflectance.coords["time"],
-                    "y": reflectance.coords["y"],
-                    "x": reflectance.coords["x"],
-                },
-            )
-        composites.append(
-            build_monthly_best_pixel_composite(
-                reflectance,
-                quality,
+            reflectance, quality, reflectance_unc = _forward_model_monthly_reflectance(
+                temporal_weights,
+                geometry=geometry,
                 year=year,
                 month=month,
             )
+            reflectance, quality, reflectance_unc, collapsed = _collapse_repeated_temporal_samples(
+                reflectance,
+                quality,
+                reflectance_unc,
+            )
+            if collapsed:
+                logger.info(
+                    "Monthly surface-prior database month %04d-%02d: collapsed identical sampled days to %d sample",
+                    year,
+                    month,
+                    int(reflectance.sizes["time"]),
+                )
+            monthly_inputs.append(
+                _MonthlyModeledReflectance(
+                    year=year,
+                    month=month,
+                    reflectance=reflectance,
+                    quality=quality,
+                    reflectance_unc=reflectance_unc,
+                )
+            )
+
+    if spectral_mapper is not None:
+        logger.info(
+            "Monthly surface-prior database: spectral mapping %d month input(s) from %d source band(s) to %d target band(s)",
+            len(monthly_inputs),
+            len(source_bands),
+            len(target_bands),
+        )
+        monthly_inputs = _map_monthly_inputs_to_target_basis(monthly_inputs, spectral_mapper)
+        logger.info("Monthly surface-prior database: spectral mapping of monthly composites complete")
+
+    composites: list[MonthlyBestPixelComposite] = []
+    for monthly_input in monthly_inputs:
+        logger.info(
+            "Monthly surface-prior database month %04d-%02d: building best-pixel composite from %d sample(s)",
+            monthly_input.year,
+            monthly_input.month,
+            int(monthly_input.reflectance.sizes["time"]),
+        )
+        composites.append(
+            build_monthly_best_pixel_composite(
+                monthly_input.reflectance,
+                monthly_input.quality,
+                year=monthly_input.year,
+                month=monthly_input.month,
+            )
+        )
+        logger.info(
+            "Monthly surface-prior database month %04d-%02d: composite complete",
+            monthly_input.year,
+            monthly_input.month,
         )
 
-    return build_monthly_composite_database(
+    logger.info("Monthly surface-prior database: assembling final database from %d composite(s)", len(composites))
+    database = build_monthly_composite_database(
         composites,
         query_bands=tuple(band.name for band in query_bands),
         visible_bands=tuple(band.name for band in visible_bands),
     )
+    logger.info(
+        "Monthly surface-prior database complete: entries=%d visible_bands=%d query_bands=%d",
+        int(database.entries_features.shape[0]),
+        len(database.visible_band_names),
+        len(database.query_band_names),
+    )
+    return database
 
 
 def query_surface_prior_from_monthly_database(
@@ -172,18 +254,24 @@ def query_surface_prior_from_monthly_database(
     if visible_band_names is not None and tuple(visible_band_names) != expected_visible:
         raise ValueError("visible_band_names must match the database visible-band ordering")
 
-    aligned_atmo = _resample_atmo_to_observation_grid(observation, atmo_prior)
-    corrector = AtmosphericCorrector(rt_model, observation.sensor_config)
-    correction = corrector.correct(
-        observation.toa,
-        observation.geometry,
-        aligned_atmo,
-        cloud_mask=observation.cloud_mask,
-    )
-
     target_shape = (
         int(database.median_summary.sizes["y"]),
         int(database.median_summary.sizes["x"]),
+    )
+    coarse_query_toa = _resample_dataset(
+        observation.toa,
+        band_names=expected_query,
+        target_shape=target_shape,
+    )
+    coarse_geometry = _resample_geometry_to_target_shape(observation.geometry, target_shape)
+    coarse_atmo = _resample_atmo_to_target_shape(atmo_prior, target_shape)
+    coarse_cloud_mask = _resample_cloud_mask_to_target_shape(observation.cloud_mask, target_shape)
+    corrector = AtmosphericCorrector(rt_model, observation.sensor_config)
+    correction = corrector.correct(
+        coarse_query_toa,
+        coarse_geometry,
+        coarse_atmo,
+        cloud_mask=coarse_cloud_mask,
     )
     corrected_query = _resample_dataset(
         correction.boa,
@@ -195,11 +283,7 @@ def query_surface_prior_from_monthly_database(
         k_neighbors=k_neighbors,
     )
 
-    cloud_mask = correction.cloud_mask
-    if "band" in cloud_mask.dims:
-        cloud_mask = cloud_mask.any(dim="band")
-    if cloud_mask.shape != target_shape:
-        cloud_mask = _resample_cloud_mask(cloud_mask, target_shape)
+    cloud_mask = _resample_cloud_mask_to_target_shape(correction.cloud_mask, target_shape)
     valid = np.all(np.isfinite(predicted_visible.values), axis=0) & np.all(np.isfinite(predicted_unc.values), axis=0)
     mask = xr.DataArray(
         valid & (~cloud_mask.values.astype(bool)),
@@ -273,6 +357,15 @@ def _forward_model_monthly_reflectance(
     year: int,
     month: int,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    logger.info(
+        "Monthly forward model start: month=%04d-%02d time=%d bands=%d grid=%dx%d",
+        year,
+        month,
+        int(temporal_weights.f0.sizes["time"]),
+        int(temporal_weights.f0.sizes["band"]),
+        int(temporal_weights.f0.sizes["y"]),
+        int(temporal_weights.f0.sizes["x"]),
+    )
     kernels = BRDFKernels(hb=2.0, br=1.0)
     k_vol, k_geo = kernels.compute(geometry.vza, geometry.sza, geometry.raa)
     reflectance = cast(
@@ -296,6 +389,12 @@ def _forward_model_monthly_reflectance(
         reflectance_unc = reflectance_unc.isel(time=month_mask)
 
     quality = reflectance_unc.mean(dim="band", skipna=True).astype(np.float32)
+    logger.info(
+        "Monthly forward model complete: month=%04d-%02d retained_samples=%d",
+        year,
+        month,
+        int(reflectance.sizes["time"]),
+    )
     return reflectance.astype(np.float32), quality, reflectance_unc.astype(np.float32)
 
 
@@ -307,6 +406,94 @@ def _select_month_mask(time_values: np.ndarray, *, year: int, month: int) -> np.
         np.asarray(month_strings == target, dtype=np.bool_),
     )
     return month_mask
+
+
+def _collapse_repeated_temporal_samples(
+    reflectance: xr.DataArray,
+    quality: xr.DataArray,
+    reflectance_unc: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, bool]:
+    if int(reflectance.sizes.get("time", 1)) <= 1:
+        return reflectance, quality, reflectance_unc, False
+    if not _all_time_slices_identical(reflectance):
+        return reflectance, quality, reflectance_unc, False
+    if not _all_time_slices_identical(quality):
+        return reflectance, quality, reflectance_unc, False
+    if not _all_time_slices_identical(reflectance_unc):
+        return reflectance, quality, reflectance_unc, False
+    first = {"time": slice(0, 1)}
+    return (
+        reflectance.isel(first),
+        quality.isel(first),
+        reflectance_unc.isel(first),
+        True,
+    )
+
+
+def _all_time_slices_identical(data: xr.DataArray) -> bool:
+    if int(data.sizes.get("time", 1)) <= 1:
+        return True
+    values = np.asarray(data.values)
+    template = np.broadcast_to(values[0:1], values.shape)
+    return bool(np.allclose(values, template, rtol=0.0, atol=0.0, equal_nan=True))
+
+
+def _map_monthly_inputs_to_target_basis(
+    monthly_inputs: collections.abc.Sequence[_MonthlyModeledReflectance],
+    spectral_mapper: SpectralMapper,
+) -> list[_MonthlyModeledReflectance]:
+    if not monthly_inputs:
+        return []
+
+    stacked_reflectance = xr.concat(
+        [monthly_input.reflectance for monthly_input in monthly_inputs],
+        dim="time",
+    ).transpose("time", "band", "y", "x")
+    stacked_uncertainty = xr.concat(
+        [monthly_input.reflectance_unc for monthly_input in monthly_inputs],
+        dim="time",
+    ).transpose("time", "band", "y", "x")
+    mapped_reflectance, mapped_uncertainty = spectral_mapper.map(
+        stacked_reflectance,
+        source_uncertainty=stacked_uncertainty,
+    )
+
+    remapped: list[_MonthlyModeledReflectance] = []
+    start = 0
+    for monthly_input in monthly_inputs:
+        stop = start + int(monthly_input.reflectance.sizes["time"])
+        mapped_month = mapped_reflectance.isel(time=slice(start, stop))
+        mapped_unc_month = mapped_uncertainty.isel(time=slice(start, stop))
+        remapped.append(
+            _MonthlyModeledReflectance(
+                year=monthly_input.year,
+                month=monthly_input.month,
+                reflectance=mapped_month,
+                quality=_combine_quality_with_mapping_uncertainty(monthly_input.quality, mapped_unc_month),
+                reflectance_unc=mapped_unc_month,
+            )
+        )
+        start = stop
+    return remapped
+
+
+def _combine_quality_with_mapping_uncertainty(
+    quality: xr.DataArray,
+    mapped_uncertainty: xr.DataArray,
+) -> xr.DataArray:
+    combined = np.sqrt(
+        np.square(quality.values, dtype=np.float32)
+        + np.square(mapped_uncertainty.mean(dim="band", skipna=True).values, dtype=np.float32)
+    ).astype(np.float32)
+    return xr.DataArray(
+        combined,
+        dims=["time", "y", "x"],
+        coords={
+            "time": quality.coords["time"],
+            "y": quality.coords["y"],
+            "x": quality.coords["x"],
+        },
+    )
 
 
 def _deduplicate_bands(bands: collections.abc.Sequence[SensorBand]) -> list[SensorBand]:
@@ -344,7 +531,27 @@ def _resample_atmo_to_observation_grid(
     observation: ObservationBundle,
     atmo_prior: AtmosphericState,
 ) -> AtmosphericState:
-    target_shape = _observation_shape(observation)
+    return _resample_atmo_to_target_shape(atmo_prior, _observation_shape(observation))
+
+
+def _resample_geometry_to_target_shape(
+    geometry: GeometryAngles,
+    target_shape: tuple[int, int],
+) -> GeometryAngles:
+    if geometry.sza.shape == target_shape:
+        return geometry
+    return GeometryAngles(
+        sza=_resample_da(geometry.sza, target_shape, "bilinear"),
+        saa=_resample_da(geometry.saa, target_shape, "bilinear"),
+        vza=_resample_da(geometry.vza, target_shape, "bilinear"),
+        vaa=_resample_da(geometry.vaa, target_shape, "bilinear"),
+    )
+
+
+def _resample_atmo_to_target_shape(
+    atmo_prior: AtmosphericState,
+    target_shape: tuple[int, int],
+) -> AtmosphericState:
     if atmo_prior.aot.shape == target_shape:
         return atmo_prior
     return AtmosphericState(
@@ -356,6 +563,17 @@ def _resample_atmo_to_observation_grid(
         tco3_unc=_resample_da(atmo_prior.tco3_unc, target_shape, "bilinear"),
         elevation=_resample_da(atmo_prior.elevation, target_shape, "bilinear"),
     )
+
+
+def _resample_cloud_mask_to_target_shape(
+    cloud_mask: xr.DataArray,
+    target_shape: tuple[int, int],
+) -> xr.DataArray:
+    if "band" in cloud_mask.dims:
+        cloud_mask = cloud_mask.any(dim="band")
+    if cloud_mask.shape == target_shape:
+        return cloud_mask
+    return _resample_cloud_mask(cloud_mask, target_shape)
 
 
 def _resample_dataset(

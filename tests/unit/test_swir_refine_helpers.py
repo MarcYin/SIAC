@@ -197,6 +197,90 @@ def test_query_surface_prior_combines_cloud_mask_resampling_and_invalid_pixels(
     assert prior.mask.values.tolist() == [[True, False], [False, False]]
 
 
+def test_query_surface_prior_corrects_only_resampled_query_bands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
+        seen["bands"] = tuple(toa.data_vars)
+        seen["toa_shape"] = toa["B08"].shape
+        seen["geometry_shape"] = geometry.sza.shape
+        seen["atmo_shape"] = aligned_atmo.aot.shape
+        seen["cloud_shape"] = None if cloud_mask is None else cloud_mask.shape
+        return SimpleNamespace(boa=toa, cloud_mask=cloud_mask)
+
+    monkeypatch.setattr(swir_refine.AtmosphericCorrector, "correct", fake_correct)
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=_observation((4, 4)),
+        atmo_prior=_atmo((2, 2)),
+        rt_model=_IdentityRTModel(),
+        database=_StubDatabase(),
+        query_band_names=("B08", "B11"),
+        visible_band_names=("B02",),
+        k_neighbors=4,
+    )
+
+    assert seen["bands"] == ("B08", "B11")
+    assert seen["toa_shape"] == (2, 2)
+    assert seen["geometry_shape"] == (2, 2)
+    assert seen["atmo_shape"] == (2, 2)
+    assert seen["cloud_shape"] == (2, 2)
+    assert prior.boa.shape == (1, 2, 2)
+
+
+def test_query_surface_prior_uses_database_grid_for_knn_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class _MismatchedGridDatabase:
+        query_band_names = ("B08", "B11")
+        visible_band_names = ("B02",)
+
+        def __init__(self) -> None:
+            self.median_summary = xr.DataArray(
+                np.zeros((2, 4, 4), dtype=np.float32),
+                dims=["feature", "y", "x"],
+                coords={"feature": ["median_query_0", "median_query_1"], "y": np.arange(4), "x": np.arange(4)},
+            )
+
+        def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+            seen["knn_shape"] = corrected_query["B08"].shape
+            assert k_neighbors == 4
+            coords = {"band": ["B02"], "y": np.arange(4), "x": np.arange(4)}
+            values = np.full((1, 4, 4), 0.2, dtype=np.float32)
+            return (
+                xr.DataArray(values, dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(np.full_like(values, 0.05), dims=["band", "y", "x"], coords=coords),
+            )
+
+    def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
+        seen["toa_shape"] = toa["B08"].shape
+        seen["geometry_shape"] = geometry.sza.shape
+        seen["atmo_shape"] = aligned_atmo.aot.shape
+        return SimpleNamespace(boa=toa, cloud_mask=cloud_mask)
+
+    monkeypatch.setattr(swir_refine.AtmosphericCorrector, "correct", fake_correct)
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=_observation((8, 8)),
+        atmo_prior=_atmo((2, 2)),
+        rt_model=_IdentityRTModel(),
+        database=_MismatchedGridDatabase(),
+        query_band_names=("B08", "B11"),
+        visible_band_names=("B02",),
+        k_neighbors=4,
+    )
+
+    assert seen["toa_shape"] == (4, 4)
+    assert seen["geometry_shape"] == (4, 4)
+    assert seen["atmo_shape"] == (4, 4)
+    assert seen["knn_shape"] == (4, 4)
+    assert prior.boa.shape == (1, 4, 4)
+
+
 def test_resample_geometry_for_surface_prior_uses_native_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

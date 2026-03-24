@@ -21,6 +21,14 @@ def _select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]
 
 
 def _select_visible_surface_prior_bands(sensor_config: SensorConfig) -> list[Any]:
+    preferred_by_sensor = {
+        "MSI": ("B01", "B02", "B04"),
+        "OLI": ("B1", "B2", "B4"),
+    }
+    preferred_names = preferred_by_sensor.get(sensor_config.sensor_id, ())
+    preferred = [band for name in preferred_names for band in sensor_config.bands if band.name == name]
+    if preferred:
+        return preferred
     bands = [band for band in sensor_config.bands if 400.0 <= band.center_wavelength < 700.0]
     if bands:
         return bands

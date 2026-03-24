@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 from scipy.spatial import cKDTree
 
+from siac.algorithms.grid.assembler import _resample_da
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from siac.algorithms.surface.brdf_monthly_composite import MonthlyBestPixelComposite
+
+logger = logging.getLogger(__name__)
 
 
 def _feature_names_for_query_bands(query_bands: Sequence[str]) -> tuple[str, ...]:
@@ -30,6 +35,34 @@ def _dataset_to_cube(dataset_or_array: xr.Dataset | xr.DataArray, band_names: Se
             raise ValueError("DataArray inputs must have a 'band' dimension")
         return dataset_or_array.sel(band=list(band_names))
     return xr.concat([dataset_or_array[name] for name in band_names], dim=xr.IndexVariable("band", list(band_names)))
+
+
+def _resample_summary_to_query_grid(
+    summary: xr.DataArray,
+    query_cube: xr.DataArray,
+) -> xr.DataArray:
+    target_shape = (int(query_cube.sizes["y"]), int(query_cube.sizes["x"]))
+    if summary.sizes.get("y") == target_shape[0] and summary.sizes.get("x") == target_shape[1]:
+        return summary
+
+    feature_coords = (
+        summary.coords["feature"].values
+        if "feature" in summary.coords
+        else np.arange(summary.sizes["feature"])
+    )
+    resampled = xr.concat(
+        [
+            _resample_da(summary.sel(feature=feature, drop=True), target_shape, "bilinear")
+            for feature in feature_coords
+        ],
+        dim=xr.IndexVariable("feature", feature_coords),
+    )
+    coords: dict[str, object] = {"feature": feature_coords}
+    if "y" in query_cube.coords:
+        coords["y"] = query_cube.coords["y"]
+    if "x" in query_cube.coords:
+        coords["x"] = query_cube.coords["x"]
+    return resampled.assign_coords(**coords)
 
 
 @dataclass(frozen=True)
@@ -62,11 +95,10 @@ class MonthlyCompositeDatabase:
             raise ValueError("k_neighbors must be >= 1")
 
         query_cube = _dataset_to_cube(corrected_reflectance, self.query_band_names).astype(np.float32)
-        if query_cube.sizes.get("y") != self.median_summary.sizes.get("y") or query_cube.sizes.get("x") != self.median_summary.sizes.get("x"):
-            raise ValueError("corrected_reflectance must share the database spatial grid")
+        query_summary = _resample_summary_to_query_grid(self.median_summary, query_cube)
 
         query_values = np.asarray(query_cube.values, dtype=np.float32)
-        median_values = np.asarray(self.median_summary.values, dtype=np.float32)
+        median_values = np.asarray(query_summary.values, dtype=np.float32)
 
         n_visible = len(self.visible_band_names)
         n_query = len(self.query_band_names)
@@ -75,13 +107,15 @@ class MonthlyCompositeDatabase:
         n_pixels = ny * nx
         predicted = np.full((n_visible, ny, nx), np.nan, dtype=np.float32)
         uncertainty = np.full((n_visible, ny, nx), np.nan, dtype=np.float32)
+        y_coords = query_cube.coords["y"] if "y" in query_cube.coords else np.arange(ny)
+        x_coords = query_cube.coords["x"] if "x" in query_cube.coords else np.arange(nx)
 
         features_flat = np.empty((n_pixels, n_query + median_values.shape[0]), dtype=np.float32)
         features_flat[:, :n_query] = query_values.reshape(n_query, n_pixels).T
         features_flat[:, n_query:] = median_values.reshape(median_values.shape[0], n_pixels).T
         valid_query_rows = np.flatnonzero(np.all(np.isfinite(features_flat), axis=1))
         if valid_query_rows.size == 0 or self.entries_features.size == 0:
-            coords = {"band": list(self.visible_band_names), "y": self.y_coords, "x": self.x_coords}
+            coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
             return (
                 xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
                 xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
@@ -89,7 +123,7 @@ class MonthlyCompositeDatabase:
 
         neighbor_index = self._neighbor_index
         if neighbor_index is None:
-            coords = {"band": list(self.visible_band_names), "y": self.y_coords, "x": self.x_coords}
+            coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
             return (
                 xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
                 xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
@@ -148,7 +182,7 @@ class MonthlyCompositeDatabase:
                     predicted_flat[flat_index] = estimate.astype(np.float32, copy=False)
                     uncertainty_flat[flat_index] = spread.astype(np.float32, copy=False)
 
-        coords = {"band": list(self.visible_band_names), "y": self.y_coords, "x": self.x_coords}
+        coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
         return (
             xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
             xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
@@ -178,6 +212,14 @@ def build_monthly_composite_database(
     n_query = len(query_names)
     n_visible = len(visible_names)
     n_pixels = ny * nx
+    logger.info(
+        "Monthly composite database build start: composites=%d query_bands=%d visible_bands=%d grid=%dx%d",
+        n_composites,
+        n_query,
+        n_visible,
+        int(ny),
+        int(nx),
+    )
 
     query_values = np.empty((n_composites, n_query, ny, nx), dtype=np.float32)
     entries_visible = np.empty((n_composites * n_pixels, n_visible), dtype=np.float32)
@@ -203,6 +245,11 @@ def build_monthly_composite_database(
     valid_entries = np.all(np.isfinite(entries_features), axis=1) & np.all(np.isfinite(entries_visible), axis=1)
     entries_features = entries_features[valid_entries]
     entries_visible = entries_visible[valid_entries]
+    logger.info(
+        "Monthly composite database build complete: valid_entries=%d total_entries=%d",
+        int(entries_features.shape[0]),
+        int(n_composites * n_pixels),
+    )
 
     return MonthlyCompositeDatabase(
         entries_features=entries_features,

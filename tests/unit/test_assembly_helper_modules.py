@@ -490,9 +490,26 @@ def test_surface_helper_selection_and_mapping_runtime(
         default_ref_scale=1.0,
         default_ref_offset=0.0,
     )
+    msi_visible_sensor = SensorConfig(
+        sensor_id="MSI",
+        satellite_id="S2",
+        bands=(
+            SensorBand("B01", 443.0, 20.0, 60.0, 0),
+            SensorBand("B02", 490.0, 65.0, 10.0, 1),
+            SensorBand("B03", 560.0, 35.0, 10.0, 2),
+            SensorBand("B04", 665.0, 30.0, 10.0, 3),
+            SensorBand("B08", 842.0, 115.0, 10.0, 4),
+            SensorBand("B11", 1610.0, 90.0, 20.0, 5),
+            SensorBand("B12", 2190.0, 180.0, 20.0, 6),
+        ),
+        default_ref_scale=1.0,
+        default_ref_offset=0.0,
+    )
 
     assert surface_mod._select_surface_prior_bands(None) == list(range(1, 8))
     assert [band.name for band in surface_mod._select_surface_prior_bands(mock_sensor_config)] == ["B01", "B02"]
+    assert [band.name for band in surface_mod._select_visible_surface_prior_bands(mock_sensor_config)] == ["B01", "B02", "B03", "B04"]
+    assert [band.name for band in surface_mod._select_visible_surface_prior_bands(msi_visible_sensor)] == ["B01", "B02", "B04"]
     assert [band.name for band in surface_mod._select_visible_surface_prior_bands(swir_sensor)] == ["B11", "B12"]
     assert [band.name for band in surface_mod._select_route_b_query_bands(msi_sensor)] == ["B08", "B11", "B12"]
     assert len(surface_mod._select_route_b_query_bands(mock_sensor_config)) == 3

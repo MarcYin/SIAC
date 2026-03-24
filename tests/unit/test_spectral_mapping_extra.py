@@ -246,6 +246,80 @@ def test_uncertainty_helpers_cover_normalization_loading_and_projection() -> Non
     assert float(output[0]) > 0.1
 
 
+def test_map_prefers_minimal_batch_path_when_package_private_hooks_exist() -> None:
+    mapper = object.__new__(SpectralMapper)
+    mapper.source_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
+    mapper.target_bands = (SensorBand("T01", 500.0, 50.0, 10.0, 0),)
+    mapper.k_neighbors = 1
+    mapper._identity = False
+    mapper._target_band_names = ["T01"]
+    mapper._mapping_config = SimpleNamespace(
+        min_valid_bands=1,
+        neighbor_estimator="distance_weighted_mean",
+        knn_backend="numpy",
+        knn_eps=0.0,
+    )
+    mapper._runtime = SimpleNamespace(source_sensor_id="src", target_sensor_id="target")
+    mapper._target_internal_to_output_index = {"T01": 0}
+    mapper._source_retrieval_indices_by_segment = {
+        "vnir": np.array([0], dtype=np.int32),
+        "swir": np.array([], dtype=np.int32),
+    }
+    mapper._target_schema_by_band_id = {"T01": SimpleNamespace(band_id="T01", segment="vnir")}
+
+    calls = {"private": 0, "public": 0}
+
+    retrieval_ok = SimpleNamespace(
+        success=True,
+        reconstructed=np.array([0.4, 0.6], dtype=np.float64),
+        neighbor_ids=("n1",),
+        neighbor_weights=np.array([1.0], dtype=np.float64),
+        query_valid_mask=np.array([True], dtype=np.bool_),
+        source_fit_rmse=0.1,
+    )
+    retrieval_empty = SimpleNamespace(
+        success=False,
+        reconstructed=None,
+        neighbor_ids=(),
+        neighbor_weights=np.array([], dtype=np.float64),
+        query_valid_mask=np.array([], dtype=np.bool_),
+        source_fit_rmse=0.0,
+    )
+
+    def _public_map_reflectance_batch(**_kwargs):  # noqa: ANN003
+        calls["public"] += 1
+        raise AssertionError("public batch path should not be used when private hooks are available")
+
+    def _retrieve_segment_batch(*, segment, **_kwargs):  # noqa: ANN003
+        calls["private"] += 1
+        if segment == "vnir":
+            return (retrieval_ok,)
+        return (retrieval_empty,)
+
+    mapper._package_mapper = SimpleNamespace(
+        map_reflectance_batch=_public_map_reflectance_batch,
+        _candidate_rows=lambda _candidate_rows: np.array([0], dtype=np.int64),
+        _retrieve_segment_batch=_retrieve_segment_batch,
+        _row_index_by_id={"n1": 0},
+        _load_hyperspectral=lambda _segment: np.array([[0.4, 0.6]], dtype=np.float64),
+        _band_response=lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float64),
+    )
+
+    source = xr.DataArray(
+        np.array([[[0.25]]], dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["B02"], "y": [0], "x": [0]},
+    )
+    source_unc = xr.full_like(source, 0.02)
+
+    mapped, mapped_unc = mapper.map(source, source_uncertainty=source_unc)
+
+    assert calls["public"] == 0
+    assert calls["private"] == 2
+    assert float(mapped.values[0, 0, 0]) == pytest.approx(0.5)
+    assert float(mapped_unc.values[0, 0, 0]) > 0.1
+
+
 def test_wrapper_and_input_split_helpers_cover_error_and_delegation_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert spectral_mapping_mod._split_mapping_inputs(None)[0] is None
     with pytest.raises(TypeError, match="HyperspectralLibrary"):

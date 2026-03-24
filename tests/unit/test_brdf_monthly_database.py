@@ -113,3 +113,28 @@ def test_monthly_composite_database_uses_median_summary_in_query() -> None:
     )
     assert visible_unc.shape == visible.shape
     assert np.all(visible_unc.values >= 0.0)
+
+
+def test_monthly_composite_database_accepts_query_on_coarser_grid() -> None:
+    composites = [_make_composite(i) for i in range(15)]
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+    )
+
+    corrected = xr.Dataset(
+        {
+            "B08": xr.DataArray(np.array([[0.47]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}),
+            "B11": xr.DataArray(np.array([[0.37]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}),
+            "B12": xr.DataArray(np.array([[0.27]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}),
+        }
+    )
+
+    visible, visible_unc = database.predict_visible(corrected, k_neighbors=1)
+
+    assert visible.shape == (2, 1, 1)
+    assert visible_unc.shape == visible.shape
+    assert list(visible.coords["y"].values) == [10]
+    assert list(visible.coords["x"].values) == [20]
+    assert np.isfinite(visible.values).all()
