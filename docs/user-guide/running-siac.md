@@ -29,8 +29,19 @@ Supported `QUERY` forms:
 
 Optional AOI forms:
 
-- `--aoi /path/to/aoi.geojson`
+- `--aoi-file /path/to/aoi.geojson`
+- `--aoi-wkt "POLYGON ((...))"`
 - `--aoi-bbox minx miny maxx maxy`
+- `--aoi-crs EPSG:xxxx`
+
+Example for the current Sentinel-2C trial scene over tile `T50QLD`:
+
+```bash
+siac process-s2 S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433 \
+  --output-path ./outputs/run \
+  --aoi-bbox 300000 1900000 400000 2000000 \
+  --aoi-crs EPSG:32650
+```
 
 ## Python facade
 

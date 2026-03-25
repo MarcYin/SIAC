@@ -116,7 +116,7 @@ The main CLI command currently exposed by the package.
 Usage pattern:
 
 ```bash
-siac process-s2 QUERY [--config path] [--output-path dir] [--aoi path | --aoi-bbox ...]
+siac process-s2 QUERY [--config path] [--output-path dir] [--aoi-file path | --aoi-wkt text | --aoi-bbox ... --aoi-crs EPSG:xxxx]
 ```
 
 Accepted query forms:
@@ -124,6 +124,15 @@ Accepted query forms:
 - local SAFE path
 - Sentinel-2 product ID
 - tile/date shorthand such as `T31UDQ_20240101`
+
+Concrete AOI example for the current Sentinel-2C trial scene:
+
+```bash
+siac process-s2 S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433 \
+  --output-path ./outputs/run \
+  --aoi-bbox 300000 1900000 400000 2000000 \
+  --aoi-crs EPSG:32650
+```
 
 ## Entry point summary
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 from siac import __version__
 from siac.config import SIACConfig
+from siac.domain.aoi import AOI
 from siac.errors import SIACError
 
 
@@ -18,6 +20,56 @@ def _non_empty_text(value: str) -> str:
     if not text:
         raise argparse.ArgumentTypeError("query must not be empty")
     return text
+
+
+def _month_number(value: str) -> int:
+    month = int(value)
+    if not 1 <= month <= 12:
+        raise argparse.ArgumentTypeError("month must be between 1 and 12")
+    return month
+
+
+def _year_month(value: str) -> tuple[int, int]:
+    text = value.strip()
+    match = re.fullmatch(r"(\d{4})-(\d{2})", text)
+    if match is None:
+        raise argparse.ArgumentTypeError("year-month must be in YYYY-MM format")
+    year = int(match.group(1))
+    month = int(match.group(2))
+    if not 1 <= month <= 12:
+        raise argparse.ArgumentTypeError("month must be between 1 and 12")
+    return year, month
+
+
+def _add_aoi_arguments(parser: argparse.ArgumentParser, *, required: bool = False) -> None:
+    aoi_group = parser.add_mutually_exclusive_group(required=required)
+    aoi_group.add_argument(
+        "--aoi",
+        type=_non_empty_text,
+        help="Deprecated alias for --aoi-file.",
+    )
+    aoi_group.add_argument(
+        "--aoi-file",
+        type=Path,
+        help="Path to an AOI GeoJSON file.",
+    )
+    aoi_group.add_argument(
+        "--aoi-wkt",
+        type=_non_empty_text,
+        help="AOI geometry as a WKT string.",
+    )
+    aoi_group.add_argument(
+        "--aoi-bbox",
+        nargs=4,
+        type=float,
+        metavar=("MINX", "MINY", "MAXX", "MAXY"),
+        help="AOI bounds in the order minx miny maxx maxy.",
+    )
+    parser.add_argument(
+        "--aoi-crs",
+        default="EPSG:4326",
+        help="CRS for --aoi-bbox coordinates.",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -53,20 +105,54 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory where corrected products will be written.",
     )
-    aoi_group = process.add_mutually_exclusive_group()
-    aoi_group.add_argument(
-        "--aoi",
-        type=Path,
-        help="Path to an AOI GeoJSON file or a raster-backed AOI source.",
-    )
-    aoi_group.add_argument(
-        "--aoi-bbox",
-        nargs=4,
-        type=float,
-        metavar=("MINX", "MINY", "MAXX", "MAXY"),
-        help="AOI bounds in the order minx miny maxx maxy.",
-    )
+    _add_aoi_arguments(process)
     process.set_defaults(handler=_run_process_s2)
+
+    prepare = subparsers.add_parser(
+        "prepare-monthly-composites",
+        help="Build prepared monthly composites for a given AOI and period selection.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    prepare.add_argument(
+        "--config",
+        type=Path,
+        help="Path to a TOML config file. If omitted, built-in defaults are used.",
+    )
+    prepare.add_argument(
+        "--output-path",
+        type=Path,
+        required=True,
+        help="Directory where the prepared monthly composite store will be written.",
+    )
+    prepare.add_argument(
+        "--resolution",
+        type=float,
+        default=500.0,
+        help="Target composite grid resolution in AOI CRS units.",
+    )
+    prepare.add_argument(
+        "--year-month",
+        action="append",
+        type=_year_month,
+        default=None,
+        help="Explicit year-month selection in YYYY-MM format. Repeat to request multiple periods.",
+    )
+    prepare.add_argument(
+        "--year",
+        action="append",
+        type=int,
+        default=None,
+        help="Year selection for cross-product period generation. Repeat to request multiple years.",
+    )
+    prepare.add_argument(
+        "--month",
+        action="append",
+        type=_month_number,
+        default=None,
+        help="Month selection for cross-product period generation. Repeat to request multiple months.",
+    )
+    _add_aoi_arguments(prepare, required=True)
+    prepare.set_defaults(handler=_run_prepare_monthly_composites)
     return parser
 
 
@@ -80,7 +166,7 @@ def _load_config(config_path: Path | None) -> SIACConfig:
 
 
 def _configure_logging(level_name: str) -> None:
-    level = logging.getLevelNamesMapping().get(str(level_name).upper(), logging.INFO)
+    level = getattr(logging, str(level_name).upper(), logging.INFO)
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
@@ -89,15 +175,44 @@ def _configure_logging(level_name: str) -> None:
     )
 
 
+def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
+    if args.aoi_bbox is not None:
+        return AOI.from_bounds(tuple(float(value) for value in args.aoi_bbox), crs=str(args.aoi_crs))
+    if getattr(args, "aoi_file", None) is not None:
+        return args.aoi_file
+    if getattr(args, "aoi_wkt", None) is not None:
+        return args.aoi_wkt
+    if getattr(args, "aoi", None) is not None:
+        return Path(args.aoi)
+    return None
+
+
 def _process_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if args.output_path is not None:
         kwargs["output_path"] = args.output_path
-    if args.aoi_bbox is not None:
-        kwargs["aoi"] = tuple(float(value) for value in args.aoi_bbox)
-    elif args.aoi is not None:
-        kwargs["aoi"] = args.aoi
+    aoi = _resolve_cli_aoi(args)
+    if aoi is not None:
+        kwargs["aoi"] = aoi
     return kwargs
+
+
+def _selected_year_months(args: argparse.Namespace) -> tuple[tuple[int, int], ...]:
+    explicit = tuple(args.year_month or ())
+    if explicit:
+        if args.year or args.month:
+            raise ValueError("Use either --year-month or --year/--month, not both")
+        pairs = explicit
+    else:
+        years = tuple(int(year) for year in (args.year or ()))
+        months = tuple(int(month) for month in (args.month or ()))
+        if not years or not months:
+            raise ValueError("Provide either --year-month or both --year and --month")
+        pairs = tuple((year, month) for year in years for month in months)
+
+    if len(set(pairs)) != len(pairs):
+        raise ValueError("Duplicate year/month selections are not allowed")
+    return tuple(sorted(pairs))
 
 
 def _run_process_s2(args: argparse.Namespace) -> int:
@@ -107,6 +222,36 @@ def _run_process_s2(args: argparse.Namespace) -> int:
     _configure_logging(config.log_level)
     result = siac_process_s2(config, args.query, **_process_kwargs(args))
     print(f"Sentinel-2 processing complete. Mean AOT: {float(result.aot.mean()):.3f}")
+    return 0
+
+
+def _run_prepare_monthly_composites(args: argparse.Namespace) -> int:
+    from siac.api.public import prepare_monthly_composites
+
+    config = _load_config(args.config)
+    _configure_logging(config.log_level)
+    aoi = _resolve_cli_aoi(args)
+    if not isinstance(aoi, AOI):
+        if aoi is None:
+            raise ValueError("An AOI is required")
+        aoi = AOI.from_geojson(aoi) if isinstance(aoi, Path) else AOI.from_geojson(str(aoi))
+    result = prepare_monthly_composites(
+        config,
+        aoi=aoi,
+        year_months=_selected_year_months(args),
+        resolution=float(args.resolution),
+        output_path=args.output_path,
+    )
+    periods = ", ".join(result.periods)
+    print(
+        "Prepared monthly composites written to "
+        f"{result.store_path} ({result.period_count} period(s): {periods}; representation={result.representation})."
+    )
+    print(
+        "Use with SIAC via "
+        "providers.monthly_composites.kind='prepared_store' "
+        f"and providers.monthly_composites.store_path='{result.store_path}'."
+    )
     return 0
 
 

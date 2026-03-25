@@ -7,13 +7,14 @@ import re
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
-
 import siac.cli as cli
 from siac.config import SIACConfig
+from siac.domain.aoi import AOI
 
 
 def test_version_flag_prints_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -69,8 +70,177 @@ def test_process_s2_delegates_with_parsed_arguments(
     assert captured["config_obj"] is config
     assert captured["query"] == "T31UDQ_20240101"
     assert captured["kwargs"]["output_path"] == tmp_path / "out"
-    assert captured["kwargs"]["aoi"] == (1.0, 2.0, 3.0, 4.0)
+    assert isinstance(captured["kwargs"]["aoi"], AOI)
+    assert captured["kwargs"]["aoi"].get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
     assert "Sentinel-2 processing complete" in captured_out.out
+
+
+def test_process_s2_accepts_aoi_file_argument(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_process(config_obj, query, **kwargs):  # noqa: ANN001
+        captured["config_obj"] = config_obj
+        captured["query"] = query
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(aot=SimpleNamespace(mean=lambda: 0.1234))
+
+    monkeypatch.setattr("siac.api.public.siac_process_s2", _fake_process)
+
+    aoi_path = tmp_path / "aoi.geojson"
+    exit_code = cli.main(["process-s2", "T31UDQ_20240101", "--aoi-file", str(aoi_path)])
+
+    captured_out = capsys.readouterr()
+    assert exit_code == 0
+    assert captured["query"] == "T31UDQ_20240101"
+    assert captured["kwargs"]["aoi"] == aoi_path
+    assert "Sentinel-2 processing complete" in captured_out.out
+
+
+def test_prepare_monthly_composites_delegates_with_period_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_prepare(config_obj, **kwargs):  # noqa: ANN001
+        captured["config_obj"] = config_obj
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            store_path=tmp_path / "prepared_store",
+            period_count=2,
+            periods=("2022-07", "2023-08"),
+            representation="kernel_weights",
+        )
+
+    monkeypatch.setattr("siac.api.public.prepare_monthly_composites", _fake_prepare)
+
+    exit_code = cli.main(
+        [
+            "prepare-monthly-composites",
+            "--output-path",
+            str(tmp_path / "prepared_store"),
+            "--aoi-bbox",
+            "1",
+            "2",
+            "3",
+            "4",
+            "--year-month",
+            "2023-08",
+            "--year-month",
+            "2022-07",
+        ]
+    )
+
+    captured_out = capsys.readouterr()
+    assert exit_code == 0
+    assert isinstance(captured["kwargs"]["aoi"], AOI)
+    assert captured["kwargs"]["aoi"].get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
+    assert captured["kwargs"]["year_months"] == ((2022, 7), (2023, 8))
+    assert captured["kwargs"]["resolution"] == 500.0
+    assert captured["kwargs"]["output_path"] == tmp_path / "prepared_store"
+    assert "Prepared monthly composites written to" in captured_out.out
+
+
+def test_prepare_monthly_composites_rejects_duplicate_period_selection(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = cli.main(
+        [
+            "prepare-monthly-composites",
+            "--output-path",
+            "/tmp/prepared-store",
+            "--aoi-bbox",
+            "1",
+            "2",
+            "3",
+            "4",
+            "--year-month",
+            "2023-07",
+            "--year-month",
+            "2023-07",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Duplicate year/month selections" in captured.err
+
+
+def test_prepare_monthly_composites_accepts_year_month_cross_product_and_wkt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_prepare(config_obj, **kwargs):  # noqa: ANN001
+        captured["config_obj"] = config_obj
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            store_path=tmp_path / "prepared_store",
+            period_count=4,
+            periods=("2022-07", "2022-08", "2023-07", "2023-08"),
+            representation="kernel_weights",
+        )
+
+    monkeypatch.setattr("siac.api.public.prepare_monthly_composites", _fake_prepare)
+
+    exit_code = cli.main(
+        [
+            "prepare-monthly-composites",
+            "--output-path",
+            str(tmp_path / "prepared_store"),
+            "--aoi-wkt",
+            "POLYGON ((1 2, 3 2, 3 4, 1 4, 1 2))",
+            "--year",
+            "2023",
+            "--year",
+            "2022",
+            "--month",
+            "8",
+            "--month",
+            "7",
+        ]
+    )
+
+    captured_out = capsys.readouterr()
+    assert exit_code == 0
+    assert isinstance(captured["kwargs"]["aoi"], AOI)
+    assert captured["kwargs"]["aoi"].get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
+    assert captured["kwargs"]["year_months"] == ((2022, 7), (2022, 8), (2023, 7), (2023, 8))
+    assert "Prepared monthly composites written to" in captured_out.out
+
+
+def test_prepare_monthly_composites_rejects_mixed_period_selection(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = cli.main(
+        [
+            "prepare-monthly-composites",
+            "--output-path",
+            "/tmp/prepared-store",
+            "--aoi-bbox",
+            "1",
+            "2",
+            "3",
+            "4",
+            "--year-month",
+            "2023-07",
+            "--year",
+            "2023",
+            "--month",
+            "8",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Use either --year-month or --year/--month" in captured.err
 
 
 def test_process_s2_reports_errors_non_zero(

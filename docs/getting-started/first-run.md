@@ -18,10 +18,13 @@ This command:
 If you want to constrain the run to a smaller area:
 
 ```bash
-siac process-s2 T31UDQ_20240101 \
+siac process-s2 S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433 \
   --output-path ./outputs/example \
-  --aoi-bbox 1 2 3 4
+  --aoi-bbox 300000 1900000 400000 2000000 \
+  --aoi-crs EPSG:32650
 ```
+
+The AOI above covers the full `T50QLD` tile used by the current Sentinel-2C trial scene.
 
 ## Python example
 
