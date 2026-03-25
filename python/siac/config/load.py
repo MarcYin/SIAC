@@ -13,7 +13,15 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     import tomli as tomllib
 
-import tomli_w
+try:
+    import tomli_w
+except ModuleNotFoundError:  # pragma: no cover - optional write dependency
+    class _TomliWFallback:
+        @staticmethod
+        def dump(_payload: object, _handle: object) -> None:
+            raise ModuleNotFoundError("tomli_w is required for writing SIAC TOML config files")
+
+    tomli_w = _TomliWFallback()
 
 from siac.config.schema import SystemConfig
 
