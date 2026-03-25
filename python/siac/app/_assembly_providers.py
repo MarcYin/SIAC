@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+import numpy as np
+
 from siac.adapters.atmo import CAMSProvider
 from siac.adapters.earthdata import earthaccess_source_from_auth
 from siac.app.registry import (
@@ -14,6 +16,7 @@ from siac.app.registry import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from siac.adapters.auth import CredentialManager
     from siac.algorithms.surface.brdf_monthly_composite import MonthlyCompositeCollection
@@ -203,6 +206,120 @@ def _build_user_callable_monthly_composite_provider(
             return result
 
     return _CallableMonthlyCompositeProvider()
+
+
+@MONTHLY_COMPOSITE_PROVIDER_REGISTRY.register("prepared_store")
+def _build_prepared_store_monthly_composite_provider(
+    config: Any,
+    _auth: CredentialManager | None = None,
+) -> Any:
+    from siac.algorithms.surface.monthly_composite_store import (
+        MonthlyCompositeStoreManifest,
+        read_monthly_composite_collection,
+        read_monthly_composite_store_manifest,
+    )
+
+    store_path = getattr(config.monthly_composites, "store_path", None)
+    if store_path is None:
+        raise ValueError("monthly_composites.store_path must be provided when kind='prepared_store'")
+    resolved_store_path = cast("str | Path", store_path)
+    strict_coverage = bool(getattr(config.monthly_composites, "strict_coverage", True))
+
+    def _validate_store_grid(
+        manifest: MonthlyCompositeStoreManifest,
+        observation: ObservationBundle,
+        resolution: float,
+    ) -> None:
+        grid = manifest.grid
+        if grid is None:
+            raise ValueError(
+                f"Prepared monthly composite store {store_path} is missing grid metadata; "
+                "set monthly_composites.strict_coverage=false to bypass compatibility checks."
+            )
+        _assert_matching_store_grid(
+            grid,
+            observation=observation,
+            resolution=resolution,
+            store_path=resolved_store_path,
+        )
+
+    class _PreparedStoreMonthlyCompositeProvider:
+        def __init__(self) -> None:
+            self._manifest: MonthlyCompositeStoreManifest | None = None
+            self._collection: MonthlyCompositeCollection | None = None
+
+        def _load_manifest(self) -> MonthlyCompositeStoreManifest:
+            if self._manifest is None:
+                self._manifest = read_monthly_composite_store_manifest(resolved_store_path)
+            return self._manifest
+
+        def _load_collection(self) -> MonthlyCompositeCollection:
+            if self._collection is None:
+                self._collection = read_monthly_composite_collection(resolved_store_path)
+            return self._collection
+
+        @property
+        def source_name(self) -> str:
+            manifest = self._load_manifest()
+            return manifest.source_name or f"prepared monthly composites: {resolved_store_path}"
+
+        @property
+        def source_bands(self) -> Any:
+            return self._load_manifest().source_bands
+
+        def get_monthly_composites(
+            self,
+            observation: ObservationBundle,
+            resolution: float,
+        ) -> MonthlyCompositeCollection:
+            manifest = self._load_manifest()
+            if strict_coverage:
+                _validate_store_grid(manifest, observation, float(resolution))
+            return self._load_collection()
+
+    return _PreparedStoreMonthlyCompositeProvider()
+
+
+def _assert_matching_store_grid(
+    grid: Any,
+    *,
+    observation: ObservationBundle,
+    resolution: float,
+    store_path: Any,
+) -> None:
+    from siac.algorithms.surface.monthly_composite_store import MonthlyCompositeStoreGridSpec
+
+    expected = MonthlyCompositeStoreGridSpec.from_bounds(
+        observation.bounds,
+        crs=str(observation.crs),
+        resolution=float(resolution),
+    )
+    if str(grid.crs) != expected.crs:
+        raise ValueError(
+            f"Prepared monthly composite store {store_path} uses CRS {grid.crs!r}, "
+            f"but the observation requires {expected.crs!r}."
+        )
+    tolerance = max(1e-6, expected.resolution * 1e-6)
+    if not np.isclose(float(grid.resolution), expected.resolution, rtol=0.0, atol=tolerance):
+        raise ValueError(
+            f"Prepared monthly composite store {store_path} uses resolution {grid.resolution}, "
+            f"but the observation requires {expected.resolution}."
+        )
+    if int(grid.width) != expected.width or int(grid.height) != expected.height:
+        raise ValueError(
+            f"Prepared monthly composite store {store_path} uses shape {(grid.height, grid.width)}, "
+            f"but the observation requires {(expected.height, expected.width)}."
+        )
+    if not np.allclose(
+        np.asarray(grid.bounds, dtype=np.float64),
+        np.asarray(expected.bounds, dtype=np.float64),
+        rtol=0.0,
+        atol=tolerance,
+    ):
+        raise ValueError(
+            f"Prepared monthly composite store {store_path} covers bounds {tuple(grid.bounds)!r}, "
+            f"but the observation requires {expected.bounds!r}."
+        )
 
 
 def resolve_monthly_composite_provider(

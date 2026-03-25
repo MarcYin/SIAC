@@ -22,7 +22,7 @@ SensorName = Literal["s2", "l8", "l9", "auto"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 AtmoProviderKind = Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"]
 BRDFProviderKind = Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"]
-MonthlyCompositeProviderKind = Literal["generated_brdf", "user_callable"]
+MonthlyCompositeProviderKind = Literal["generated_brdf", "user_callable", "prepared_store"]
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 
@@ -231,6 +231,13 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
         serialization_alias="kind",
     )
     user_callable: Any | None = None
+    store_path: Path | None = None
+    strict_coverage: bool = True
+
+    @field_validator("store_path", mode="before")
+    @classmethod
+    def normalize_store_path(cls, value: Any) -> Path | None:
+        return _coerce_pathlike(value)
 
     @property
     def provider(self) -> MonthlyCompositeProviderKind:
@@ -238,7 +245,7 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
 
     @provider.setter
     def provider(self, value: str) -> None:
-        allowed = {"generated_brdf", "user_callable"}
+        allowed = {"generated_brdf", "user_callable", "prepared_store"}
         if value not in allowed:
             raise ValueError(
                 f"Invalid monthly composite provider {value!r}; expected one of {sorted(allowed)!r}."

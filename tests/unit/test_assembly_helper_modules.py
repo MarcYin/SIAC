@@ -8,11 +8,20 @@ import pytest
 import xarray as xr
 
 from siac.algorithms.grid import assembler as grid_assembler_mod
+from siac.algorithms.surface.brdf_monthly_composite import (
+    MonthlyCompositeCollection,
+    MonthlyKernelWeightComposite,
+)
+from siac.algorithms.surface.monthly_composite_store import (
+    MonthlyCompositeStoreGridSpec,
+    MonthlyCompositeStoreManifest,
+    write_monthly_composite_collection,
+)
 from siac.app import _assembly_providers as providers_mod
 from siac.app import _assembly_runtime as runtime_mod
 from siac.app import _assembly_surface as surface_mod
 from siac.domain import SensorBand, SensorConfig
-from siac.runtime import SolvedAtmosphere, SolverInputBundle
+from siac.runtime import BRDFKernelWeights, SolvedAtmosphere, SolverInputBundle
 
 
 def _cloud_mask_config() -> object:
@@ -838,3 +847,149 @@ def test_build_registered_component_delegates_common_signature() -> None:
     config = SimpleNamespace()
 
     assert providers_mod._build_registered_component(registry, "x", config, auth="y") == ("x", config, "y")
+
+
+def test_prepared_store_monthly_provider_loads_collection(tmp_path) -> None:
+    bands = (
+        SensorBand("B02", 490.0, 65.0, 10.0, 0),
+        SensorBand("B08", 842.0, 115.0, 10.0, 1),
+    )
+    coords = {"band": ["B02", "B08"], "y": [0, 1], "x": [0]}
+    cube = xr.DataArray(np.full((2, 2, 1), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    collection = MonthlyCompositeCollection(
+        composites=(
+            MonthlyKernelWeightComposite(
+                kernels=BRDFKernelWeights(
+                    f0=cube,
+                    f1=xr.zeros_like(cube),
+                    f2=xr.zeros_like(cube),
+                    f0_unc=xr.full_like(cube, 0.01),
+                    f1_unc=xr.full_like(cube, 0.01),
+                    f2_unc=xr.full_like(cube, 0.01),
+                ),
+                quality=xr.DataArray(np.full((2, 1), 0.03, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}),
+                sample_index=xr.DataArray(np.zeros((2, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}),
+                year=2023,
+                month=7,
+            ),
+        ),
+        source_bands=bands,
+        source_name="prepared-test",
+    )
+    store_path = write_monthly_composite_collection(collection, tmp_path / "prepared_store")
+    config = SimpleNamespace(
+        monthly_composites=SimpleNamespace(
+            provider="prepared_store",
+            store_path=store_path,
+            strict_coverage=False,
+        )
+    )
+
+    provider = providers_mod.resolve_monthly_composite_provider(config)
+    loaded = provider.get_monthly_composites("observation", 500.0)
+
+    assert provider.source_name == "prepared-test"
+    assert [band.name for band in provider.source_bands] == ["B02", "B08"]
+    assert isinstance(loaded.composites[0], MonthlyKernelWeightComposite)
+
+
+def test_prepared_store_monthly_provider_is_lazy_until_first_use(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = {"manifest": 0, "collection": 0}
+    manifest = MonthlyCompositeStoreManifest(
+        version=2,
+        source_name="prepared-test",
+        source_bands=(),
+        entries=(),
+    )
+    collection = MonthlyCompositeCollection(composites=(), source_bands=(), source_name="prepared-test")
+
+    def _fake_read_manifest(_path):  # noqa: ANN001
+        calls["manifest"] += 1
+        return manifest
+
+    def _fake_read_collection(_path):  # noqa: ANN001
+        calls["collection"] += 1
+        return collection
+
+    monkeypatch.setattr(
+        "siac.algorithms.surface.monthly_composite_store.read_monthly_composite_store_manifest",
+        _fake_read_manifest,
+    )
+    monkeypatch.setattr(
+        "siac.algorithms.surface.monthly_composite_store.read_monthly_composite_collection",
+        _fake_read_collection,
+    )
+
+    config = SimpleNamespace(
+        monthly_composites=SimpleNamespace(
+            provider="prepared_store",
+            store_path=tmp_path / "prepared_store",
+            strict_coverage=False,
+        )
+    )
+
+    provider = providers_mod.resolve_monthly_composite_provider(config)
+
+    assert calls == {"manifest": 0, "collection": 0}
+    assert provider.source_name == "prepared-test"
+    assert calls == {"manifest": 1, "collection": 0}
+    assert provider.get_monthly_composites("observation", 500.0) is collection
+    assert calls == {"manifest": 1, "collection": 1}
+
+
+def test_prepared_store_monthly_provider_rejects_mismatched_grid_when_strict(tmp_path) -> None:
+    bands = (
+        SensorBand("B02", 490.0, 65.0, 10.0, 0),
+        SensorBand("B08", 842.0, 115.0, 10.0, 1),
+    )
+    coords = {"band": ["B02", "B08"], "y": [750.0, 250.0], "x": [250.0, 750.0]}
+    cube = xr.DataArray(np.full((2, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    collection = MonthlyCompositeCollection(
+        composites=(
+            MonthlyKernelWeightComposite(
+                kernels=BRDFKernelWeights(
+                    f0=cube,
+                    f1=xr.zeros_like(cube),
+                    f2=xr.zeros_like(cube),
+                    f0_unc=xr.full_like(cube, 0.01),
+                    f1_unc=xr.full_like(cube, 0.01),
+                    f2_unc=xr.full_like(cube, 0.01),
+                ),
+                quality=xr.DataArray(
+                    np.full((2, 2), 0.03, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [750.0, 250.0], "x": [250.0, 750.0]},
+                ),
+                sample_index=xr.DataArray(
+                    np.zeros((2, 2), dtype=np.int16),
+                    dims=["y", "x"],
+                    coords={"y": [750.0, 250.0], "x": [250.0, 750.0]},
+                ),
+                year=2023,
+                month=7,
+            ),
+        ),
+        source_bands=bands,
+        source_name="prepared-test",
+    )
+    store_path = write_monthly_composite_collection(
+        collection,
+        tmp_path / "prepared_store",
+        grid=MonthlyCompositeStoreGridSpec.from_bounds((0.0, 0.0, 1000.0, 1000.0), crs="EPSG:32632", resolution=500.0),
+    )
+    config = SimpleNamespace(
+        monthly_composites=SimpleNamespace(
+            provider="prepared_store",
+            store_path=store_path,
+            strict_coverage=True,
+        )
+    )
+
+    provider = providers_mod.resolve_monthly_composite_provider(config)
+    observation = SimpleNamespace(bounds=(0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632")
+
+    with pytest.raises(ValueError, match="uses shape"):
+        provider.get_monthly_composites(observation, 500.0)
