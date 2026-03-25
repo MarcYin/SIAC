@@ -395,6 +395,87 @@ def test_read_virtual_stack_to_target_builds_group_vrts_then_one_stack(
     assert len(unlink_calls) == 3
 
 
+def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_calls: list[tuple[str, list[str], object | None]] = []
+    translate_calls: list[tuple[str, str, dict[str, object]]] = []
+    unlink_calls: list[str] = []
+
+    class _FakeDataset:
+        def __init__(
+            self,
+            values: np.ndarray | None = None,
+            *,
+            projection: str = "PROJCS[\"MODLAND\"]",
+            geotransform: tuple[float, float, float, float, float, float] = (0.0, 10.0, 0.0, 100.0, 0.0, -10.0),
+            width: int = 10,
+            height: int = 10,
+        ) -> None:
+            self._values = values
+            self._projection = projection
+            self._geotransform = geotransform
+            self.RasterXSize = width
+            self.RasterYSize = height
+
+        def ReadAsArray(self) -> np.ndarray:
+            assert self._values is not None
+            return self._values
+
+        def GetProjection(self) -> str:
+            return self._projection
+
+        def GetGeoTransform(self, can_return_null: bool = False) -> tuple[float, float, float, float, float, float]:
+            assert can_return_null in {True, False}
+            return self._geotransform
+
+    def _build_vrt(path: str, sources: list[str], options: object | None = None) -> object:
+        build_calls.append((path, list(sources), options))
+        return _FakeDataset()
+
+    def _translate(path: str, source: str, **kwargs: object) -> object:
+        translate_calls.append((path, source, kwargs))
+        return _FakeDataset()
+
+    fake_gdal = SimpleNamespace(
+        UseExceptions=lambda: None,
+        GDT_Float32=6,
+        BuildVRT=_build_vrt,
+        BuildVRTOptions=lambda **kwargs: kwargs,
+        Translate=_translate,
+        Warp=lambda _dest, _src, **_kwargs: _FakeDataset(
+            np.arange(2, dtype=np.float32).reshape(1, 1, 2)
+        ),
+        Unlink=lambda path: unlink_calls.append(path),
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_gdal))
+    monkeypatch.setattr(
+        earth_adapter,
+        "transform_bounds",
+        lambda bounds, src, dst: (25.0, 25.0, 75.0, 75.0) if dst.startswith("PROJCS") else bounds,
+    )
+
+    out = earth_adapter.read_virtual_stack_to_target(
+        [["tile-a.tif", "tile-b.tif"]],
+        group_band_counts=[1],
+        bounds=(0.0, 0.0, 2.0, 1.0),
+        crs="EPSG:4326",
+        resolution=1.0,
+        resampling="nearest",
+        nodata=np.nan,
+    )
+
+    assert out.dims == ("layer", "y", "x")
+    assert out.shape == (1, 1, 2)
+    assert len(translate_calls) == 1
+    assert translate_calls[0][1] == build_calls[0][0]
+    assert translate_calls[0][2]["format"] == "VRT"
+    assert translate_calls[0][2]["projWin"] == [25.0, 75.0, 75.0, 25.0]
+    assert translate_calls[0][2]["projWinSRS"] == 'PROJCS["MODLAND"]'
+    assert build_calls[1][1] == [translate_calls[0][0]]
+    assert len(unlink_calls) == 3
+
+
 def test_merge_reprojected_tiles_handles_single_pixel_target_and_irregular_grid() -> None:
     ref = xr.DataArray(
         np.array([[np.nan, 1.0], [1.0, 1.0]], dtype=np.float32),

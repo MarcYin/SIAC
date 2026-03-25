@@ -42,6 +42,15 @@ class EarthAccessRuntime:
     catalog: EarthAccessCatalog
 
 
+@dataclass(frozen=True)
+class _VirtualStackSpec:
+    """Temporary GDAL VRT stack plus cleanup metadata."""
+
+    path: str
+    cleanup_paths: tuple[str, ...]
+    expected_layers: int
+
+
 def earthaccess_source_from_auth(
     auth: CredentialManager | None,
     *,
@@ -50,7 +59,7 @@ def earthaccess_source_from_auth(
     """Build an ``EarthAccessSource`` using configured credentials when available."""
     if auth is None:
         return EarthAccessSource(provider=provider)
-    return auth.earthdata().build_earthaccess_source(provider=provider)
+    return cast("EarthAccessSource", auth.earthdata().build_earthaccess_source(provider=provider))
 
 
 def build_earthaccess_runtime(
@@ -182,6 +191,23 @@ def merge_reprojected_tiles(
         raise ValueError("Expected at least one array to merge")
 
     target = target_template if target_template is not None else build_target_template(bounds, crs, resolution)
+    if reproject_native_to_target is not _DEFAULT_REPROJECT_NATIVE_TO_TARGET:
+        reprojected = [
+            reproject_native_to_target(
+                arr,
+                bounds=bounds,
+                crs=crs,
+                resolution=resolution,
+                resampling=resampling,
+                nodata=nodata,
+                target_template=target,
+            )
+            for arr in arrays
+        ]
+        merged = reprojected[0].astype(np.float32)
+        for arr in reprojected[1:]:
+            merged = merged.where(np.isfinite(merged), arr.astype(np.float32))
+        return merged.astype(np.float32)
     return _merge_tiles_via_vrt(
         arrays,
         bounds=bounds,
@@ -191,6 +217,32 @@ def merge_reprojected_tiles(
         nodata=nodata,
         target=target,
     )
+
+
+def reproject_native_to_target(
+    data: xr.DataArray,
+    *,
+    bounds: tuple[float, float, float, float],
+    crs: str,
+    resolution: float,
+    resampling: Resampling,
+    nodata: float | None,
+    target_template: xr.DataArray | None = None,
+) -> xr.DataArray:
+    """Compatibility wrapper for callers that still monkeypatch per-array reprojection."""
+    target = target_template if target_template is not None else build_target_template(bounds, crs, resolution)
+    return _merge_tiles_via_vrt(
+        [data],
+        bounds=bounds,
+        crs=crs,
+        resolution=resolution,
+        resampling=resampling,
+        nodata=nodata,
+        target=target,
+    )
+
+
+_DEFAULT_REPROJECT_NATIVE_TO_TARGET = reproject_native_to_target
 
 
 def read_virtual_stack_to_target(
@@ -218,17 +270,12 @@ def read_virtual_stack_to_target(
     target_bounds = _target_bounds_from_template(target, resolution=resolution)
     width = int(target.sizes["x"])
     height = int(target.sizes["y"])
-    expected_layers = int(sum(group_band_counts))
-    vrt_prefix = f"/vsimem/siac_{uuid4().hex}"
-    group_vrt_paths: list[str] = []
-    master_vrt_path = f"{vrt_prefix}_stack.vrt"
-    master_vrt = None
     warped = None
 
     logger.info(
         "GDAL virtual stack start: groups=%d layers=%d target=%dx%d crs=%s resolution=%s bounds=%s",
         len(source_groups),
-        expected_layers,
+        int(sum(group_band_counts)),
         width,
         height,
         str(target.rio.crs),
@@ -236,35 +283,13 @@ def read_virtual_stack_to_target(
         target_bounds,
     )
 
+    stack_spec = _build_virtual_stack_vrt(
+        source_groups,
+        group_band_counts=group_band_counts,
+        target_bounds=target_bounds,
+        target_crs=str(target.rio.crs),
+    )
     try:
-        for index, sources in enumerate(source_groups):
-            if not sources:
-                raise ValueError(f"source group {index} is empty")
-            group_vrt_path = f"{vrt_prefix}_group_{index}.vrt"
-            logger.debug(
-                "GDAL virtual stack group %d/%d: sources=%d bands=%d first=%s last=%s",
-                index + 1,
-                len(source_groups),
-                len(sources),
-                group_band_counts[index],
-                sources[0],
-                sources[-1],
-            )
-            group_vrt = gdal.BuildVRT(group_vrt_path, list(sources))
-            if group_vrt is None:
-                raise RuntimeError(f"GDAL failed to build VRT for source group {index}")
-            group_vrt = None
-            group_vrt_paths.append(group_vrt_path)
-
-        logger.info("GDAL virtual stack: building master VRT from %d group VRT(s)", len(group_vrt_paths))
-        master_vrt = gdal.BuildVRT(
-            master_vrt_path,
-            group_vrt_paths,
-            options=gdal.BuildVRTOptions(separate=True),
-        )
-        if master_vrt is None:
-            raise RuntimeError("GDAL failed to build stacked VRT")
-
         warp_kwargs: dict[str, object] = {
             "format": "MEM",
             "outputBounds": target_bounds,
@@ -274,6 +299,7 @@ def read_virtual_stack_to_target(
             "resampleAlg": _normalize_gdal_resampling(resampling),
             "outputType": gdal.GDT_Float32,
             "multithread": True,
+            "warpOptions": ["NUM_THREADS=ALL_CPUS"],
         }
         if nodata is not None:
             warp_kwargs["dstNodata"] = float(nodata)
@@ -283,24 +309,22 @@ def read_virtual_stack_to_target(
             warp_kwargs["resampleAlg"],
             warp_kwargs.get("dstNodata"),
         )
-        warped = gdal.Warp("", master_vrt, **warp_kwargs)
+        warped = gdal.Warp("", stack_spec.path, **warp_kwargs)
         if warped is None:
             raise RuntimeError("GDAL failed to warp stacked VRT")
 
         values = np.asarray(warped.ReadAsArray(), dtype=np.float32)
         logger.info("GDAL virtual stack complete: warped shape=%s", tuple(values.shape))
     finally:
-        master_vrt = None
         warped = None
-        gdal.Unlink(master_vrt_path)
-        for path in group_vrt_paths:
+        for path in stack_spec.cleanup_paths:
             gdal.Unlink(path)
 
     if values.ndim == 2:
         values = values[np.newaxis, :, :]
 
-    if values.shape[0] != expected_layers:
-        raise ValueError(f"Expected {expected_layers} stacked layer(s), got {values.shape[0]}")
+    if values.shape[0] != stack_spec.expected_layers:
+        raise ValueError(f"Expected {stack_spec.expected_layers} stacked layer(s), got {values.shape[0]}")
 
     stacked = xr.DataArray(
         values,
@@ -314,6 +338,192 @@ def read_virtual_stack_to_target(
     stacked = stacked.rio.set_spatial_dims(x_dim="x", y_dim="y")
     stacked = stacked.rio.write_crs(target.rio.crs)
     return stacked.rio.write_transform(target_transform)
+
+
+def _build_virtual_stack_vrt(
+    source_groups: Sequence[Sequence[str]],
+    *,
+    group_band_counts: Sequence[int],
+    target_bounds: tuple[float, float, float, float],
+    target_crs: str,
+) -> _VirtualStackSpec:
+    """Build a cropped, stacked VRT in ``/vsimem`` without warping it."""
+    if not source_groups:
+        raise ValueError("Expected at least one source group")
+    if len(source_groups) != len(group_band_counts):
+        raise ValueError("source_groups and group_band_counts must have the same length")
+
+    from osgeo import gdal
+
+    gdal.UseExceptions()
+    expected_layers = int(sum(group_band_counts))
+    vrt_prefix = f"/vsimem/siac_{uuid4().hex}"
+    cleanup_paths = [f"{vrt_prefix}_stack.vrt"]
+    group_vrt_paths: list[str] = []
+    master_vrt_path = cleanup_paths[0]
+
+    for index, sources in enumerate(source_groups):
+        if not sources:
+            raise ValueError(f"source group {index} is empty")
+        group_vrt_path = f"{vrt_prefix}_group_{index}.vrt"
+        cleanup_paths.append(group_vrt_path)
+        logger.debug(
+            "GDAL virtual stack group %d/%d: sources=%d bands=%d first=%s last=%s",
+            index + 1,
+            len(source_groups),
+            len(sources),
+            group_band_counts[index],
+            sources[0],
+            sources[-1],
+        )
+        group_vrt = gdal.BuildVRT(group_vrt_path, list(sources))
+        if group_vrt is None:
+            raise RuntimeError(f"GDAL failed to build VRT for source group {index}")
+
+        cropped_group_vrt_path = _crop_virtual_group_to_target_bounds(
+            gdal,
+            source_dataset=group_vrt,
+            source_path=group_vrt_path,
+            target_bounds=target_bounds,
+            target_crs=target_crs,
+            output_path=f"{vrt_prefix}_group_{index}_crop.vrt",
+        )
+        if cropped_group_vrt_path != group_vrt_path:
+            cleanup_paths.append(cropped_group_vrt_path)
+        group_vrt = None
+        group_vrt_paths.append(cropped_group_vrt_path)
+
+    logger.info("GDAL virtual stack: building master VRT from %d group VRT(s)", len(group_vrt_paths))
+    master_vrt = gdal.BuildVRT(
+        master_vrt_path,
+        group_vrt_paths,
+        options=gdal.BuildVRTOptions(separate=True),
+    )
+    if master_vrt is None:
+        raise RuntimeError("GDAL failed to build stacked VRT")
+    master_vrt = None
+    return _VirtualStackSpec(
+        path=master_vrt_path,
+        cleanup_paths=tuple(dict.fromkeys(cleanup_paths)),
+        expected_layers=expected_layers,
+    )
+
+
+def _crop_virtual_group_to_target_bounds(
+    gdal_module: Any,
+    *,
+    source_dataset: Any,
+    source_path: str,
+    target_bounds: tuple[float, float, float, float],
+    target_crs: str,
+    output_path: str,
+) -> str:
+    source_crs = _dataset_projection(source_dataset)
+    if not source_crs:
+        return source_path
+
+    dataset_bounds = _dataset_bounds(source_dataset)
+    if dataset_bounds is None:
+        return source_path
+
+    try:
+        projected_bounds = transform_bounds(target_bounds, target_crs, source_crs)
+    except Exception:
+        logger.debug("GDAL virtual stack: native bounds transform failed for %s", source_path, exc_info=True)
+        return source_path
+
+    clipped_bounds = _intersect_bounds(projected_bounds, dataset_bounds)
+    if clipped_bounds is None or _bounds_close(clipped_bounds, dataset_bounds):
+        return source_path
+
+    logger.debug(
+        "GDAL virtual stack: cropping %s to native bounds=%s in crs=%s",
+        source_path,
+        clipped_bounds,
+        source_crs,
+    )
+    cropped = gdal_module.Translate(
+        output_path,
+        source_path,
+        format="VRT",
+        projWin=[clipped_bounds[0], clipped_bounds[3], clipped_bounds[2], clipped_bounds[1]],
+        projWinSRS=source_crs,
+    )
+    if cropped is None:
+        raise RuntimeError(f"GDAL failed to crop VRT for {source_path}")
+    cropped = None
+    return output_path
+
+
+def _dataset_projection(dataset: Any) -> str | None:
+    get_projection = getattr(dataset, "GetProjection", None)
+    if callable(get_projection):
+        projection = get_projection()
+        if projection:
+            return str(projection)
+
+    get_projection_ref = getattr(dataset, "GetProjectionRef", None)
+    if callable(get_projection_ref):
+        projection_ref = get_projection_ref()
+        if projection_ref:
+            return str(projection_ref)
+    return None
+
+
+def _dataset_bounds(dataset: Any) -> tuple[float, float, float, float] | None:
+    get_geotransform = getattr(dataset, "GetGeoTransform", None)
+    if not callable(get_geotransform):
+        return None
+
+    try:
+        geotransform = get_geotransform(can_return_null=True)
+    except TypeError:
+        geotransform = get_geotransform()
+    except Exception:
+        return None
+
+    if geotransform is None or len(geotransform) != 6:
+        return None
+    if abs(float(geotransform[2])) > 1e-9 or abs(float(geotransform[4])) > 1e-9:
+        return None
+
+    width = int(getattr(dataset, "RasterXSize", 0))
+    height = int(getattr(dataset, "RasterYSize", 0))
+    if width <= 0 or height <= 0:
+        return None
+
+    x0 = float(geotransform[0])
+    y0 = float(geotransform[3])
+    x1 = x0 + float(geotransform[1]) * width
+    y1 = y0 + float(geotransform[5]) * height
+    return (
+        min(x0, x1),
+        min(y0, y1),
+        max(x0, x1),
+        max(y0, y1),
+    )
+
+
+def _intersect_bounds(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> tuple[float, float, float, float] | None:
+    xmin = max(float(left[0]), float(right[0]))
+    ymin = max(float(left[1]), float(right[1]))
+    xmax = min(float(left[2]), float(right[2]))
+    ymax = min(float(left[3]), float(right[3]))
+    if xmin >= xmax or ymin >= ymax:
+        return None
+    return (xmin, ymin, xmax, ymax)
+
+
+def _bounds_close(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+    *,
+    atol: float = 1e-6,
+) -> bool:
+    return bool(np.allclose(np.asarray(left, dtype=np.float64), np.asarray(right, dtype=np.float64), atol=atol, rtol=0.0))
 
 
 def _merge_tiles_via_vrt(

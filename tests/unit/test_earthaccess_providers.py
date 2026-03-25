@@ -470,10 +470,8 @@ def test_mcd43_provider_batches_monthly_downloads_into_one_call(monkeypatch):
     def _search_granules(**kwargs):
         source.search_calls.append(kwargs)
         start = kwargs["temporal"][0]
-        if start.startswith("2024-01"):
-            return list(january)
-        if start.startswith("2024-02"):
-            return list(february)
+        if start.startswith("2024-01-01"):
+            return [*january, *february]
         return []
 
     def _download_granules(selected_granules, dest_dir):
@@ -519,7 +517,12 @@ def test_mcd43_provider_batches_monthly_downloads_into_one_call(monkeypatch):
         ],
     )
 
-    assert len(source.search_calls) == 4
+    assert len(source.search_calls) == 1
+    assert source.search_calls[0]["count"] == -1
+    assert source.search_calls[0]["temporal"] == (
+        "2024-01-01T00:00:00Z",
+        "2024-02-29T23:59:59Z",
+    )
     assert len(source.download_calls) == 1
     assert len(source.download_calls[0]) == 4
     assert len(outputs) == 2
@@ -533,7 +536,7 @@ def test_mcd43_provider_batches_monthly_downloads_into_one_call(monkeypatch):
     ]
 
 
-def test_mcd43_provider_uses_sample_days_as_search_batches() -> None:
+def test_mcd43_provider_merges_sample_days_into_month_window_batches() -> None:
     batches = MCD43EarthAccessProvider._merge_search_batches(
         [
             (datetime(2023, 12, 16, 12, 0, 0), np.array(["2023-12-01", "2023-12-08"], dtype="datetime64[D]")),
@@ -544,28 +547,51 @@ def test_mcd43_provider_uses_sample_days_as_search_batches() -> None:
         [16, 16, 15, 16],
     )
 
-    assert len(batches) == 8
+    assert len(batches) == 2
     first = batches[0]
     assert first[0] == np.datetime64("2022-12-01")
-    assert first[1] == np.datetime64("2022-12-01")
+    assert first[1] == np.datetime64("2022-12-31")
     assert list(first[2]) == [
         np.datetime64("2022-12-01"),
-    ]
-    second = batches[1]
-    assert second[0] == np.datetime64("2022-12-08")
-    assert second[1] == np.datetime64("2022-12-08")
-    assert list(second[2]) == [
         np.datetime64("2022-12-08"),
     ]
-    assert list(batches[-1][2]) == [
-        np.datetime64("2024-02-08"),
-    ]
-    assert [batch[0] for batch in batches[2:7]] == [
+    second = batches[1]
+    assert second[0] == np.datetime64("2023-12-01")
+    assert second[1] == np.datetime64("2024-02-29")
+    assert list(second[2]) == [
         np.datetime64("2023-12-01"),
         np.datetime64("2023-12-08"),
         np.datetime64("2024-01-01"),
         np.datetime64("2024-01-08"),
         np.datetime64("2024-02-01"),
+        np.datetime64("2024-02-08"),
+    ]
+    assert [batch[0] for batch in batches] == [
+        np.datetime64("2022-12-01"),
+        np.datetime64("2023-12-01"),
+    ]
+
+
+def test_mcd43_provider_merges_cross_year_sample_batches_into_one_window() -> None:
+    batches = MCD43EarthAccessProvider._merge_search_batches(
+        [
+            (datetime(2025, 12, 16, 12, 0, 0), np.array(["2025-12-01", "2025-12-08"], dtype="datetime64[D]")),
+            (datetime(2026, 1, 16, 12, 0, 0), np.array(["2026-01-01", "2026-01-08"], dtype="datetime64[D]")),
+            (datetime(2026, 2, 15, 12, 0, 0), np.array(["2026-02-01", "2026-02-08"], dtype="datetime64[D]")),
+        ],
+        [16, 16, 15],
+    )
+
+    assert [(batch[0], batch[1]) for batch in batches] == [
+        (np.datetime64("2025-12-01"), np.datetime64("2026-02-28")),
+    ]
+    assert list(batches[0][2]) == [
+        np.datetime64("2025-12-01"),
+        np.datetime64("2025-12-08"),
+        np.datetime64("2026-01-01"),
+        np.datetime64("2026-01-08"),
+        np.datetime64("2026-02-01"),
+        np.datetime64("2026-02-08"),
     ]
 
 

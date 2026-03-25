@@ -13,7 +13,19 @@ import h5py
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
-from pyhdf.SD import SD, SDC  # type: ignore[import-untyped]
+
+try:
+    from pyhdf.SD import SD, SDC  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    class _MissingSDC:
+        READ = 0
+
+    def SD(*_args: Any, **_kwargs: Any) -> Any:  # noqa: N802
+        raise ModuleNotFoundError(
+            "pyhdf is required for HDF4 Earthdata products but is not installed in this environment."
+        )
+
+    SDC = _MissingSDC()
 
 from siac.geo.reprojection import transform_bounds
 

@@ -13,6 +13,8 @@ from rasterio.enums import Resampling
 
 from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata import (
+    _build_virtual_stack_vrt,
+    _target_bounds_from_template,
     build_earthaccess_runtime,
     constant_target_band_array,
     earthaccess_cache_dir,
@@ -173,7 +175,8 @@ class _EarthAccessBRDFProvider:
         self.short_name = short_name
         self.provider = provider
         self.probe_earthdata = probe_earthdata
-        self.max_granules = max(1, int(max_granules))
+        resolved_max_granules = int(max_granules)
+        self.max_granules = -1 if resolved_max_granules < 0 else max(1, resolved_max_granules)
 
     @property
     def source_name(self) -> str:
@@ -350,6 +353,7 @@ class _EarthAccessBRDFProvider:
             if downloaded:
                 outputs: list[BRDFKernelWeights] = []
                 try:
+                    selected_path_groups: list[list[Path]] = []
                     for request_index, (obs_time, time_axis) in enumerate(request_specs, start=1):
                         logger.info(
                             "%s temporal batch request %d/%d: obs_time=%s sample_days=%d first_day=%s last_day=%s",
@@ -376,16 +380,6 @@ class _EarthAccessBRDFProvider:
                                 len(request_specs),
                                 len(paths),
                             )
-                            outputs.append(
-                                self._load_temporal_from_granules(
-                                    paths,
-                                    requested=requested,
-                                    bounds=bounds,
-                                    crs=crs,
-                                    target_resolution=target_resolution,
-                                    time_axis=time_axis,
-                                )
-                            )
                         else:
                             logger.info(
                                 "%s temporal batch request %d/%d: no candidate granules matched sampled days",
@@ -393,14 +387,53 @@ class _EarthAccessBRDFProvider:
                                 request_index,
                                 len(request_specs),
                             )
-                            outputs.append(
-                                self._default_temporal_weights(
-                                    bounds,
-                                    target_resolution,
-                                    [coord for coord, _band in requested],
-                                    time_axis,
-                                )
+                        selected_path_groups.append(paths)
+
+                    combined_time_axis = np.unique(
+                        np.concatenate([time_axis for _obs_time, time_axis in request_specs])
+                    ).astype("datetime64[D]")
+                    combined_paths = list(
+                        dict.fromkeys(path for paths in selected_path_groups for path in paths)
+                    )
+                    combined_temporal: BRDFKernelWeights | None = None
+                    if combined_paths:
+                        logger.info(
+                            "%s temporal batch request: loading combined temporal stack for %d day(s) across %d request(s)",
+                            self._source_name,
+                            len(combined_time_axis),
+                            len(request_specs),
+                        )
+                        combined_temporal = self._load_temporal_from_granules(
+                            combined_paths,
+                            requested=requested,
+                            bounds=bounds,
+                            crs=crs,
+                            target_resolution=target_resolution,
+                            time_axis=combined_time_axis,
+                        )
+
+                    for time_axis, paths in zip(
+                        [time_axis for _obs_time, time_axis in request_specs],
+                        selected_path_groups,
+                        strict=True,
+                    ):
+                        if combined_temporal is not None and paths:
+                            output = self._slice_temporal_weights(
+                                combined_temporal,
+                                source_time_axis=combined_time_axis,
+                                request_time_axis=time_axis,
                             )
+                            if np.isfinite(output.f0.values).any():
+                                outputs.append(output)
+                                continue
+                        outputs.append(
+                            self._default_temporal_weights(
+                                bounds,
+                                target_resolution,
+                                [coord for coord, _band in requested],
+                                time_axis,
+                            )
+                        )
                     return outputs
                 except Exception as exc:  # pragma: no cover - external/system dependent
                     logger.warning(
@@ -442,6 +475,47 @@ class _EarthAccessBRDFProvider:
                 raise KeyError(f"Band {band!r} is not available in {self._source_name}")
             resolved.append((int(band), self._bands_by_label[label]))
         return resolved
+
+    @staticmethod
+    def _slice_temporal_weights(
+        weights: BRDFKernelWeights,
+        *,
+        source_time_axis: np.ndarray,
+        request_time_axis: np.ndarray,
+    ) -> BRDFKernelWeights:
+        resolved_request_time_axis = np.asarray(request_time_axis, dtype="datetime64[D]")
+        source_lookup = {
+            np.datetime64(day, "D"): index
+            for index, day in enumerate(np.asarray(source_time_axis, dtype="datetime64[D]"))
+        }
+        time_index = np.array(
+            [source_lookup.get(np.datetime64(day, "D"), -1) for day in resolved_request_time_axis],
+            dtype=np.intp,
+        )
+        coords = {"time": xr.IndexVariable("time", resolved_request_time_axis)}
+
+        def _slice(data: xr.DataArray | None) -> xr.DataArray | None:
+            if data is None:
+                return None
+            if time_index.size == 0:
+                return data.isel(time=slice(0, 0)).assign_coords(coords)
+            missing = time_index < 0
+            filled_index = np.where(missing, 0, time_index)
+            sliced = data.isel(time=filled_index).astype(np.float32, copy=False)
+            if np.any(missing):
+                sliced = sliced.copy(deep=True)
+                sliced.values[missing] = np.nan
+            return sliced.assign_coords(coords)
+
+        return BRDFKernelWeights(
+            f0=cast("xr.DataArray", _slice(weights.f0)),
+            f1=cast("xr.DataArray", _slice(weights.f1)),
+            f2=cast("xr.DataArray", _slice(weights.f2)),
+            f0_unc=cast("xr.DataArray", _slice(weights.f0_unc)),
+            f1_unc=cast("xr.DataArray", _slice(weights.f1_unc)),
+            f2_unc=cast("xr.DataArray", _slice(weights.f2_unc)),
+            reflectance_unc=_slice(weights.reflectance_unc),
+        )
 
     def _download_granules(
         self,
@@ -504,6 +578,7 @@ class _EarthAccessBRDFProvider:
                     bounds=bounds,
                     crs=crs,
                     temporal=temporal,
+                    count=-1,
                 ),
                 sample_dates,
             )
@@ -529,6 +604,7 @@ class _EarthAccessBRDFProvider:
         bounds: tuple[float, float, float, float],
         crs: str,
         temporal: tuple[str, str],
+        count: int | None = None,
     ) -> list[object]:
         return cast(
             "list[object]",
@@ -538,7 +614,7 @@ class _EarthAccessBRDFProvider:
                 crs=crs,
                 temporal=temporal,
                 provider=self.provider,
-                count=self.max_granules,
+                count=self.max_granules if count is None else count,
             ),
         )
 
@@ -563,7 +639,7 @@ class _EarthAccessBRDFProvider:
         short_name: str,
     ) -> list[Path]:
         dest = earthaccess_cache_dir(self.cache_dir, short_name)
-        return cast("list[Path]", self.source.download_granules(granules, dest))
+        return self.source.download_granules(granules, dest)
 
     @staticmethod
     def _merge_search_batches(
@@ -572,19 +648,29 @@ class _EarthAccessBRDFProvider:
     ) -> list[tuple[Any, Any, np.ndarray]]:
         windows: list[tuple[Any, Any, np.ndarray]] = []
         for (obs_time, sample_dates), temporal_window in zip(request_specs, temporal_windows, strict=True):
-            if sample_dates.size > 0:
-                for day in np.asarray(sample_dates, dtype="datetime64[D]"):
-                    windows.append((day, day, np.array([day], dtype="datetime64[D]")))
-                continue
+            days = np.asarray(sample_dates, dtype="datetime64[D]")
+            start_day: Any
+            end_day: Any
+            if days.size == 0:
+                temporal = EarthAccessSource.temporal_window(obs_time, temporal_window)
+                start_day = np.datetime64(temporal[0][:10], "D")
+                end_day = np.datetime64(temporal[1][:10], "D")
+            else:
+                start_month = cast("np.datetime64", days.min().astype("datetime64[M]"))
+                end_month = cast("np.datetime64", days.max().astype("datetime64[M]"))
+                start_day = start_month.astype("datetime64[D]")
+                end_month_day: np.datetime64 = (end_month + np.timedelta64(1, "M")).astype("datetime64[D]")
+                end_day = end_month_day - np.timedelta64(1, "D")
+                days = np.unique(days).astype("datetime64[D]")
 
-            temporal = EarthAccessSource.temporal_window(obs_time, temporal_window)
-            start_day = np.datetime64(temporal[0][:10], "D")
-            end_day = np.datetime64(temporal[1][:10], "D")
-            windows.append((start_day, end_day, sample_dates))
+            windows.append((start_day, end_day, days))
 
         windows.sort(key=lambda item: item[0])
         batches: list[tuple[Any, Any, np.ndarray]] = []
-        for start_day, end_day, sample_dates in windows:
+        for window in windows:
+            start_day = window[0]
+            end_day = window[1]
+            sample_dates = window[2]
             if not batches:
                 batches.append((start_day, end_day, sample_dates))
                 continue
@@ -887,6 +973,20 @@ class _EarthAccessBRDFProvider:
         del grouped_paths, requested, bounds, crs, target_resolution, time_axis, target_template
         return None
 
+    def _load_temporal_payload_vrt_from_daily_payload_vrts(
+        self,
+        grouped_paths: dict[np.datetime64, list[Path]],
+        *,
+        requested: Sequence[_RequestedBandSpec],
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        target_resolution: float,
+        time_axis: np.ndarray,
+        target_template: xr.DataArray,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        del grouped_paths, requested, bounds, crs, target_resolution, time_axis, target_template
+        return None
+
     def _load_temporal_from_granules(
         self,
         paths: list[Path],
@@ -933,13 +1033,33 @@ class _EarthAccessBRDFProvider:
             target_template=target_template,
         )
         if temporal_payload is None:
-            logger.info("%s temporal BRDF stack: direct temporal VRT path unavailable, falling back to per-day merges", self._source_name)
-            params_values, unc_values = self._allocate_temporal_payload_arrays(
-                time_axis,
-                requested,
-                y_size=y_coords.size,
-                x_size=x_coords.size,
+            logger.info(
+                "%s temporal BRDF stack: direct temporal VRT path unavailable, attempting one-warp daily-payload fallback",
+                self._source_name,
             )
+            temporal_payload = self._load_temporal_payload_vrt_from_daily_payload_vrts(
+                grouped_paths,
+                requested=requested,
+                bounds=bounds,
+                crs=crs,
+                target_resolution=target_resolution,
+                time_axis=time_axis,
+                target_template=target_template,
+            )
+            if temporal_payload is None:
+                logger.info(
+                    "%s temporal BRDF stack: daily-payload fallback unavailable, falling back to per-day merges",
+                    self._source_name,
+                )
+                params_values, unc_values = self._allocate_temporal_payload_arrays(
+                    time_axis,
+                    requested,
+                    y_size=y_coords.size,
+                    x_size=x_coords.size,
+                )
+            else:
+                logger.info("%s temporal BRDF stack: daily-payload fallback completed", self._source_name)
+                params_values, unc_values = temporal_payload
         else:
             logger.info("%s temporal BRDF stack: direct temporal VRT read completed", self._source_name)
             params_values, unc_values = temporal_payload
@@ -1551,6 +1671,126 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
 
         return params_values, unc_values
 
+    def _load_temporal_payload_vrt_from_daily_payload_vrts(
+        self,
+        grouped_paths: dict[np.datetime64, list[Path]],
+        *,
+        requested: Sequence[_RequestedBandSpec],
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        target_resolution: float,
+        time_axis: np.ndarray,
+        target_template: xr.DataArray,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        if not gdal_available():
+            return None
+
+        params_values, unc_values = self._allocate_temporal_payload_arrays(
+            time_axis,
+            requested,
+            y_size=int(target_template.sizes["y"]),
+            x_size=int(target_template.sizes["x"]),
+        )
+        available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
+        if not available_days:
+            return params_values, unc_values
+
+        dataset_names = tuple(
+            dict.fromkeys(
+                [
+                    dataset_name
+                    for _band_coord, product_band in requested
+                    for dataset_name in (product_band.parameter_dataset, product_band.qa_dataset or "")
+                ]
+            )
+        )
+        day_specs: list[Any] = []
+        try:
+            dataset_attrs = self._read_named_dataset_attrs(available_days[0][1][0], dataset_names)
+            param_attrs = [dataset_attrs[product_band.parameter_dataset] for _band_coord, product_band in requested]
+            qa_attrs = [dataset_attrs[product_band.qa_dataset or ""] for _band_coord, product_band in requested]
+            target_bounds = _target_bounds_from_template(target_template, resolution=target_resolution)
+            target_crs = str(target_template.rio.crs)
+            source_groups: list[list[str]] = []
+            group_band_counts: list[int] = []
+
+            for time_index, day_paths in available_days:
+                logger.debug(
+                    "%s daily-payload temporal VRT day=%s tiles=%d",
+                    self._source_name,
+                    str(time_axis[time_index]),
+                    len(day_paths),
+                )
+                day_source_groups: list[list[str]] = []
+                day_group_band_counts: list[int] = []
+                for _band_coord, product_band in requested:
+                    qa_name = product_band.qa_dataset or ""
+                    day_source_groups.append(
+                        [resolve_gdal_subdataset_path(path, product_band.parameter_dataset) for path in day_paths]
+                    )
+                    day_group_band_counts.append(3)
+                    day_source_groups.append([resolve_gdal_subdataset_path(path, qa_name) for path in day_paths])
+                    day_group_band_counts.append(1)
+
+                day_spec = _build_virtual_stack_vrt(
+                    day_source_groups,
+                    group_band_counts=day_group_band_counts,
+                    target_bounds=target_bounds,
+                    target_crs=target_crs,
+                )
+                day_specs.append(day_spec)
+                source_groups.append([day_spec.path])
+                group_band_counts.append(day_spec.expected_layers)
+
+            logger.info(
+                "%s daily-payload temporal VRT: available_days=%d requested_bands=%d",
+                self._source_name,
+                len(available_days),
+                len(requested),
+            )
+            stacked = read_virtual_stack_to_target(
+                source_groups,
+                group_band_counts=group_band_counts,
+                bounds=bounds,
+                crs=crs,
+                resolution=target_resolution,
+                resampling=Resampling.bilinear,
+                nodata=np.nan,
+                target_template=target_template,
+            )
+        except Exception:
+            logger.debug(
+                "%s daily-payload temporal VRT path unavailable; falling back to per-day array merge.",
+                self._source_name,
+                exc_info=True,
+            )
+            return None
+        finally:
+            if day_specs:
+                from osgeo import gdal  # type: ignore[import-untyped]
+
+                for day_spec in day_specs:
+                    for path in day_spec.cleanup_paths:
+                        gdal.Unlink(path)
+
+        layer_values = np.asarray(stacked.values, dtype=np.float32)
+        offset = 0
+        for (time_index, _day_paths), day_spec in zip(available_days, day_specs, strict=True):
+            day_layers = layer_values[offset : offset + day_spec.expected_layers]
+            day_offset = 0
+            for band_index in range(len(requested)):
+                params_values[time_index, band_index] = apply_scale_and_mask(
+                    day_layers[day_offset : day_offset + 3],
+                    param_attrs[band_index],
+                )
+                day_offset += 3
+                qa_values = apply_scale_and_mask(day_layers[day_offset], qa_attrs[band_index])
+                day_offset += 1
+                unc_values[time_index, band_index] = self._qa_values_to_uncertainty(qa_values)
+            offset += day_spec.expected_layers
+
+        return params_values, unc_values
+
 
 class MCD43EarthAccessProvider(_StackParameterProvider):
     """MODIS MCD43 BRDF provider using real MCD43A1 kernel parameters."""
@@ -1950,5 +2190,134 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             offset += 1
             unc_base = self._qa_values_to_uncertainty(qa_values)
             unc_values[time_index] = np.repeat(unc_base[np.newaxis, :, :], len(requested), axis=0)
+
+        return params_values, unc_values
+
+    def _load_temporal_payload_vrt_from_daily_payload_vrts(
+        self,
+        grouped_paths: dict[np.datetime64, list[Path]],
+        *,
+        requested: Sequence[_RequestedBandSpec],
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        target_resolution: float,
+        time_axis: np.ndarray,
+        target_template: xr.DataArray,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        if not gdal_available():
+            return None
+
+        params_values, unc_values = self._allocate_temporal_payload_arrays(
+            time_axis,
+            requested,
+            y_size=int(target_template.sizes["y"]),
+            x_size=int(target_template.sizes["x"]),
+        )
+        available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
+        if not available_days:
+            return params_values, unc_values
+
+        labels = [product_band.label.replace("Band", "") for _band_coord, product_band in requested]
+        dataset_names = ["Status_QA"]
+        for label in labels:
+            dataset_names.extend([f"Kiso_Band{label}", f"Kvol_Band{label}", f"Kgeo_Band{label}"])
+        unique_dataset_names = tuple(dict.fromkeys(dataset_names))
+
+        day_specs: list[Any] = []
+        try:
+            dataset_attrs = read_hdf4_datasets_attrs(available_days[0][1][0], unique_dataset_names)
+            target_bounds = _target_bounds_from_template(target_template, resolution=target_resolution)
+            target_crs = str(target_template.rio.crs)
+            source_groups: list[list[str]] = []
+            group_band_counts: list[int] = []
+
+            for time_index, day_paths in available_days:
+                logger.debug(
+                    "%s daily-payload temporal VRT day=%s tiles=%d",
+                    self._source_name,
+                    str(time_axis[time_index]),
+                    len(day_paths),
+                )
+                day_source_groups: list[list[str]] = []
+                day_group_band_counts: list[int] = []
+                for label in labels:
+                    for dataset_name in (
+                        f"Kiso_Band{label}",
+                        f"Kvol_Band{label}",
+                        f"Kgeo_Band{label}",
+                    ):
+                        day_source_groups.append([resolve_gdal_subdataset_path(path, dataset_name) for path in day_paths])
+                        day_group_band_counts.append(1)
+
+                day_source_groups.append([resolve_gdal_subdataset_path(path, "Status_QA") for path in day_paths])
+                day_group_band_counts.append(1)
+
+                day_spec = _build_virtual_stack_vrt(
+                    day_source_groups,
+                    group_band_counts=day_group_band_counts,
+                    target_bounds=target_bounds,
+                    target_crs=target_crs,
+                )
+                day_specs.append(day_spec)
+                source_groups.append([day_spec.path])
+                group_band_counts.append(day_spec.expected_layers)
+
+            logger.info(
+                "%s daily-payload temporal VRT: available_days=%d requested_bands=%d shared_qa=yes",
+                self._source_name,
+                len(available_days),
+                len(requested),
+            )
+            stacked = read_virtual_stack_to_target(
+                source_groups,
+                group_band_counts=group_band_counts,
+                bounds=bounds,
+                crs=crs,
+                resolution=target_resolution,
+                resampling=Resampling.bilinear,
+                nodata=np.nan,
+                target_template=target_template,
+            )
+        except Exception:
+            logger.debug(
+                "%s daily-payload temporal VRT path unavailable; falling back to per-day array merge.",
+                self._source_name,
+                exc_info=True,
+            )
+            return None
+        finally:
+            if day_specs:
+                from osgeo import gdal
+
+                for day_spec in day_specs:
+                    for path in day_spec.cleanup_paths:
+                        gdal.Unlink(path)
+
+        layer_values = np.asarray(stacked.values, dtype=np.float32)
+        offset = 0
+        for (time_index, _day_paths), day_spec in zip(available_days, day_specs, strict=True):
+            day_layers = layer_values[offset : offset + day_spec.expected_layers]
+            day_offset = 0
+            for band_index, label in enumerate(labels):
+                params_values[time_index, band_index, 0] = apply_scale_and_mask(
+                    day_layers[day_offset],
+                    dataset_attrs[f"Kiso_Band{label}"],
+                )
+                day_offset += 1
+                params_values[time_index, band_index, 1] = apply_scale_and_mask(
+                    day_layers[day_offset],
+                    dataset_attrs[f"Kvol_Band{label}"],
+                )
+                day_offset += 1
+                params_values[time_index, band_index, 2] = apply_scale_and_mask(
+                    day_layers[day_offset],
+                    dataset_attrs[f"Kgeo_Band{label}"],
+                )
+                day_offset += 1
+
+            qa_values = apply_scale_and_mask(day_layers[day_offset], dataset_attrs["Status_QA"])
+            unc_base = self._qa_values_to_uncertainty(qa_values)
+            unc_values[time_index] = np.repeat(unc_base[np.newaxis, :, :], len(requested), axis=0)
+            offset += day_spec.expected_layers
 
         return params_values, unc_values

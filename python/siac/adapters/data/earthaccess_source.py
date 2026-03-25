@@ -12,6 +12,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from pyproj import Transformer
@@ -46,6 +47,7 @@ class EarthAccessSource:
 
         self._earthaccess: Any | None = None
         self._authenticated = False
+        self._auth_lock = Lock()
 
     @property
     def is_authenticated(self) -> bool:
@@ -66,34 +68,37 @@ class EarthAccessSource:
     def _ensure_auth(self) -> None:
         if self._authenticated:
             return
+        with self._auth_lock:
+            if self._authenticated:
+                return
 
-        ea = self._get_module()
-        kwargs = dict(self.login_kwargs)
-        use_env_credentials = bool(self.earthdata_username and self.earthdata_password)
-        if use_env_credentials:
-            kwargs.setdefault("strategy", "environment")
-        elif self.login_strategy is not None:
-            kwargs.setdefault("strategy", self.login_strategy)
-        else:
-            # Match the documented earthaccess flow explicitly instead of relying
-            # on version-dependent library defaults.
-            kwargs.setdefault("strategy", "all")
-        if self.persist is not None:
-            kwargs.setdefault("persist", self.persist)
-        else:
-            kwargs.setdefault("persist", False)
+            ea = self._get_module()
+            kwargs = dict(self.login_kwargs)
+            use_env_credentials = bool(self.earthdata_username and self.earthdata_password)
+            if use_env_credentials:
+                kwargs.setdefault("strategy", "environment")
+            elif self.login_strategy is not None:
+                kwargs.setdefault("strategy", self.login_strategy)
+            else:
+                # Match the documented earthaccess flow explicitly instead of relying
+                # on version-dependent library defaults.
+                kwargs.setdefault("strategy", "all")
+            if self.persist is not None:
+                kwargs.setdefault("persist", self.persist)
+            else:
+                kwargs.setdefault("persist", False)
 
-        with self._temporary_environment_credentials():
-            try:
-                if kwargs:
-                    ea.login(**kwargs)
-                else:
+            with self._temporary_environment_credentials():
+                try:
+                    if kwargs:
+                        ea.login(**kwargs)
+                    else:
+                        ea.login()
+                except TypeError:
+                    # Some earthaccess versions may not expose all kwargs.
                     ea.login()
-            except TypeError:
-                # Some earthaccess versions may not expose all kwargs.
-                ea.login()
 
-        self._authenticated = True
+            self._authenticated = True
 
     @contextmanager
     def _temporary_environment_credentials(self) -> Iterator[None]:

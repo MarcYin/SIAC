@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from siac.adapters.brdf.mcd43_earthaccess import (
 )
 from siac.adapters.earthdata_common import ProductBandDefinition
 from siac.domain import SensorBand
+from siac.runtime import BRDFKernelWeights
 
 
 class _StubSource:
@@ -334,6 +336,156 @@ def test_download_and_filter_helpers_cover_warning_and_passthrough_branches(
             temporal_windows=[1],
         ) == []
     assert "no sampled results" in caplog.text
+
+
+def test_temporal_batch_loader_reads_combined_stack_once_and_slices_per_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, catalog = _install_runtime(monkeypatch)
+    provider = _DummyProvider(source=source, catalog=catalog, probe_earthdata=True)
+    downloaded = [Path("/tmp/january.hdf"), Path("/tmp/february.hdf")]
+
+    monkeypatch.setattr(
+        provider,
+        "_download_granules_batch",
+        lambda **_kwargs: downloaded,
+    )
+
+    def _select_candidate_paths(paths, obs_time, bounds, crs, sample_dates=None):  # noqa: ANN001
+        del obs_time, bounds, crs
+        first_day = str(np.asarray(sample_dates, dtype="datetime64[D]")[0])
+        if first_day.startswith("2024-01"):
+            return [paths[0]]
+        return [paths[1]]
+
+    monkeypatch.setattr(provider, "_select_candidate_paths", _select_candidate_paths)
+
+    load_calls: list[dict[str, object]] = []
+
+    def _load_temporal_from_granules(  # noqa: ANN001
+        paths,
+        *,
+        requested,
+        bounds,
+        crs,
+        target_resolution,
+        time_axis,
+    ):
+        del requested, bounds, crs, target_resolution
+        load_calls.append(
+            {
+                "paths": list(paths),
+                "time_axis": np.asarray(time_axis, dtype="datetime64[D]").copy(),
+            }
+        )
+        coords = {
+            "time": np.asarray(time_axis, dtype="datetime64[D]"),
+            "band": ["Band3"],
+            "y": [0],
+            "x": [0],
+        }
+        base = np.arange(len(time_axis), dtype=np.float32).reshape(len(time_axis), 1, 1, 1)
+        unc = np.full_like(base, 0.1, dtype=np.float32)
+        return BRDFKernelWeights(
+            f0=xr.DataArray(base, dims=["time", "band", "y", "x"], coords=coords),
+            f1=xr.DataArray(np.zeros_like(base), dims=["time", "band", "y", "x"], coords=coords),
+            f2=xr.DataArray(np.zeros_like(base), dims=["time", "band", "y", "x"], coords=coords),
+            f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+            f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+            f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+            reflectance_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+        )
+
+    monkeypatch.setattr(provider, "_load_temporal_from_granules", _load_temporal_from_granules)
+
+    outputs = provider.get_temporal_brdf_parameters_batch(
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        obs_times=[datetime(2024, 1, 4, 12, 0, 0), datetime(2024, 2, 4, 12, 0, 0)],
+        target_resolution=500.0,
+        bands=[1],
+        temporal_windows=[10, 10],
+        sample_date_sets=[
+            [datetime(2024, 1, 1), datetime(2024, 1, 8)],
+            [datetime(2024, 2, 1), datetime(2024, 2, 8)],
+        ],
+    )
+
+    assert len(load_calls) == 1
+    assert load_calls[0]["paths"] == downloaded
+    assert list(load_calls[0]["time_axis"]) == [
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-08"),
+        np.datetime64("2024-02-01"),
+        np.datetime64("2024-02-08"),
+    ]
+    assert list(outputs[0].f0.coords["time"].values) == [
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-08"),
+    ]
+    assert list(outputs[1].f0.coords["time"].values) == [
+        np.datetime64("2024-02-01"),
+        np.datetime64("2024-02-08"),
+    ]
+    np.testing.assert_allclose(outputs[0].f0[:, 0, 0, 0].values, np.array([0.0, 1.0], dtype=np.float32))
+    np.testing.assert_allclose(outputs[1].f0[:, 0, 0, 0].values, np.array([2.0, 3.0], dtype=np.float32))
+
+
+def test_provider_accepts_unbounded_max_granules(monkeypatch: pytest.MonkeyPatch) -> None:
+    source, catalog = _install_runtime(monkeypatch)
+    provider = _DummyProvider(source=source, catalog=catalog, probe_earthdata=True, max_granules=-1)
+
+    provider._search_granules(
+        short_name="SN:dummy_brdf",
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        temporal=("2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"),
+    )
+
+    assert provider.max_granules == -1
+    assert source.search_calls[-1]["count"] == -1
+
+
+def test_batched_temporal_brdf_slicing_preserves_missing_requested_days(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_runtime(monkeypatch)
+    provider = _DummyProvider(probe_earthdata=False)
+
+    coords = {
+        "time": np.array(["2024-01-01", "2024-01-08"], dtype="datetime64[D]"),
+        "band": ["Band3"],
+        "y": [0],
+        "x": [0],
+    }
+    base = np.array([[[[0.1]]], [[[0.2]]]], dtype=np.float32)
+    unc = np.full_like(base, 0.05, dtype=np.float32)
+    weights = BRDFKernelWeights(
+        f0=xr.DataArray(base, dims=["time", "band", "y", "x"], coords=coords),
+        f1=xr.DataArray(np.zeros_like(base), dims=["time", "band", "y", "x"], coords=coords),
+        f2=xr.DataArray(np.zeros_like(base), dims=["time", "band", "y", "x"], coords=coords),
+        f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+        f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+        f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+        reflectance_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+    )
+
+    sliced = provider._slice_temporal_weights(
+        weights,
+        source_time_axis=np.array(["2024-01-01", "2024-01-08"], dtype="datetime64[D]"),
+        request_time_axis=np.array(["2024-01-01", "2024-01-04", "2024-01-08"], dtype="datetime64[D]"),
+    )
+
+    assert list(sliced.f0.coords["time"].values) == [
+        np.datetime64("2024-01-01"),
+        np.datetime64("2024-01-04"),
+        np.datetime64("2024-01-08"),
+    ]
+    np.testing.assert_allclose(
+        sliced.f0[[0, 2], 0, 0, 0].values,
+        np.array([0.1, 0.2], dtype=np.float32),
+    )
+    assert np.isnan(float(sliced.f0[1, 0, 0, 0].values))
 
 
 def test_load_from_granules_fills_missing_values_and_builds_uncertainties(
@@ -759,6 +911,123 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
     assert float(temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B02").values[0, 0]) == pytest.approx(
         0.015 * (3.0**1.6)
     )
+
+
+def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_runtime(monkeypatch)
+    provider = MCD43EarthAccessProvider(probe_earthdata=False)
+    requested = [("B02", provider._product_bands[0]), ("B03", provider._product_bands[1])]
+    time_axis = np.array(["2024-01-01", "2024-01-02", "2024-01-03"], dtype="datetime64[D]")
+    day_map = {
+        Path("/tmp/day1_a.hdf"): datetime(2024, 1, 1),
+        Path("/tmp/day1_b.hdf"): datetime(2024, 1, 1),
+        Path("/tmp/day3.hdf"): datetime(2024, 1, 3),
+    }
+    build_calls: list[tuple[list[list[str]], list[int]]] = []
+    final_calls: list[tuple[list[list[str]], list[int]]] = []
+    unlink_calls: list[str] = []
+
+    monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
+    monkeypatch.setattr(mcd_mod, "gdal_available", lambda: True)
+
+    def _no_temporal_payload(_grouped_paths, **_kwargs):  # noqa: ANN001, ANN003
+        return None
+
+    monkeypatch.setattr(provider, "_load_temporal_payload_vrt", _no_temporal_payload)
+    monkeypatch.setattr(
+        provider,
+        "_read_named_dataset_attrs",
+        lambda _path, dataset_names: {dataset_name: {} for dataset_name in dataset_names},
+    )
+    monkeypatch.setattr(
+        mcd_mod,
+        "resolve_gdal_subdataset_path",
+        lambda path, dataset_name: f"{Path(path).name}:{dataset_name}",
+    )
+    monkeypatch.setattr(
+        provider,
+        "_merge_requested_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("per-day merges should not be used")),
+    )
+
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))))
+
+    def _fake_build_virtual_stack_vrt(source_groups, *, group_band_counts, **_kwargs):  # type: ignore[no-untyped-def]
+        build_calls.append(([list(group) for group in source_groups], list(group_band_counts)))
+        index = len(build_calls) - 1
+        return SimpleNamespace(
+            path=f"/vsimem/day_{index}.vrt",
+            cleanup_paths=(f"/vsimem/day_{index}.vrt", f"/vsimem/day_{index}_group_0.vrt"),
+            expected_layers=int(sum(group_band_counts)),
+        )
+
+    def _fake_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
+        final_calls.append(([list(group) for group in source_groups], list(group_band_counts)))
+        target = kwargs["target_template"]
+        values = np.array(
+            [
+                np.full((1, 1), 10.0, dtype=np.float32),
+                np.full((1, 1), 11.0, dtype=np.float32),
+                np.full((1, 1), 12.0, dtype=np.float32),
+                np.full((1, 1), 0.0, dtype=np.float32),
+                np.full((1, 1), 20.0, dtype=np.float32),
+                np.full((1, 1), 21.0, dtype=np.float32),
+                np.full((1, 1), 22.0, dtype=np.float32),
+                np.full((1, 1), 1.0, dtype=np.float32),
+                np.full((1, 1), 30.0, dtype=np.float32),
+                np.full((1, 1), 31.0, dtype=np.float32),
+                np.full((1, 1), 32.0, dtype=np.float32),
+                np.full((1, 1), 2.0, dtype=np.float32),
+                np.full((1, 1), 40.0, dtype=np.float32),
+                np.full((1, 1), 41.0, dtype=np.float32),
+                np.full((1, 1), 42.0, dtype=np.float32),
+                np.full((1, 1), 3.0, dtype=np.float32),
+            ],
+            dtype=np.float32,
+        )
+        return xr.DataArray(
+            values,
+            dims=("layer", "y", "x"),
+            coords={
+                "layer": np.arange(values.shape[0], dtype=np.int32),
+                "y": target.coords["y"],
+                "x": target.coords["x"],
+            },
+        )
+
+    monkeypatch.setattr(mcd_mod, "_build_virtual_stack_vrt", _fake_build_virtual_stack_vrt)
+    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _fake_vrt_reader)
+
+    temporal = provider._load_temporal_from_granules(
+        [Path("/tmp/day1_a.hdf"), Path("/tmp/day1_b.hdf"), Path("/tmp/day3.hdf")],
+        requested=requested,
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        target_resolution=500.0,
+        time_axis=time_axis,
+    )
+
+    assert len(build_calls) == 2
+    assert build_calls[0][1] == [3, 1, 3, 1]
+    assert build_calls[1][1] == [3, 1, 3, 1]
+    assert final_calls == [([["/vsimem/day_0.vrt"], ["/vsimem/day_1.vrt"]], [8, 8])]
+    assert unlink_calls == [
+        "/vsimem/day_0.vrt",
+        "/vsimem/day_0_group_0.vrt",
+        "/vsimem/day_1.vrt",
+        "/vsimem/day_1_group_0.vrt",
+    ]
+    np.testing.assert_allclose(
+        temporal.f0.sel(time=np.datetime64("2024-01-01"), band="B02").values,
+        np.full((1, 1), 10.0, dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        temporal.f2.sel(time=np.datetime64("2024-01-03"), band="B03").values,
+        np.full((1, 1), 42.0, dtype=np.float32),
+    )
+    assert np.isnan(temporal.f0.sel(time=np.datetime64("2024-01-02")).values).all()
 
 
 def test_mcd19_provider_uses_direct_temporal_vrt_payload_path(
