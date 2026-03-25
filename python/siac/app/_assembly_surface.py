@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -113,15 +113,15 @@ def _mark_surface_prior_metadata(provider: SurfacePriorFn, *, requires_atmo_prio
 
 def _surface_prior_mapping_state(
     config: Any,
-    brdf_provider: Any,
     *,
+    source_bands: list[Any] | tuple[Any, ...],
     target_bands: list[Any] | tuple[Any, ...],
     context: str,
 ) -> tuple[Any | None, int]:
     """Resolve spectral-mapping resources for a surface-prior builder."""
     return _surface_spectral_mapping_runtime(
         config,
-        source_bands=brdf_provider.source_bands,
+        source_bands=source_bands,
         target_bands=target_bands,
         context=context,
     )
@@ -157,7 +157,7 @@ class _MonthlySurfacePriorRuntime:
 
 def _prepare_monthly_surface_prior_runtime(
     config: Any,
-    brdf_provider: Any,
+    monthly_composite_provider: Any,
     *,
     observation: ObservationBundle,
     resolution: float,
@@ -177,23 +177,42 @@ def _prepare_monthly_surface_prior_runtime(
 
     visible_bands = _select_visible_surface_prior_bands(observation.sensor_config)
     query_bands = _select_route_b_query_bands(observation.sensor_config)
-    spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
-        config,
-        brdf_provider,
-        target_bands=[*visible_bands, *query_bands],
-        context="Route-B monthly-database surface priors",
-    )
     geometry = resample_geometry_fn(observation, resolution=resolution)
-    database = build_database_fn(
-        observation=observation,
-        brdf_provider=brdf_provider,
-        resolution=resolution,
-        geometry=geometry,
-        visible_bands=visible_bands,
-        query_bands=query_bands,
-        spectral_library=spectral_library,
-        spectral_k_neighbors=spectral_k_neighbors,
-    )
+    get_monthly_composites = getattr(monthly_composite_provider, "get_monthly_composites", None)
+    if callable(get_monthly_composites):
+        monthly_composites = get_monthly_composites(observation, resolution)
+        spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
+            config,
+            source_bands=tuple(monthly_composites.source_bands),
+            target_bands=[*visible_bands, *query_bands],
+            context="Route-B monthly-database surface priors",
+        )
+        database = build_database_fn(
+            monthly_composites=monthly_composites,
+            geometry=geometry,
+            visible_bands=visible_bands,
+            query_bands=query_bands,
+            spectral_library=spectral_library,
+            spectral_k_neighbors=spectral_k_neighbors,
+        )
+    else:
+        source_bands = tuple(getattr(monthly_composite_provider, "source_bands", [*visible_bands, *query_bands]))
+        spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
+            config,
+            source_bands=source_bands,
+            target_bands=[*visible_bands, *query_bands],
+            context="Route-B monthly-database surface priors",
+        )
+        database = build_database_fn(
+            observation=observation,
+            brdf_provider=monthly_composite_provider,
+            resolution=resolution,
+            geometry=geometry,
+            visible_bands=visible_bands,
+            query_bands=query_bands,
+            spectral_library=spectral_library,
+            spectral_k_neighbors=spectral_k_neighbors,
+        )
     return _MonthlySurfacePriorRuntime(
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -216,7 +235,7 @@ def _query_monthly_surface_prior(
 
         query_database_fn = query_surface_prior_from_monthly_database
 
-    return query_database_fn(
+    prior = query_database_fn(
         observation=observation,
         atmo_prior=atmo_prior,
         rt_model=rt_model,
@@ -225,6 +244,10 @@ def _query_monthly_surface_prior(
         visible_band_names=tuple(band.name for band in runtime.visible_bands),
         k_neighbors=runtime.spectral_k_neighbors,
     )
+    composites = tuple(getattr(runtime.database, "composites", ()))
+    if not composites or not hasattr(prior, "monthly_composites"):
+        return prior
+    return replace(prior, monthly_composites=composites)
 
 
 __all__ = [

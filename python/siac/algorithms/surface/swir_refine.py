@@ -14,10 +14,17 @@ import xarray as xr
 
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.correction.atmospheric import AtmosphericCorrector
-from siac.algorithms.grid.assembler import _compute_target_shape, _resample_cloud_mask, _resample_da
+from siac.algorithms.grid.assembler import (
+    _build_target_template,
+    _resample_cloud_mask,
+    _resample_da,
+)
 from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyBestPixelComposite,
+    MonthlyCompositeCollection,
+    MonthlyKernelWeightComposite,
     build_monthly_best_pixel_composite,
+    build_monthly_best_pixel_kernel_composite,
 )
 from siac.algorithms.surface.brdf_monthly_database import (
     MonthlyCompositeDatabase,
@@ -74,130 +81,251 @@ class _MonthlyModeledReflectance:
     reflectance_unc: xr.DataArray
 
 
+@dataclass(frozen=True)
+class _MonthSpec:
+    year: int
+    month: int
+    center_time: datetime
+    temporal_window: int
+    sample_dates: tuple[datetime, ...]
+
+
 def build_monthly_surface_prior_database(
     *,
-    observation: ObservationBundle,
-    brdf_provider: object,
-    resolution: float,
+    monthly_composites: MonthlyCompositeCollection | None = None,
+    observation: ObservationBundle | None = None,
+    brdf_provider: object | None = None,
+    resolution: float | None = None,
     geometry: GeometryAngles,
     visible_bands: collections.abc.Sequence[SensorBand],
     query_bands: collections.abc.Sequence[SensorBand],
     spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
     spectral_k_neighbors: int = 5,
 ) -> MonthlyCompositeDatabase:
-    """Build the 15-month Route-B database for the current scene.
-
-    When the BRDF provider bands differ from the requested Route-B bands,
-    ``spectral_library`` is forwarded to the spectral mapper.
-    """
-    if resolution <= 0:
-        raise ValueError("resolution must be > 0")
-
+    """Build a Route-B database from prepared monthly composites."""
     target_bands = _deduplicate_bands([*visible_bands, *query_bands])
-    source_bands = _resolve_provider_source_bands(brdf_provider, target_bands)
-    obs_time = cast("datetime", observation.metadata["observation_time"])
-    month_specs = [
-        (
-            year,
-            month,
-            _month_center_datetime(year, month, obs_time),
-            max(1, calendar.monthrange(year, month)[1] // 2 + 1),
-            _weekly_sample_dates(year, month),
+    if monthly_composites is None:
+        if observation is None or brdf_provider is None or resolution is None:
+            raise TypeError(
+                "build_monthly_surface_prior_database requires monthly_composites=... "
+                "or the legacy observation=..., brdf_provider=..., resolution=... inputs"
+            )
+        monthly_composites = generate_monthly_composites_from_brdf(
+            observation=observation,
+            brdf_provider=brdf_provider,
+            resolution=resolution,
+            fallback_source_bands=target_bands,
         )
-        for year, month in _iter_history_months(obs_time)
-    ]
+
+    source_bands = tuple(monthly_composites.source_bands) or tuple(target_bands)
+    if not monthly_composites.source_bands:
+        logger.info(
+            "Monthly surface-prior database: source band metadata missing; "
+            "falling back to requested target bands"
+        )
+
     logger.info(
-        "Monthly surface-prior database build: obs_time=%s months=%d batch_size=%d required_bands=%d source_bands=%d",
-        obs_time.isoformat(),
-        len(month_specs),
-        _BRDF_BATCH_MONTHS,
+        "Monthly surface-prior database build: prepared_composites=%d target_bands=%d source_bands=%d",
+        len(monthly_composites.composites),
         len(target_bands),
         len(source_bands),
     )
-    spectral_mapper: SpectralMapper | None = None
-    if tuple(band.name for band in source_bands) != tuple(band.name for band in target_bands):
-        spectral_mapper = SpectralMapper(
+    spectral_mapper = (
+        SpectralMapper(
             source_bands,
             target_bands,
             spectral_library=spectral_library,
             k_neighbors=spectral_k_neighbors,
         )
-    monthly_inputs: list[_MonthlyModeledReflectance] = []
-    for batch_start in range(0, len(month_specs), _BRDF_BATCH_MONTHS):
-        month_batch = month_specs[batch_start: batch_start + _BRDF_BATCH_MONTHS]
+        if tuple(band.name for band in source_bands) != tuple(band.name for band in target_bands)
+        else None
+    )
+    composites = [
+        _normalize_monthly_composite_to_target_basis(
+            composite,
+            geometry=geometry,
+            target_bands=target_bands,
+            spectral_mapper=spectral_mapper,
+        )
+        for composite in monthly_composites.composites
+    ]
+    logger.info("Monthly surface-prior database: assembling final database from %d composite(s)", len(composites))
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=tuple(band.name for band in query_bands),
+        visible_bands=tuple(band.name for band in visible_bands),
+    )
+    logger.info(
+        "Monthly surface-prior database complete: entries=%d visible_bands=%d query_bands=%d",
+        int(database.entries_features.shape[0]),
+        len(database.visible_band_names),
+        len(database.query_band_names),
+    )
+    return database
+
+
+def generate_monthly_composites_from_brdf(
+    *,
+    observation: ObservationBundle,
+    brdf_provider: object,
+    resolution: float,
+    fallback_source_bands: collections.abc.Sequence[SensorBand] = (),
+) -> MonthlyCompositeCollection:
+    """Generate default monthly kernel-weight composites from a temporal BRDF provider."""
+    if resolution <= 0:
+        raise ValueError("resolution must be > 0")
+
+    source_bands = _resolve_provider_source_bands(brdf_provider, fallback_source_bands)
+    obs_time = cast("datetime", observation.metadata["observation_time"])
+    month_specs = [
+        _MonthSpec(
+            year=year,
+            month=month,
+            center_time=_month_center_datetime(year, month, obs_time),
+            temporal_window=max(1, calendar.monthrange(year, month)[1] // 2 + 1),
+            sample_dates=_weekly_sample_dates(year, month),
+        )
+        for year, month in _iter_history_months(obs_time)
+    ]
+    logger.info(
+        "Monthly composite generation from BRDF: obs_time=%s months=%d batch_size=%d source_bands=%d",
+        obs_time.isoformat(),
+        len(month_specs),
+        _BRDF_BATCH_MONTHS,
+        len(source_bands),
+    )
+
+    composites: list[MonthlyKernelWeightComposite] = []
+    month_batches = [
+        (batch_start, month_specs[batch_start: batch_start + _BRDF_BATCH_MONTHS])
+        for batch_start in range(0, len(month_specs), _BRDF_BATCH_MONTHS)
+    ]
+    for batch_start, month_batch in month_batches:
         logger.info(
-            "Monthly surface-prior database batch %d-%d/%d: fetching temporal BRDF for months=%s",
+            "Monthly composite generation batch %d-%d/%d: fetching temporal BRDF for months=%s",
             batch_start + 1,
             batch_start + len(month_batch),
             len(month_specs),
-            [f"{year:04d}-{month:02d}" for year, month, *_rest in month_batch],
+            [f"{spec.year:04d}-{spec.month:02d}" for spec in month_batch],
         )
         temporal_weights_batch = _get_temporal_brdf_parameters_batch(
             brdf_provider,
             bounds=observation.bounds,
             crs=observation.crs,
-            obs_times=[spec[2] for spec in month_batch],
+            obs_times=[spec.center_time for spec in month_batch],
             target_resolution=resolution,
             bands=source_bands,
-            temporal_windows=[spec[3] for spec in month_batch],
-            sample_date_sets=[spec[4] for spec in month_batch],
+            temporal_windows=[spec.temporal_window for spec in month_batch],
+            sample_date_sets=[spec.sample_dates for spec in month_batch],
         )
-        logger.info(
-            "Monthly surface-prior database batch %d-%d/%d: received %d temporal BRDF stack(s)",
-            batch_start + 1,
-            batch_start + len(month_batch),
-            len(month_specs),
-            len(temporal_weights_batch),
-        )
-        for (year, month, _center_time, _temporal_window, _sample_dates), temporal_weights in zip(
-            month_batch,
-            temporal_weights_batch,
-            strict=True,
-        ):
-            logger.info(
-                "Monthly surface-prior database month %04d-%02d: forward modelling %d sampled day(s)",
-                year,
-                month,
-                int(temporal_weights.f0.sizes["time"]),
-            )
-            reflectance, quality, reflectance_unc = _forward_model_monthly_reflectance(
+        for spec, temporal_weights in zip(month_batch, temporal_weights_batch, strict=True):
+            monthly_weights = _select_temporal_weights_for_month(
                 temporal_weights,
-                geometry=geometry,
-                year=year,
-                month=month,
+                year=spec.year,
+                month=spec.month,
             )
-            reflectance, quality, reflectance_unc, collapsed = _collapse_repeated_temporal_samples(
-                reflectance,
-                quality,
-                reflectance_unc,
-            )
+            quality = _quality_from_temporal_weights(monthly_weights)
+            monthly_weights, quality, collapsed = _collapse_repeated_temporal_weights(monthly_weights, quality)
             if collapsed:
                 logger.info(
-                    "Monthly surface-prior database month %04d-%02d: collapsed identical sampled days to %d sample",
-                    year,
-                    month,
-                    int(reflectance.sizes["time"]),
+                    "Monthly composite generation month %04d-%02d: collapsed identical sampled days to %d sample",
+                    spec.year,
+                    spec.month,
+                    int(monthly_weights.f0.sizes["time"]),
                 )
-            monthly_inputs.append(
-                _MonthlyModeledReflectance(
-                    year=year,
-                    month=month,
-                    reflectance=reflectance,
-                    quality=quality,
-                    reflectance_unc=reflectance_unc,
+            composites.append(
+                build_monthly_best_pixel_kernel_composite(
+                    monthly_weights,
+                    quality,
+                    year=spec.year,
+                    month=spec.month,
                 )
             )
 
-    if spectral_mapper is not None:
-        logger.info(
-            "Monthly surface-prior database: spectral mapping %d month input(s) from %d source band(s) to %d target band(s)",
-            len(monthly_inputs),
-            len(source_bands),
-            len(target_bands),
-        )
-        monthly_inputs = _map_monthly_inputs_to_target_basis(monthly_inputs, spectral_mapper)
-        logger.info("Monthly surface-prior database: spectral mapping of monthly composites complete")
+    return MonthlyCompositeCollection(
+        composites=tuple(composites),
+        source_bands=tuple(source_bands),
+        source_name=getattr(brdf_provider, "source_name", None),
+    )
 
+
+def _fetch_monthly_batch_inputs(
+    brdf_provider: object,
+    *,
+    observation: ObservationBundle,
+    resolution: float,
+    geometry: GeometryAngles,
+    source_bands: collections.abc.Sequence[SensorBand],
+    month_batch: collections.abc.Sequence[_MonthSpec],
+    total_months: int,
+    batch_start: int,
+) -> list[_MonthlyModeledReflectance]:
+    logger.info(
+        "Monthly surface-prior database batch %d-%d/%d: fetching temporal BRDF for months=%s",
+        batch_start + 1,
+        batch_start + len(month_batch),
+        total_months,
+        [f"{spec.year:04d}-{spec.month:02d}" for spec in month_batch],
+    )
+    temporal_weights_batch = _get_temporal_brdf_parameters_batch(
+        brdf_provider,
+        bounds=observation.bounds,
+        crs=observation.crs,
+        obs_times=[spec.center_time for spec in month_batch],
+        target_resolution=resolution,
+        bands=source_bands,
+        temporal_windows=[spec.temporal_window for spec in month_batch],
+        sample_date_sets=[spec.sample_dates for spec in month_batch],
+    )
+    logger.info(
+        "Monthly surface-prior database batch %d-%d/%d: received %d temporal BRDF stack(s)",
+        batch_start + 1,
+        batch_start + len(month_batch),
+        total_months,
+        len(temporal_weights_batch),
+    )
+
+    monthly_inputs: list[_MonthlyModeledReflectance] = []
+    for spec, temporal_weights in zip(month_batch, temporal_weights_batch, strict=True):
+        logger.info(
+            "Monthly surface-prior database month %04d-%02d: forward modelling %d sampled day(s)",
+            spec.year,
+            spec.month,
+            int(temporal_weights.f0.sizes["time"]),
+        )
+        reflectance, quality, reflectance_unc = _forward_model_monthly_reflectance(
+            temporal_weights,
+            geometry=geometry,
+            year=spec.year,
+            month=spec.month,
+        )
+        reflectance, quality, reflectance_unc, collapsed = _collapse_repeated_temporal_samples(
+            reflectance,
+            quality,
+            reflectance_unc,
+        )
+        if collapsed:
+            logger.info(
+                "Monthly surface-prior database month %04d-%02d: collapsed identical sampled days to %d sample",
+                spec.year,
+                spec.month,
+                int(reflectance.sizes["time"]),
+            )
+        monthly_inputs.append(
+            _MonthlyModeledReflectance(
+                year=spec.year,
+                month=spec.month,
+                reflectance=reflectance,
+                quality=quality,
+                reflectance_unc=reflectance_unc,
+            )
+        )
+    return monthly_inputs
+
+
+def _build_monthly_composites(
+    monthly_inputs: collections.abc.Sequence[_MonthlyModeledReflectance],
+) -> list[MonthlyBestPixelComposite]:
     composites: list[MonthlyBestPixelComposite] = []
     for monthly_input in monthly_inputs:
         logger.info(
@@ -219,20 +347,7 @@ def build_monthly_surface_prior_database(
             monthly_input.year,
             monthly_input.month,
         )
-
-    logger.info("Monthly surface-prior database: assembling final database from %d composite(s)", len(composites))
-    database = build_monthly_composite_database(
-        composites,
-        query_bands=tuple(band.name for band in query_bands),
-        visible_bands=tuple(band.name for band in visible_bands),
-    )
-    logger.info(
-        "Monthly surface-prior database complete: entries=%d visible_bands=%d query_bands=%d",
-        int(database.entries_features.shape[0]),
-        len(database.visible_band_names),
-        len(database.query_band_names),
-    )
-    return database
+    return composites
 
 
 def query_surface_prior_from_monthly_database(
@@ -305,17 +420,16 @@ def resample_geometry_for_surface_prior(
     resolution: float,
 ) -> GeometryAngles:
     """Resample geometry to the Route-B target grid."""
-    native_resolution = _native_observation_resolution(observation)
-    first_var = next(iter(observation.toa.data_vars))
-    target_shape = cast(
-        "tuple[int, int]",
-        _compute_target_shape(observation.toa[first_var].shape, native_resolution, resolution),
+    target_template = _build_target_template(observation.bounds, observation.crs, resolution)
+    target_shape: tuple[int, int] = (
+        int(target_template.shape[0]),
+        int(target_template.shape[1]),
     )
     return GeometryAngles(
-        sza=_resample_da(observation.geometry.sza, target_shape, "bilinear"),
-        saa=_resample_da(observation.geometry.saa, target_shape, "bilinear"),
-        vza=_resample_da(observation.geometry.vza, target_shape, "bilinear"),
-        vaa=_resample_da(observation.geometry.vaa, target_shape, "bilinear"),
+        sza=_resample_da(observation.geometry.sza, target_shape, "bilinear", template=target_template),
+        saa=_resample_da(observation.geometry.saa, target_shape, "bilinear", template=target_template),
+        vza=_resample_da(observation.geometry.vza, target_shape, "bilinear", template=target_template),
+        vaa=_resample_da(observation.geometry.vaa, target_shape, "bilinear", template=target_template),
     )
 
 
@@ -493,6 +607,238 @@ def _combine_quality_with_mapping_uncertainty(
             "y": quality.coords["y"],
             "x": quality.coords["x"],
         },
+    )
+
+
+def _combine_composite_quality_with_mapping_uncertainty(
+    quality: xr.DataArray,
+    mapped_uncertainty: xr.DataArray,
+) -> xr.DataArray:
+    combined = np.sqrt(
+        np.square(quality.values, dtype=np.float32)
+        + np.square(mapped_uncertainty.mean(dim="band", skipna=True).values, dtype=np.float32)
+    ).astype(np.float32)
+    return xr.DataArray(
+        combined,
+        dims=["y", "x"],
+        coords={
+            "y": quality.coords["y"],
+            "x": quality.coords["x"],
+        },
+    )
+
+
+def _normalize_monthly_composite_to_target_basis(
+    composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
+    *,
+    geometry: GeometryAngles,
+    target_bands: collections.abc.Sequence[SensorBand],
+    spectral_mapper: SpectralMapper | None,
+) -> MonthlyBestPixelComposite:
+    template = geometry.sza
+    quality = _resample_spatial_field_to_template(composite.quality.astype(np.float32), template, "bilinear")
+    sample_index = _resample_spatial_field_to_template(
+        composite.sample_index.astype(np.float32),
+        template,
+        "nearest",
+    ).round().astype(np.int16)
+
+    if isinstance(composite, MonthlyKernelWeightComposite):
+        weights = _resample_brdf_weights_to_template(composite.kernels, template)
+        reflectance, reflectance_unc = _reflectance_from_kernel_weights(weights, geometry)
+    else:
+        reflectance = _resample_band_cube_to_template(composite.reflectance.astype(np.float32), template, "bilinear")
+        reflectance_unc = None
+
+    if spectral_mapper is not None:
+        reflectance, mapped_unc = spectral_mapper.map(
+            reflectance,
+            source_uncertainty=reflectance_unc,
+        )
+        quality = _combine_composite_quality_with_mapping_uncertainty(quality, mapped_unc)
+    else:
+        reflectance = reflectance.sel(band=[band.name for band in target_bands]).astype(np.float32)
+
+    return MonthlyBestPixelComposite(
+        reflectance=reflectance.astype(np.float32),
+        quality=quality.astype(np.float32),
+        sample_index=sample_index.astype(np.int16),
+        year=composite.year,
+        month=composite.month,
+    )
+
+
+def _reflectance_from_kernel_weights(
+    weights: BRDFKernelWeights,
+    geometry: GeometryAngles,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    kernels = BRDFKernels(hb=2.0, br=1.0)
+    k_vol, k_geo = kernels.compute(geometry.vza, geometry.sza, geometry.raa)
+    reflectance = weights.compute_reflectance(
+        cast("xr.DataArray", k_vol),
+        cast("xr.DataArray", k_geo),
+    ).transpose("band", "y", "x")
+    reflectance_unc = weights.compute_reflectance_uncertainty(
+        cast("xr.DataArray", k_vol),
+        cast("xr.DataArray", k_geo),
+    ).transpose("band", "y", "x")
+    return reflectance.astype(np.float32), reflectance_unc.astype(np.float32)
+
+
+def _resample_brdf_weights_to_template(
+    weights: BRDFKernelWeights,
+    template: xr.DataArray,
+) -> BRDFKernelWeights:
+    return BRDFKernelWeights(
+        f0=_resample_band_cube_to_template(weights.f0, template, "bilinear"),
+        f1=_resample_band_cube_to_template(weights.f1, template, "bilinear"),
+        f2=_resample_band_cube_to_template(weights.f2, template, "bilinear"),
+        f0_unc=_resample_band_cube_to_template(weights.f0_unc, template, "bilinear"),
+        f1_unc=_resample_band_cube_to_template(weights.f1_unc, template, "bilinear"),
+        f2_unc=_resample_band_cube_to_template(weights.f2_unc, template, "bilinear"),
+        reflectance_unc=(
+            _resample_band_cube_to_template(weights.reflectance_unc, template, "bilinear")
+            if weights.reflectance_unc is not None
+            else None
+        ),
+    )
+
+
+def _resample_band_cube_to_template(
+    data: xr.DataArray,
+    template: xr.DataArray,
+    method: str,
+) -> xr.DataArray:
+    if _shares_spatial_grid(data, template):
+        return data.astype(np.float32)
+
+    target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
+    band_coords = data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
+    resampled = xr.concat(
+        [
+            _resample_da(data.sel(band=band, drop=True), target_shape, method)
+            for band in band_coords
+        ],
+        dim=xr.IndexVariable("band", band_coords),
+    )
+    coords: dict[str, object] = {"band": band_coords}
+    if "y" in template.coords:
+        coords["y"] = template.coords["y"]
+    if "x" in template.coords:
+        coords["x"] = template.coords["x"]
+    return resampled.assign_coords(**coords).astype(np.float32)
+
+
+def _resample_spatial_field_to_template(
+    data: xr.DataArray,
+    template: xr.DataArray,
+    method: str,
+) -> xr.DataArray:
+    if _shares_spatial_grid(data, template):
+        return data.astype(np.float32)
+    target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
+    resampled = _resample_da(data, target_shape, method)
+    coords: dict[str, object] = {}
+    if "y" in template.coords:
+        coords["y"] = template.coords["y"]
+    if "x" in template.coords:
+        coords["x"] = template.coords["x"]
+    return resampled.assign_coords(**coords).astype(np.float32)
+
+
+def _shares_spatial_grid(data: xr.DataArray, template: xr.DataArray) -> bool:
+    if data.sizes.get("y") != template.sizes.get("y") or data.sizes.get("x") != template.sizes.get("x"):
+        return False
+    if "y" in data.coords and "y" in template.coords and not np.array_equal(
+        np.asarray(data.coords["y"].values),
+        np.asarray(template.coords["y"].values),
+    ):
+        return False
+    if "x" in data.coords and "x" in template.coords and not np.array_equal(
+        np.asarray(data.coords["x"].values),
+        np.asarray(template.coords["x"].values),
+    ):
+        return False
+    return not (
+        "x" in data.coords
+        and "x" in template.coords
+        and not np.array_equal(
+            np.asarray(data.coords["x"].values),
+            np.asarray(template.coords["x"].values),
+        )
+    )
+
+
+def _select_temporal_weights_for_month(
+    temporal_weights: BRDFKernelWeights,
+    *,
+    year: int,
+    month: int,
+) -> BRDFKernelWeights:
+    month_mask = _select_month_mask(temporal_weights.f0.coords["time"].values, year=year, month=month)
+    if not month_mask.any():
+        return temporal_weights
+    return _select_temporal_weight_indexer(temporal_weights, month_mask)
+
+
+def _quality_from_temporal_weights(
+    temporal_weights: BRDFKernelWeights,
+) -> xr.DataArray:
+    if temporal_weights.reflectance_unc is not None:
+        return temporal_weights.reflectance_unc.mean(dim="band", skipna=True).astype(np.float32)
+    stacked = xr.concat(
+        [temporal_weights.f0_unc, temporal_weights.f1_unc, temporal_weights.f2_unc],
+        dim=xr.IndexVariable("parameter", ["f0", "f1", "f2"]),
+    )
+    return stacked.mean(dim=("parameter", "band"), skipna=True).astype(np.float32)
+
+
+def _collapse_repeated_temporal_weights(
+    temporal_weights: BRDFKernelWeights,
+    quality: xr.DataArray,
+) -> tuple[BRDFKernelWeights, xr.DataArray, bool]:
+    if int(temporal_weights.f0.sizes.get("time", 1)) <= 1:
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(temporal_weights.f0):
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(temporal_weights.f1):
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(temporal_weights.f2):
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(temporal_weights.f0_unc):
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(temporal_weights.f1_unc):
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(temporal_weights.f2_unc):
+        return temporal_weights, quality, False
+    if temporal_weights.reflectance_unc is not None and not _all_time_slices_identical(temporal_weights.reflectance_unc):
+        return temporal_weights, quality, False
+    if not _all_time_slices_identical(quality):
+        return temporal_weights, quality, False
+    first = slice(0, 1)
+    return (
+        _select_temporal_weight_indexer(temporal_weights, first),
+        quality.isel(time=first),
+        True,
+    )
+
+
+def _select_temporal_weight_indexer(
+    temporal_weights: BRDFKernelWeights,
+    indexer: Any,
+) -> BRDFKernelWeights:
+    return BRDFKernelWeights(
+        f0=temporal_weights.f0.isel(time=indexer),
+        f1=temporal_weights.f1.isel(time=indexer),
+        f2=temporal_weights.f2.isel(time=indexer),
+        f0_unc=temporal_weights.f0_unc.isel(time=indexer),
+        f1_unc=temporal_weights.f1_unc.isel(time=indexer),
+        f2_unc=temporal_weights.f2_unc.isel(time=indexer),
+        reflectance_unc=(
+            temporal_weights.reflectance_unc.isel(time=indexer)
+            if temporal_weights.reflectance_unc is not None
+            else None
+        ),
     )
 
 

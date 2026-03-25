@@ -1,4 +1,4 @@
-"""Route-B database built from 15 monthly BRDF composites."""
+"""Route-B database built from monthly BRDF composites."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def _resample_summary_to_query_grid(
 
 @dataclass(frozen=True)
 class MonthlyCompositeDatabase:
-    """Searchable database over 15 monthly composites."""
+    """Searchable database over monthly composites."""
 
     entries_features: np.ndarray
     entries_visible: np.ndarray
@@ -77,6 +77,7 @@ class MonthlyCompositeDatabase:
     feature_names: tuple[str, ...]
     y_coords: xr.DataArray
     x_coords: xr.DataArray
+    composites: tuple[MonthlyBestPixelComposite, ...] = ()
 
     @cached_property
     def _neighbor_index(self) -> cKDTree | None:
@@ -195,9 +196,9 @@ def build_monthly_composite_database(
     query_bands: Sequence[str],
     visible_bands: Sequence[str],
 ) -> MonthlyCompositeDatabase:
-    """Build the Route-B database from exactly 15 monthly composites."""
-    if len(composites) != 15:
-        raise ValueError("Route-B monthly database requires exactly 15 monthly composites")
+    """Build the Route-B database from one or more monthly composites."""
+    if len(composites) < 1:
+        raise ValueError("Route-B monthly database requires at least one monthly composite")
     if len(query_bands) < 1:
         raise ValueError("query_bands must not be empty")
     if len(visible_bands) < 1:
@@ -268,4 +269,5 @@ def build_monthly_composite_database(
         feature_names=_feature_names_for_query_bands(query_names),
         y_coords=first.coords["y"],
         x_coords=first.coords["x"],
+        composites=tuple(composites),
     )

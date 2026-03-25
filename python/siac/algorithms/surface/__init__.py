@@ -2,7 +2,10 @@
 
 from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyBestPixelComposite,
+    MonthlyCompositeCollection,
+    MonthlyKernelWeightComposite,
     build_monthly_best_pixel_composite,
+    build_monthly_best_pixel_kernel_composite,
 )
 from siac.algorithms.surface.brdf_monthly_database import (
     MonthlyCompositeDatabase,
@@ -26,6 +29,7 @@ from siac.algorithms.surface.spectral_mapping import (
 )
 from siac.algorithms.surface.swir_refine import (
     build_monthly_surface_prior_database,
+    generate_monthly_composites_from_brdf,
     query_surface_prior_from_monthly_database,
     resample_geometry_for_surface_prior,
 )
@@ -39,10 +43,14 @@ __all__ = [
     "sensor_to_reference",
     "reference_to_sensor",
     "MonthlyBestPixelComposite",
+    "MonthlyKernelWeightComposite",
+    "MonthlyCompositeCollection",
     "build_monthly_best_pixel_composite",
+    "build_monthly_best_pixel_kernel_composite",
     "MonthlyCompositeDatabase",
     "build_monthly_composite_database",
     "build_monthly_surface_prior_database",
+    "generate_monthly_composites_from_brdf",
     "HyperspectralLibrary",
     "SpectralMappingConfig",
     "SpectralMapper",

@@ -23,6 +23,7 @@ from siac.app._assembly_providers import (
     _build_registered_component,
     resolve_atmo_provider,
     resolve_brdf_provider,
+    resolve_monthly_composite_provider,
 )
 from siac.app._assembly_runtime import (
     PreprocessorRuntime,
@@ -83,12 +84,6 @@ def _build_surface_prior_component(
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("kernel_model")
 def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
-    deriver = KernelModelDeriver(
-        psf_sigma_x=config.surface_prior.psf_sigma_x,
-        psf_sigma_y=config.surface_prior.psf_sigma_y,
-        apply_psf=config.surface_prior.apply_psf,
-    )
-
     def _surface_prior(
         observation: ObservationBundle,
         atmo_prior: AtmosphericState | None,
@@ -99,7 +94,7 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
         target_bands = _select_surface_prior_bands(observation.sensor_config)
         spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
             config,
-            brdf_prov,
+            source_bands=tuple(brdf_prov.source_bands),
             target_bands=target_bands,
             context="surface priors",
         )
@@ -110,6 +105,11 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
                 target_resolution=resolution,
                 temporal_window=config.brdf.temporal_window,
             ),
+        )
+        deriver = KernelModelDeriver(
+            psf_sigma_x=config.surface_prior.psf_sigma_x,
+            psf_sigma_y=config.surface_prior.psf_sigma_y,
+            apply_psf=config.surface_prior.apply_psf,
         )
         return deriver.compute_surface_prior(
             brdf_weights,
@@ -125,13 +125,6 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("whittaker")
 def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
-    deriver = BRDFWhittakerDeriver(
-        temporal_lambda=config.surface_prior.whittaker_lambda,
-        psf_sigma_x=config.surface_prior.psf_sigma_x,
-        psf_sigma_y=config.surface_prior.psf_sigma_y,
-        apply_psf=config.surface_prior.apply_psf,
-    )
-
     def _surface_prior(
         observation: ObservationBundle,
         atmo_prior: AtmosphericState | None,
@@ -142,7 +135,7 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
         target_bands = _select_surface_prior_bands(observation.sensor_config)
         spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
             config,
-            brdf_prov,
+            source_bands=tuple(brdf_prov.source_bands),
             target_bands=target_bands,
             context="Whittaker surface priors",
         )
@@ -153,6 +146,12 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
                 target_resolution=resolution,
                 temporal_window=config.brdf.temporal_window,
             ),
+        )
+        deriver = BRDFWhittakerDeriver(
+            temporal_lambda=config.surface_prior.whittaker_lambda,
+            psf_sigma_x=config.surface_prior.psf_sigma_x,
+            psf_sigma_y=config.surface_prior.psf_sigma_y,
+            apply_psf=config.surface_prior.apply_psf,
         )
         return deriver.compute_surface_prior(
             brdf_weights,
@@ -169,14 +168,14 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
 
 def _prepare_monthly_surface_prior_runtime(
     config: Any,
-    brdf_provider: Any,
+    monthly_composite_provider: Any,
     *,
     observation: ObservationBundle,
     resolution: float,
 ) -> _MonthlySurfacePriorRuntime:
     return _shared_prepare_monthly_surface_prior_runtime(
         config,
-        brdf_provider,
+        monthly_composite_provider,
         observation=observation,
         resolution=resolution,
         build_database_fn=build_monthly_surface_prior_database,
@@ -200,13 +199,12 @@ def _query_monthly_surface_prior(
 
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("monthly_database")
-def _build_monthly_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
-    fallback_deriver = KernelModelDeriver(
-        psf_sigma_x=config.surface_prior.psf_sigma_x,
-        psf_sigma_y=config.surface_prior.psf_sigma_y,
-        apply_psf=config.surface_prior.apply_psf,
-    )
-
+def _build_monthly_surface_prior(
+    config: Any,
+    monthly_composite_provider: Any,
+    *,
+    fallback_brdf_provider_factory: Any | None = None,
+) -> SurfacePriorFn:
     def _surface_prior(
         observation: ObservationBundle,
         atmo_prior: AtmosphericState | None,
@@ -223,7 +221,7 @@ def _build_monthly_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
         ):
             monthly_runtime = _prepare_monthly_surface_prior_runtime(
                 config,
-                brdf_prov,
+                monthly_composite_provider,
                 observation=observation,
                 resolution=resolution,
             )
@@ -256,6 +254,12 @@ def _build_monthly_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
                 message="Monthly database produced no valid pixels; falling back to kernel-model priors.",
             )
         with observe_stage("M3.monthly_database.fallback"):
+            if fallback_brdf_provider_factory is not None:
+                brdf_prov = fallback_brdf_provider_factory()
+            elif hasattr(monthly_composite_provider, "get_brdf_parameters"):
+                brdf_prov = monthly_composite_provider
+            else:
+                raise ValueError("Route-B monthly_database fallback requires a BRDF provider factory")
             brdf_weights = brdf_prov.get_brdf_parameters(
                 **_surface_prior_brdf_request(
                     observation,
@@ -263,6 +267,11 @@ def _build_monthly_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
                     target_resolution=resolution,
                     temporal_window=config.brdf.temporal_window,
                 ),
+            )
+            fallback_deriver = KernelModelDeriver(
+                psf_sigma_x=config.surface_prior.psf_sigma_x,
+                psf_sigma_y=config.surface_prior.psf_sigma_y,
+                apply_psf=config.surface_prior.apply_psf,
             )
             return fallback_deriver.compute_surface_prior(
                 brdf_weights,
@@ -277,8 +286,19 @@ def _build_monthly_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
 
 
 def resolve_surface_prior_provider(config: Any, auth: CredentialManager | None = None) -> SurfacePriorFn:
-    brdf_prov = resolve_brdf_provider(config, auth=auth)
     method = getattr(config.surface_prior, "method", "kernel_model")
+    if method == "monthly_database":
+        monthly_provider = resolve_monthly_composite_provider(config, auth=auth)
+        return cast(
+            "SurfacePriorFn",
+            _build_monthly_surface_prior(
+                config,
+                monthly_provider,
+                fallback_brdf_provider_factory=lambda: resolve_brdf_provider(config, auth=auth),
+            ),
+        )
+
+    brdf_prov = resolve_brdf_provider(config, auth=auth)
     return _build_surface_prior_component(method, config, brdf_prov)
 
 
@@ -312,6 +332,7 @@ __all__ = [
     "build_preprocessor_runtime",
     "resolve_atmo_provider",
     "resolve_brdf_provider",
+    "resolve_monthly_composite_provider",
     "resolve_corrector",
     "resolve_grid_assembler",
     "resolve_output_writer",

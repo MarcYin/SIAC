@@ -13,12 +13,14 @@ if TYPE_CHECKING:
 
     import xarray as xr
 
+    from siac.algorithms.surface.brdf_monthly_composite import MonthlyCompositeCollection
     from siac.domain.sensors import SensorBand, SensorConfig
     from siac.runtime.models import (
         AtmosphericState,
         BRDFKernelWeights,
         CorrectionResult,
         GeometryAngles,
+        ObservationBundle,
         RTCoefficients,
         SolvedAtmosphere,
         SolverInputBundle,
@@ -99,6 +101,26 @@ class SurfacePriorDeriver(Protocol):
         geometry: GeometryAngles,
         psf_params: tuple[float, float] | None = None,
     ) -> SurfacePrior:
+        ...
+
+
+@runtime_checkable
+class MonthlyCompositeProvider(Protocol):
+    """Protocol for providers returning prepared monthly composite inputs."""
+
+    @property
+    def source_name(self) -> str:
+        ...
+
+    @property
+    def source_bands(self) -> Sequence[SensorBand]:
+        ...
+
+    def get_monthly_composites(
+        self,
+        observation: ObservationBundle,
+        resolution: float,
+    ) -> MonthlyCompositeCollection:
         ...
 
 

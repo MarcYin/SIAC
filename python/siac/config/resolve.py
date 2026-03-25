@@ -18,6 +18,7 @@ from siac.config.schema import (
     ResolvedConfig,
     ResolvedEarthdataAuthConfig,
     ResolvedGCSAuthConfig,
+    ResolvedMonthlyCompositeProviderConfig,
     ResolvedPathsConfig,
     ResolvedProvidersConfig,
     ResolvedRTAlgorithmConfig,
@@ -108,6 +109,9 @@ def resolve_config(system: SystemConfig, request: RunRequest) -> ResolvedConfig:
         s2=ResolvedS2ProviderConfig(
             **system.providers.s2.model_dump(mode="python", exclude={"cache_dir"}),
             cache_dir=_resolve_cache_dir(system.providers.s2.cache_dir, paths.caches.s2),
+        ),
+        monthly_composites=ResolvedMonthlyCompositeProviderConfig(
+            **system.providers.monthly_composites.model_dump(mode="python"),
         ),
     )
 

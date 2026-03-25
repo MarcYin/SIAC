@@ -158,6 +158,30 @@ def _spectral_library() -> HyperspectralLibrary:
     )
 
 
+def _patch_kernel_to_reflectance(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_reflectance_from_kernel_weights(weights, geometry):  # noqa: ANN001
+        del geometry
+        unc = weights.reflectance_unc if weights.reflectance_unc is not None else weights.f0_unc
+        return weights.f0.astype(np.float32), unc.astype(np.float32)
+
+    monkeypatch.setattr(
+        "siac.algorithms.surface.swir_refine._reflectance_from_kernel_weights",
+        _fake_reflectance_from_kernel_weights,
+    )
+
+
+def _patch_zero_kernel_geometry(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _ZeroKernels:
+        def __init__(self, hb=2.0, br=1.0):  # noqa: ANN001
+            self.hb = hb
+            self.br = br
+
+        def compute(self, vza, sza, raa):  # noqa: ANN001
+            return xr.zeros_like(vza), xr.zeros_like(sza)
+
+    monkeypatch.setattr("siac.algorithms.surface.swir_refine.BRDFKernels", _ZeroKernels)
+
+
 def test_query_surface_prior_from_monthly_database_returns_visible_surface_prior() -> None:
     sensor_config = _sensor_config()
     toa = xr.Dataset(
@@ -249,7 +273,11 @@ def test_weekly_sample_dates_use_weekly_spacing() -> None:
     assert [dt.day for dt in sample_dates] == [1, 8, 15, 22, 29]
 
 
-def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples() -> None:
+def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_kernel_to_reflectance(monkeypatch)
+
     obs = ObservationBundle(
         toa=xr.Dataset(
             {
@@ -271,6 +299,7 @@ def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples() -> 
     class _FakeBRDFProvider:
         def __init__(self) -> None:
             self.batch_calls: list[dict[str, object]] = []
+            self.source_bands = tuple(_sensor_config().bands)
 
         def get_temporal_brdf_parameters_batch(self, **kwargs):
             self.batch_calls.append(kwargs)
@@ -326,7 +355,11 @@ def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples() -> 
     assert [dt.day for dt in july_call] == [1, 8, 15, 22, 29]
 
 
-def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty() -> None:
+def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_zero_kernel_geometry(monkeypatch)
+
     coords = {
         "time": np.array(["2024-07-01", "2024-07-08"], dtype="datetime64[D]"),
         "band": ["B02", "B08"],
@@ -367,7 +400,11 @@ def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty
     )
 
 
-def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis() -> None:
+def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_kernel_to_reflectance(monkeypatch)
+
     obs = ObservationBundle(
         toa=xr.Dataset(
             {
@@ -443,12 +480,10 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
     assert np.isfinite(database.entries_visible).all()
 
 
-def test_build_monthly_surface_prior_database_maps_before_best_pixel_selection(
+def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_basis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from siac.algorithms.surface.brdf_monthly_composite import (
-        build_monthly_best_pixel_composite as real_build,
-    )
+    _patch_kernel_to_reflectance(monkeypatch)
 
     obs = ObservationBundle(
         toa=xr.Dataset(
@@ -510,7 +545,7 @@ def test_build_monthly_surface_prior_database_maps_before_best_pixel_selection(
                 )
             return outputs
 
-    seen: dict[str, object] = {}
+    seen: dict[str, object] = {"calls": 0}
 
     class _SwitchingMapper:
         def __init__(self, _source_bands, target_bands, *, spectral_library, k_neighbors):  # noqa: ANN001
@@ -518,39 +553,24 @@ def test_build_monthly_surface_prior_database_maps_before_best_pixel_selection(
             self._target_band_names = [band.name for band in target_bands]
 
         def map(self, reflectance, *, source_uncertainty=None):  # noqa: ANN001
-            del source_uncertainty
-            time_size = int(reflectance.sizes["time"])
-            mapped_values = np.empty((time_size, len(self._target_band_names), 1, 1), dtype=np.float32)
-            mapped_unc_values = np.empty_like(mapped_values)
-            mapped_values[0::2] = np.array([0.10, 0.20, 0.40, 0.30, 0.20], dtype=np.float32).reshape(1, 5, 1, 1)
-            mapped_values[1::2] = np.array([0.60, 0.70, 0.50, 0.40, 0.30], dtype=np.float32).reshape(1, 5, 1, 1)
-            mapped_unc_values[0::2] = np.float32(0.30)
-            mapped_unc_values[1::2] = np.float32(0.01)
+            seen["calls"] += 1
+            if seen["calls"] == 1:
+                seen["bands"] = tuple(reflectance.coords["band"].values.tolist())
+                seen["dims"] = tuple(reflectance.dims)
+                seen["has_unc"] = source_uncertainty is not None
             mapped = xr.DataArray(
-                mapped_values,
-                dims=["time", "band", "y", "x"],
+                np.array([0.10, 0.20, 0.40, 0.30, 0.20], dtype=np.float32).reshape(5, 1, 1),
+                dims=["band", "y", "x"],
                 coords={
-                    "time": reflectance.coords["time"],
                     "band": self._target_band_names,
                     "y": reflectance.coords["y"],
                     "x": reflectance.coords["x"],
                 },
             )
-            mapped_unc = xr.DataArray(
-                mapped_unc_values,
-                dims=["time", "band", "y", "x"],
-                coords=mapped.coords,
-            )
+            mapped_unc = xr.full_like(mapped, 0.03)
             return mapped, mapped_unc
 
-    def _recording_builder(reflectance, quality, *, year, month):  # noqa: ANN001
-        if not seen:
-            seen["bands"] = tuple(reflectance.coords["band"].values.tolist())
-            seen["quality"] = np.asarray(quality[:, 0, 0].values, dtype=np.float32)
-        return real_build(reflectance, quality, year=year, month=month)
-
     monkeypatch.setattr("siac.algorithms.surface.swir_refine.SpectralMapper", _SwitchingMapper)
-    monkeypatch.setattr("siac.algorithms.surface.swir_refine.build_monthly_best_pixel_composite", _recording_builder)
 
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
@@ -565,13 +585,17 @@ def test_build_monthly_surface_prior_database_maps_before_best_pixel_selection(
         spectral_library=_spectral_library(),
     )
 
-    assert seen["bands"] == ("B02", "B03", "B08", "B11", "B12")
-    np.testing.assert_allclose(seen["quality"], np.array([0.30033281, 0.01731427], dtype=np.float32), rtol=1e-5)
+    assert seen["bands"] == ("Band3", "Band4", "Band2", "Band6", "Band7")
+    assert seen["dims"] == ("band", "y", "x")
+    assert seen["has_unc"] is True
+    assert seen["calls"] == 15
 
 
 def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for_identical_months(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _patch_kernel_to_reflectance(monkeypatch)
+
     obs = ObservationBundle(
         toa=xr.Dataset(
             {
@@ -627,7 +651,7 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
                 )
             return outputs
 
-    calls = {"map": 0, "time_sizes": []}
+    calls = {"map": 0, "band_counts": []}
 
     class _CountingMapper:
         def __init__(self, _source_bands, target_bands, *, spectral_library, k_neighbors):  # noqa: ANN001
@@ -637,11 +661,10 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
         def map(self, reflectance, *, source_uncertainty=None):  # noqa: ANN001
             del source_uncertainty
             calls["map"] += 1
-            calls["time_sizes"].append(int(reflectance.sizes["time"]))
+            calls["band_counts"].append(int(reflectance.sizes["band"]))
             mapped = xr.DataArray(
                 np.full(
                     (
-                        int(reflectance.sizes["time"]),
                         len(self._target_band_names),
                         int(reflectance.sizes["y"]),
                         int(reflectance.sizes["x"]),
@@ -649,9 +672,8 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
                     0.2,
                     dtype=np.float32,
                 ),
-                dims=["time", "band", "y", "x"],
+                dims=["band", "y", "x"],
                 coords={
-                    "time": reflectance.coords["time"],
                     "band": self._target_band_names,
                     "y": reflectance.coords["y"],
                     "x": reflectance.coords["x"],
@@ -674,12 +696,16 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
         spectral_library=_spectral_library(),
     )
 
-    assert calls["map"] == 1
-    assert calls["time_sizes"] == [15]
+    assert calls["map"] == 15
+    assert calls["band_counts"] == [5] * 15
     assert database.entries_features.shape[0] == 15
 
 
-def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_bands() -> None:
+def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_bands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_kernel_to_reflectance(monkeypatch)
+
     obs = ObservationBundle(
         toa=xr.Dataset(
             {
@@ -754,6 +780,74 @@ def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_ban
 
     assert database.query_band_names == ("B08", "B11", "B12")
     assert database.visible_band_names == ("B02", "B03")
+
+
+def test_build_monthly_surface_prior_database_falls_back_to_target_bands_when_provider_has_no_source_bands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_kernel_to_reflectance(monkeypatch)
+
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((1, 1), 0.1, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((1, 1), 0.1, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((1, 1), 0.4, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((1, 1), 0.3, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((1, 1), 0.2, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((1, 1)),
+        cloud_mask=xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"]),
+        sensor_config=_sensor_config(),
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 1.0, 1.0),
+    )
+    sensor_config = _sensor_config()
+    visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
+    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    batch_band_calls: list[list[str]] = []
+
+    class _LegacyBRDFProvider:
+        def get_temporal_brdf_parameters_batch(self, **kwargs):  # noqa: ANN003
+            bands = [band.name for band in kwargs["bands"]]
+            batch_band_calls.append(bands)
+            outputs = []
+            for sample_dates in kwargs["sample_date_sets"]:
+                coords = {
+                    "time": np.array([np.datetime64(dt.date(), "D") for dt in sample_dates]),
+                    "band": bands,
+                    "y": [0],
+                    "x": [0],
+                }
+                data = np.full((len(sample_dates), len(bands), 1, 1), 0.2, dtype=np.float32)
+                unc = np.full_like(data, 0.03, dtype=np.float32)
+                outputs.append(
+                    BRDFKernelWeights(
+                        f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                    )
+                )
+            return outputs
+
+    database = build_monthly_surface_prior_database(
+        observation=obs,
+        brdf_provider=_LegacyBRDFProvider(),
+        resolution=500.0,
+        geometry=_geometry((1, 1)),
+        visible_bands=visible_bands,
+        query_bands=query_bands,
+    )
+
+    assert batch_band_calls
+    assert batch_band_calls[0] == ["B02", "B03", "B08", "B11", "B12"]
+    assert database.visible_band_names == ("B02", "B03")
+    assert database.query_band_names == ("B08", "B11", "B12")
 
 
 def test_build_monthly_surface_prior_database_requires_batch_method() -> None:

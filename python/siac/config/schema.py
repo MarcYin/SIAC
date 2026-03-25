@@ -22,6 +22,7 @@ SensorName = Literal["s2", "l8", "l9", "auto"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 AtmoProviderKind = Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"]
 BRDFProviderKind = Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"]
+MonthlyCompositeProviderKind = Literal["generated_brdf", "user_callable"]
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 
@@ -223,10 +224,33 @@ class S2ProviderConfig(SIACBaseModel):
         return _coerce_pathlike(value)
 
 
+class MonthlyCompositeProviderConfig(SIACBaseModel):
+    kind: MonthlyCompositeProviderKind = Field(
+        default="generated_brdf",
+        validation_alias=AliasChoices("kind", "provider"),
+        serialization_alias="kind",
+    )
+    user_callable: Any | None = None
+
+    @property
+    def provider(self) -> MonthlyCompositeProviderKind:
+        return self.kind
+
+    @provider.setter
+    def provider(self, value: str) -> None:
+        allowed = {"generated_brdf", "user_callable"}
+        if value not in allowed:
+            raise ValueError(
+                f"Invalid monthly composite provider {value!r}; expected one of {sorted(allowed)!r}."
+            )
+        self.kind = cast("MonthlyCompositeProviderKind", value)
+
+
 class ProvidersConfig(SIACBaseModel):
     atmo: AtmoProviderConfig = Field(default_factory=AtmoProviderConfig)
     brdf: BRDFProviderConfig = Field(default_factory=BRDFProviderConfig)
     s2: S2ProviderConfig = Field(default_factory=S2ProviderConfig)
+    monthly_composites: MonthlyCompositeProviderConfig = Field(default_factory=MonthlyCompositeProviderConfig)
 
 
 class SpectralMappingAlgorithmConfig(SIACBaseModel):
@@ -400,6 +424,10 @@ class SystemConfig(SIACBaseModel):
         return self.providers.s2
 
     @property
+    def monthly_composites(self) -> MonthlyCompositeProviderConfig:
+        return self.providers.monthly_composites
+
+    @property
     def execution(self) -> ExecutionRuntimeConfig:
         return self.runtime.execution
 
@@ -500,10 +528,15 @@ class ResolvedS2ProviderConfig(S2ProviderConfig):
     cache_dir: Path | None = None
 
 
+class ResolvedMonthlyCompositeProviderConfig(MonthlyCompositeProviderConfig):
+    pass
+
+
 class ResolvedProvidersConfig(SIACBaseModel):
     atmo: ResolvedAtmoProviderConfig
     brdf: ResolvedBRDFProviderConfig
     s2: ResolvedS2ProviderConfig
+    monthly_composites: ResolvedMonthlyCompositeProviderConfig
 
 
 class ResolvedSpectralMappingConfig(SpectralMappingAlgorithmConfig):
@@ -564,6 +597,10 @@ class ResolvedConfig(SIACBaseModel):
     @property
     def s2_data(self) -> ResolvedS2ProviderConfig:
         return self.providers.s2
+
+    @property
+    def monthly_composites(self) -> ResolvedMonthlyCompositeProviderConfig:
+        return self.providers.monthly_composites
 
     @property
     def surface_prior(self) -> ResolvedSurfacePriorAlgorithmConfig:

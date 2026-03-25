@@ -410,6 +410,134 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
     assert captured["atmo_shapes"]["aot"] == template.shape
 
 
+def test_resolve_corrector_preserves_coarse_atmo_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_observation_bundle,
+) -> None:
+    import rioxarray  # noqa: F401
+
+    from siac.runtime import AtmosphericState
+
+    coarse = xr.DataArray(
+        np.array([[0.2, 0.3], [0.4, 0.5]], dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": [1500.0, 500.0], "x": [500.0, 1500.0]},
+    ).rio.write_crs("EPSG:32632")
+    coarse_unc = xr.full_like(coarse, 0.05)
+    solved = SolvedAtmosphere(
+        atmo_state=AtmosphericState(
+            aot=coarse,
+            tcwv=coarse + 1.0,
+            tco3=coarse + 0.1,
+            aot_unc=coarse_unc,
+            tcwv_unc=coarse_unc,
+            tco3_unc=coarse_unc,
+            elevation=xr.zeros_like(coarse),
+        ),
+        aot=coarse,
+        tcwv=coarse + 1.0,
+        aot_unc=coarse_unc,
+        tcwv_unc=coarse_unc,
+        cost_final=0.0,
+        n_iterations=1,
+        converged=True,
+    )
+
+    class _FakeCorrector:
+        def __init__(self, rt_model: object, sensor_config: object) -> None:
+            _ = (rt_model, sensor_config)
+
+        def correct(self, toa, geometry, atmo, cloud_mask):  # noqa: ANN001
+            from siac.runtime import CorrectionResult
+
+            _ = (toa, geometry)
+            return CorrectionResult(
+                boa=mock_observation_bundle.toa,
+                boa_unc=None,
+                aot=atmo.aot,
+                tcwv=atmo.tcwv,
+                cloud_mask=cloud_mask,
+            )
+
+    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+
+    result = runtime_mod.resolve_corrector(SimpleNamespace())(
+        mock_observation_bundle,
+        solved,
+        "rt-model",
+    )
+
+    assert result.aot.shape == (2, 2)
+    assert result.tcwv.shape == (2, 2)
+    assert result.aot.rio.crs is not None
+    assert result.aot.rio.crs.to_string() == "EPSG:32632"
+    assert result.aot.coords["x"].values.tolist() == [500.0, 1500.0]
+    assert result.aot.coords["y"].values.tolist() == [1500.0, 500.0]
+
+
+def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_observation_bundle,
+) -> None:
+    from siac.runtime import AtmosphericState
+
+    coarse = xr.DataArray(
+        np.array([[0.2, np.nan], [0.4, 0.5]], dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": [1500.0, 500.0], "x": [500.0, 1500.0]},
+    )
+    solved = SolvedAtmosphere(
+        atmo_state=AtmosphericState(
+            aot=coarse,
+            tcwv=coarse + 1.0,
+            tco3=xr.where(np.isfinite(coarse), coarse + 0.1, np.nan),
+            aot_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
+            tcwv_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
+            tco3_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
+            elevation=xr.zeros_like(coarse),
+        ),
+        aot=coarse,
+        tcwv=coarse + 1.0,
+        aot_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
+        tcwv_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
+        cost_final=0.0,
+        n_iterations=1,
+        converged=True,
+    )
+    captured: dict[str, np.ndarray] = {}
+
+    class _FakeCorrector:
+        def __init__(self, rt_model: object, sensor_config: object) -> None:
+            _ = (rt_model, sensor_config)
+
+        def correct(self, toa, geometry, atmo, cloud_mask):  # noqa: ANN001
+            from siac.runtime import CorrectionResult
+
+            _ = (toa, geometry, cloud_mask)
+            captured["aot"] = np.asarray(atmo.aot.values, dtype=np.float32)
+            captured["tcwv"] = np.asarray(atmo.tcwv.values, dtype=np.float32)
+            captured["tco3"] = np.asarray(atmo.tco3.values, dtype=np.float32)
+            return CorrectionResult(
+                boa=mock_observation_bundle.toa,
+                boa_unc=None,
+                aot=atmo.aot,
+                tcwv=atmo.tcwv,
+                cloud_mask=mock_observation_bundle.cloud_mask,
+            )
+
+    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+
+    runtime_mod.resolve_corrector(SimpleNamespace())(
+        mock_observation_bundle,
+        solved,
+        "rt-model",
+    )
+
+    assert np.isfinite(captured["aot"]).all()
+    assert np.isfinite(captured["tcwv"]).all()
+    assert np.isfinite(captured["tco3"]).all()
+
+
 def test_shares_template_grid_false_cases_cover_mismatch_paths() -> None:
     template = xr.DataArray(
         np.ones((2, 2), dtype=np.float32),

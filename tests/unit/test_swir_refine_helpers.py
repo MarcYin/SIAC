@@ -281,24 +281,39 @@ def test_query_surface_prior_uses_database_grid_for_knn_query(
     assert prior.boa.shape == (1, 4, 4)
 
 
-def test_resample_geometry_for_surface_prior_uses_native_resolution(
+def test_resample_geometry_for_surface_prior_uses_solver_grid_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seen: list[tuple[tuple[int, int], float, float]] = []
+    seen: list[tuple[tuple[float, float, float, float], str, float]] = []
 
-    def fake_target_shape(shape: tuple[int, int], native_resolution: float, resolution: float) -> tuple[int, int]:
-        seen.append((shape, native_resolution, resolution))
-        return (1, 2)
+    def fake_target_template(
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        resolution: float,
+    ) -> xr.DataArray:
+        seen.append((bounds, crs, resolution))
+        return xr.DataArray(
+            np.full((1, 2), np.nan, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": [0.0], "x": [0.0, 1.0]},
+        )
 
-    def fake_resample(data: xr.DataArray, target_shape: tuple[int, int], method: str) -> xr.DataArray:
+    def fake_resample(
+        data: xr.DataArray,
+        target_shape: tuple[int, int],
+        method: str,
+        *,
+        template: xr.DataArray | None = None,
+    ) -> xr.DataArray:
+        assert template is not None
         return xr.DataArray(np.full(target_shape, 1.0, dtype=np.float32), dims=["y", "x"])
 
-    monkeypatch.setattr(swir_refine, "_compute_target_shape", fake_target_shape)
+    monkeypatch.setattr(swir_refine, "_build_target_template", fake_target_template)
     monkeypatch.setattr(swir_refine, "_resample_da", fake_resample)
 
     out = resample_geometry_for_surface_prior(_observation(), resolution=20.0)
 
-    assert seen == [((2, 2), 10.0, 20.0)]
+    assert seen == [((0.0, 0.0, 2.0, 2.0), "EPSG:32632", 20.0)]
     assert out.sza.shape == (1, 2)
     assert out.vaa.shape == (1, 2)
 

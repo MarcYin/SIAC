@@ -59,8 +59,8 @@ def _make_composite(month_idx: int) -> MonthlyBestPixelComposite:
     )
 
 
-def test_build_monthly_composite_database_requires_15_composites() -> None:
-    composites = [_make_composite(i) for i in range(14)]
+def test_build_monthly_composite_database_requires_non_empty_composites() -> None:
+    composites: list[MonthlyBestPixelComposite] = []
     try:
         build_monthly_composite_database(
             composites,
@@ -68,9 +68,9 @@ def test_build_monthly_composite_database_requires_15_composites() -> None:
             visible_bands=("B02", "B03"),
         )
     except ValueError as exc:
-        assert "15" in str(exc)
+        assert "at least one" in str(exc)
     else:
-        raise AssertionError("Expected ValueError when composite count != 15")
+        raise AssertionError("Expected ValueError when composite count is empty")
 
 
 def test_monthly_composite_database_uses_median_summary_in_query() -> None:
