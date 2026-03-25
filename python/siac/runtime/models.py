@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -14,6 +15,53 @@ if TYPE_CHECKING:
 
 def _as_data_array(value: object) -> xr.DataArray:
     return cast("xr.DataArray", value)
+
+
+def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> xr.DataArray:
+    """Copy spatial coords/CRS/transform from *reference* onto *data* when possible."""
+    import rioxarray  # noqa: F401
+
+    out = data
+    coord_updates = {
+        dim: reference.coords[dim]
+        for dim in reference.dims
+        if dim in out.dims and dim in reference.coords and out.sizes[dim] == reference.sizes[dim]
+    }
+    if coord_updates:
+        out = out.assign_coords(coord_updates)
+
+    x_dim: str | None = None
+    y_dim: str | None = None
+    try:
+        x_dim = reference.rio.x_dim
+        y_dim = reference.rio.y_dim
+    except Exception:
+        if "x" in reference.dims and "y" in reference.dims:
+            x_dim, y_dim = "x", "y"
+        elif "longitude" in reference.dims and "latitude" in reference.dims:
+            x_dim, y_dim = "longitude", "latitude"
+
+    spatial_sizes_match = (
+        x_dim is not None
+        and y_dim is not None
+        and x_dim in out.dims
+        and y_dim in out.dims
+        and out.sizes[x_dim] == reference.sizes[x_dim]
+        and out.sizes[y_dim] == reference.sizes[y_dim]
+    )
+    if spatial_sizes_match:
+        with suppress(Exception):
+            out = out.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
+
+    try:
+        ref_crs = reference.rio.crs
+    except Exception:
+        ref_crs = None
+    if ref_crs is not None and spatial_sizes_match:
+        out = out.rio.write_crs(ref_crs)
+        with suppress(Exception):
+            out = out.rio.write_transform(reference.rio.transform(recalc=True))
+    return out
 
 
 @dataclass(frozen=True)
@@ -100,11 +148,11 @@ class AtmosphericState:
         tcwv_unc: xr.DataArray | None = None,
     ) -> AtmosphericState:
         return AtmosphericState(
-            aot=aot,
-            tcwv=tcwv,
+            aot=copy_spatial_metadata_like(aot, self.aot),
+            tcwv=copy_spatial_metadata_like(tcwv, self.tcwv),
             tco3=self.tco3,
-            aot_unc=aot_unc if aot_unc is not None else self.aot_unc,
-            tcwv_unc=tcwv_unc if tcwv_unc is not None else self.tcwv_unc,
+            aot_unc=copy_spatial_metadata_like(aot_unc, self.aot_unc) if aot_unc is not None else self.aot_unc,
+            tcwv_unc=copy_spatial_metadata_like(tcwv_unc, self.tcwv_unc) if tcwv_unc is not None else self.tcwv_unc,
             tco3_unc=self.tco3_unc,
             elevation=self.elevation,
         )
@@ -194,6 +242,16 @@ class SurfacePrior:
     boa_unc: xr.DataArray
     kernels: BRDFKernelWeights | None
     mask: xr.DataArray
+    monthly_composites: tuple[Any, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class MonthlyCompositeOutput:
+    """Persistable monthly-composite product bundle."""
+
+    reflectance: xr.Dataset
+    quality: xr.DataArray
+    sample_index: xr.DataArray
 
 
 @dataclass(frozen=True)
@@ -255,6 +313,9 @@ class CorrectionResult:
     aot: xr.DataArray
     tcwv: xr.DataArray
     cloud_mask: xr.DataArray
+    surface_prior: xr.Dataset | None = None
+    surface_prior_unc: xr.Dataset | None = None
+    monthly_composites: dict[str, MonthlyCompositeOutput] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     diagnostics: CorrectionDiagnostics = field(default_factory=CorrectionDiagnostics)
 
@@ -262,9 +323,11 @@ class CorrectionResult:
 __all__ = [
     "AtmosphericState",
     "BRDFKernelWeights",
+    "copy_spatial_metadata_like",
     "CorrectionDiagnostics",
     "CorrectionResult",
     "GeometryAngles",
+    "MonthlyCompositeOutput",
     "ObservationBundle",
     "RTCoefficients",
     "SolvedAtmosphere",

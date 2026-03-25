@@ -434,7 +434,16 @@ def mock_surface_prior_provider(mock_surface_prior):
 @pytest.fixture
 def mock_grid_assembler(mock_solver_input_bundle):
     """Grid assembler that returns a pre-built SolverInputBundle."""
-    def _assemble(obs, atmo, surface, rt_model, aux_res=500.0, aero_res=1000.0):
+    def _assemble(
+        obs,
+        atmo,
+        surface,
+        rt_model,
+        aux_resolution_m=500.0,
+        aerosol_resolution_m=1000.0,
+        **_kwargs,
+    ):
+        _ = (obs, atmo, surface, rt_model, aux_resolution_m, aerosol_resolution_m)
         return mock_solver_input_bundle
     return _assemble
 

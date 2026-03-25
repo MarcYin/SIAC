@@ -9,13 +9,18 @@ import xarray as xr
 import siac.adapters.output as output_module
 from siac.adapters.output import ConfiguredOutputWriter
 from siac.config.schema import OutputDefaultsConfig
-from siac.runtime import CorrectionResult
+from siac.runtime import CorrectionResult, MonthlyCompositeOutput
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _result(*, include_uncertainty: bool = True) -> CorrectionResult:
+def _result(
+    *,
+    include_uncertainty: bool = True,
+    include_surface_prior: bool = False,
+    include_monthly_composites: bool = False,
+) -> CorrectionResult:
     coords = {"y": [0, 1], "x": [0, 1]}
     boa = xr.Dataset(
         {
@@ -38,12 +43,55 @@ def _result(*, include_uncertainty: bool = True) -> CorrectionResult:
         if include_uncertainty
         else None
     )
+    surface_prior = (
+        xr.Dataset(
+            {
+                "B04": xr.DataArray(np.full((2, 2), 0.11, dtype=np.float32), dims=["y", "x"], coords=coords),
+                "B03": xr.DataArray(np.full((2, 2), 0.09, dtype=np.float32), dims=["y", "x"], coords=coords),
+            }
+        )
+        if include_surface_prior
+        else None
+    )
+    surface_prior_unc = (
+        xr.Dataset(
+            {
+                name: xr.DataArray(
+                    np.full((2, 2), 0.02, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords=coords,
+                )
+                for name in ("B04", "B03")
+            }
+        )
+        if include_surface_prior and include_uncertainty
+        else None
+    )
+    monthly_composites = (
+        {
+            "2023_07": MonthlyCompositeOutput(
+                reflectance=xr.Dataset(
+                    {
+                        "B04": xr.DataArray(np.full((2, 2), 0.13, dtype=np.float32), dims=["y", "x"], coords=coords),
+                        "B03": xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coords),
+                    }
+                ),
+                quality=xr.DataArray(np.full((2, 2), 0.4, dtype=np.float32), dims=["y", "x"], coords=coords),
+                sample_index=xr.DataArray(np.full((2, 2), 3, dtype=np.int16), dims=["y", "x"], coords=coords),
+            )
+        }
+        if include_monthly_composites
+        else None
+    )
     return CorrectionResult(
         boa=boa,
         boa_unc=boa_unc,
         aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coords),
         tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coords),
         cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"], coords=coords),
+        surface_prior=surface_prior,
+        surface_prior_unc=surface_prior_unc,
+        monthly_composites=monthly_composites,
     )
 
 
@@ -111,18 +159,18 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
     } <= set(artifacts)
 
 
-def test_write_netcdf_alias_emits_cog_band_products_and_respects_toggles(
+def test_write_netcdf_products_route_and_respects_toggles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    dataset_calls: list[tuple[xr.Dataset, Path, dict[str, object]]] = []
+    calls: list[Path] = []
 
-    def _fake_write_dataset(dataset: xr.Dataset, output_dir: Path, **kwargs: object) -> dict[str, Path]:
-        dataset_calls.append((dataset, output_dir, kwargs))
-        return {name: output_dir / f"{name}.tif" for name in dataset.data_vars}
+    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+        del dataset, kwargs
+        calls.append(path)
+        return path
 
-    monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
+    monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -134,15 +182,61 @@ def test_write_netcdf_alias_emits_cog_band_products_and_respects_toggles(
     )
     artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
 
-    assert len(dataset_calls) == 1
-    assert dataset_calls[0][1] == tmp_path / "boa"
-    assert dataset_calls[0][2]["as_cog"] is True
-    assert artifacts == {
-        "boa.B04": tmp_path / "boa" / "B04.tif",
-        "boa.B03": tmp_path / "boa" / "B03.tif",
-        "boa.B02": tmp_path / "boa" / "B02.tif",
-    }
-    assert "treating it as 'cog'" in caplog.text
+    assert calls == [tmp_path / "boa.nc"]
+    assert artifacts == {"boa": tmp_path / "boa.nc"}
+
+
+def test_write_raster_products_emits_surface_prior_and_monthly_composites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_calls: list[tuple[xr.Dataset, Path, dict[str, object]]] = []
+    raster_calls: list[tuple[Path, dict[str, object], np.dtype[np.generic]]] = []
+
+    def _fake_write_dataset(dataset: xr.Dataset, output_dir: Path, **kwargs: object) -> dict[str, Path]:
+        dataset_calls.append((dataset, output_dir, kwargs))
+        return {name: output_dir / f"{name}.tif" for name in dataset.data_vars}
+
+    def _fake_write_cog(data: xr.DataArray, path: Path, **kwargs: object) -> Path:
+        raster_calls.append((path, kwargs, data.dtype))
+        return path
+
+    monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
+    monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
+    monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda _dataset, path: path)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="cog",
+            boa_dtype="uint16",
+            include_uncertainty=True,
+            include_auxiliary=False,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(
+        _result(include_surface_prior=True, include_monthly_composites=True),
+        tmp_path,
+    )
+
+    assert [output_dir for _, output_dir, _ in dataset_calls] == [
+        tmp_path / "boa",
+        tmp_path / "boa_unc",
+        tmp_path / "surface_prior",
+        tmp_path / "surface_prior_unc",
+        tmp_path / "monthly_composites" / "2023_07",
+    ]
+    assert {path.name for path, _, _ in raster_calls} == {"quality.tif", "sample_index.tif"}
+    assert {
+        "surface_prior.B04",
+        "surface_prior.B03",
+        "surface_prior_unc.B04",
+        "surface_prior_unc.B03",
+        "monthly_composites.2023_07.B04",
+        "monthly_composites.2023_07.B03",
+        "monthly_composites.2023_07.quality",
+        "monthly_composites.2023_07.sample_index",
+    } <= set(artifacts)
 
 
 def test_write_zarr_products_route_and_respects_toggles(
@@ -169,6 +263,45 @@ def test_write_zarr_products_route_and_respects_toggles(
 
     assert calls == [tmp_path / "boa.zarr"]
     assert artifacts == {"boa": tmp_path / "boa.zarr"}
+
+
+def test_write_zarr_products_include_surface_prior_and_monthly_composites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    def _fake_writer(dataset: xr.Dataset, path: Path) -> Path:
+        calls.append(path)
+        return path
+
+    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="zarr",
+            include_uncertainty=True,
+            include_auxiliary=False,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(
+        _result(include_surface_prior=True, include_monthly_composites=True),
+        tmp_path,
+    )
+
+    assert calls == [
+        tmp_path / "boa.zarr",
+        tmp_path / "boa_unc.zarr",
+        tmp_path / "surface_prior.zarr",
+        tmp_path / "surface_prior_unc.zarr",
+        tmp_path / "monthly_composites" / "2023_07.zarr",
+    ]
+    assert {
+        "surface_prior",
+        "surface_prior_unc",
+        "monthly_composites.2023_07",
+    } <= set(artifacts)
 
 
 def test_write_rejects_unsupported_format(tmp_path: Path) -> None:

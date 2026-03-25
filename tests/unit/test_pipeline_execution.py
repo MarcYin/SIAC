@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import time
@@ -195,6 +196,84 @@ def test_resolve_execution_settings_rejects_invalid_values(
 def test_aerosol_resolution_reads_solver_config() -> None:
     cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=250.0))
     assert pipeline._aerosol_resolution(cfg) == 250.0
+
+
+def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_solver_input_bundle,
+    mock_solver_fn,
+    mock_corrector_fn,
+    mock_rt_model,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _grid_assembler(obs, atmo, surface, rt_model, **kwargs):  # noqa: ANN001
+        captured["args"] = (obs, atmo, surface, rt_model)
+        captured["kwargs"] = kwargs
+        return mock_solver_input_bundle
+
+    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=250.0))
+
+    result = pipeline._run_tail(
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        cfg,
+        grid_assembler=_grid_assembler,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=mock_rt_model,
+    )
+
+    assert isinstance(result, CorrectionResult)
+    assert captured["args"][0] is mock_observation_bundle
+    assert captured["kwargs"]["aerosol_resolution_m"] == 250.0
+
+
+def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_solver_input_bundle,
+    mock_solver_fn,
+    mock_corrector_fn,
+    mock_rt_model,
+) -> None:
+    composite = SimpleNamespace(
+        year=2023,
+        month=7,
+        reflectance=xr.DataArray(
+            np.stack([np.full(mock_surface_prior.boa.shape, 0.14, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+            coords={"band": ["B02"]},
+        ),
+        quality=xr.DataArray(np.full(mock_surface_prior.boa.shape, 0.5, dtype=np.float32), dims=["y", "x"]),
+        sample_index=xr.DataArray(np.full(mock_surface_prior.boa.shape, 2, dtype=np.int16), dims=["y", "x"]),
+    )
+    surface_with_monthly = dataclasses.replace(
+        mock_surface_prior,
+        monthly_composites=(composite,),
+    )
+
+    result = pipeline._run_tail(
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        surface_with_monthly,
+        SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0)),
+        grid_assembler=lambda *args, **kwargs: mock_solver_input_bundle,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=mock_rt_model,
+    )
+
+    assert result.surface_prior is not None
+    assert result.surface_prior_unc is not None
+    assert "surface_prior" in result.surface_prior.data_vars
+    assert result.monthly_composites is not None
+    assert "2023_07" in result.monthly_composites
+    assert "B02" in result.monthly_composites["2023_07"].reflectance.data_vars
 
 
 def test_call_with_retries_recovers_and_logs(caplog: pytest.LogCaptureFixture) -> None:

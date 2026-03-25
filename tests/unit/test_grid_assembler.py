@@ -113,6 +113,18 @@ class TestAssembleGrids:
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=500.0)
         assert sib.aux_resolution_m == 500.0
 
+    def test_aux_resolution_falls_back_to_solver_grid_for_legacy_callers(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ):
+        sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=320.0)
+
+        assert sib.toa.shape[1:] == (2, 2)
+        assert sib.aerosol_resolution_m == 320.0
+
     def test_band_selection(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Bands should be aerosol-sensitive (400-520 nm)."""
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
@@ -134,24 +146,45 @@ class TestAssembleGrids:
         assert sib.cloud_mask.values.any(), "Cloud region should be preserved"
 
     def test_identity_same_res(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
-        """When aux_resolution == native, output ≈ input."""
-        # bands[0].resolution is 60.0 for B01, but let's set aux to native so no resampling
+        """When aerosol_resolution matches the scene pixel size, output ≈ input."""
         sib = assemble_grids(
             large_obs_bundle, large_atmo, large_surface, mock_rt_model,
-            aux_resolution_m=60.0,  # matches B01 resolution
+            aerosol_resolution_m=10.0,
         )
         # Should have same shape as input (64x64)
         assert sib.toa.shape[1:] == (64, 64)
 
     def test_downsampling_reduces_shape(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
-        """Resampling from 10m to 500m should produce a smaller grid."""
+        """Resampling to a coarser aerosol grid should produce a smaller grid."""
         sib = assemble_grids(
             large_obs_bundle, large_atmo, large_surface, mock_rt_model,
-            aux_resolution_m=500.0,
+            aerosol_resolution_m=500.0,
         )
         # 64 px @ 10m -> ~1.3 px @ 500m -> at least (1, 1)
         assert sib.toa.shape[1] <= 64
         assert sib.toa.shape[2] <= 64
+
+    def test_aerosol_resolution_controls_grid_and_georeference(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ):
+        sib = assemble_grids(
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=320.0,
+        )
+
+        assert sib.toa.shape[1:] == (2, 2)
+        assert sib.atmo_prior.aot.shape == (2, 2)
+        assert sib.atmo_prior.aot.rio.crs is not None
+        assert sib.atmo_prior.aot.rio.crs.to_string() == "EPSG:32632"
+        assert sib.atmo_prior.aot.coords["x"].values.tolist() == pytest.approx([300160.0, 300480.0])
+        assert sib.atmo_prior.aot.coords["y"].values.tolist() == pytest.approx([5500480.0, 5500160.0])
 
     def test_passes_validation(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Output should pass validate_solver_input_bundle()."""

@@ -205,10 +205,10 @@ def resolve_solver(config: Any) -> SolverFn:
         )
         return SolvedAtmosphere(
             atmo_state=solved_atmo,
-            aot=result.aot,
-            tcwv=result.tcwv,
-            aot_unc=result.aot_unc,
-            tcwv_unc=result.tcwv_unc,
+            aot=solved_atmo.aot,
+            tcwv=solved_atmo.tcwv,
+            aot_unc=solved_atmo.aot_unc,
+            tcwv_unc=solved_atmo.tcwv_unc,
             cost_final=float(result.final_cost),
             n_iterations=result.n_iterations,
             converged=result.success,
@@ -285,6 +285,58 @@ def _resample_field_to_template(field: Any, template: Any) -> Any:
     )
 
 
+def _fill_nonfinite_like_template(
+    field: Any,
+    source: Any,
+    template: Any,
+    *,
+    fallback_value: float = 0.0,
+) -> Any:
+    values = np.asarray(field.values, dtype=np.float32)
+    if np.all(np.isfinite(values)):
+        return field
+
+    filled = values.copy()
+    if (
+        len(source.dims) == 2
+        and source.dims == template.dims
+        and all(dim in source.coords for dim in source.dims)
+        and all(dim in template.coords for dim in template.dims)
+    ):
+        try:
+            nearest = source.interp(
+                coords={dim: template.coords[dim] for dim in template.dims},
+                method="nearest",
+            )
+            nearest_values = np.asarray(nearest.values, dtype=np.float32)
+            filled = np.where(np.isfinite(filled), filled, nearest_values)
+        except Exception:
+            pass
+
+    if not np.all(np.isfinite(filled)):
+        source_values = np.asarray(source.values, dtype=np.float32)
+        finite_source = source_values[np.isfinite(source_values)]
+        fill_value = float(finite_source.mean()) if finite_source.size else float(fallback_value)
+        filled = np.where(np.isfinite(filled), filled, np.float32(fill_value))
+
+    return field.copy(data=filled)
+
+
+def _resample_field_to_template_for_correction(
+    field: Any,
+    template: Any,
+    *,
+    fallback_value: float = 0.0,
+) -> Any:
+    """Resample atmosphere fields to the correction grid and guarantee finiteness."""
+    return _fill_nonfinite_like_template(
+        _resample_field_to_template(field, template),
+        field,
+        template,
+        fallback_value=fallback_value,
+    )
+
+
 def resolve_corrector(_config: Any) -> CorrectorFn:
     def _default_corrector(
         obs: ObservationBundle,
@@ -295,15 +347,26 @@ def resolve_corrector(_config: Any) -> CorrectorFn:
         first_band = obs.toa[next(iter(obs.toa.data_vars))]
         atmo = solved.atmo_state
         matched_atmo = AtmosphericState(
-            aot=_resample_field_to_template(atmo.aot, first_band),
-            tcwv=_resample_field_to_template(atmo.tcwv, first_band),
-            tco3=_resample_field_to_template(atmo.tco3, first_band),
-            aot_unc=_resample_field_to_template(atmo.aot_unc, first_band),
-            tcwv_unc=_resample_field_to_template(atmo.tcwv_unc, first_band),
-            tco3_unc=_resample_field_to_template(atmo.tco3_unc, first_band),
-            elevation=_resample_field_to_template(atmo.elevation, first_band),
+            aot=_resample_field_to_template_for_correction(atmo.aot, first_band),
+            tcwv=_resample_field_to_template_for_correction(atmo.tcwv, first_band),
+            tco3=_resample_field_to_template_for_correction(atmo.tco3, first_band),
+            aot_unc=_resample_field_to_template_for_correction(atmo.aot_unc, first_band),
+            tcwv_unc=_resample_field_to_template_for_correction(atmo.tcwv_unc, first_band),
+            tco3_unc=_resample_field_to_template_for_correction(atmo.tco3_unc, first_band),
+            elevation=_resample_field_to_template_for_correction(atmo.elevation, first_band),
         )
-        return corrector_obj.correct(obs.toa, obs.geometry, matched_atmo, obs.cloud_mask)
+        corrected = corrector_obj.correct(obs.toa, obs.geometry, matched_atmo, obs.cloud_mask)
+        if not isinstance(corrected, CorrectionResult):
+            return corrected
+        return CorrectionResult(
+            boa=corrected.boa,
+            boa_unc=corrected.boa_unc,
+            aot=atmo.aot,
+            tcwv=atmo.tcwv,
+            cloud_mask=corrected.cloud_mask,
+            metadata=corrected.metadata,
+            diagnostics=corrected.diagnostics,
+        )
 
     return _default_corrector
 

@@ -4,17 +4,19 @@ Pipeline orchestration for SIAC atmospheric correction.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
+import xarray as xr
 
 from siac.observability import (
     ExecutionObserver,
@@ -28,11 +30,13 @@ from siac.runtime import (
     AtmosphericState,
     CorrectionResult,
     GeometryAngles,
+    MonthlyCompositeOutput,
     ObservationBundle,
     SolvedAtmosphere,
     SolverInputBundle,
     SurfacePrior,
 )
+from siac.runtime.models import copy_spatial_metadata_like
 from siac.runtime.validation import (
     validate_atmospheric_state,
     validate_correction_result,
@@ -301,6 +305,113 @@ def _surface_prior_requires_atmo(provider: SurfacePriorFn) -> bool:
     return bool(getattr(provider, "requires_atmo_prior", False))
 
 
+def _surface_template(data: xr.DataArray) -> xr.DataArray:
+    if "band" in data.dims:
+        band_coord = data.coords["band"].values[0] if "band" in data.coords else 0
+        return data.sel(band=band_coord, drop=True)
+    return data
+
+
+def _band_name(value: object, index: int) -> str:
+    if hasattr(value, "item"):
+        with suppress(Exception):
+            value = value.item()
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    text = str(value)
+    return text if text else f"band_{index + 1:02d}"
+
+
+def _banded_dataarray_to_dataset(
+    data: xr.DataArray,
+    *,
+    default_name: str,
+    template: xr.DataArray,
+) -> xr.Dataset:
+    if "band" not in data.dims:
+        return xr.Dataset({default_name: copy_spatial_metadata_like(data, template)})
+
+    band_values = data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
+    return xr.Dataset(
+        {
+            _band_name(band, index): copy_spatial_metadata_like(
+                data.sel(band=band, drop=True),
+                template,
+            )
+            for index, band in enumerate(band_values)
+        }
+    )
+
+
+def _monthly_composite_outputs(
+    composites: tuple[Any, ...],
+    *,
+    template: xr.DataArray,
+) -> dict[str, MonthlyCompositeOutput] | None:
+    if not composites:
+        return None
+
+    outputs: dict[str, MonthlyCompositeOutput] = {}
+    for composite in composites:
+        label = f"{int(composite.year):04d}_{int(composite.month):02d}"
+        outputs[label] = MonthlyCompositeOutput(
+            reflectance=_banded_dataarray_to_dataset(
+                composite.reflectance,
+                default_name="reflectance",
+                template=template,
+            ),
+            quality=copy_spatial_metadata_like(composite.quality.astype(np.float32), template),
+            sample_index=copy_spatial_metadata_like(composite.sample_index.astype(np.int16), template),
+        )
+    return outputs
+
+
+def _call_grid_assembler(
+    grid_assembler: GridAssemblerFn,
+    obs: ObservationBundle,
+    atmo: AtmosphericState,
+    surface: SurfacePrior,
+    rt_model: Any,
+    *,
+    aerosol_resolution_m: float,
+) -> SolverInputBundle:
+    grid_assembler_fn = cast("Callable[..., SolverInputBundle]", grid_assembler)
+    try:
+        signature = inspect.signature(grid_assembler_fn)
+    except (TypeError, ValueError):
+        return grid_assembler_fn(
+            obs,
+            atmo,
+            surface,
+            rt_model,
+            aerosol_resolution_m=aerosol_resolution_m,
+        )
+
+    params = tuple(signature.parameters.values())
+    if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params) or "aerosol_resolution_m" in signature.parameters:
+        return grid_assembler_fn(
+            obs,
+            atmo,
+            surface,
+            rt_model,
+            aerosol_resolution_m=aerosol_resolution_m,
+        )
+    if any(param.kind is inspect.Parameter.VAR_POSITIONAL for param in params):
+        return grid_assembler_fn(obs, atmo, surface, rt_model, 500.0, aerosol_resolution_m)
+
+    positional_params = [
+        param
+        for param in params
+        if param.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+    ]
+    if len(positional_params) >= 6:
+        return grid_assembler_fn(obs, atmo, surface, rt_model, 500.0, aerosol_resolution_m)
+    if len(positional_params) >= 5:
+        return grid_assembler_fn(obs, atmo, surface, rt_model, aerosol_resolution_m)
+    return grid_assembler_fn(obs, atmo, surface, rt_model)
+
+
 def _call_with_retries(
     fn: Callable[..., Any],
     args: tuple[Any, ...],
@@ -405,11 +516,19 @@ def _run_tail(
 ) -> CorrectionResult:
     validate_atmospheric_state(atmo)
     validate_surface_prior(surface)
+    aerosol_resolution = _aerosol_resolution(config)
 
     t0 = time.monotonic()
     logger.info("M4: Assembling solver grids...")
     with observe_stage("M4.grid_assembly"):
-        solver_inputs = grid_assembler(obs, atmo, surface, rt_model)
+        solver_inputs = _call_grid_assembler(
+            grid_assembler,
+            obs,
+            atmo,
+            surface,
+            rt_model,
+            aerosol_resolution_m=aerosol_resolution,
+        )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
 
@@ -433,7 +552,31 @@ def _run_tail(
     t0 = time.monotonic()
     logger.info("M6: Applying atmospheric correction...")
     with observe_stage("M6.correction"):
-        result = corrector(obs, solved, rt_model)
+        corrected = corrector(obs, solved, rt_model)
+        surface_template = _surface_template(solver_inputs.surface_prior.boa)
+        result = CorrectionResult(
+            boa=corrected.boa,
+            boa_unc=corrected.boa_unc,
+            aot=corrected.aot,
+            tcwv=corrected.tcwv,
+            cloud_mask=corrected.cloud_mask,
+            surface_prior=_banded_dataarray_to_dataset(
+                solver_inputs.surface_prior.boa,
+                default_name="surface_prior",
+                template=surface_template,
+            ),
+            surface_prior_unc=_banded_dataarray_to_dataset(
+                solver_inputs.surface_prior.boa_unc,
+                default_name="surface_prior_unc",
+                template=surface_template,
+            ),
+            monthly_composites=_monthly_composite_outputs(
+                tuple(getattr(surface, "monthly_composites", ())),
+                template=surface_template,
+            ),
+            metadata=corrected.metadata,
+            diagnostics=corrected.diagnostics,
+        )
     validate_correction_result(result)
     logger.info("M6: Correction complete (%.2fs).", time.monotonic() - t0)
 
