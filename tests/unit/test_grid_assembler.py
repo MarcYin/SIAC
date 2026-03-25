@@ -2,9 +2,12 @@
 Layer 3 — Grid assembler (M4) unit tests.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 import xarray as xr
+from rasterio.enums import Resampling as RasterioResampling
 
 from siac.algorithms.grid.assembler import assemble_grids
 from siac.domain import SensorBand, SensorConfig
@@ -163,6 +166,53 @@ class TestAssembleGrids:
         # 64 px @ 10m -> ~1.3 px @ 500m -> at least (1, 1)
         assert sib.toa.shape[1] <= 64
         assert sib.toa.shape[2] <= 64
+
+    def test_toa_downsampling_uses_gdal_average_when_georeferenced(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from affine import Affine
+        from rioxarray.raster_array import RasterArray
+
+        x = 300000.0 + (np.arange(64, dtype=np.float64) + 0.5) * 10.0
+        y = 5500640.0 - (np.arange(64, dtype=np.float64) + 0.5) * 10.0
+        transform = Affine(10.0, 0.0, 300000.0, 0.0, -10.0, 5500640.0)
+
+        def _georef(da: xr.DataArray) -> xr.DataArray:
+            out = da.assign_coords({"x": x, "y": y})
+            out = out.rio.set_spatial_dims(x_dim="x", y_dim="y")
+            out = out.rio.write_crs("EPSG:32632")
+            return out.rio.write_transform(transform)
+
+        obs = dataclasses.replace(
+            large_obs_bundle,
+            toa=xr.Dataset({name: _georef(data) for name, data in large_obs_bundle.toa.data_vars.items()}),
+        )
+
+        calls: list[RasterioResampling] = []
+        original_reproject_match = RasterArray.reproject_match
+
+        def _fake_reproject_match(self, target, *, resampling, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(resampling)
+            return original_reproject_match(self, target, resampling=resampling, **kwargs)
+
+        monkeypatch.setattr(RasterArray, "reproject_match", _fake_reproject_match)
+
+        sib = assemble_grids(
+            obs,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=320.0,
+        )
+
+        assert sib.toa.shape[1:] == (2, 2)
+        assert calls == [RasterioResampling.average, RasterioResampling.average]
 
     def test_aerosol_resolution_controls_grid_and_georeference(
         self,

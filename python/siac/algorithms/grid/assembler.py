@@ -10,6 +10,7 @@ See PLANS.md §4.4 for the full specification.
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from typing import Any
 
 import numpy as np
@@ -41,6 +42,14 @@ def _template_coords(template: xr.DataArray | None) -> dict[str, xr.DataArray]:
     }
 
 
+def _ensure_template_transform(template: xr.DataArray) -> xr.DataArray:
+    try:
+        transform = template.rio.transform(recalc=True)
+    except Exception:
+        return template
+    return template.rio.write_transform(transform)
+
+
 def _build_target_template(
     bounds: tuple[float, float, float, float],
     crs: str,
@@ -59,7 +68,8 @@ def _build_target_template(
         coords={"x": x, "y": y},
     )
     template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
-    return template.rio.write_crs(crs)
+    template = template.rio.write_crs(crs)
+    return _ensure_template_transform(template)
 
 
 def _compute_target_shape(
@@ -112,6 +122,9 @@ def _resample_da(
         return copy_spatial_metadata_like(da, template) if template is not None else da
 
     if method == "area":
+        gdal_average = _resample_da_gdal_average(da, template)
+        if gdal_average is not None:
+            return gdal_average
         # Block-mean downsampling
         factor_y = max(1, src.shape[0] // h_out)
         factor_x = max(1, src.shape[1] // w_out)
@@ -145,6 +158,67 @@ def _resample_da(
         attrs=da.attrs,
     )
     return copy_spatial_metadata_like(out_da, template) if template is not None else out_da
+
+
+def _resample_da_gdal_average(
+    da: xr.DataArray,
+    template: xr.DataArray | None,
+) -> xr.DataArray | None:
+    """Use GDAL-backed average resampling when the source is georeferenced."""
+    if template is None:
+        return None
+
+    try:
+        import rioxarray  # noqa: F401
+        from rasterio.enums import Resampling as RasterioResampling
+    except Exception:
+        return None
+
+    try:
+        x_dim = template.rio.x_dim
+        y_dim = template.rio.y_dim
+    except Exception:
+        if "x" in template.dims and "y" in template.dims:
+            x_dim, y_dim = "x", "y"
+        else:
+            return None
+
+    if x_dim not in da.dims or y_dim not in da.dims:
+        return None
+    if x_dim not in da.coords or y_dim not in da.coords:
+        return None
+
+    try:
+        source = da.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
+    except Exception:
+        return None
+
+    try:
+        source_crs = source.rio.crs
+    except Exception:
+        source_crs = None
+
+    try:
+        target = _ensure_template_transform(template)
+        target_crs = target.rio.crs
+    except Exception:
+        return None
+
+    if target_crs is None:
+        return None
+    if source_crs is None:
+        source = source.rio.write_crs(target_crs)
+
+    with suppress(Exception):
+        source = source.rio.write_transform(source.rio.transform(recalc=True))
+
+    try:
+        out = source.rio.reproject_match(target, resampling=RasterioResampling.average)
+    except Exception:
+        return None
+
+    out = out.astype(np.float32).assign_attrs(da.attrs)
+    return copy_spatial_metadata_like(out, target)
 
 
 def _resample_cloud_mask(
