@@ -12,6 +12,7 @@ from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary
 from siac.algorithms.surface.swir_refine import (
     _forward_model_monthly_reflectance,
     _weekly_sample_dates,
+    build_monthly_composites_from_brdf,
     build_monthly_surface_prior_database,
     query_surface_prior_from_monthly_database,
 )
@@ -271,6 +272,69 @@ def test_query_surface_prior_from_monthly_database_resamples_coarse_atmo_prior()
 def test_weekly_sample_dates_use_weekly_spacing() -> None:
     sample_dates = _weekly_sample_dates(2024, 1)
     assert [dt.day for dt in sample_dates] == [1, 8, 15, 22, 29]
+
+
+def test_build_monthly_composites_from_brdf_honors_explicit_period_selection() -> None:
+    class _FakeBRDFProvider:
+        def __init__(self) -> None:
+            self.batch_calls: list[dict[str, object]] = []
+            self.source_bands = tuple(_sensor_config().bands)
+
+        def get_temporal_brdf_parameters_batch(self, **kwargs):
+            self.batch_calls.append(kwargs)
+            outputs = []
+            bands = [band.name for band in kwargs["bands"]]
+            for sample_dates in kwargs["sample_date_sets"]:
+                sample_dates = tuple(sample_dates)
+                n_time = len(sample_dates)
+                data = np.full((n_time, len(bands), 2, 1), 0.2, dtype=np.float32)
+                unc = np.full_like(data, 0.03, dtype=np.float32)
+                coords = {
+                    "time": np.array([np.datetime64(dt.date(), "D") for dt in sample_dates]),
+                    "band": bands,
+                    "y": [0, 1],
+                    "x": [0],
+                }
+                outputs.append(
+                    BRDFKernelWeights(
+                        f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                    )
+                )
+            return outputs
+
+    provider = _FakeBRDFProvider()
+
+    collection = build_monthly_composites_from_brdf(
+        brdf_provider=provider,
+        bounds=(0.0, 0.0, 1.0, 2.0),
+        crs="EPSG:32632",
+        resolution=500.0,
+        year_months=((2023, 8), (2022, 7)),
+    )
+
+    assert [(composite.year, composite.month) for composite in collection.composites] == [(2022, 7), (2023, 8)]
+    assert len(provider.batch_calls) == 1
+    requested_sample_sets = [tuple(sample_dates) for sample_dates in provider.batch_calls[0]["sample_date_sets"]]
+    assert [(sample_dates[0].year, sample_dates[0].month) for sample_dates in requested_sample_sets] == [(2022, 7), (2023, 8)]
+
+
+def test_build_monthly_composites_from_brdf_rejects_duplicate_periods() -> None:
+    class _FakeBRDFProvider:
+        source_bands = tuple(_sensor_config().bands)
+
+    with pytest.raises(ValueError, match="Duplicate monthly composite selection"):
+        build_monthly_composites_from_brdf(
+            brdf_provider=_FakeBRDFProvider(),
+            bounds=(0.0, 0.0, 1.0, 2.0),
+            crs="EPSG:32632",
+            resolution=500.0,
+            year_months=((2023, 7), (2023, 7)),
+        )
 
 
 def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples(

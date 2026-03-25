@@ -28,6 +28,7 @@ from siac.algorithms.surface.spectral_mapping import (
     needs_spectral_mapping,
 )
 from siac.algorithms.surface.swir_refine import (
+    build_monthly_composites_from_brdf,
     build_monthly_surface_prior_database,
     generate_monthly_composites_from_brdf,
     query_surface_prior_from_monthly_database,
@@ -49,6 +50,7 @@ __all__ = [
     "build_monthly_best_pixel_kernel_composite",
     "MonthlyCompositeDatabase",
     "build_monthly_composite_database",
+    "build_monthly_composites_from_brdf",
     "build_monthly_surface_prior_database",
     "generate_monthly_composites_from_brdf",
     "HyperspectralLibrary",

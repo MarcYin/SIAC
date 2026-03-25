@@ -172,24 +172,37 @@ def generate_monthly_composites_from_brdf(
     fallback_source_bands: collections.abc.Sequence[SensorBand] = (),
 ) -> MonthlyCompositeCollection:
     """Generate default monthly kernel-weight composites from a temporal BRDF provider."""
+    obs_time = cast("datetime", observation.metadata["observation_time"])
+    return build_monthly_composites_from_brdf(
+        brdf_provider=brdf_provider,
+        bounds=observation.bounds,
+        crs=observation.crs,
+        resolution=resolution,
+        year_months=_iter_history_months(obs_time),
+        fallback_source_bands=fallback_source_bands,
+        template_time=obs_time,
+    )
+
+
+def build_monthly_composites_from_brdf(
+    *,
+    brdf_provider: object,
+    bounds: tuple[float, float, float, float],
+    crs: str,
+    resolution: float,
+    year_months: collections.abc.Sequence[tuple[int, int]],
+    fallback_source_bands: collections.abc.Sequence[SensorBand] = (),
+    template_time: datetime | None = None,
+) -> MonthlyCompositeCollection:
+    """Build monthly kernel-weight composites for explicit year/month selections."""
     if resolution <= 0:
         raise ValueError("resolution must be > 0")
 
     source_bands = _resolve_provider_source_bands(brdf_provider, fallback_source_bands)
-    obs_time = cast("datetime", observation.metadata["observation_time"])
-    month_specs = [
-        _MonthSpec(
-            year=year,
-            month=month,
-            center_time=_month_center_datetime(year, month, obs_time),
-            temporal_window=max(1, calendar.monthrange(year, month)[1] // 2 + 1),
-            sample_dates=_weekly_sample_dates(year, month),
-        )
-        for year, month in _iter_history_months(obs_time)
-    ]
+    month_specs = _build_explicit_month_specs(year_months, template_time=template_time)
     logger.info(
         "Monthly composite generation from BRDF: obs_time=%s months=%d batch_size=%d source_bands=%d",
-        obs_time.isoformat(),
+        month_specs[0].center_time.isoformat() if month_specs else "n/a",
         len(month_specs),
         _BRDF_BATCH_MONTHS,
         len(source_bands),
@@ -210,8 +223,8 @@ def generate_monthly_composites_from_brdf(
         )
         temporal_weights_batch = _get_temporal_brdf_parameters_batch(
             brdf_provider,
-            bounds=observation.bounds,
-            crs=observation.crs,
+            bounds=bounds,
+            crs=crs,
             obs_times=[spec.center_time for spec in month_batch],
             target_resolution=resolution,
             bands=source_bands,
@@ -448,6 +461,36 @@ def _iter_history_months(obs_time: datetime) -> list[tuple[int, int]]:
                 year += 1
             months.append((year, month))
     return months
+
+
+def _build_explicit_month_specs(
+    year_months: collections.abc.Sequence[tuple[int, int]],
+    *,
+    template_time: datetime | None,
+) -> list[_MonthSpec]:
+    if not year_months:
+        raise ValueError("year_months must not be empty")
+
+    specs: list[_MonthSpec] = []
+    seen: set[tuple[int, int]] = set()
+    for year, month in sorted((int(year), int(month)) for year, month in year_months):
+        if not 1 <= month <= 12:
+            raise ValueError(f"month must be between 1 and 12, got {month}")
+        key = (year, month)
+        if key in seen:
+            raise ValueError(f"Duplicate monthly composite selection: {year:04d}-{month:02d}")
+        seen.add(key)
+        center_template = template_time or datetime(year, month, 15, 12, 0, 0)
+        specs.append(
+            _MonthSpec(
+                year=year,
+                month=month,
+                center_time=_month_center_datetime(year, month, center_template),
+                temporal_window=max(1, calendar.monthrange(year, month)[1] // 2 + 1),
+                sample_dates=_weekly_sample_dates(year, month),
+            )
+        )
+    return specs
 
 
 def _month_center_datetime(year: int, month: int, template_time: datetime) -> datetime:
