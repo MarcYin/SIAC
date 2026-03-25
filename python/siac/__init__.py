@@ -32,10 +32,18 @@ def __getattr__(name: str) -> Any:
         from siac.config import SIACConfig
 
         return SIACConfig
+    if name == "PreparedMonthlyCompositeBuildResult":
+        from siac.api import PreparedMonthlyCompositeBuildResult
+
+        return PreparedMonthlyCompositeBuildResult
     if name == "process_sentinel2":
         from siac.api import process_sentinel2
 
         return process_sentinel2
+    if name == "prepare_monthly_composites":
+        from siac.api import prepare_monthly_composites
+
+        return prepare_monthly_composites
     if name == "process_landsat8":
         from siac.api import process_landsat8
 
@@ -57,8 +65,10 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "__version__",
+    "PreparedMonthlyCompositeBuildResult",
     "SIAC",
     "SIACConfig",
+    "prepare_monthly_composites",
     "process_sentinel2",
     "process_landsat8",
     "resolve_s2_input",

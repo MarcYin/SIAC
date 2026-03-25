@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from siac.adapters.auth import CredentialManager
 from siac.api.requests import (
@@ -27,6 +27,10 @@ from siac.app.sentinel2 import (
     search_sentinel2 as app_search_sentinel2,
 )
 from siac.config import SIACConfig
+from siac.public_models import PreparedMonthlyCompositeBuildResult
+from siac.workflows.monthly_composites import (
+    prepare_monthly_composites as workflow_prepare_monthly_composites,
+)
 from siac.workflows.scene import process_scene as workflow_process_scene
 from siac.workflows.sentinel2 import process_s2 as workflow_process_s2
 
@@ -82,7 +86,7 @@ def resolve_s2_input(
     auth: CredentialManager | None = None,
 ) -> Path:
     request = Sentinel2ResolveRequest(config=config, query=query, auth=auth)
-    return app_resolve_s2_input(request)
+    return cast("Path", app_resolve_s2_input(request))
 
 
 def search_sentinel2(
@@ -110,7 +114,7 @@ def search_sentinel2(
         config=config,
         auth=auth,
     )
-    return app_search_sentinel2(request)
+    return cast("list[S2Product]", app_search_sentinel2(request))
 
 
 def process_sentinel2(
@@ -163,12 +167,33 @@ def siac_process(
     return workflow_process_scene(request)
 
 
+def prepare_monthly_composites(
+    config: SIACConfig,
+    *,
+    aoi: AOISpec,
+    year_months: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+    resolution: float,
+    output_path: str | Path,
+    auth: CredentialManager | None = None,
+) -> PreparedMonthlyCompositeBuildResult:
+    return workflow_prepare_monthly_composites(
+        config,
+        aoi=aoi,
+        year_months=year_months,
+        resolution=resolution,
+        output_path=output_path,
+        auth=auth,
+    )
+
+
 __all__ = [
+    "PreparedMonthlyCompositeBuildResult",
     "SIAC",
     "apply_s2_query_defaults",
     "coerce_date",
     "coerce_s2_query",
     "process_landsat8",
+    "prepare_monthly_composites",
     "process_sentinel2",
     "resolve_s2_input",
     "search_sentinel2",
