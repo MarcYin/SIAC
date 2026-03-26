@@ -175,12 +175,12 @@ def test_process_scene_writes_outputs_when_plan_has_writer(monkeypatch: pytest.M
     monkeypatch.setattr(
         scene_mod,
         "_resolve_execution_settings",
-        lambda _config, execution=None, max_workers=None: {
+        lambda _config, **_kwargs: {
             "show_progress": False,
             "performance_report_path": None,
         },
     )
-    monkeypatch.setattr(scene_mod, "execute_plan", lambda _plan, execution=None: result)
+    monkeypatch.setattr(scene_mod, "execute_plan", lambda _plan, **_kwargs: result)
 
     def _fake_write_output(result_arg, output_path, *, output_writer):  # noqa: ANN001
         captured["result"] = result_arg
