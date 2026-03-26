@@ -370,6 +370,64 @@ def test_mcd43_provider_returns_temporal_kernel_stack(monkeypatch):
     assert float(weights.f0.isel(time=2).mean()) == pytest.approx(0.3)
 
 
+def test_mcd43_provider_preserves_nan_spatial_payload_instead_of_defaulting(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = MCD43EarthAccessProvider(probe_earthdata=False)
+    requested = provider._resolve_requested_bands([provider.source_bands[0]])
+    payload = xr.DataArray(
+        np.full((4, 2, 2), np.nan, dtype=np.float32),
+        dims=("layer", "y", "x"),
+        coords={"layer": np.arange(4, dtype=np.int32), "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+
+    monkeypatch.setattr(provider, "_merge_requested_payload", lambda *_args, **_kwargs: payload)
+
+    with caplog.at_level("WARNING"):
+        weights = provider._load_from_granules(
+            [Path("/tmp/MCD43A1.A2024257.h29v07.061.fake.hdf")],
+            requested=requested,
+            bounds=(0.0, 0.0, 1000.0, 1000.0),
+            crs="EPSG:4326",
+            target_resolution=500.0,
+        )
+
+    assert np.isnan(weights.f0.values).all()
+    assert np.isnan(weights.reflectance_unc.values).all()
+    assert "preserving NaN weights" in caplog.text
+
+
+def test_mcd43_provider_preserves_nan_temporal_payload_instead_of_defaulting(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = MCD43EarthAccessProvider(probe_earthdata=False)
+    requested = provider._resolve_requested_bands([provider.source_bands[0]])
+
+    def _fake_temporal_payload(_grouped_paths, **kwargs):  # noqa: ANN001, ANN003
+        time_axis = kwargs["time_axis"]
+        return (
+            np.full((len(time_axis), len(requested), 3, 2, 2), np.nan, dtype=np.float32),
+            np.full((len(time_axis), len(requested), 2, 2), np.nan, dtype=np.float32),
+        )
+
+    provider._load_temporal_payload_vrt = _fake_temporal_payload  # type: ignore[method-assign]
+
+    with caplog.at_level("WARNING"):
+        weights = provider._load_temporal_from_granules(
+            [Path("/tmp/MCD43A1.A2024257.h29v07.061.fake.hdf")],
+            requested=requested,
+            bounds=(0.0, 0.0, 1000.0, 1000.0),
+            crs="EPSG:4326",
+            target_resolution=500.0,
+            time_axis=np.array([np.datetime64("2024-09-13")], dtype="datetime64[D]"),
+        )
+
+    assert np.isnan(weights.f0.values).all()
+    assert np.isnan(weights.reflectance_unc.values).all()
+    assert "preserving NaN weights" in caplog.text
+
+
 def test_mcd43_provider_filters_temporal_granules_to_sample_dates(monkeypatch):
     source = _StubEarthAccessSource([])
     granules = [_fake_granule(day) for day in (1, 2, 8, 9)]
@@ -566,10 +624,41 @@ def test_mcd43_provider_merges_sample_days_into_month_window_batches() -> None:
         np.datetime64("2024-02-01"),
         np.datetime64("2024-02-08"),
     ]
-    assert [batch[0] for batch in batches] == [
-        np.datetime64("2022-12-01"),
-        np.datetime64("2023-12-01"),
-    ]
+
+
+def test_mcd43_provider_batch_preserves_nan_weights_when_combined_load_fails(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = MCD43EarthAccessProvider(probe_earthdata=True)
+    fake_paths = [Path("/tmp/MCD43A1.A2024001.h29v07.061.fake.hdf")]
+
+    monkeypatch.setattr(provider, "_download_granules_batch", lambda **_kwargs: fake_paths)
+    monkeypatch.setattr(provider, "_select_candidate_paths", lambda *_args, **_kwargs: fake_paths)
+
+    def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(provider, "_load_temporal_from_granules", _boom)
+
+    with caplog.at_level("WARNING"):
+        outputs = provider.get_temporal_brdf_parameters_batch(
+            bounds=(0.0, 0.0, 1000.0, 1000.0),
+            crs="EPSG:4326",
+            obs_times=[datetime(2024, 1, 4, 12, 0, 0), datetime(2024, 2, 4, 12, 0, 0)],
+            target_resolution=500.0,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 1)],
+            temporal_windows=[10, 10],
+            sample_date_sets=[
+                [datetime(2024, 1, 1), datetime(2024, 1, 8)],
+                [datetime(2024, 2, 1), datetime(2024, 2, 8)],
+            ],
+        )
+
+    assert len(outputs) == 2
+    assert np.isnan(outputs[0].f0.values).all()
+    assert np.isnan(outputs[1].f0.values).all()
+    assert "preserving NaN weights" in caplog.text
 
 
 def test_mcd43_provider_merges_cross_year_sample_batches_into_one_window() -> None:

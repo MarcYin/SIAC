@@ -16,6 +16,7 @@ from siac.adapters.earthdata import (
     _build_virtual_stack_vrt,
     _target_bounds_from_template,
     build_earthaccess_runtime,
+    build_source_aligned_target_template,
     constant_target_band_array,
     earthaccess_cache_dir,
     merge_reprojected_tiles,
@@ -326,6 +327,7 @@ class _EarthAccessBRDFProvider:
             raise ValueError("obs_times, temporal_windows, and sample_date_sets must have the same length")
 
         requested = self._resolve_requested_bands(list(bands))
+        requested_coords = [coord for coord, _band in requested]
         request_specs: list[tuple[datetime, np.ndarray]] = []
         for obs_time, temporal_window, sample_dates in zip(obs_times, temporal_windows, sample_date_sets, strict=True):
             time_axis = (
@@ -423,24 +425,32 @@ class _EarthAccessBRDFProvider:
                                 source_time_axis=combined_time_axis,
                                 request_time_axis=time_axis,
                             )
-                            if np.isfinite(output.f0.values).any():
-                                outputs.append(output)
-                                continue
+                            outputs.append(output)
+                            continue
                         outputs.append(
-                            self._default_temporal_weights(
+                            self._nan_temporal_weights(
                                 bounds,
                                 target_resolution,
-                                [coord for coord, _band in requested],
+                                requested_coords,
                                 time_axis,
                             )
                         )
                     return outputs
                 except Exception as exc:  # pragma: no cover - external/system dependent
                     logger.warning(
-                        "%s batched temporal BRDF granule parsing failed; using defaults (%s)",
+                        "%s batched temporal BRDF granule parsing failed; preserving NaN weights (%s)",
                         self._source_name,
                         exc,
                     )
+                    return [
+                        self._nan_temporal_weights(
+                            bounds,
+                            target_resolution,
+                            requested_coords,
+                            time_axis,
+                        )
+                        for _obs_time, time_axis in request_specs
+                    ]
 
         return [
             self._default_temporal_weights(
@@ -710,16 +720,33 @@ class _EarthAccessBRDFProvider:
         crs: str,
         target_resolution: float,
     ) -> BRDFKernelWeights:
-        target_template = build_target_template(bounds, crs, target_resolution)
-        payload = self._merge_requested_payload(
+        target_template, resolved_target_resolution = self._build_source_target_template(
             paths,
             requested=requested,
             bounds=bounds,
             crs=crs,
             target_resolution=target_resolution,
+        )
+        payload = self._merge_requested_payload(
+            paths,
+            requested=requested,
+            bounds=bounds,
+            crs=crs,
+            target_resolution=resolved_target_resolution,
             target_template=target_template,
         )
         params, unc = self._unpack_payload_stack(payload, requested=requested)
+        if not np.isfinite(params.values).any():
+            logger.warning(
+                "%s BRDF payload contained no finite values for bounds=%s crs=%s; preserving NaN weights",
+                self._source_name,
+                bounds,
+                crs,
+            )
+            return self._weights_from_layers(
+                params.astype(np.float32),
+                unc.astype(np.float32),
+            )
         return self._weights_from_layers(
             self._fill_parameter_defaults(params),
             unc.fillna(0.08),
@@ -745,6 +772,33 @@ class _EarthAccessBRDFProvider:
             nodata=nodata,
             target_template=target_template,
         )
+
+    @staticmethod
+    def _build_source_target_template(
+        paths: Sequence[str | Path],
+        *,
+        requested: Sequence[_RequestedBandSpec],
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        target_resolution: float,
+    ) -> tuple[xr.DataArray, float]:
+        try:
+            first_dataset = resolve_gdal_subdataset_path(paths[0], requested[0][1].parameter_dataset)
+            return build_source_aligned_target_template(
+                first_dataset,
+                bounds=bounds,
+                crs=crs,
+                resolution=target_resolution,
+                resolution_name="target_resolution",
+            )
+        except Exception as exc:
+            logger.debug(
+                "%s could not build source-aligned BRDF target template from %s; using AOI grid (%s)",
+                getattr(paths[0], "name", paths[0]),
+                requested[0][1].parameter_dataset,
+                exc,
+            )
+            return build_target_template(bounds, crs, target_resolution), float(target_resolution)
 
     @staticmethod
     def _coerce_sample_day(value: date | datetime | np.datetime64) -> np.datetime64:
@@ -889,6 +943,30 @@ class _EarthAccessBRDFProvider:
             reflectance_unc=_repeat(base.reflectance_unc) if base.reflectance_unc is not None else None,
         )
 
+    def _nan_temporal_weights(
+        self,
+        bounds: tuple[float, float, float, float],
+        resolution: float,
+        bands: list[int | str],
+        time_axis: np.ndarray,
+    ) -> BRDFKernelWeights:
+        base = self._default_temporal_weights(bounds, resolution, bands, time_axis)
+
+        def _nan_like(data: xr.DataArray | None) -> xr.DataArray | None:
+            if data is None:
+                return None
+            return xr.full_like(data, np.nan, dtype=np.float32)
+
+        return BRDFKernelWeights(
+            f0=cast("xr.DataArray", _nan_like(base.f0)),
+            f1=cast("xr.DataArray", _nan_like(base.f1)),
+            f2=cast("xr.DataArray", _nan_like(base.f2)),
+            f0_unc=cast("xr.DataArray", _nan_like(base.f0_unc)),
+            f1_unc=cast("xr.DataArray", _nan_like(base.f1_unc)),
+            f2_unc=cast("xr.DataArray", _nan_like(base.f2_unc)),
+            reflectance_unc=_nan_like(base.reflectance_unc),
+        )
+
     @staticmethod
     def _allocate_temporal_payload_arrays(
         time_axis: np.ndarray,
@@ -1015,8 +1093,15 @@ class _EarthAccessBRDFProvider:
             sorted(str(day) for day in grouped_paths),
         )
 
-        y_coords, x_coords = self._grid(bounds, target_resolution)
-        target_template = build_target_template(bounds, crs, target_resolution)
+        target_template, resolved_target_resolution = self._build_source_target_template(
+            paths,
+            requested=requested,
+            bounds=bounds,
+            crs=crs,
+            target_resolution=target_resolution,
+        )
+        y_coords = np.asarray(target_template.coords["y"].values, dtype=np.float32)
+        x_coords = np.asarray(target_template.coords["x"].values, dtype=np.float32)
         logger.info(
             "%s temporal BRDF stack: attempting direct temporal VRT read for %d day(s) x %d band(s)",
             self._source_name,
@@ -1028,7 +1113,7 @@ class _EarthAccessBRDFProvider:
             requested=requested,
             bounds=bounds,
             crs=crs,
-            target_resolution=target_resolution,
+            target_resolution=resolved_target_resolution,
             time_axis=time_axis,
             target_template=target_template,
         )
@@ -1042,7 +1127,7 @@ class _EarthAccessBRDFProvider:
                 requested=requested,
                 bounds=bounds,
                 crs=crs,
-                target_resolution=target_resolution,
+                target_resolution=resolved_target_resolution,
                 time_axis=time_axis,
                 target_template=target_template,
             )
@@ -1082,7 +1167,7 @@ class _EarthAccessBRDFProvider:
                     requested=requested,
                     bounds=bounds,
                     crs=crs,
-                    target_resolution=target_resolution,
+                    target_resolution=resolved_target_resolution,
                     target_template=target_template,
                 )
                 params, unc = self._unpack_payload_stack(payload, requested=requested)
@@ -1102,12 +1187,14 @@ class _EarthAccessBRDFProvider:
         )
         if np.isfinite(temporal.f0.values).any():
             return temporal
-        return self._default_temporal_weights(
+        logger.warning(
+            "%s temporal BRDF payload contained no finite values for bounds=%s crs=%s days=%d; preserving NaN weights",
+            self._source_name,
             bounds,
-            target_resolution,
-            [coord for coord, _band in requested],
-            time_axis,
+            crs,
+            len(time_axis),
         )
+        return temporal
 
     def _load_native_band_stack(
         self,
@@ -1189,7 +1276,7 @@ class _EarthAccessBRDFProvider:
             bounds=bounds,
             crs=crs,
             target_resolution=target_resolution,
-            resampling=Resampling.bilinear,
+            resampling=Resampling.nearest,
             nodata=np.nan,
             target_template=target_template,
         )
@@ -1522,7 +1609,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 bounds=bounds,
                 crs=crs,
                 resolution=target_resolution,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.nearest,
                 nodata=np.nan,
                 target_template=target_template,
             )
@@ -1641,7 +1728,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 bounds=bounds,
                 crs=crs,
                 resolution=target_resolution,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.nearest,
                 nodata=np.nan,
                 target_template=target_template,
             )
@@ -1754,7 +1841,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 bounds=bounds,
                 crs=crs,
                 resolution=target_resolution,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.nearest,
                 nodata=np.nan,
                 target_template=target_template,
             )
@@ -2037,7 +2124,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 bounds=bounds,
                 crs=crs,
                 resolution=target_resolution,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.nearest,
                 nodata=np.nan,
                 target_template=target_template,
             )
@@ -2162,7 +2249,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 bounds=bounds,
                 crs=crs,
                 resolution=target_resolution,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.nearest,
                 nodata=np.nan,
                 target_template=target_template,
             )
@@ -2274,7 +2361,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 bounds=bounds,
                 crs=crs,
                 resolution=target_resolution,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.nearest,
                 nodata=np.nan,
                 target_template=target_template,
             )

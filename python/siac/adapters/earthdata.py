@@ -181,7 +181,7 @@ def merge_reprojected_tiles(
     *,
     bounds: tuple[float, float, float, float],
     crs: str,
-    resolution: float,
+    resolution: float | None,
     resampling: Resampling,
     nodata: float | None,
     target_template: xr.DataArray | None = None,
@@ -190,14 +190,29 @@ def merge_reprojected_tiles(
     if not arrays:
         raise ValueError("Expected at least one array to merge")
 
-    target = target_template if target_template is not None else build_target_template(bounds, crs, resolution)
+    reference = arrays[0]
+    if target_template is not None:
+        target = target_template
+        resolved_resolution = _resolve_target_template_resolution(
+            target_template,
+            resolution,
+            resolution_name="resolution",
+        )
+    else:
+        target, resolved_resolution = _build_source_aligned_target_template_from_array(
+            reference,
+            bounds=bounds,
+            crs=crs,
+            resolution=resolution,
+            resolution_name="resolution",
+        )
     if reproject_native_to_target is not _DEFAULT_REPROJECT_NATIVE_TO_TARGET:
         reprojected = [
             reproject_native_to_target(
                 arr,
                 bounds=bounds,
                 crs=crs,
-                resolution=resolution,
+                resolution=resolved_resolution,
                 resampling=resampling,
                 nodata=nodata,
                 target_template=target,
@@ -212,7 +227,7 @@ def merge_reprojected_tiles(
         arrays,
         bounds=bounds,
         crs=crs,
-        resolution=resolution,
+        resolution=resolved_resolution,
         resampling=resampling,
         nodata=nodata,
         target=target,
@@ -224,18 +239,32 @@ def reproject_native_to_target(
     *,
     bounds: tuple[float, float, float, float],
     crs: str,
-    resolution: float,
+    resolution: float | None,
     resampling: Resampling,
     nodata: float | None,
     target_template: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Compatibility wrapper for callers that still monkeypatch per-array reprojection."""
-    target = target_template if target_template is not None else build_target_template(bounds, crs, resolution)
+    if target_template is not None:
+        target = target_template
+        resolved_resolution = _resolve_target_template_resolution(
+            target_template,
+            resolution,
+            resolution_name="resolution",
+        )
+    else:
+        target, resolved_resolution = _build_source_aligned_target_template_from_array(
+            data,
+            bounds=bounds,
+            crs=crs,
+            resolution=resolution,
+            resolution_name="resolution",
+        )
     return _merge_tiles_via_vrt(
         [data],
         bounds=bounds,
         crs=crs,
-        resolution=resolution,
+        resolution=resolved_resolution,
         resampling=resampling,
         nodata=nodata,
         target=target,
@@ -251,7 +280,7 @@ def read_virtual_stack_to_target(
     group_band_counts: Sequence[int],
     bounds: tuple[float, float, float, float],
     crs: str,
-    resolution: float,
+    resolution: float | None,
     resampling: Resampling,
     nodata: float | None,
     target_template: xr.DataArray | None = None,
@@ -265,9 +294,26 @@ def read_virtual_stack_to_target(
     from osgeo import gdal  # type: ignore[import-untyped]
 
     gdal.UseExceptions()
-    target = target_template if target_template is not None else build_target_template(bounds, crs, resolution)
-    target_transform = _target_transform(target, resolution=resolution)
-    target_bounds = _target_bounds_from_template(target, resolution=resolution)
+    if target_template is not None:
+        target = target_template
+        resolved_resolution = _resolve_target_template_resolution(
+            target_template,
+            resolution,
+            resolution_name="resolution",
+        )
+    else:
+        first_source = next((group[0] for group in source_groups if group), None)
+        if first_source is None:
+            raise ValueError("Expected at least one source path")
+        target, resolved_resolution = build_source_aligned_target_template(
+            first_source,
+            bounds=bounds,
+            crs=crs,
+            resolution=resolution,
+            resolution_name="resolution",
+        )
+    target_transform = _target_transform(target, resolution=resolved_resolution)
+    target_bounds = _target_bounds_from_template(target, resolution=resolved_resolution)
     width = int(target.sizes["x"])
     height = int(target.sizes["y"])
     warped = None
@@ -279,7 +325,7 @@ def read_virtual_stack_to_target(
         width,
         height,
         str(target.rio.crs),
-        resolution,
+        resolved_resolution,
         target_bounds,
     )
 
@@ -444,7 +490,7 @@ def _crop_virtual_group_to_target_bounds(
     )
     cropped = gdal_module.Translate(
         output_path,
-        source_path,
+        source_dataset,
         format="VRT",
         projWin=[clipped_bounds[0], clipped_bounds[3], clipped_bounds[2], clipped_bounds[1]],
         projWinSRS=source_crs,
@@ -468,6 +514,33 @@ def _dataset_projection(dataset: Any) -> str | None:
         if projection_ref:
             return str(projection_ref)
     return None
+
+
+def build_source_aligned_target_template(
+    source_path: str | Path,
+    *,
+    bounds: tuple[float, float, float, float],
+    crs: str,
+    resolution: float | None,
+    resolution_name: str = "resolution",
+) -> tuple[xr.DataArray, float]:
+    from osgeo import gdal  # type: ignore[import-untyped]
+
+    gdal.UseExceptions()
+    dataset = gdal.Open(str(source_path))
+    if dataset is None:
+        raise RuntimeError(f"GDAL failed to open source dataset: {source_path}")
+    try:
+        source_crs = _dataset_projection(dataset) or str(crs)
+        resolved_resolution = _resolve_dataset_resolution(
+            dataset,
+            resolution,
+            resolution_name=resolution_name,
+        )
+        source_bounds = _transform_bounds_to_crs(bounds, crs, source_crs)
+        return build_target_template(source_bounds, source_crs, resolved_resolution), resolved_resolution
+    finally:
+        dataset = None
 
 
 def _dataset_bounds(dataset: Any) -> tuple[float, float, float, float] | None:
@@ -504,6 +577,25 @@ def _dataset_bounds(dataset: Any) -> tuple[float, float, float, float] | None:
     )
 
 
+def _dataset_resolution(dataset: Any) -> float | None:
+    get_geotransform = getattr(dataset, "GetGeoTransform", None)
+    if not callable(get_geotransform):
+        return None
+
+    try:
+        geotransform = get_geotransform(can_return_null=True)
+    except TypeError:
+        geotransform = get_geotransform()
+    except Exception:
+        return None
+
+    if geotransform is None or len(geotransform) != 6:
+        return None
+    if abs(float(geotransform[2])) > 1e-9 or abs(float(geotransform[4])) > 1e-9:
+        return None
+    return _coerce_square_resolution(float(geotransform[1]), float(geotransform[5]))
+
+
 def _intersect_bounds(
     left: tuple[float, float, float, float],
     right: tuple[float, float, float, float],
@@ -524,6 +616,116 @@ def _bounds_close(
     atol: float = 1e-6,
 ) -> bool:
     return bool(np.allclose(np.asarray(left, dtype=np.float64), np.asarray(right, dtype=np.float64), atol=atol, rtol=0.0))
+
+
+def _resolve_target_template_resolution(
+    target: xr.DataArray,
+    resolution: float | None,
+    *,
+    resolution_name: str,
+) -> float:
+    resolved = _normalize_resolution_value(resolution, resolution_name=resolution_name)
+    if resolved is not None:
+        return resolved
+    inferred = _data_array_resolution(target)
+    if inferred is None:
+        raise ValueError(f"Could not infer {resolution_name} from target template")
+    return inferred
+
+
+def _resolve_dataset_resolution(
+    dataset: Any,
+    resolution: float | None,
+    *,
+    resolution_name: str,
+) -> float:
+    resolved = _normalize_resolution_value(resolution, resolution_name=resolution_name)
+    if resolved is not None:
+        return resolved
+    inferred = _dataset_resolution(dataset)
+    if inferred is None:
+        raise ValueError(f"Could not infer {resolution_name} from source dataset")
+    return inferred
+
+
+def _build_source_aligned_target_template_from_array(
+    data: xr.DataArray,
+    *,
+    bounds: tuple[float, float, float, float],
+    crs: str,
+    resolution: float | None,
+    resolution_name: str,
+) -> tuple[xr.DataArray, float]:
+    source_crs = str(data.rio.crs) if data.rio.crs is not None else str(crs)
+    resolved_resolution = _normalize_resolution_value(resolution, resolution_name=resolution_name)
+    if resolved_resolution is None:
+        resolved_resolution = _data_array_resolution(data)
+    if resolved_resolution is None:
+        raise ValueError(f"Could not infer {resolution_name} from source array")
+    source_bounds = _transform_bounds_to_crs(bounds, crs, source_crs)
+    return build_target_template(source_bounds, source_crs, resolved_resolution), resolved_resolution
+
+
+def _normalize_resolution_value(
+    resolution: float | None,
+    *,
+    resolution_name: str,
+) -> float | None:
+    if resolution is None:
+        return None
+    value = float(resolution)
+    if value <= 0:
+        raise ValueError(f"{resolution_name} must be > 0, got {resolution}")
+    return value
+
+
+def _data_array_resolution(data: xr.DataArray) -> float | None:
+    x_values = np.asarray(data.coords.get("x", xr.DataArray([])).values, dtype=np.float64)
+    y_values = np.asarray(data.coords.get("y", xr.DataArray([])).values, dtype=np.float64)
+    x_resolution = _axis_resolution(x_values)
+    y_resolution = _axis_resolution(y_values)
+    if x_resolution is not None and y_resolution is not None:
+        return _coerce_square_resolution(x_resolution, y_resolution)
+    if x_resolution is not None:
+        return float(abs(x_resolution))
+    if y_resolution is not None:
+        return float(abs(y_resolution))
+    return None
+
+
+def _axis_resolution(values: np.ndarray) -> float | None:
+    if values.size <= 1:
+        return None
+    diffs = np.diff(values)
+    magnitudes = np.abs(diffs[np.nonzero(diffs)])
+    if magnitudes.size == 0:
+        return None
+    resolution = float(np.median(magnitudes))
+    if not np.allclose(magnitudes, resolution, rtol=0.0, atol=1e-9):
+        return None
+    return resolution
+
+
+def _coerce_square_resolution(x_resolution: float, y_resolution: float) -> float | None:
+    x_magnitude = abs(float(x_resolution))
+    y_magnitude = abs(float(y_resolution))
+    if x_magnitude <= 0 or y_magnitude <= 0:
+        return None
+    if not np.isclose(x_magnitude, y_magnitude, rtol=0.0, atol=1e-9):
+        raise ValueError(
+            f"Source dataset uses non-square pixels ({x_magnitude}, {y_magnitude}); scalar resolution is ambiguous"
+        )
+    return x_magnitude
+
+
+def _transform_bounds_to_crs(
+    bounds: tuple[float, float, float, float],
+    source_crs: str,
+    target_crs: str,
+) -> tuple[float, float, float, float]:
+    if str(source_crs) == str(target_crs):
+        return tuple(float(value) for value in bounds)
+    return transform_bounds(bounds, source_crs, target_crs)
 
 
 def _merge_tiles_via_vrt(
@@ -807,6 +1009,7 @@ def _empty_target_like(
 
 __all__ = [
     "EarthAccessRuntime",
+    "build_source_aligned_target_template",
     "build_earthaccess_runtime",
     "constant_target_array",
     "constant_target_band_array",

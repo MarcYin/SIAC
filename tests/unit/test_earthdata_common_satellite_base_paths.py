@@ -352,6 +352,18 @@ def test_read_virtual_stack_to_target_builds_group_vrts_then_one_stack(
 ) -> None:
     build_calls: list[tuple[str, list[str], object | None]] = []
     unlink_calls: list[str] = []
+    monkeypatch.setattr(
+        earth_adapter,
+        "build_source_aligned_target_template",
+        lambda *_args, **_kwargs: (
+            xr.DataArray(
+                np.zeros((2, 3), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [1.5, 0.5], "x": [0.5, 1.5, 2.5]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326"),
+            1.0,
+        ),
+    )
 
     class _FakeDataset:
         def __init__(self, values: np.ndarray) -> None:
@@ -399,8 +411,21 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_calls: list[tuple[str, list[str], object | None]] = []
-    translate_calls: list[tuple[str, str, dict[str, object]]] = []
+    built_datasets: list[object] = []
+    translate_calls: list[tuple[str, object, dict[str, object]]] = []
     unlink_calls: list[str] = []
+    monkeypatch.setattr(
+        earth_adapter,
+        "build_source_aligned_target_template",
+        lambda *_args, **_kwargs: (
+            xr.DataArray(
+                np.zeros((1, 2), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [0.5], "x": [0.5, 1.5]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326"),
+            1.0,
+        ),
+    )
 
     class _FakeDataset:
         def __init__(
@@ -431,9 +456,11 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
 
     def _build_vrt(path: str, sources: list[str], options: object | None = None) -> object:
         build_calls.append((path, list(sources), options))
-        return _FakeDataset()
+        dataset = _FakeDataset()
+        built_datasets.append(dataset)
+        return dataset
 
-    def _translate(path: str, source: str, **kwargs: object) -> object:
+    def _translate(path: str, source: object, **kwargs: object) -> object:
         translate_calls.append((path, source, kwargs))
         return _FakeDataset()
 
@@ -452,7 +479,7 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
     monkeypatch.setattr(
         earth_adapter,
         "transform_bounds",
-        lambda bounds, src, dst: (25.0, 25.0, 75.0, 75.0) if dst.startswith("PROJCS") else bounds,
+        lambda bounds, _src, dst: (25.0, 25.0, 75.0, 75.0) if dst.startswith("PROJCS") else bounds,
     )
 
     out = earth_adapter.read_virtual_stack_to_target(
@@ -468,12 +495,91 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
     assert out.dims == ("layer", "y", "x")
     assert out.shape == (1, 1, 2)
     assert len(translate_calls) == 1
-    assert translate_calls[0][1] == build_calls[0][0]
+    assert translate_calls[0][1] is built_datasets[0]
     assert translate_calls[0][2]["format"] == "VRT"
     assert translate_calls[0][2]["projWin"] == [25.0, 75.0, 75.0, 25.0]
     assert translate_calls[0][2]["projWinSRS"] == 'PROJCS["MODLAND"]'
     assert build_calls[1][1] == [translate_calls[0][0]]
     assert len(unlink_calls) == 3
+
+
+def test_read_virtual_stack_to_target_defaults_to_source_crs_resolution_when_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warp_calls: list[dict[str, object]] = []
+
+    class _FakeDataset:
+        def __init__(
+            self,
+            values: np.ndarray | None = None,
+            *,
+            projection: str = "EPSG:32615",
+            geotransform: tuple[float, float, float, float, float, float] = (100.0, 20.0, 0.0, 220.0, 0.0, -20.0),
+            width: int = 2,
+            height: int = 1,
+        ) -> None:
+            self._values = values
+            self._projection = projection
+            self._geotransform = geotransform
+            self.RasterXSize = width
+            self.RasterYSize = height
+
+        def ReadAsArray(self) -> np.ndarray:
+            assert self._values is not None
+            return self._values
+
+        def GetProjection(self) -> str:
+            return self._projection
+
+        def GetGeoTransform(self, can_return_null: bool = False) -> tuple[float, float, float, float, float, float]:
+            assert can_return_null in {True, False}
+            return self._geotransform
+
+    def _build_vrt(path: str, sources: list[str], options: object | None = None) -> object:
+        _ = path, sources, options
+        return _FakeDataset()
+
+    def _open(path: str) -> object:
+        assert path == "tile-a.tif"
+        return _FakeDataset()
+
+    def _warp(_dest: str, _src: str, **kwargs: object) -> object:
+        warp_calls.append(dict(kwargs))
+        return _FakeDataset(np.arange(2, dtype=np.float32).reshape(1, 1, 2))
+
+    fake_gdal = SimpleNamespace(
+        UseExceptions=lambda: None,
+        GDT_Float32=6,
+        Open=_open,
+        BuildVRT=_build_vrt,
+        BuildVRTOptions=lambda **kwargs: kwargs,
+        Warp=_warp,
+        Unlink=lambda _path: None,
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_gdal))
+    monkeypatch.setattr(
+        earth_adapter,
+        "transform_bounds",
+        lambda bounds, _src, dst: (100.0, 200.0, 140.0, 220.0) if dst == "EPSG:32615" else bounds,
+    )
+
+    out = earth_adapter.read_virtual_stack_to_target(
+        [["tile-a.tif"]],
+        group_band_counts=[1],
+        bounds=(-91.0, 41.0, -90.5, 41.5),
+        crs="EPSG:4326",
+        resolution=None,
+        resampling="nearest",
+        nodata=np.nan,
+    )
+
+    assert out.dims == ("layer", "y", "x")
+    assert out.shape == (1, 1, 2)
+    assert warp_calls[0]["dstSRS"] == "EPSG:32615"
+    assert warp_calls[0]["resampleAlg"] == "near"
+    assert warp_calls[0]["outputBounds"] == (100.0, 200.0, 140.0, 220.0)
+    assert warp_calls[0]["width"] == 2
+    assert warp_calls[0]["height"] == 1
 
 
 def test_merge_reprojected_tiles_handles_single_pixel_target_and_irregular_grid() -> None:

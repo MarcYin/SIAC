@@ -80,7 +80,28 @@ def _install_runtime(
             catalog=cat,
         ),
     )
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **kwargs: (
+            xr.DataArray(
+                np.zeros((1, 1), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [0.0], "x": [0.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            float(kwargs.get("resolution") or 500.0),
+        ),
+    )
+    monkeypatch.setattr(
+        mcd_mod,
+        "resolve_gdal_subdataset_path",
+        lambda path, dataset_name: f"{Path(path).name}:{dataset_name}",
+    )
     return src, cat
+
+
+def _resampling_name(value: object) -> object:
+    return getattr(value, "name", value)
 
 
 def _da(
@@ -658,6 +679,7 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
     requested = [("B02", provider._product_bands[0]), ("B03", provider._product_bands[1])]
     source_groups_seen: list[list[str]] = []
     band_counts_seen: list[int] = []
+    resampling_seen: list[object] = []
 
     monkeypatch.setattr(mcd_mod, "gdal_available", lambda: True)
     monkeypatch.setattr(
@@ -674,6 +696,18 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
         provider,
         "_load_native_band_stack",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+    )
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **_kwargs: (
+            xr.DataArray(
+                np.zeros((1, 1), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [0.0], "x": [0.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            500.0,
+        ),
     )
 
     def _fake_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
@@ -703,7 +737,11 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
             },
         )
 
-    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _fake_vrt_reader)
+    def _capturing_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
+        resampling_seen.append(_resampling_name(kwargs["resampling"]))
+        return _fake_vrt_reader(source_groups, group_band_counts=group_band_counts, **kwargs)
+
+    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _capturing_vrt_reader)
 
     weights = provider._load_from_granules(
         [Path("/tmp/tile_a.hdf"), Path("/tmp/tile_b.hdf")],
@@ -732,6 +770,7 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
             f"tile_b.hdf:{provider._product_bands[1].qa_dataset}",
         ],
     ]
+    assert resampling_seen == ["nearest"]
     np.testing.assert_allclose(weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32))
     np.testing.assert_allclose(weights.f2.sel(band="B03").values, np.full((1, 1), 22.0, dtype=np.float32))
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(0.015)
@@ -748,6 +787,7 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
     requested = [("B02", provider._product_bands[0]), ("B03", provider._product_bands[1])]
     source_groups_seen: list[list[str]] = []
     band_counts_seen: list[int] = []
+    resampling_seen: list[object] = []
 
     monkeypatch.setattr(mcd_mod, "gdal_available", lambda: True)
     monkeypatch.setattr(
@@ -764,6 +804,18 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
         provider,
         "_load_native_band_stack",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+    )
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **_kwargs: (
+            xr.DataArray(
+                np.zeros((1, 1), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [0.0], "x": [0.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            500.0,
+        ),
     )
 
     def _fake_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
@@ -792,7 +844,11 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
             },
         )
 
-    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _fake_vrt_reader)
+    def _capturing_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
+        resampling_seen.append(_resampling_name(kwargs["resampling"]))
+        return _fake_vrt_reader(source_groups, group_band_counts=group_band_counts, **kwargs)
+
+    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _capturing_vrt_reader)
 
     weights = provider._load_from_granules(
         [Path("/tmp/tile_a.hdf"), Path("/tmp/tile_b.hdf")],
@@ -807,6 +863,7 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
         "tile_a.hdf:Status_QA",
         "tile_b.hdf:Status_QA",
     ]
+    assert resampling_seen == ["nearest"]
     np.testing.assert_allclose(weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32))
     np.testing.assert_allclose(weights.f1.sel(band="B03").values, np.full((1, 1), 50.0, dtype=np.float32))
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(
@@ -828,6 +885,7 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
     }
     source_groups_seen: list[list[str]] = []
     band_counts_seen: list[int] = []
+    resampling_seen: list[object] = []
 
     monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
     monkeypatch.setattr(mcd_mod, "gdal_available", lambda: True)
@@ -845,6 +903,18 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
         provider,
         "_load_native_band_stack",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+    )
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **_kwargs: (
+            xr.DataArray(
+                np.zeros((1, 1), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [0.0], "x": [0.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            500.0,
+        ),
     )
 
     def _fake_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
@@ -882,7 +952,11 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
             },
         )
 
-    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _fake_vrt_reader)
+    def _capturing_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
+        resampling_seen.append(_resampling_name(kwargs["resampling"]))
+        return _fake_vrt_reader(source_groups, group_band_counts=group_band_counts, **kwargs)
+
+    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _capturing_vrt_reader)
 
     temporal = provider._load_temporal_from_granules(
         [Path("/tmp/day1_a.hdf"), Path("/tmp/day1_b.hdf"), Path("/tmp/day3.hdf")],
@@ -899,6 +973,7 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
         f"day1_b.hdf:{provider._product_bands[0].parameter_dataset}",
     ]
     assert source_groups_seen[4] == [f"day3.hdf:{provider._product_bands[0].parameter_dataset}"]
+    assert resampling_seen == ["nearest"]
     np.testing.assert_allclose(
         temporal.f0.sel(time=np.datetime64("2024-01-01"), band="B02").values,
         np.full((1, 1), 10.0, dtype=np.float32),
@@ -928,6 +1003,7 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
     build_calls: list[tuple[list[list[str]], list[int]]] = []
     final_calls: list[tuple[list[list[str]], list[int]]] = []
     unlink_calls: list[str] = []
+    resampling_seen: list[object] = []
 
     monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
     monkeypatch.setattr(mcd_mod, "gdal_available", lambda: True)
@@ -950,6 +1026,18 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
         provider,
         "_merge_requested_payload",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("per-day merges should not be used")),
+    )
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **_kwargs: (
+            xr.DataArray(
+                np.zeros((1, 1), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [0.0], "x": [0.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            500.0,
+        ),
     )
 
     monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))))
@@ -998,7 +1086,12 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
         )
 
     monkeypatch.setattr(mcd_mod, "_build_virtual_stack_vrt", _fake_build_virtual_stack_vrt)
-    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _fake_vrt_reader)
+
+    def _capturing_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
+        resampling_seen.append(_resampling_name(kwargs["resampling"]))
+        return _fake_vrt_reader(source_groups, group_band_counts=group_band_counts, **kwargs)
+
+    monkeypatch.setattr(mcd_mod, "read_virtual_stack_to_target", _capturing_vrt_reader)
 
     temporal = provider._load_temporal_from_granules(
         [Path("/tmp/day1_a.hdf"), Path("/tmp/day1_b.hdf"), Path("/tmp/day3.hdf")],
@@ -1013,6 +1106,7 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
     assert build_calls[0][1] == [3, 1, 3, 1]
     assert build_calls[1][1] == [3, 1, 3, 1]
     assert final_calls == [([["/vsimem/day_0.vrt"], ["/vsimem/day_1.vrt"]], [8, 8])]
+    assert resampling_seen == ["nearest"]
     assert unlink_calls == [
         "/vsimem/day_0.vrt",
         "/vsimem/day_0_group_0.vrt",
@@ -1136,6 +1230,18 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
 
     monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
     monkeypatch.setattr(provider, "_grid", lambda _bounds, _resolution: (np.array([10.0, 20.0]), np.array([30.0, 40.0])))
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **kwargs: (
+            xr.DataArray(
+                np.zeros((2, 2), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [10.0, 20.0], "x": [30.0, 40.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            float(kwargs.get("resolution") or 500.0),
+        ),
+    )
 
     def _stack_for_path(path: Path, _band: ProductBandDefinition):
         base = 0.1 if "day1" in path.name else 0.3
@@ -1171,7 +1277,6 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
     assert list(temporal.f0.coords["y"].values) == [10.0, 20.0]
     assert "extra" not in temporal.f0.coords
 
-    sentinel = provider._default_temporal_weights((0.0, 0.0, 1.0, 1.0), 500.0, ["B02"], time_axis)
     monkeypatch.setattr(
         provider,
         "_load_native_band_stack",
@@ -1184,7 +1289,6 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
             _da(np.full((2, 2), np.nan)),
         ),
     )
-    monkeypatch.setattr(provider, "_default_temporal_weights", lambda *_args, **_kwargs: sentinel)
     fallback = provider._load_temporal_from_granules(
         [Path("/tmp/day1.hdf")],
         requested=[("B02", provider._product_bands[0])],
@@ -1193,7 +1297,10 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
         target_resolution=500.0,
         time_axis=time_axis[:1],
     )
-    assert fallback is sentinel
+    assert np.isnan(fallback.f0.values).all()
+    assert np.isnan(fallback.reflectance_unc.values).all()
+    assert list(fallback.f0.coords["y"].values) == [10.0, 20.0]
+    assert list(fallback.f0.coords["x"].values) == [30.0, 40.0]
 
 
 def test_temporal_loading_fallback_batches_requested_bands_into_one_payload_merge_per_day(
@@ -1209,6 +1316,18 @@ def test_temporal_loading_fallback_batches_requested_bands_into_one_payload_merg
 
     monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
     monkeypatch.setattr(provider, "_grid", lambda _bounds, _resolution: (np.array([10.0, 20.0]), np.array([30.0, 40.0])))
+    monkeypatch.setattr(
+        mcd_mod,
+        "build_source_aligned_target_template",
+        lambda *_args, **kwargs: (
+            xr.DataArray(
+                np.zeros((2, 2), dtype=np.float32),
+                dims=("y", "x"),
+                coords={"y": [10.0, 20.0], "x": [30.0, 40.0]},
+            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            float(kwargs.get("resolution") or 500.0),
+        ),
+    )
 
     def _stack_for_path(path: Path, product_band: ProductBandDefinition):
         day_offset = 0.1 if "day1" in path.name else 0.3

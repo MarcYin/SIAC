@@ -261,7 +261,7 @@ class _EarthAccessMAIACAODProvider:
             bounds=bounds,
             crs=crs,
             resolution=resolution,
-            resampling=Resampling.bilinear,
+            resampling=Resampling.nearest,
             nodata=np.nan,
         )
 
