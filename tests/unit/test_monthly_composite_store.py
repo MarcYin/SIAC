@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import numpy as np
 import pytest
@@ -202,3 +203,41 @@ def test_monthly_composite_store_removes_stale_entry_when_new_run_skips_nan_mont
     manifest = read_monthly_composite_store_manifest(store_path)
     assert manifest.entries == ()
     assert not stale_month.exists()
+
+
+def test_monthly_composite_store_rejects_irregular_spatial_axes(tmp_path) -> None:
+    collection = _reflectance_collection()
+    composite = cast("MonthlyBestPixelComposite", collection.composites[0])
+    irregular = MonthlyBestPixelComposite(
+        reflectance=xr.DataArray(
+            np.array(
+                [
+                    [[0.11, 0.12, 0.13], [0.14, 0.15, 0.16]],
+                    [[0.51, 0.52, 0.53], [0.54, 0.55, 0.56]],
+                ],
+                dtype=np.float32,
+            ),
+            dims=["band", "y", "x"],
+            coords={"band": ["B02", "B08"], "y": [0.0, 1.0], "x": [0.0, 1.5, 3.5]},
+        ),
+        quality=xr.DataArray(
+            np.full((2, 3), 0.05, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": [0.0, 1.0], "x": [0.0, 1.5, 3.5]},
+        ),
+        sample_index=xr.DataArray(
+            np.ones((2, 3), dtype=np.int16),
+            dims=["y", "x"],
+            coords={"y": [0.0, 1.0], "x": [0.0, 1.5, 3.5]},
+        ),
+        year=composite.year,
+        month=composite.month,
+    )
+    collection = MonthlyCompositeCollection(
+        composites=(irregular,),
+        source_bands=collection.source_bands,
+        source_name=collection.source_name,
+    )
+
+    with pytest.raises(ValueError, match="regularly spaced x coordinates"):
+        write_monthly_composite_collection(collection, tmp_path / "irregular_store")

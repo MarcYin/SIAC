@@ -15,6 +15,7 @@ from siac.algorithms.surface.monthly_composite_store import (
 from siac.algorithms.surface.swir_refine import build_monthly_composites_from_brdf
 from siac.app.assembly import resolve_brdf_provider
 from siac.app.planning import coerce_aoi_spec, resolve_run_config
+from siac.domain.aoi import AOI
 from siac.public_models import PreparedMonthlyCompositeBuildResult
 
 if TYPE_CHECKING:
@@ -43,7 +44,7 @@ def prepare_monthly_composites(
     resolved_config = resolve_run_config(
         config,
         sensor=getattr(config, "sensor", "auto"),
-        aoi=runtime_aoi,
+        aoi=_request_safe_aoi_spec(aoi, runtime_aoi),
     )
     auth_obj = auth or CredentialManager.from_config(resolved_config)
     brdf_provider = resolve_brdf_provider(resolved_config, auth=auth_obj)
@@ -106,6 +107,16 @@ def prepare_monthly_composites(
         source_band_names=tuple(band.name for band in materialized_collection.source_bands),
         representation=representation,
     )
+
+
+def _request_safe_aoi_spec(aoi: AOISpec, runtime_aoi: AOI) -> AOISpec:
+    if isinstance(aoi, AOI):
+        return {
+            "type": "Feature",
+            "geometry": runtime_aoi.to_geojson(),
+            "crs": {"type": "name", "properties": {"name": runtime_aoi.crs}},
+        }
+    return aoi
 
 
 def _resolve_requested_resolution(

@@ -505,6 +505,10 @@ def _affine_from_coords(
 
     x_resolution = _axis_resolution(x)
     y_resolution = _axis_resolution(y)
+    if x.size > 1 and x_resolution is None:
+        raise ValueError("Monthly composite GeoTIFF assets require regularly spaced x coordinates")
+    if y.size > 1 and y_resolution is None:
+        raise ValueError("Monthly composite GeoTIFF assets require regularly spaced y coordinates")
     x_sign = _axis_sign(x) or 1.0
     y_sign = _axis_sign(y) or -1.0
 

@@ -93,7 +93,12 @@ def test_prepare_monthly_composites_orchestrates_provider_build_and_store(
         auth=auth,
     )
 
-    assert captured["resolved"] == {"sensor": "auto", "aoi": aoi}
+    resolved = captured["resolved"]
+    assert resolved["sensor"] == "auto"
+    resolved_aoi = workflow_mod.coerce_aoi_spec(resolved["aoi"])
+    assert isinstance(resolved_aoi, AOI)
+    assert resolved_aoi.get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
+    assert str(resolved_aoi.crs) == "EPSG:4326"
     build_kwargs = captured["build_kwargs"]
     assert build_kwargs["bounds"] == (1.0, 2.0, 3.0, 4.0)
     assert build_kwargs["crs"] == "EPSG:4326"
