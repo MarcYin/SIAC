@@ -262,7 +262,7 @@ def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
         mock_atmospheric_state,
         surface_with_monthly,
         SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0)),
-        grid_assembler=lambda *args, **kwargs: mock_solver_input_bundle,
+        grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
         solver=mock_solver_fn,
         corrector=mock_corrector_fn,
         rt_model=mock_rt_model,
