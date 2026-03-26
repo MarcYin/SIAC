@@ -199,13 +199,20 @@ def merge_reprojected_tiles(
             resolution_name="resolution",
         )
     else:
-        target, resolved_resolution = _build_source_aligned_target_template_from_array(
-            reference,
-            bounds=bounds,
-            crs=crs,
-            resolution=resolution,
+        resolved_resolution = _normalize_resolution_value(
+            resolution,
             resolution_name="resolution",
         )
+        if resolved_resolution is None:
+            target, resolved_resolution = _build_source_aligned_target_template_from_array(
+                reference,
+                bounds=bounds,
+                crs=crs,
+                resolution=resolution,
+                resolution_name="resolution",
+            )
+        else:
+            target = build_target_template(bounds, crs, resolved_resolution)
     if reproject_native_to_target is not _DEFAULT_REPROJECT_NATIVE_TO_TARGET:
         reprojected = [
             reproject_native_to_target(
@@ -253,13 +260,20 @@ def reproject_native_to_target(
             resolution_name="resolution",
         )
     else:
-        target, resolved_resolution = _build_source_aligned_target_template_from_array(
-            data,
-            bounds=bounds,
-            crs=crs,
-            resolution=resolution,
+        resolved_resolution = _normalize_resolution_value(
+            resolution,
             resolution_name="resolution",
         )
+        if resolved_resolution is None:
+            target, resolved_resolution = _build_source_aligned_target_template_from_array(
+                data,
+                bounds=bounds,
+                crs=crs,
+                resolution=resolution,
+                resolution_name="resolution",
+            )
+        else:
+            target = build_target_template(bounds, crs, resolved_resolution)
     return _merge_tiles_via_vrt(
         [data],
         bounds=bounds,
@@ -302,16 +316,23 @@ def read_virtual_stack_to_target(
             resolution_name="resolution",
         )
     else:
-        first_source = next((group[0] for group in source_groups if group), None)
-        if first_source is None:
-            raise ValueError("Expected at least one source path")
-        target, resolved_resolution = build_source_aligned_target_template(
-            first_source,
-            bounds=bounds,
-            crs=crs,
-            resolution=resolution,
+        resolved_resolution = _normalize_resolution_value(
+            resolution,
             resolution_name="resolution",
         )
+        if resolved_resolution is None:
+            first_source = next((group[0] for group in source_groups if group), None)
+            if first_source is None:
+                raise ValueError("Expected at least one source path")
+            target, resolved_resolution = build_source_aligned_target_template(
+                first_source,
+                bounds=bounds,
+                crs=crs,
+                resolution=resolution,
+                resolution_name="resolution",
+            )
+        else:
+            target = build_target_template(bounds, crs, resolved_resolution)
     target_transform = _target_transform(target, resolution=resolved_resolution)
     target_bounds = _target_bounds_from_template(target, resolution=resolved_resolution)
     width = int(target.sizes["x"])

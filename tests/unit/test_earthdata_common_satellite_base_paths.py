@@ -582,6 +582,74 @@ def test_read_virtual_stack_to_target_defaults_to_source_crs_resolution_when_omi
     assert warp_calls[0]["height"] == 1
 
 
+def test_read_virtual_stack_to_target_keeps_requested_grid_when_resolution_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warp_calls: list[dict[str, object]] = []
+
+    class _FakeDataset:
+        def __init__(
+            self,
+            values: np.ndarray | None = None,
+            *,
+            projection: str = "EPSG:32615",
+            geotransform: tuple[float, float, float, float, float, float] = (100.0, 20.0, 0.0, 220.0, 0.0, -20.0),
+            width: int = 2,
+            height: int = 1,
+        ) -> None:
+            self._values = values
+            self._projection = projection
+            self._geotransform = geotransform
+            self.RasterXSize = width
+            self.RasterYSize = height
+
+        def ReadAsArray(self) -> np.ndarray:
+            assert self._values is not None
+            return self._values
+
+        def GetProjection(self) -> str:
+            return self._projection
+
+        def GetGeoTransform(self, can_return_null: bool = False) -> tuple[float, float, float, float, float, float]:
+            assert can_return_null in {True, False}
+            return self._geotransform
+
+    def _build_vrt(path: str, sources: list[str], options: object | None = None) -> object:
+        _ = path, sources, options
+        return _FakeDataset()
+
+    def _warp(_dest: str, _src: str, **kwargs: object) -> object:
+        warp_calls.append(dict(kwargs))
+        return _FakeDataset(np.arange(4, dtype=np.float32).reshape(1, 2, 2))
+
+    fake_gdal = SimpleNamespace(
+        UseExceptions=lambda: None,
+        GDT_Float32=6,
+        BuildVRT=_build_vrt,
+        BuildVRTOptions=lambda **kwargs: kwargs,
+        Warp=_warp,
+        Unlink=lambda _path: None,
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_gdal))
+
+    out = earth_adapter.read_virtual_stack_to_target(
+        [["tile-a.tif"]],
+        group_band_counts=[1],
+        bounds=(-91.0, 41.0, -90.5, 41.5),
+        crs="EPSG:4326",
+        resolution=0.25,
+        resampling="nearest",
+        nodata=np.nan,
+    )
+
+    assert out.dims == ("layer", "y", "x")
+    assert out.shape == (1, 2, 2)
+    assert warp_calls[0]["dstSRS"] == "EPSG:4326"
+    assert warp_calls[0]["outputBounds"] == (-91.0, 41.0, -90.5, 41.5)
+    assert warp_calls[0]["width"] == 2
+    assert warp_calls[0]["height"] == 2
+
+
 def test_merge_reprojected_tiles_handles_single_pixel_target_and_irregular_grid() -> None:
     ref = xr.DataArray(
         np.array([[np.nan, 1.0], [1.0, 1.0]], dtype=np.float32),
@@ -655,6 +723,31 @@ def test_merge_reprojected_tiles_handles_mixed_crs_sources() -> None:
             dtype=np.float32,
         ),
     )
+
+
+def test_merge_reprojected_tiles_keeps_requested_crs_when_first_source_differs() -> None:
+    from rasterio.warp import transform
+
+    mx, my = transform("EPSG:4326", "EPSG:3857", [0.0, 1.0], [1.0, 0.0])
+    source = xr.DataArray(
+        np.array([[9.0, 10.0], [11.0, 12.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": my, "x": mx},
+    )
+    source = source.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:3857")
+
+    out = earth_adapter.merge_reprojected_tiles(
+        [source],
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        resolution=0.5,
+        resampling="nearest",
+        nodata=None,
+    )
+
+    assert str(out.rio.crs) == "EPSG:4326"
+    np.testing.assert_allclose(out.coords["x"].values, np.array([0.25, 0.75]))
+    np.testing.assert_allclose(out.coords["y"].values, np.array([0.75, 0.25]))
 
 
 def test_merge_reprojected_tiles_preserves_priority_and_extra_dims() -> None:
