@@ -77,6 +77,9 @@ def test_coerce_aoi_spec_covers_supported_inputs_and_invalid_type(tmp_path: Path
     assert isinstance(path_aoi, AOI)
     assert path_aoi.get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
 
+    with pytest.raises(ValueError, match="longitude bounds must look like degrees"):
+        coerce_aoi_spec([500000.0, 4100000.0, 501000.0, 4101000.0])
+
     with pytest.raises(ValueError, match="Could not parse AOI"):
         coerce_aoi_spec(123)
 
@@ -231,18 +234,22 @@ def test_process_scene_only_writes_when_output_path_and_writer_are_present(
         "build_execution_plan",
         lambda _request, **kwargs: plan if kwargs["preprocessor"] == "pre" else plan_without_writer,
     )
-    monkeypatch.setitem(
-        scene_mod.process_scene.__globals__,
-        "execute_plan",
-        lambda _built_plan, execution=None: next(results),
-    )
+    def _fake_execute_plan(_built_plan, execution=None):  # noqa: ANN001
+        _ = execution
+        return next(results)
+
+    def _fake_resolve_execution_settings(_config, execution=None, max_workers=None):  # noqa: ANN001
+        _ = execution, max_workers
+        return {
+            "show_progress": False,
+            "performance_report_path": None,
+        }
+
+    monkeypatch.setitem(scene_mod.process_scene.__globals__, "execute_plan", _fake_execute_plan)
     monkeypatch.setitem(
         scene_mod.process_scene.__globals__,
         "_resolve_execution_settings",
-        lambda _config, execution=None, max_workers=None: {
-            "show_progress": False,
-            "performance_report_path": None,
-        },
+        _fake_resolve_execution_settings,
     )
     monkeypatch.setitem(
         scene_mod.process_scene.__globals__,

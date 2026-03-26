@@ -172,7 +172,7 @@ def prepare_monthly_composites(
     *,
     aoi: AOISpec,
     year_months: list[tuple[int, int]] | tuple[tuple[int, int], ...],
-    resolution: float,
+    resolution: float | None,
     output_path: str | Path,
     auth: CredentialManager | None = None,
 ) -> PreparedMonthlyCompositeBuildResult:

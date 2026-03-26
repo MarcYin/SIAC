@@ -201,8 +201,8 @@ def build_monthly_composites_from_brdf(
     source_bands = _resolve_provider_source_bands(brdf_provider, fallback_source_bands)
     month_specs = _build_explicit_month_specs(year_months, template_time=template_time)
     logger.info(
-        "Monthly composite generation from BRDF: obs_time=%s months=%d batch_size=%d source_bands=%d",
-        month_specs[0].center_time.isoformat() if month_specs else "n/a",
+        "Monthly composite generation from BRDF: first_period=%s months=%d batch_size=%d source_bands=%d",
+        f"{month_specs[0].year:04d}-{month_specs[0].month:02d}" if month_specs else "n/a",
         len(month_specs),
         _BRDF_BATCH_MONTHS,
         len(source_bands),

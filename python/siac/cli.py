@@ -7,7 +7,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from siac import __version__
 from siac.config import SIACConfig
@@ -67,8 +67,8 @@ def _add_aoi_arguments(parser: argparse.ArgumentParser, *, required: bool = Fals
     )
     parser.add_argument(
         "--aoi-crs",
-        default="EPSG:4326",
-        help="CRS for --aoi-bbox coordinates.",
+        default=None,
+        help="CRS for AOI coordinates. If omitted, SIAC assumes WGS84 and validates degree-like coordinates.",
     )
 
 
@@ -127,8 +127,8 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare.add_argument(
         "--resolution",
         type=float,
-        default=500.0,
-        help="Target composite grid resolution in AOI CRS units.",
+        default=None,
+        help="Target composite grid resolution. If omitted, SIAC uses the source dataset resolution.",
     )
     prepare.add_argument(
         "--year-month",
@@ -177,13 +177,16 @@ def _configure_logging(level_name: str) -> None:
 
 def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
     if args.aoi_bbox is not None:
-        return AOI.from_bounds(tuple(float(value) for value in args.aoi_bbox), crs=str(args.aoi_crs))
+        return AOI.from_bounds(
+            tuple(float(value) for value in args.aoi_bbox),
+            crs=cast("str | None", getattr(args, "aoi_crs", None)),
+        )
     if getattr(args, "aoi_file", None) is not None:
-        return args.aoi_file
+        return AOI.from_geojson(args.aoi_file, crs=cast("str | None", getattr(args, "aoi_crs", None)))
     if getattr(args, "aoi_wkt", None) is not None:
-        return args.aoi_wkt
+        return AOI.from_geojson(args.aoi_wkt, crs=cast("str | None", getattr(args, "aoi_crs", None)))
     if getattr(args, "aoi", None) is not None:
-        return Path(args.aoi)
+        return AOI.from_geojson(Path(args.aoi), crs=cast("str | None", getattr(args, "aoi_crs", None)))
     return None
 
 
@@ -239,7 +242,7 @@ def _run_prepare_monthly_composites(args: argparse.Namespace) -> int:
         config,
         aoi=aoi,
         year_months=_selected_year_months(args),
-        resolution=float(args.resolution),
+        resolution=(float(args.resolution) if args.resolution is not None else None),
         output_path=args.output_path,
     )
     periods = ", ".join(result.periods)

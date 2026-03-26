@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -70,6 +71,21 @@ class MonthlyCompositeStoreManifest:
     grid: MonthlyCompositeStoreGridSpec | None = None
 
 
+def filter_materialized_monthly_composite_collection(
+    collection: MonthlyCompositeCollection,
+) -> MonthlyCompositeCollection:
+    """Drop composites whose scientific payload is entirely NaN."""
+    return MonthlyCompositeCollection(
+        composites=tuple(
+            composite
+            for composite in collection.composites
+            if _composite_has_any_finite_payload(composite)
+        ),
+        source_bands=collection.source_bands,
+        source_name=collection.source_name,
+    )
+
+
 def write_monthly_composite_collection(
     collection: MonthlyCompositeCollection,
     output_path: str | Path,
@@ -77,15 +93,23 @@ def write_monthly_composite_collection(
     grid: MonthlyCompositeStoreGridSpec | None = None,
 ) -> Path:
     """Write a prepared monthly composite collection to a directory store."""
+    materialized = filter_materialized_monthly_composite_collection(collection)
     root = Path(output_path)
     root.mkdir(parents=True, exist_ok=True)
+    stale_paths = _load_existing_store_entry_paths(root)
 
     entries: list[MonthlyCompositeStoreEntry] = []
-    for composite in collection.composites:
+    for composite in materialized.composites:
         label = _composite_label(composite.year, composite.month)
         relative_path = f"{label}.zarr"
         dataset = _composite_to_dataset(composite)
-        dataset.to_zarr(root / relative_path, mode="w", consolidated=False, zarr_format=2)
+        dataset.to_zarr(
+            root / relative_path,
+            mode="w",
+            consolidated=False,
+            zarr_format=2,
+            write_empty_chunks=True,
+        )
         entries.append(
             MonthlyCompositeStoreEntry(
                 label=label,
@@ -98,12 +122,13 @@ def write_monthly_composite_collection(
 
     manifest = MonthlyCompositeStoreManifest(
         version=_STORE_VERSION,
-        source_name=collection.source_name,
-        source_bands=tuple(collection.source_bands),
+        source_name=materialized.source_name,
+        source_bands=tuple(materialized.source_bands),
         entries=tuple(entries),
-        grid=grid or _infer_collection_grid(collection),
+        grid=grid or _infer_collection_grid(materialized),
     )
     _write_store_manifest(root, manifest)
+    _remove_stale_store_paths(root, stale_paths - {entry.path for entry in entries})
     return root
 
 
@@ -267,6 +292,27 @@ def _dataset_to_composite(
     )
 
 
+def _composite_has_any_finite_payload(
+    composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
+) -> bool:
+    sample_index = np.asarray(composite.sample_index.values)
+    if sample_index.size > 0 and np.all(sample_index < 0):
+        return False
+    if isinstance(composite, MonthlyKernelWeightComposite):
+        return any(
+            _data_array_has_any_finite_value(data)
+            for data in (composite.kernels.f0, composite.kernels.f1, composite.kernels.f2)
+        )
+    return _data_array_has_any_finite_value(composite.reflectance)
+
+
+def _data_array_has_any_finite_value(data: xr.DataArray) -> bool:
+    values = np.asarray(data.values)
+    if not np.issubdtype(values.dtype, np.floating):
+        return False
+    return bool(np.isfinite(values).any())
+
+
 def _serialize_sensor_band(band: SensorBand) -> dict[str, Any]:
     return {
         "name": band.name,
@@ -333,6 +379,26 @@ def _write_store_manifest(root: Path, manifest: MonthlyCompositeStoreManifest) -
         "grid": _serialize_grid_spec(manifest.grid),
     }
     (root / _MANIFEST_NAME).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _load_existing_store_entry_paths(root: Path) -> set[str]:
+    manifest_path = root / _MANIFEST_NAME
+    if not manifest_path.exists():
+        return set()
+    try:
+        manifest = read_monthly_composite_store_manifest(root)
+    except Exception:
+        return set()
+    return {entry.path for entry in manifest.entries}
+
+
+def _remove_stale_store_paths(root: Path, relative_paths: set[str]) -> None:
+    for relative_path in relative_paths:
+        target = root / relative_path
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
 
 
 def _serialize_grid_spec(grid: MonthlyCompositeStoreGridSpec | None) -> dict[str, Any] | None:
@@ -427,6 +493,7 @@ __all__ = [
     "MonthlyCompositeStoreEntry",
     "MonthlyCompositeStoreGridSpec",
     "MonthlyCompositeStoreManifest",
+    "filter_materialized_monthly_composite_collection",
     "read_monthly_composite_collection",
     "read_monthly_composite_store_manifest",
     "write_monthly_composite_collection",

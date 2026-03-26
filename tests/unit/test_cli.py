@@ -91,12 +91,17 @@ def test_process_s2_accepts_aoi_file_argument(
     monkeypatch.setattr("siac.api.public.siac_process_s2", _fake_process)
 
     aoi_path = tmp_path / "aoi.geojson"
+    aoi_path.write_text(
+        '{"type":"Polygon","coordinates":[[[1,2],[3,2],[3,4],[1,4],[1,2]]]}',
+        encoding="utf-8",
+    )
     exit_code = cli.main(["process-s2", "T31UDQ_20240101", "--aoi-file", str(aoi_path)])
 
     captured_out = capsys.readouterr()
     assert exit_code == 0
     assert captured["query"] == "T31UDQ_20240101"
-    assert captured["kwargs"]["aoi"] == aoi_path
+    assert isinstance(captured["kwargs"]["aoi"], AOI)
+    assert captured["kwargs"]["aoi"].get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
     assert "Sentinel-2 processing complete" in captured_out.out
 
 
@@ -141,7 +146,7 @@ def test_prepare_monthly_composites_delegates_with_period_selection(
     assert isinstance(captured["kwargs"]["aoi"], AOI)
     assert captured["kwargs"]["aoi"].get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
     assert captured["kwargs"]["year_months"] == ((2022, 7), (2023, 8))
-    assert captured["kwargs"]["resolution"] == 500.0
+    assert captured["kwargs"]["resolution"] is None
     assert captured["kwargs"]["output_path"] == tmp_path / "prepared_store"
     assert "Prepared monthly composites written to" in captured_out.out
 
@@ -212,8 +217,72 @@ def test_prepare_monthly_composites_accepts_year_month_cross_product_and_wkt(
     assert exit_code == 0
     assert isinstance(captured["kwargs"]["aoi"], AOI)
     assert captured["kwargs"]["aoi"].get_bounds() == pytest.approx((1.0, 2.0, 3.0, 4.0))
+    assert str(captured["kwargs"]["aoi"].crs) == "EPSG:4326"
     assert captured["kwargs"]["year_months"] == ((2022, 7), (2022, 8), (2023, 7), (2023, 8))
     assert "Prepared monthly composites written to" in captured_out.out
+
+
+def test_cli_applies_aoi_crs_to_wkt_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_prepare(config_obj, **kwargs):  # noqa: ANN001
+        captured["config_obj"] = config_obj
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            store_path=tmp_path / "prepared_store",
+            period_count=1,
+            periods=("2023-08",),
+            representation="kernel_weights",
+        )
+
+    monkeypatch.setattr("siac.api.public.prepare_monthly_composites", _fake_prepare)
+
+    exit_code = cli.main(
+        [
+            "prepare-monthly-composites",
+            "--output-path",
+            str(tmp_path / "prepared_store"),
+            "--aoi-wkt",
+            "POLYGON ((500000 4100000, 501000 4100000, 501000 4101000, 500000 4101000, 500000 4100000))",
+            "--aoi-crs",
+            "EPSG:32632",
+            "--year-month",
+            "2023-08",
+        ]
+    )
+
+    captured_out = capsys.readouterr()
+    assert exit_code == 0
+    assert isinstance(captured["kwargs"]["aoi"], AOI)
+    assert str(captured["kwargs"]["aoi"].crs) == "EPSG:32632"
+    assert "Prepared monthly composites written to" in captured_out.out
+
+
+def test_cli_rejects_degree_like_bbox_when_crs_is_omitted_and_values_are_projected(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = cli.main(
+        [
+            "prepare-monthly-composites",
+            "--output-path",
+            "/tmp/prepared-store",
+            "--aoi-bbox",
+            "500000",
+            "4100000",
+            "501000",
+            "4101000",
+            "--year-month",
+            "2023-08",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "longitude bounds must look like degrees" in captured.err
 
 
 def test_prepare_monthly_composites_rejects_mixed_period_selection(

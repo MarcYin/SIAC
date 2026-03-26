@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from siac.geo.geometry import bounds_to_polygon, load_aoi, polygon_to_bounds
 from siac.geo.reprojection import transform_bounds
 
@@ -28,21 +30,22 @@ class AOI:
     def from_bounds(
         cls,
         bounds: tuple[float, float, float, float],
-        crs: str | CRS = "EPSG:4326",
+        crs: str | CRS | None = None,
     ) -> AOI:
         """Create an AOI from bounds."""
-        return cls(geometry=bounds_to_polygon(bounds), crs=str(crs))
+        return cls(geometry=bounds_to_polygon(bounds), crs=_resolve_crs(bounds, crs))
 
     @classmethod
     def from_geojson(
         cls,
         aoi: str | Path | dict[str, Any],
-        crs: str | CRS = "EPSG:4326",
+        crs: str | CRS | None = None,
     ) -> AOI:
         """Create an AOI from GeoJSON-like input or a file path."""
         geometry = load_aoi(aoi)
-        detected_crs = _detect_crs(aoi) or str(crs)
-        return cls(geometry=geometry, crs=detected_crs)
+        bounds = polygon_to_bounds(geometry)
+        detected_crs = _detect_crs(aoi)
+        return cls(geometry=geometry, crs=_resolve_crs(bounds, detected_crs or crs))
 
     @classmethod
     def from_raster(cls, raster: xr.DataArray) -> AOI:
@@ -94,3 +97,32 @@ def _detect_crs(aoi: str | Path | dict[str, Any]) -> str | None:
             if isinstance(name, str):
                 return name
     return None
+
+
+def _resolve_crs(
+    bounds: tuple[float, float, float, float],
+    crs: str | CRS | None,
+) -> str:
+    if crs is None:
+        _validate_default_wgs84_bounds(bounds)
+        return "EPSG:4326"
+
+    from pyproj import CRS as PyprojCRS
+
+    return str(PyprojCRS.from_user_input(crs))
+
+
+def _validate_default_wgs84_bounds(bounds: tuple[float, float, float, float]) -> None:
+    xmin, ymin, xmax, ymax = (float(value) for value in bounds)
+    if not all(np.isfinite([xmin, ymin, xmax, ymax])):
+        raise ValueError("AOI bounds must be finite when defaulting CRS to WGS84")
+    if xmin >= xmax or ymin >= ymax:
+        raise ValueError("AOI bounds must satisfy min < max when defaulting CRS to WGS84")
+    longitudes_are_signed = xmin >= -180.0 and xmax <= 180.0
+    longitudes_are_wrapped = xmin >= 0.0 and xmax <= 360.0
+    if not (longitudes_are_signed or longitudes_are_wrapped):
+        raise ValueError(
+            "AOI longitude bounds must look like degrees in [-180, 180] or [0, 360] when CRS is omitted"
+        )
+    if ymin < -90.0 or ymax > 90.0:
+        raise ValueError("AOI latitude bounds must be within [-90, 90] when CRS is omitted")

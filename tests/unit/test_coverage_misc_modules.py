@@ -98,6 +98,13 @@ class TestAOI:
         assert aoi.to_geojson()["type"] == "Polygon"
         assert aoi.get_bounds() == (0.0, 1.0, 2.0, 3.0)
 
+    def test_from_bounds_defaults_to_validated_wgs84(self):
+        aoi = AOI.from_bounds((10.0, 20.0, 12.0, 21.0))
+        assert aoi.crs == "EPSG:4326"
+
+        with pytest.raises(ValueError, match="longitude bounds must look like degrees"):
+            AOI.from_bounds((500000.0, 4100000.0, 501000.0, 4101000.0))
+
     def test_from_geojson_and_detect_crs(self, tmp_path: Path):
         geojson = {
             "type": "Feature",
@@ -117,6 +124,12 @@ class TestAOI:
         aoi = AOI.from_geojson(p)
         assert aoi.crs == "EPSG:4326"
         assert aoi.get_bounds() == (0.0, 0.0, 2.0, 1.0)
+
+        aoi_override = AOI.from_geojson(
+            "POLYGON ((500000 4100000, 501000 4100000, 501000 4101000, 500000 4101000, 500000 4100000))",
+            crs="EPSG:32632",
+        )
+        assert aoi_override.crs == "EPSG:32632"
 
     def test_from_raster_and_crs_transform(self, request: pytest.FixtureRequest):
         _skip_native_heavy_for_cdse_cov(request)
