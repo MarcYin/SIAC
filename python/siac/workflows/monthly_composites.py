@@ -42,6 +42,7 @@ def prepare_monthly_composites(
     resolved_config = resolve_run_config(
         config,
         sensor=getattr(config, "sensor", "auto"),
+        aoi=runtime_aoi,
     )
     auth_obj = auth or CredentialManager.from_config(resolved_config)
     brdf_provider = resolve_brdf_provider(resolved_config, auth=auth_obj)
