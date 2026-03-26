@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import rasterio
+import rioxarray  # noqa: F401
 import xarray as xr
+from affine import Affine
 
 from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyBestPixelComposite,
@@ -18,10 +21,13 @@ from siac.algorithms.surface.brdf_monthly_composite import (
 )
 from siac.domain import SensorBand
 from siac.runtime import BRDFKernelWeights
+from siac.storage.writers import write_raster
 
 _MANIFEST_NAME = "manifest.json"
-_STORE_VERSION = 2
-_SUPPORTED_STORE_VERSIONS = frozenset({1, 2})
+_STORE_VERSION = 3
+_SUPPORTED_STORE_VERSIONS = frozenset({1, 2, 3})
+_GEOTIFF_FORMAT = "geotiff"
+_GEOTIFF_EXTENSION = ".tif"
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,8 @@ class MonthlyCompositeStoreEntry:
     year: int
     month: int
     kind: str
+    format: str = _GEOTIFF_FORMAT
+    assets: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -101,15 +109,8 @@ def write_monthly_composite_collection(
     entries: list[MonthlyCompositeStoreEntry] = []
     for composite in materialized.composites:
         label = _composite_label(composite.year, composite.month)
-        relative_path = f"{label}.zarr"
-        dataset = _composite_to_dataset(composite)
-        dataset.to_zarr(
-            root / relative_path,
-            mode="w",
-            consolidated=False,
-            zarr_format=2,
-            write_empty_chunks=True,
-        )
+        relative_path = label
+        assets = _write_monthly_geotiff_period(root / relative_path, composite)
         entries.append(
             MonthlyCompositeStoreEntry(
                 label=label,
@@ -117,6 +118,8 @@ def write_monthly_composite_collection(
                 year=int(composite.year),
                 month=int(composite.month),
                 kind=_composite_kind(composite),
+                format=_GEOTIFF_FORMAT,
+                assets=assets,
             )
         )
 
@@ -159,6 +162,12 @@ def read_monthly_composite_store_manifest(
                 year=int(entry["year"]),
                 month=int(entry["month"]),
                 kind=str(entry["kind"]),
+                format=str(entry.get("format") or _infer_entry_format(str(entry["path"]))),
+                assets=(
+                    {str(name): str(path) for name, path in cast("dict[str, Any]", entry["assets"]).items()}
+                    if isinstance(entry.get("assets"), dict)
+                    else None
+                ),
             )
             for entry in manifest.get("entries", ())
         ),
@@ -177,11 +186,10 @@ def read_monthly_composite_collection(
     root = Path(input_path)
     manifest = read_monthly_composite_store_manifest(root)
     composites = tuple(
-        _dataset_to_composite(
-            _open_monthly_dataset(root / entry.path),
-            kind=entry.kind,
-            year=entry.year,
-            month=entry.month,
+        _read_store_entry(
+            root,
+            entry=entry,
+            source_bands=manifest.source_bands,
         )
         for entry in manifest.entries
     )
@@ -189,6 +197,30 @@ def read_monthly_composite_collection(
         composites=composites,
         source_bands=manifest.source_bands,
         source_name=manifest.source_name,
+    )
+
+
+def _read_store_entry(
+    root: Path,
+    *,
+    entry: MonthlyCompositeStoreEntry,
+    source_bands: tuple[SensorBand, ...],
+) -> MonthlyBestPixelComposite | MonthlyKernelWeightComposite:
+    if entry.format == _GEOTIFF_FORMAT:
+        return _read_geotiff_composite(
+            root / entry.path,
+            kind=entry.kind,
+            year=entry.year,
+            month=entry.month,
+            source_bands=source_bands,
+            assets=entry.assets,
+        )
+    dataset = _open_monthly_dataset(root / entry.path)
+    return _dataset_to_composite(
+        dataset,
+        kind=entry.kind,
+        year=entry.year,
+        month=entry.month,
     )
 
 
@@ -200,6 +232,315 @@ def _open_monthly_dataset(path: Path) -> xr.Dataset:
     else:
         raise ValueError(f"Unsupported monthly composite dataset format: {path.suffix}")
     return dataset.load()
+
+
+def _infer_entry_format(path_text: str) -> str:
+    suffix = Path(path_text).suffix.lower()
+    if suffix in {".tif", ".tiff"}:
+        return _GEOTIFF_FORMAT
+    if suffix == ".zarr":
+        return "zarr"
+    if suffix == ".nc":
+        return "netcdf"
+    return _GEOTIFF_FORMAT
+
+
+def _write_monthly_geotiff_period(
+    period_root: Path,
+    composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
+) -> dict[str, str]:
+    if period_root.exists():
+        if period_root.is_dir():
+            shutil.rmtree(period_root)
+        else:
+            period_root.unlink()
+    period_root.mkdir(parents=True, exist_ok=True)
+
+    assets: dict[str, str] = {}
+    if isinstance(composite, MonthlyKernelWeightComposite):
+        asset_sources: list[tuple[str, xr.DataArray, str]] = [
+            ("f0", composite.kernels.f0, "float32"),
+            ("f1", composite.kernels.f1, "float32"),
+            ("f2", composite.kernels.f2, "float32"),
+            ("f0_unc", composite.kernels.f0_unc, "float32"),
+            ("f1_unc", composite.kernels.f1_unc, "float32"),
+            ("f2_unc", composite.kernels.f2_unc, "float32"),
+        ]
+        if composite.kernels.reflectance_unc is not None:
+            asset_sources.append(("reflectance_unc", composite.kernels.reflectance_unc, "float32"))
+    else:
+        asset_sources = [("reflectance", composite.reflectance, "float32")]
+
+    asset_sources.extend(
+        [
+            ("quality", composite.quality, "float32"),
+            ("sample_index", composite.sample_index, "int16"),
+        ]
+    )
+    for asset_name, data, dtype in asset_sources:
+        relative_asset = f"{asset_name}{_GEOTIFF_EXTENSION}"
+        _write_geotiff_asset(
+            period_root / relative_asset,
+            data,
+            asset_name=asset_name,
+            dtype=dtype,
+        )
+        assets[asset_name] = relative_asset
+    return assets
+
+
+def _write_geotiff_asset(
+    path: Path,
+    data: xr.DataArray,
+    *,
+    asset_name: str,
+    dtype: str,
+) -> None:
+    prepared = _prepare_raster_asset(data)
+    write_raster(
+        prepared,
+        path,
+        compression="deflate",
+        dtype=dtype,
+        blockxsize=_tiff_block_size(int(prepared.sizes["x"])),
+        blockysize=_tiff_block_size(int(prepared.sizes["y"])),
+    )
+    descriptions = _asset_band_descriptions(prepared, asset_name=asset_name)
+    with rasterio.open(path, "r+") as dst:
+        dst.descriptions = descriptions
+        dst.update_tags(siac_asset=asset_name)
+
+
+def _prepare_raster_asset(data: xr.DataArray) -> xr.DataArray:
+    extra_coords = [name for name in data.coords if name not in data.dims]
+    if extra_coords:
+        data = data.drop_vars(extra_coords, errors="ignore")
+    if "x" not in data.coords or "y" not in data.coords:
+        raise ValueError("Monthly composite assets require x/y coordinates for GeoTIFF persistence")
+    prepared = data.transpose("band", "y", "x") if "band" in data.dims else data.transpose("y", "x")
+    transform = _affine_from_coords(prepared.coords["x"].values, prepared.coords["y"].values)
+    prepared = prepared.rio.set_spatial_dims(x_dim="x", y_dim="y")
+    crs = _data_array_crs(prepared)
+    if crs is not None:
+        prepared = prepared.rio.write_crs(crs)
+    return prepared.rio.write_transform(transform)
+
+
+def _asset_band_descriptions(
+    data: xr.DataArray,
+    *,
+    asset_name: str,
+) -> tuple[str, ...]:
+    if "band" not in data.dims:
+        return (asset_name,)
+    return tuple(str(value) for value in data.coords["band"].values)
+
+
+def _read_geotiff_composite(
+    period_root: Path,
+    *,
+    kind: str,
+    year: int,
+    month: int,
+    source_bands: tuple[SensorBand, ...],
+    assets: dict[str, str] | None,
+) -> MonthlyBestPixelComposite | MonthlyKernelWeightComposite:
+    resolved_assets = _resolve_geotiff_assets(period_root, kind=kind, assets=assets)
+    default_band_names = tuple(band.name for band in source_bands)
+
+    if kind == "kernel_weights":
+        first_band_data = _read_geotiff_asset(
+            period_root / resolved_assets["f0"],
+            band_names=default_band_names or None,
+        ).astype(np.float32)
+        band_names = tuple(str(value) for value in first_band_data.coords["band"].values)
+        kernel_arrays = {
+            "f0": first_band_data,
+            "f1": _read_geotiff_asset(period_root / resolved_assets["f1"], band_names=band_names).astype(np.float32),
+            "f2": _read_geotiff_asset(period_root / resolved_assets["f2"], band_names=band_names).astype(np.float32),
+            "f0_unc": _read_geotiff_asset(period_root / resolved_assets["f0_unc"], band_names=band_names).astype(np.float32),
+            "f1_unc": _read_geotiff_asset(period_root / resolved_assets["f1_unc"], band_names=band_names).astype(np.float32),
+            "f2_unc": _read_geotiff_asset(period_root / resolved_assets["f2_unc"], band_names=band_names).astype(np.float32),
+        }
+        reflectance_unc = (
+            _read_geotiff_asset(
+                period_root / resolved_assets["reflectance_unc"],
+                band_names=band_names,
+            ).astype(np.float32)
+            if "reflectance_unc" in resolved_assets
+            else None
+        )
+        quality = _read_geotiff_asset(period_root / resolved_assets["quality"]).astype(np.float32)
+        sample_index = _read_sample_index_asset(period_root / resolved_assets["sample_index"])
+        return MonthlyKernelWeightComposite(
+            kernels=BRDFKernelWeights(
+                f0=kernel_arrays["f0"],
+                f1=kernel_arrays["f1"],
+                f2=kernel_arrays["f2"],
+                f0_unc=kernel_arrays["f0_unc"],
+                f1_unc=kernel_arrays["f1_unc"],
+                f2_unc=kernel_arrays["f2_unc"],
+                reflectance_unc=reflectance_unc,
+            ),
+            quality=quality,
+            sample_index=sample_index,
+            year=year,
+            month=month,
+        )
+    if kind != "reflectance":
+        raise ValueError(f"Unsupported monthly composite kind: {kind!r}")
+
+    reflectance = _read_geotiff_asset(
+        period_root / resolved_assets["reflectance"],
+        band_names=default_band_names or None,
+    ).astype(np.float32)
+    quality = _read_geotiff_asset(period_root / resolved_assets["quality"]).astype(np.float32)
+    sample_index = _read_sample_index_asset(period_root / resolved_assets["sample_index"])
+    return MonthlyBestPixelComposite(
+        reflectance=reflectance,
+        quality=quality,
+        sample_index=sample_index,
+        year=year,
+        month=month,
+    )
+
+
+def _resolve_geotiff_assets(
+    period_root: Path,
+    *,
+    kind: str,
+    assets: dict[str, str] | None,
+) -> dict[str, str]:
+    if assets is not None:
+        return {str(name): str(path) for name, path in assets.items()}
+    resolved = {
+        "quality": f"quality{_GEOTIFF_EXTENSION}",
+        "sample_index": f"sample_index{_GEOTIFF_EXTENSION}",
+    }
+    if kind == "kernel_weights":
+        for name in ("f0", "f1", "f2", "f0_unc", "f1_unc", "f2_unc"):
+            resolved[name] = f"{name}{_GEOTIFF_EXTENSION}"
+        reflectance_unc_path = period_root / f"reflectance_unc{_GEOTIFF_EXTENSION}"
+        if reflectance_unc_path.exists():
+            resolved["reflectance_unc"] = reflectance_unc_path.name
+        return resolved
+    if kind == "reflectance":
+        resolved["reflectance"] = f"reflectance{_GEOTIFF_EXTENSION}"
+        return resolved
+    raise ValueError(f"Unsupported monthly composite kind: {kind!r}")
+
+
+def _read_geotiff_asset(
+    path: Path,
+    *,
+    band_names: tuple[str, ...] | None = None,
+) -> xr.DataArray:
+    with rasterio.open(path) as src:
+        values = src.read()
+        y_coords, x_coords = _coords_from_transform(src.transform, height=src.height, width=src.width)
+        if src.count == 1:
+            data = xr.DataArray(
+                values[0],
+                dims=("y", "x"),
+                coords={"y": y_coords, "x": x_coords},
+            )
+        else:
+            resolved_band_names = _resolve_asset_band_names(src, band_names=band_names)
+            data = xr.DataArray(
+                values,
+                dims=("band", "y", "x"),
+                coords={
+                    "band": np.asarray(resolved_band_names, dtype=object),
+                    "y": y_coords,
+                    "x": x_coords,
+                },
+            )
+        data = data.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        if src.crs is not None:
+            data = data.rio.write_crs(src.crs.to_string())
+        data = data.rio.write_transform(src.transform)
+    return data
+
+
+def _read_sample_index_asset(path: Path) -> xr.DataArray:
+    data = _read_geotiff_asset(path)
+    rounded = np.rint(np.asarray(data.values, dtype=np.float32)).astype(np.int16)
+    return xr.DataArray(rounded, dims=data.dims, coords=data.coords)
+
+
+def _resolve_asset_band_names(
+    src: rasterio.io.DatasetReader,
+    *,
+    band_names: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    if band_names is not None and len(band_names) == src.count:
+        return band_names
+    descriptions = tuple(str(description) for description in src.descriptions if description)
+    if len(descriptions) == src.count:
+        return descriptions
+    raise ValueError(f"Could not determine multiband names for monthly composite asset {src.name}")
+
+
+def _coords_from_transform(
+    transform: Affine,
+    *,
+    height: int,
+    width: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    if not np.isclose(transform.b, 0.0, rtol=0.0, atol=1e-12) or not np.isclose(transform.d, 0.0, rtol=0.0, atol=1e-12):
+        raise ValueError("Monthly composite GeoTIFF assets must use axis-aligned transforms")
+    x = transform.c + (np.arange(width, dtype=np.float32) + 0.5) * np.float32(transform.a)
+    y = transform.f + (np.arange(height, dtype=np.float32) + 0.5) * np.float32(transform.e)
+    return y.astype(np.float32), x.astype(np.float32)
+
+
+def _affine_from_coords(
+    x_values: Any,
+    y_values: Any,
+) -> Affine:
+    x = np.asarray(x_values, dtype=np.float64)
+    y = np.asarray(y_values, dtype=np.float64)
+    if x.size == 0 or y.size == 0:
+        raise ValueError("Monthly composite GeoTIFF assets require non-empty x/y coordinates")
+
+    x_resolution = _axis_resolution(x)
+    y_resolution = _axis_resolution(y)
+    x_sign = _axis_sign(x) or 1.0
+    y_sign = _axis_sign(y) or -1.0
+
+    x_step = (x_sign * x_resolution) if x_resolution is not None else (abs(y_resolution) if y_resolution is not None else 1.0)
+    y_step = (y_sign * y_resolution) if y_resolution is not None else (-abs(x_step) if x_step != 0 else -1.0)
+    return Affine(
+        float(x_step),
+        0.0,
+        float(x[0] - (x_step / 2.0)),
+        0.0,
+        float(y_step),
+        float(y[0] - (y_step / 2.0)),
+    )
+
+
+def _axis_sign(values: np.ndarray) -> float | None:
+    if values.size <= 1:
+        return None
+    diffs = np.diff(values)
+    nonzero = diffs[np.abs(diffs) > 1e-9]
+    if nonzero.size == 0:
+        return None
+    return 1.0 if float(np.median(nonzero)) >= 0.0 else -1.0
+
+
+def _tiff_block_size(length: int) -> int:
+    if length <= 16:
+        return 16
+    return int(min(512, ((length + 15) // 16) * 16))
+
+
+def _data_array_crs(data: xr.DataArray) -> str | None:
+    try:
+        return str(data.rio.crs) if data.rio.crs is not None else None
+    except Exception:
+        return None
 
 
 def _composite_label(year: int, month: int) -> str:
@@ -373,6 +714,8 @@ def _write_store_manifest(root: Path, manifest: MonthlyCompositeStoreManifest) -
                 "year": entry.year,
                 "month": entry.month,
                 "kind": entry.kind,
+                "format": entry.format,
+                "assets": entry.assets,
             }
             for entry in manifest.entries
         ],

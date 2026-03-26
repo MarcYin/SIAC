@@ -12,6 +12,7 @@ from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyCompositeCollection,
     MonthlyKernelWeightComposite,
 )
+from siac.algorithms.surface.monthly_composite_store import MonthlyCompositeStoreGridSpec
 from siac.domain import SensorBand
 from siac.domain.aoi import AOI
 from siac.runtime import BRDFKernelWeights
@@ -99,7 +100,11 @@ def test_prepare_monthly_composites_orchestrates_provider_build_and_store(
     assert build_kwargs["resolution"] == 500.0
     assert build_kwargs["year_months"] == ((2023, 7), (2022, 8))
     _, _, grid = captured["write"]
-    assert grid is None
+    assert grid == MonthlyCompositeStoreGridSpec.from_bounds(
+        (1.0, 2.0, 3.0, 4.0),
+        crs="EPSG:4326",
+        resolution=500.0,
+    )
     assert result.store_path == tmp_path / "prepared_store"
     assert result.periods == ("2023-07",)
     assert result.period_count == 1

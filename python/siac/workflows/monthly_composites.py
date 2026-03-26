@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from siac.adapters.auth import CredentialManager
 from siac.algorithms.surface.brdf_monthly_composite import MonthlyKernelWeightComposite
 from siac.algorithms.surface.monthly_composite_store import (
+    MonthlyCompositeStoreGridSpec,
     filter_materialized_monthly_composite_collection,
     write_monthly_composite_collection,
 )
@@ -79,6 +80,11 @@ def prepare_monthly_composites(
     store_path = write_monthly_composite_collection(
         materialized_collection,
         output_path,
+        grid=MonthlyCompositeStoreGridSpec.from_bounds(
+            runtime_aoi.get_bounds(),
+            crs=str(runtime_aoi.crs),
+            resolution=effective_resolution,
+        ),
     )
     periods = tuple(
         f"{int(composite.year):04d}-{int(composite.month):02d}"
