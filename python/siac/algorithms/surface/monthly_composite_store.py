@@ -13,7 +13,9 @@ import rasterio
 import rioxarray  # noqa: F401
 import xarray as xr
 from affine import Affine
+from rasterio.transform import from_bounds
 
+from siac.algorithms.grid.assembler import _resample_da
 from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyBestPixelComposite,
     MonthlyCompositeCollection,
@@ -50,8 +52,10 @@ class MonthlyCompositeStoreGridSpec:
         res = float(resolution)
         width = max(1, int(np.ceil((xmax - xmin) / res)))
         height = max(1, int(np.ceil((ymax - ymin) / res)))
+        aligned_xmax = xmin + width * res
+        aligned_ymin = ymax - height * res
         return cls(
-            bounds=(xmin, ymin, xmax, ymax),
+            bounds=(xmin, aligned_ymin, aligned_xmax, ymax),
             crs=str(crs),
             resolution=res,
             width=width,
@@ -110,7 +114,7 @@ def write_monthly_composite_collection(
     for composite in materialized.composites:
         label = _composite_label(composite.year, composite.month)
         relative_path = label
-        assets = _write_monthly_geotiff_period(root / relative_path, composite)
+        assets = _write_monthly_geotiff_period(root / relative_path, composite, grid=grid)
         entries.append(
             MonthlyCompositeStoreEntry(
                 label=label,
@@ -248,6 +252,8 @@ def _infer_entry_format(path_text: str) -> str:
 def _write_monthly_geotiff_period(
     period_root: Path,
     composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
+    *,
+    grid: MonthlyCompositeStoreGridSpec | None = None,
 ) -> dict[str, str]:
     if period_root.exists():
         if period_root.is_dir():
@@ -284,6 +290,7 @@ def _write_monthly_geotiff_period(
             data,
             asset_name=asset_name,
             dtype=dtype,
+            grid=grid,
         )
         assets[asset_name] = relative_asset
     return assets
@@ -295,8 +302,9 @@ def _write_geotiff_asset(
     *,
     asset_name: str,
     dtype: str,
+    grid: MonthlyCompositeStoreGridSpec | None = None,
 ) -> None:
-    prepared = _prepare_raster_asset(data)
+    prepared = _prepare_raster_asset(data, grid=grid)
     write_raster(
         prepared,
         path,
@@ -311,7 +319,11 @@ def _write_geotiff_asset(
         dst.update_tags(siac_asset=asset_name)
 
 
-def _prepare_raster_asset(data: xr.DataArray) -> xr.DataArray:
+def _prepare_raster_asset(
+    data: xr.DataArray,
+    *,
+    grid: MonthlyCompositeStoreGridSpec | None = None,
+) -> xr.DataArray:
     extra_coords = [name for name in data.coords if name not in data.dims]
     if extra_coords:
         data = data.drop_vars(extra_coords, errors="ignore")
@@ -323,7 +335,35 @@ def _prepare_raster_asset(data: xr.DataArray) -> xr.DataArray:
     crs = _data_array_crs(prepared)
     if crs is not None:
         prepared = prepared.rio.write_crs(crs)
-    return prepared.rio.write_transform(transform)
+    prepared = prepared.rio.write_transform(transform)
+    if grid is None:
+        return prepared
+    return _align_raster_asset_to_grid(prepared, grid)
+
+
+def _align_raster_asset_to_grid(
+    data: xr.DataArray,
+    grid: MonthlyCompositeStoreGridSpec,
+) -> xr.DataArray:
+    template = _grid_template(grid)
+    target_shape = (int(grid.height), int(grid.width))
+    return _resample_da(data, target_shape, "nearest", template=template).astype(data.dtype, copy=False)
+
+
+def _grid_template(grid: MonthlyCompositeStoreGridSpec) -> xr.DataArray:
+    xmin, ymin, xmax, ymax = (float(value) for value in grid.bounds)
+    width = int(grid.width)
+    height = int(grid.height)
+    transform = from_bounds(xmin, ymin, xmax, ymax, width, height)
+    y, x = _coords_from_transform(transform, height=height, width=width)
+    template = xr.DataArray(
+        np.full((height, width), np.nan, dtype=np.float32),
+        dims=("y", "x"),
+        coords={"x": x, "y": y},
+    )
+    template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
+    template = template.rio.write_crs(grid.crs)
+    return template.rio.write_transform(transform)
 
 
 def _asset_band_descriptions(

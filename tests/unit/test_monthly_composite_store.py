@@ -14,6 +14,7 @@ from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyKernelWeightComposite,
 )
 from siac.algorithms.surface.monthly_composite_store import (
+    MonthlyCompositeStoreGridSpec,
     read_monthly_composite_collection,
     read_monthly_composite_store_manifest,
     write_monthly_composite_collection,
@@ -153,6 +154,50 @@ def test_monthly_composite_store_round_trips_kernel_collection(tmp_path) -> None
         assert src.driver == "GTiff"
         assert src.is_tiled
         assert str(src.profile["compress"]).lower() == "deflate"
+
+
+def test_monthly_composite_store_honors_explicit_grid_metadata(tmp_path) -> None:
+    grid = MonthlyCompositeStoreGridSpec.from_bounds(
+        (399960.0, 4590240.0, 509760.0, 4700040.0),
+        crs="EPSG:32615",
+        resolution=500.0,
+    )
+    store_path = write_monthly_composite_collection(
+        _kernel_collection(),
+        tmp_path / "kernel_store_on_target_grid",
+        grid=grid,
+    )
+    manifest = read_monthly_composite_store_manifest(store_path)
+
+    assert manifest.grid == grid
+    with rasterio.open(store_path / manifest.entries[0].path / manifest.entries[0].assets["f0"]) as src:
+        assert src.crs is not None
+        assert src.crs.to_string() == "EPSG:32615"
+        assert src.width == grid.width
+        assert src.height == grid.height
+        assert src.bounds == pytest.approx(grid.bounds)
+        assert src.transform == rasterio.transform.from_bounds(*grid.bounds, grid.width, grid.height)
+
+    loaded = read_monthly_composite_collection(store_path)
+    composite = cast("MonthlyKernelWeightComposite", loaded.composites[0])
+    assert composite.kernels.f0.sizes["x"] == grid.width
+    assert composite.kernels.f0.sizes["y"] == grid.height
+    np.testing.assert_allclose(
+        np.asarray(composite.kernels.f0.coords["x"].values, dtype=np.float64),
+        np.linspace(
+            grid.bounds[0] + grid.resolution / 2.0,
+            grid.bounds[2] - grid.resolution / 2.0,
+            grid.width,
+        ),
+    )
+    np.testing.assert_allclose(
+        np.asarray(composite.kernels.f0.coords["y"].values, dtype=np.float64),
+        np.linspace(
+            grid.bounds[3] - grid.resolution / 2.0,
+            grid.bounds[1] + grid.resolution / 2.0,
+            grid.height,
+        ),
+    )
 
 
 def test_monthly_composite_store_round_trips_reflectance_collection(tmp_path) -> None:
