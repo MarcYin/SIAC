@@ -11,6 +11,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import nullcontext, suppress
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import xarray as xr
 
+from siac.algorithms.solver import build_solver_valid_mask
 from siac.observability import (
     ExecutionObserver,
     bind_execution_observer,
@@ -27,6 +29,7 @@ from siac.observability import (
     resolve_execution_observer,
 )
 from siac.runtime import (
+    AOTScatterBandDiagnostics,
     AtmosphericState,
     CorrectionResult,
     GeometryAngles,
@@ -170,10 +173,101 @@ def _aerosol_resolution(config: Any) -> float:
 
 def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
     """Mirror M4 band-selection logic for LUT preloading hints."""
-    bands = sensor_config.select_bands_in_range(400.0, 520.0)
-    if bands:
-        return list(bands)
-    return list(sensor_config.bands[:2])
+    return list(sensor_config.default_aerosol_solver_bands())
+
+
+def _should_capture_aot_scatter(config: Any) -> bool:
+    output = getattr(config, "output", None)
+    defaults = getattr(output, "defaults", None)
+    if defaults is None:
+        return True
+    return bool(getattr(defaults, "include_auxiliary", True))
+
+
+def _sample_scatter_values(values: np.ndarray, *, max_points: int) -> np.ndarray:
+    if values.size <= max_points:
+        return values.astype(np.float32, copy=False)
+    indices = np.linspace(0, values.size - 1, max_points, dtype=np.int64)
+    return values[indices].astype(np.float32, copy=False)
+
+
+def _select_band_slice(
+    data: xr.DataArray,
+    *,
+    band_name: str,
+    band_index: int,
+) -> xr.DataArray | None:
+    if "band" not in data.dims:
+        return data
+    band_coord = data.coords.get("band")
+    if band_coord is not None:
+        band_values = [str(value) for value in np.asarray(band_coord.values).tolist()]
+        if band_name in band_values:
+            return cast("xr.DataArray", data.sel(band=band_name, drop=True))
+        if np.asarray(band_coord.values).dtype.kind in {"U", "S", "O"}:
+            return None
+    return cast("xr.DataArray", data.isel(band=band_index, drop=True))
+
+
+def _build_aot_scatter_diagnostics(
+    solver_inputs: SolverInputBundle,
+    solved: SolvedAtmosphere,
+    *,
+    max_points_per_band: int = 4096,
+) -> tuple[AOTScatterBandDiagnostics, ...]:
+    valid_mask = build_solver_valid_mask(
+        solver_inputs.cloud_mask,
+        solver_inputs.toa,
+        solver_inputs.surface_prior,
+    ).values.astype(bool)
+    diagnostics: list[AOTScatterBandDiagnostics] = []
+
+    for band_index, band in enumerate(solver_inputs.bands):
+        toa_band = _select_band_slice(solver_inputs.toa, band_name=band.name, band_index=band_index)
+        surface_band = _select_band_slice(
+            solver_inputs.surface_prior.boa,
+            band_name=band.name,
+            band_index=band_index,
+        )
+        if toa_band is None or surface_band is None:
+            continue
+        coeffs = solver_inputs.rt_model.compute_coefficients(
+            solver_inputs.geometry,
+            solved.atmo_state,
+            band,
+            False,
+        )
+        simulated_toa = coeffs.simulate_toa(surface_band)
+
+        band_valid = (
+            valid_mask
+            & np.isfinite(surface_band.values)
+            & np.isfinite(toa_band.values)
+            & np.isfinite(simulated_toa.values)
+        )
+        if not np.any(band_valid):
+            continue
+
+        surface_values = surface_band.values[band_valid].astype(np.float32, copy=False)
+        observed_values = toa_band.values[band_valid].astype(np.float32, copy=False)
+        simulated_values = simulated_toa.values[band_valid].astype(np.float32, copy=False)
+
+        if surface_values.size > max_points_per_band:
+            order = np.argsort(surface_values, kind="mergesort")
+            surface_values = surface_values[order]
+            observed_values = observed_values[order]
+            simulated_values = simulated_values[order]
+        diagnostics.append(
+            AOTScatterBandDiagnostics(
+                band_name=band.name,
+                surface_reflectance=_sample_scatter_values(surface_values, max_points=max_points_per_band),
+                observed_toa=_sample_scatter_values(observed_values, max_points=max_points_per_band),
+                simulated_toa=_sample_scatter_values(simulated_values, max_points=max_points_per_band),
+                total_valid_count=int(np.count_nonzero(band_valid)),
+            )
+        )
+
+    return tuple(diagnostics)
 
 
 def _shares_template_grid(field: Any, template: Any) -> bool:
@@ -553,6 +647,14 @@ def _run_tail(
     logger.info("M6: Applying atmospheric correction...")
     with observe_stage("M6.correction"):
         corrected = corrector(obs, solved, rt_model)
+        diagnostics = corrected.diagnostics
+        if _should_capture_aot_scatter(config):
+            try:
+                scatter = _build_aot_scatter_diagnostics(solver_inputs, solved)
+            except Exception:
+                logger.exception("Failed to build aerosol-solver scatter diagnostics.")
+            else:
+                diagnostics = replace(corrected.diagnostics, aot_scatter_plots=scatter)
         surface_template = _surface_template(solver_inputs.surface_prior.boa)
         result = CorrectionResult(
             boa=corrected.boa,
@@ -575,7 +677,7 @@ def _run_tail(
                 template=surface_template,
             ),
             metadata=corrected.metadata,
-            diagnostics=corrected.diagnostics,
+            diagnostics=diagnostics,
         )
     validate_correction_result(result)
     logger.info("M6: Correction complete (%.2fs).", time.monotonic() - t0)

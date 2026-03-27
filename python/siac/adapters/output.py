@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import xarray as xr
+from scipy.ndimage import maximum_filter, zoom
 
-from siac.storage.product_writers import write_dataset, write_rgb_quicklook
+from siac.runtime.models import copy_spatial_metadata_like
+from siac.storage.product_writers import write_aot_scatter_plot, write_dataset, write_rgb_quicklook
 from siac.storage.raster_writers import write_cog, write_raster, write_zarr
 from siac.storage.writers import write_netcdf
 
@@ -19,6 +21,93 @@ if TYPE_CHECKING:
     from siac.runtime import CorrectionResult
 
 logger = logging.getLogger(__name__)
+
+
+def _shares_grid(field: xr.DataArray, template: xr.DataArray) -> bool:
+    if tuple(field.shape) != tuple(template.shape):
+        return False
+    if tuple(field.dims) != tuple(template.dims):
+        return False
+    for dim in template.dims:
+        if dim not in field.coords or dim not in template.coords:
+            return False
+        if not np.array_equal(np.asarray(field.coords[dim].values), np.asarray(template.coords[dim].values), equal_nan=True):
+            return False
+    return True
+
+
+def _axis_resolution(values: np.ndarray) -> float | None:
+    if values.size <= 1:
+        return None
+    diffs = np.abs(np.diff(np.asarray(values, dtype=np.float64)))
+    finite = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+    if finite.size == 0:
+        return None
+    return float(np.median(finite))
+
+
+def _cloud_mask_on_template_grid(mask: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
+    if _shares_grid(mask, template):
+        return mask.astype(np.uint8)
+
+    if (
+        len(mask.dims) == 2
+        and mask.dims == template.dims
+        and all(dim in mask.coords for dim in mask.dims)
+        and all(dim in template.coords for dim in template.dims)
+    ):
+        factor_y = 1
+        factor_x = 1
+        src_y_res = _axis_resolution(np.asarray(mask.coords[mask.dims[0]].values))
+        src_x_res = _axis_resolution(np.asarray(mask.coords[mask.dims[1]].values))
+        dst_y_res = _axis_resolution(np.asarray(template.coords[template.dims[0]].values))
+        dst_x_res = _axis_resolution(np.asarray(template.coords[template.dims[1]].values))
+        if src_y_res is not None and dst_y_res is not None and dst_y_res > src_y_res:
+            factor_y = max(1, int(np.ceil(dst_y_res / src_y_res)))
+        if src_x_res is not None and dst_x_res is not None and dst_x_res > src_x_res:
+            factor_x = max(1, int(np.ceil(dst_x_res / src_x_res)))
+
+        source = np.asarray(mask.values, dtype=np.float32)
+        if factor_y > 1 or factor_x > 1:
+            source = maximum_filter(source, size=(factor_y, factor_x), mode="nearest")
+        remapped = xr.DataArray(
+            source,
+            dims=mask.dims,
+            coords={dim: mask.coords[dim] for dim in mask.dims},
+            attrs=mask.attrs,
+        )
+        try:
+            interpolated = remapped.interp(
+                coords={dim: template.coords[dim] for dim in template.dims},
+                method="nearest",
+            )
+            out = np.asarray(interpolated.values, dtype=np.float32)
+            out = np.where(np.isfinite(out), out, 1.0)
+        except Exception:
+            out = np.asarray(mask.values, dtype=np.float32)
+    else:
+        out = np.asarray(mask.values, dtype=np.float32)
+
+    h_out = int(template.sizes[template.dims[0]])
+    w_out = int(template.sizes[template.dims[1]])
+    if out.shape != (h_out, w_out):
+        factor_y = max(1, out.shape[0] // h_out)
+        factor_x = max(1, out.shape[1] // w_out)
+        dilated = maximum_filter(out, size=(factor_y, factor_x), mode="nearest")
+        out = zoom(dilated, (h_out / dilated.shape[0], w_out / dilated.shape[1]), order=0)
+        out = out[:h_out, :w_out]
+        if out.shape != (h_out, w_out):
+            padded = np.ones((h_out, w_out), dtype=np.float32)
+            padded[: out.shape[0], : out.shape[1]] = out
+            out = padded
+
+    resampled = xr.DataArray(
+        (out > 0.5).astype(np.uint8),
+        dims=template.dims,
+        coords={dim: template.coords[dim] for dim in template.dims if dim in template.coords},
+        attrs=mask.attrs,
+    )
+    return copy_spatial_metadata_like(resampled, template)
 
 
 def _uint16_encode(data: xr.DataArray, *, scale: float, nodata: float) -> xr.DataArray:
@@ -208,6 +297,7 @@ class ConfiguredOutputWriter:
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
+        artifacts.update(self._write_scatter_diagnostics_if_available(result, output_dir))
         return artifacts
 
     def _write_netcdf_products(
@@ -244,17 +334,19 @@ class ConfiguredOutputWriter:
                     monthly_root / f"{label}.nc",
                 )
         if self.defaults.include_auxiliary:
+            aux_template = result.aot
             aux_ds = xr.Dataset(
                 {
-                    "aot": result.aot.astype(np.float32),
+                    "aot": aux_template.astype(np.float32),
                     "tcwv": result.tcwv.astype(np.float32),
-                    "cloud_mask": result.cloud_mask.astype(np.uint8),
+                    "cloud_mask": _cloud_mask_on_template_grid(result.cloud_mask, aux_template),
                 }
             )
             artifacts["auxiliary"] = write_netcdf(aux_ds, output_dir / "auxiliary.nc")
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
+        artifacts.update(self._write_scatter_diagnostics_if_available(result, output_dir))
         return artifacts
 
     def _write_zarr_products(
@@ -291,17 +383,19 @@ class ConfiguredOutputWriter:
                     monthly_root / f"{label}.zarr",
                 )
         if self.defaults.include_auxiliary:
+            aux_template = result.aot
             aux_ds = xr.Dataset(
                 {
-                    "aot": result.aot.astype(np.float32),
+                    "aot": aux_template.astype(np.float32),
                     "tcwv": result.tcwv.astype(np.float32),
-                    "cloud_mask": result.cloud_mask.astype(np.uint8),
+                    "cloud_mask": _cloud_mask_on_template_grid(result.cloud_mask, aux_template),
                 }
             )
             artifacts["auxiliary"] = write_zarr(aux_ds, output_dir / "auxiliary.zarr")
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
+        artifacts.update(self._write_scatter_diagnostics_if_available(result, output_dir))
         return artifacts
 
     def _write_rgb_if_available(
@@ -314,6 +408,27 @@ class ConfiguredOutputWriter:
         if not {"B04", "B03", "B02"} <= set(result.boa.data_vars):
             return None
         return cast("Path", write_rgb_quicklook(result.boa, output_dir / "quicklook.tif"))
+
+    def _write_scatter_diagnostics_if_available(
+        self,
+        result: CorrectionResult,
+        output_dir: Path,
+    ) -> dict[str, Path]:
+        if not self.defaults.include_auxiliary:
+            return {}
+        plots = tuple(getattr(result.diagnostics, "aot_scatter_plots", ()))
+        if not plots:
+            return {}
+
+        diagnostics_dir = output_dir / "diagnostics"
+        artifacts: dict[str, Path] = {}
+        for plot in plots:
+            path = diagnostics_dir / f"aot_scatter_{plot.band_name}.png"
+            artifacts[f"diagnostics.scatter.{plot.band_name}"] = cast(
+                "Path",
+                write_aot_scatter_plot(plot, path),
+            )
+        return artifacts
 
 
 __all__ = ["ConfiguredOutputWriter"]

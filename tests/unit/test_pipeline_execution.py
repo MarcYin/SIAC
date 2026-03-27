@@ -276,6 +276,33 @@ def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
     assert "B02" in result.monthly_composites["2023_07"].reflectance.data_vars
 
 
+def test_run_tail_attaches_aot_scatter_diagnostics(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_solver_input_bundle,
+    mock_solver_fn,
+    mock_corrector_fn,
+    mock_rt_model,
+) -> None:
+    result = pipeline._run_tail(
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0)),
+        grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=mock_rt_model,
+    )
+
+    assert result.diagnostics.aot_scatter_plots
+    scatter = result.diagnostics.aot_scatter_plots[0]
+    assert scatter.band_name == "B02"
+    assert scatter.total_valid_count > 0
+    assert scatter.surface_reflectance.shape == scatter.observed_toa.shape == scatter.simulated_toa.shape
+
+
 def test_call_with_retries_recovers_and_logs(caplog: pytest.LogCaptureFixture) -> None:
     calls = {"n": 0}
 

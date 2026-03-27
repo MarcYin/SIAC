@@ -1,6 +1,7 @@
 """Public storage entrypoints for raster, product, and STAC I/O."""
 
 from siac.storage.product_writers import (
+    write_aot_scatter_plot,
     write_auxiliary_products,
     write_boa_products,
     write_dataset,
@@ -35,6 +36,7 @@ __all__ = [
     "read_raster_at_resolution",
     "read_raster_window",
     "read_zarr_array",
+    "write_aot_scatter_plot",
     "write_auxiliary_products",
     "write_boa_products",
     "write_cog",

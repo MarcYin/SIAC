@@ -25,7 +25,13 @@ from siac.geo.reprojection import (
     resample_to_shape,
     transform_points,
 )
-from siac.runtime import CorrectionDiagnostics, CorrectionResult, GeometryAngles, ObservationBundle
+from siac.runtime import (
+    AOTScatterBandDiagnostics,
+    CorrectionDiagnostics,
+    CorrectionResult,
+    GeometryAngles,
+    ObservationBundle,
+)
 from siac.storage.readers import (
     check_rasters_aligned,
     get_raster_info,
@@ -43,6 +49,7 @@ from siac.storage.stac import build_stac_item, write_stac_item
 from siac.storage.writers import (
     _compute_overview_levels,
     _prepare_for_write,
+    write_aot_scatter_plot,
     write_auxiliary_products,
     write_boa_products,
     write_cog,
@@ -375,6 +382,20 @@ class TestWritersExtra:
         )
         out = tmp_path / "quicklook.tif"
         p = write_rgb_quicklook(boa, out, target_resolution=40.0)
+        assert p.exists()
+
+    def test_write_aot_scatter_plot(self, tmp_path: Path):
+        out = tmp_path / "scatter.png"
+        plot = AOTScatterBandDiagnostics(
+            band_name="B02",
+            surface_reflectance=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+            observed_toa=np.array([0.12, 0.21, 0.31], dtype=np.float32),
+            simulated_toa=np.array([0.11, 0.20, 0.30], dtype=np.float32),
+            total_valid_count=3,
+        )
+
+        p = write_aot_scatter_plot(plot, out)
+
         assert p.exists()
 
     def test_write_dataset_skip_nonspatial_and_write_zarr_chunks(

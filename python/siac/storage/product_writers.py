@@ -1,6 +1,7 @@
 """Focused exports for higher-level SIAC product writers."""
 
 from siac.storage.writers import (
+    write_aot_scatter_plot,
     write_auxiliary_products,
     write_boa_products,
     write_dataset,
@@ -8,6 +9,7 @@ from siac.storage.writers import (
 )
 
 __all__ = [
+    "write_aot_scatter_plot",
     "write_auxiliary_products",
     "write_boa_products",
     "write_dataset",

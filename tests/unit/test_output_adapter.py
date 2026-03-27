@@ -9,7 +9,12 @@ import xarray as xr
 import siac.adapters.output as output_module
 from siac.adapters.output import ConfiguredOutputWriter
 from siac.config.schema import OutputDefaultsConfig
-from siac.runtime import CorrectionResult, MonthlyCompositeOutput
+from siac.runtime import (
+    AOTScatterBandDiagnostics,
+    CorrectionDiagnostics,
+    CorrectionResult,
+    MonthlyCompositeOutput,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,6 +25,7 @@ def _result(
     include_uncertainty: bool = True,
     include_surface_prior: bool = False,
     include_monthly_composites: bool = False,
+    include_diagnostics: bool = False,
 ) -> CorrectionResult:
     coords = {"y": [0, 1], "x": [0, 1]}
     boa = xr.Dataset(
@@ -92,6 +98,18 @@ def _result(
         surface_prior=surface_prior,
         surface_prior_unc=surface_prior_unc,
         monthly_composites=monthly_composites,
+        diagnostics=CorrectionDiagnostics(
+            processing_time_s=0.25,
+            aot_scatter_plots=(
+                AOTScatterBandDiagnostics(
+                    band_name="B02",
+                    surface_reflectance=np.array([0.1, 0.2], dtype=np.float32),
+                    observed_toa=np.array([0.15, 0.25], dtype=np.float32),
+                    simulated_toa=np.array([0.14, 0.24], dtype=np.float32),
+                    total_valid_count=2,
+                ),
+            ) if include_diagnostics else (),
+        ),
     )
 
 
@@ -102,6 +120,7 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
     dataset_calls: list[tuple[xr.Dataset, Path, dict[str, object]]] = []
     raster_calls: list[tuple[Path, dict[str, object], np.dtype[np.generic]]] = []
     quicklook_calls: list[Path] = []
+    scatter_calls: list[Path] = []
 
     def _fake_write_dataset(dataset: xr.Dataset, output_dir: Path, **kwargs: object) -> dict[str, Path]:
         dataset_calls.append((dataset, output_dir, kwargs))
@@ -115,9 +134,14 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
         quicklook_calls.append(path)
         return path
 
+    def _fake_write_aot_scatter_plot(_scatter: object, path: Path) -> Path:
+        scatter_calls.append(path)
+        return path
+
     monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
     monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
     monkeypatch.setattr(output_module, "write_rgb_quicklook", _fake_write_rgb_quicklook)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", _fake_write_aot_scatter_plot)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -128,7 +152,7 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
             include_rgb=True,
         )
     )
-    artifacts = writer.write(_result(), tmp_path)
+    artifacts = writer.write(_result(include_diagnostics=True), tmp_path)
 
     assert len(dataset_calls) == 2
     assert dataset_calls[0][1] == tmp_path / "boa"
@@ -145,6 +169,7 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
     assert cloud_mask_call[1]["nodata"] == 255
 
     assert quicklook_calls == [tmp_path / "quicklook.tif"]
+    assert scatter_calls == [tmp_path / "diagnostics" / "aot_scatter_B02.png"]
     assert {
         "boa.B04",
         "boa.B03",
@@ -155,6 +180,7 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
         "auxiliary.aot",
         "auxiliary.tcwv",
         "auxiliary.cloud_mask",
+        "diagnostics.scatter.B02",
         "quicklook.rgb",
     } <= set(artifacts)
 
@@ -171,6 +197,7 @@ def test_write_netcdf_products_route_and_respects_toggles(
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -184,6 +211,152 @@ def test_write_netcdf_products_route_and_respects_toggles(
 
     assert calls == [tmp_path / "boa.nc"]
     assert artifacts == {"boa": tmp_path / "boa.nc"}
+
+
+def test_write_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, xr.Dataset] = {}
+
+    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+        del kwargs
+        captured[str(path)] = dataset
+        return path
+
+    monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+
+    coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
+    fine_coords = {"y": [1750.0, 1250.0, 750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
+    result = CorrectionResult(
+        boa=xr.Dataset(
+            {
+                "B04": xr.DataArray(np.full((4, 4), 0.12, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+                "B03": xr.DataArray(np.full((4, 4), 0.10, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+                "B02": xr.DataArray(np.full((4, 4), 0.08, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+            }
+        ),
+        boa_unc=None,
+        aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        cloud_mask=xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"], coords=fine_coords),
+    )
+    result.cloud_mask.values[0, 0] = True
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="netcdf",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+
+    artifacts = writer.write(result, tmp_path)
+
+    aux_ds = captured[str(tmp_path / "auxiliary.nc")]
+    assert artifacts["auxiliary"] == tmp_path / "auxiliary.nc"
+    assert aux_ds.sizes == {"y": 2, "x": 2}
+    assert aux_ds["cloud_mask"].coords["x"].identical(result.aot.coords["x"])
+    assert aux_ds["cloud_mask"].coords["y"].identical(result.aot.coords["y"])
+    assert aux_ds["cloud_mask"].dtype == np.uint8
+
+
+def test_write_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, xr.Dataset] = {}
+
+    def _fake_write_zarr(dataset: xr.Dataset, path: Path) -> Path:
+        captured[str(path)] = dataset
+        return path
+
+    monkeypatch.setattr(output_module, "write_zarr", _fake_write_zarr)
+
+    coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
+    fine_coords = {"y": [1750.0, 1250.0, 750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
+    result = CorrectionResult(
+        boa=xr.Dataset(
+            {
+                "B04": xr.DataArray(np.full((4, 4), 0.12, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+                "B03": xr.DataArray(np.full((4, 4), 0.10, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+                "B02": xr.DataArray(np.full((4, 4), 0.08, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+            }
+        ),
+        boa_unc=None,
+        aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        cloud_mask=xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"], coords=fine_coords),
+    )
+    result.cloud_mask.values[0, 0] = True
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="zarr",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+
+    artifacts = writer.write(result, tmp_path)
+
+    aux_ds = captured[str(tmp_path / "auxiliary.zarr")]
+    assert artifacts["auxiliary"] == tmp_path / "auxiliary.zarr"
+    assert aux_ds.sizes == {"y": 2, "x": 2}
+    assert aux_ds["cloud_mask"].coords["x"].identical(result.aot.coords["x"])
+    assert aux_ds["cloud_mask"].coords["y"].identical(result.aot.coords["y"])
+    assert aux_ds["cloud_mask"].dtype == np.uint8
+
+
+def test_write_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, xr.Dataset] = {}
+
+    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+        del kwargs
+        captured[str(path)] = dataset
+        return path
+
+    monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+
+    coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
+    shifted_mask = xr.DataArray(
+        np.array([[0, 1], [0, 0]], dtype=bool),
+        dims=["y", "x"],
+        coords={"y": [500.0, 1500.0], "x": [1500.0, 500.0]},
+    )
+    result = CorrectionResult(
+        boa=xr.Dataset(
+            {
+                "B04": xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+                "B03": xr.DataArray(np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+                "B02": xr.DataArray(np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            }
+        ),
+        boa_unc=None,
+        aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        cloud_mask=shifted_mask,
+    )
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="netcdf",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+
+    writer.write(result, tmp_path)
+
+    aux_ds = captured[str(tmp_path / "auxiliary.nc")]
+    expected = np.array([[False, False], [True, False]], dtype=bool)
+    np.testing.assert_array_equal(aux_ds["cloud_mask"].values.astype(bool), expected)
 
 
 def test_write_raster_products_emits_surface_prior_and_monthly_composites(
@@ -204,6 +377,7 @@ def test_write_raster_products_emits_surface_prior_and_monthly_composites(
     monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
     monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
     monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda _dataset, path: path)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -250,6 +424,7 @@ def test_write_zarr_products_route_and_respects_toggles(
         return path
 
     monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(

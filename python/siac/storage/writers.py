@@ -20,13 +20,16 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from siac.runtime import AOTScatterBandDiagnostics
 
 CompressionSettings: TypeAlias = dict[str, str | int]
 
@@ -524,6 +527,118 @@ def write_rgb_quicklook(
     rgb_scaled.rio.to_raster(str(output_path), driver="GTiff")
 
     logger.info(f"Wrote RGB quicklook to {output_path}")
+    return output_path
+
+
+def write_aot_scatter_plot(
+    scatter: AOTScatterBandDiagnostics,
+    output_path: str | Path,
+    *,
+    width: int = 720,
+    height: int = 720,
+) -> Path:
+    """Write a PNG scatter plot for one aerosol-solver band."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    image = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(image, "RGBA")
+    font = ImageFont.load_default()
+
+    margin_left = 76
+    margin_right = 28
+    margin_top = 56
+    margin_bottom = 80
+    plot_left = margin_left
+    plot_top = margin_top
+    plot_right = width - margin_right
+    plot_bottom = height - margin_bottom
+
+    draw.rectangle((plot_left, plot_top, plot_right, plot_bottom), outline=(60, 60, 60, 255), width=2)
+
+    x_values = np.asarray(scatter.surface_reflectance, dtype=np.float64)
+    observed_values = np.asarray(scatter.observed_toa, dtype=np.float64)
+    simulated_values = np.asarray(scatter.simulated_toa, dtype=np.float64)
+
+    if x_values.size:
+        x_min = float(np.nanmin(x_values))
+        x_max = float(np.nanmax(x_values))
+        y_min = float(np.nanmin(np.concatenate([observed_values, simulated_values])))
+        y_max = float(np.nanmax(np.concatenate([observed_values, simulated_values])))
+    else:
+        x_min = 0.0
+        x_max = 1.0
+        y_min = 0.0
+        y_max = 1.0
+
+    if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min == x_max:
+        x_min, x_max = 0.0, 1.0
+    if not np.isfinite(y_min) or not np.isfinite(y_max) or y_min == y_max:
+        y_min, y_max = 0.0, 1.0
+
+    x_pad = max((x_max - x_min) * 0.05, 1.0e-3)
+    y_pad = max((y_max - y_min) * 0.05, 1.0e-3)
+    x_min -= x_pad
+    x_max += x_pad
+    y_min -= y_pad
+    y_max += y_pad
+
+    def _sx(value: float) -> int:
+        fraction = (value - x_min) / (x_max - x_min)
+        return int(round(plot_left + fraction * (plot_right - plot_left)))
+
+    def _sy(value: float) -> int:
+        fraction = (value - y_min) / (y_max - y_min)
+        return int(round(plot_bottom - fraction * (plot_bottom - plot_top)))
+
+    for step in range(6):
+        x_tick = x_min + (x_max - x_min) * step / 5.0
+        y_tick = y_min + (y_max - y_min) * step / 5.0
+        x_pos = _sx(x_tick)
+        y_pos = _sy(y_tick)
+        draw.line((x_pos, plot_bottom, x_pos, plot_bottom + 6), fill=(60, 60, 60, 255), width=1)
+        draw.line((plot_left - 6, y_pos, plot_left, y_pos), fill=(60, 60, 60, 255), width=1)
+        draw.text((x_pos - 18, plot_bottom + 10), f"{x_tick:.2f}", fill=(40, 40, 40, 255), font=font)
+        draw.text((8, y_pos - 6), f"{y_tick:.2f}", fill=(40, 40, 40, 255), font=font)
+
+    observed_color = (70, 70, 70, 110)
+    simulated_palette = {
+        "B02": (20, 90, 220, 120),
+        "B04": (210, 55, 40, 120),
+    }
+    simulated_color = simulated_palette.get(scatter.band_name, (0, 140, 120, 120))
+
+    def _draw_points(x_series: np.ndarray, y_series: np.ndarray, color: tuple[int, int, int, int]) -> None:
+        for x_value, y_value in zip(x_series, y_series, strict=False):
+            if not np.isfinite(x_value) or not np.isfinite(y_value):
+                continue
+            px = _sx(float(x_value))
+            py = _sy(float(y_value))
+            draw.ellipse((px - 1, py - 1, px + 1, py + 1), fill=color, outline=None)
+
+    _draw_points(x_values, observed_values, observed_color)
+    _draw_points(x_values, simulated_values, simulated_color)
+
+    draw.text(
+        (plot_left, 16),
+        f"AOT Solver Scatter {scatter.band_name}  sampled={x_values.size} total={scatter.total_valid_count}",
+        fill=(20, 20, 20, 255),
+        font=font,
+    )
+    draw.text((plot_left, height - 28), "Simulated surface reflectance", fill=(20, 20, 20, 255), font=font)
+    draw.text((16, 24), "TOA", fill=(20, 20, 20, 255), font=font)
+
+    legend_x = plot_right - 146
+    legend_y = plot_top + 12
+    draw.rectangle((legend_x, legend_y, legend_x + 12, legend_y + 12), fill=observed_color)
+    draw.text((legend_x + 18, legend_y), "Observed TOA", fill=(20, 20, 20, 255), font=font)
+    draw.rectangle((legend_x, legend_y + 20, legend_x + 12, legend_y + 32), fill=simulated_color)
+    draw.text((legend_x + 18, legend_y + 20), "Simulated TOA", fill=(20, 20, 20, 255), font=font)
+
+    image.save(output_path, format="PNG")
+    logger.info("Wrote aerosol scatter plot to %s", output_path)
     return output_path
 
 
