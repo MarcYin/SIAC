@@ -221,6 +221,64 @@ def test_build_cloud_classes_auto_mode_uses_provider(monkeypatch: pytest.MonkeyP
     np.testing.assert_array_equal(out.values, np.array([[1, 2], [3, 0]], dtype=np.uint8))
 
 
+def test_build_cloud_classes_auto_late_loads_missing_green_band(monkeypatch: pytest.MonkeyPatch):
+    cfg = _sensor_config_with_duplicate_red()
+    toa = xr.Dataset(
+        {
+            "R1": xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            "R2": xr.DataArray(np.full((2, 2), 0.5, dtype=np.float32), dims=["y", "x"]),
+            "N1": xr.DataArray(np.full((2, 2), 0.6, dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+    load_calls: list[str] = []
+
+    def _load_band(name: str) -> xr.DataArray:
+        load_calls.append(name)
+        if name == "G1":
+            return xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"])
+        raise KeyError(name)
+
+    toa.attrs["_siac_toa_band_loader"] = _load_band
+
+    class _FakeProvider:
+        def predict(self, red, green, nir, class_mapping=None, unmapped_to_missing=True):  # noqa: ANN001
+            del class_mapping, unmapped_to_missing
+            assert float(red.mean()) == pytest.approx(0.4)
+            assert float(green.mean()) == pytest.approx(0.2)
+            assert float(nir.mean()) == pytest.approx(0.6)
+            return xr.DataArray(np.array([[1, 2], [3, 0]], dtype=np.uint8), dims=["y", "x"])
+
+    monkeypatch.setattr("siac.algorithms.cloud.mask.OmniCloudMaskProvider", _FakeProvider)
+
+    out = build_cloud_classes(toa, cfg, mode="auto")
+
+    np.testing.assert_array_equal(out.values, np.array([[1, 2], [3, 0]], dtype=np.uint8))
+    assert load_calls == ["G1"]
+
+
+def test_build_cloud_classes_auto_fails_when_loader_cannot_supply_green_band():
+    cfg = _sensor_config_with_duplicate_red()
+    toa = xr.Dataset(
+        {
+            "R1": xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            "R2": xr.DataArray(np.full((2, 2), 0.5, dtype=np.float32), dims=["y", "x"]),
+            "N1": xr.DataArray(np.full((2, 2), 0.6, dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+    load_calls: list[str] = []
+
+    def _load_band(name: str) -> xr.DataArray:
+        load_calls.append(name)
+        raise KeyError(name)
+
+    toa.attrs["_siac_toa_band_loader"] = _load_band
+
+    with pytest.raises(ValueError, match="Could not find any green band"):
+        build_cloud_classes(toa, cfg, mode="auto")
+
+    assert load_calls == ["G1"]
+
+
 
 def test_omnicloud_provider_predictor_paths():
     red = xr.DataArray(np.array([[0.1, 0.5]], dtype=np.float32), dims=["y", "x"])

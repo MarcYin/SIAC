@@ -129,7 +129,7 @@ class BaseSatellitePreprocessor(ABC):
         metadata = self.get_metadata(input_path)
         logger.info(f"Observation time: {metadata.get('observation_time')}")
 
-        toa = self.load_toa(input_path)
+        toa = self._load_toa_for_preprocess(input_path, metadata=metadata)
         logger.info(f"Loaded TOA with bands: {list(toa.data_vars)}")
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -154,6 +154,39 @@ class BaseSatellitePreprocessor(ABC):
         if cloud_classes is not None:
             result["cloud_classes"] = cloud_classes
         return result
+
+    def _preprocess_toa_band_names(
+        self,
+        input_path: Path,
+        *,
+        metadata: dict[str, Any],
+    ) -> tuple[str, ...] | None:
+        """Return an optional TOA band subset for preprocessing."""
+        del input_path, metadata
+        if not isinstance(self.config, dict):
+            return None
+        raw = self.config.get("preload_toa_bands")
+        if raw is None:
+            return None
+        names = (raw,) if isinstance(raw, str) else tuple(str(name) for name in raw)
+        return names or None
+
+    def _load_toa_for_preprocess(
+        self,
+        input_path: Path,
+        *,
+        metadata: dict[str, Any],
+    ) -> xr.Dataset:
+        """Load TOA, passing a configured band subset when supported."""
+        band_names = self._preprocess_toa_band_names(input_path, metadata=metadata)
+        params = signature(self.load_toa).parameters.values()
+        accepts_band_names = any(
+            p.name == "band_names" or p.kind == Parameter.VAR_KEYWORD
+            for p in params
+        )
+        if band_names is not None and accepts_band_names:
+            return self.load_toa(input_path, band_names=band_names)  # type: ignore[call-arg]
+        return self.load_toa(input_path)
 
     def _extract_cloud_mask_with_toa(
         self,

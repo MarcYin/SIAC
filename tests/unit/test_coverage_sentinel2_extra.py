@@ -256,6 +256,9 @@ class TestSentinel2Internals:
     def test_load_toa_extract_geometry_cloud_and_metadata(self, tmp_path: Path, monkeypatch):
         safe = _safe_tree(tmp_path)
         p = Sentinel2Preprocessor()
+        img_data = safe / "GRANULE" / "L1C_TILE" / "IMG_DATA"
+        for band in ("B03", "B08"):
+            (img_data / f"TILE_{band}.jp2").write_text("x")
 
         def _fake_read_raster(path):
             name = Path(path).name
@@ -270,6 +273,13 @@ class TestSentinel2Internals:
             "siac.adapters.satellite.sentinel2.reproject_match",
             lambda src, _tgt, **_kwargs: src,
         )
+
+        class _FakeProvider:
+            def predict(self, red, green, nir, **_kwargs):  # noqa: ANN001
+                del green, nir
+                return xr.full_like(red, 1, dtype=np.uint8)
+
+        monkeypatch.setattr("siac.algorithms.cloud.mask.OmniCloudMaskProvider", _FakeProvider)
 
         # product + granule metadata files
         _write(
@@ -321,14 +331,12 @@ class TestSentinel2Internals:
 
         def _fake_build(*args, **kwargs):  # noqa: ANN001
             calls["n"] += 1
-            if kwargs.get("mode") == "none":
-                return xr.full_like(_da((2, 2), 0.2), 1, dtype=np.uint8)
             raise ValueError("Could not find any red band")
 
         monkeypatch.setattr("siac.adapters.satellite.sentinel2.build_cloud_classes", _fake_build)
-        out = p.extract_cloud_mask(safe, toa=toa)
-        assert out.dtype == bool
-        assert calls["n"] == 2  # auto + fallback none
+        with pytest.raises(ValueError, match="Could not find any red band"):
+            p.extract_cloud_mask(safe, toa=toa)
+        assert calls["n"] == 1
 
         monkeypatch.setattr(
             "siac.adapters.satellite.sentinel2.build_cloud_classes",

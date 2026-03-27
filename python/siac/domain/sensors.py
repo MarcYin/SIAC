@@ -178,6 +178,21 @@ class SensorConfig:
                 closest = band
         return closest
 
+    def default_aerosol_solver_bands(self) -> list[SensorBand]:
+        """Return the default bands used for aerosol retrieval on this sensor."""
+        preferred_by_sensor = {
+            "MSI": ("B02", "B04"),
+        }
+        preferred_names = preferred_by_sensor.get(self.sensor_id, ())
+        preferred = [band for name in preferred_names for band in self.bands if band.name == name]
+        if len(preferred) == len(preferred_names) and preferred:
+            return preferred
+
+        aerosol = self.select_bands_in_range(400.0, 520.0)
+        if aerosol:
+            return aerosol
+        return list(self.bands[:2])
+
     @property
     def vis_bands(self) -> list[SensorBand]:
         return self.select_bands_in_range(400.0, 700.0)

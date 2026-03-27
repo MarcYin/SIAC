@@ -129,10 +129,9 @@ class TestAssembleGrids:
         assert sib.aerosol_resolution_m == 320.0
 
     def test_band_selection(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
-        """Bands should be aerosol-sensitive (400-520 nm)."""
+        """Non-MSI sensors should keep the wavelength-based aerosol defaults."""
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
-        for b in sib.bands:
-            assert 400.0 <= b.center_wavelength <= 520.0
+        assert [b.name for b in sib.bands] == ["B01", "B02"]
 
     def test_cloud_mask_conservative(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Any native pixel that is cloud → aux pixel is cloud."""

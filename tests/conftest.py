@@ -383,10 +383,11 @@ def mock_solver_input_bundle(
     """Pre-assembled SolverInputBundle (skips M4)."""
     from siac.runtime import SolverInputBundle
     obs = mock_observation_bundle
-    bands = obs.sensor_config.select_bands_in_range(400.0, 520.0)
+    bands = obs.sensor_config.default_aerosol_solver_bands()
     band_names = [b.name for b in bands]
     toa_arrays = [obs.toa[bn] for bn in band_names if bn in obs.toa.data_vars]
     toa_da = xr.concat(toa_arrays, dim="band") if toa_arrays else obs.toa[list(obs.toa.data_vars)[0]].expand_dims("band")
+    toa_da = toa_da.assign_coords(band=[data.name for data in toa_arrays] or [list(obs.toa.data_vars)[0]])
     return SolverInputBundle(
         toa=toa_da,
         geometry=obs.geometry,

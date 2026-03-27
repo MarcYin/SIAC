@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from siac.domain import SensorConfig
 
 logger = logging.getLogger(__name__)
+_TOA_BAND_LOADER_ATTR = "_siac_toa_band_loader"
 
 
 @register_preprocessor("s2")
@@ -106,7 +107,12 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             )
             return get_sensor_config("MSI", self._satellite_id)
 
-    def load_toa(self, input_path: str | Path) -> xr.Dataset:
+    def load_toa(
+        self,
+        input_path: str | Path,
+        *,
+        band_names: tuple[str, ...] | list[str] | None = None,
+    ) -> xr.Dataset:
         """Load TOA reflectance from Sentinel-2 SAFE directory."""
         input_path = Path(input_path).expanduser()
         self._resolve_paths(input_path)
@@ -121,65 +127,59 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         band_files = self._discover_band_files(img_data_path)
         if not band_files:
             raise RuntimeError(f"No Sentinel-2 bands found under {img_data_path}")
+        requested_band_names = self._resolve_requested_band_names(
+            band_names=band_names,
+            available_band_files=band_files,
+        )
 
-        ref_name = next(
-            (name for name in ("B04", "B03", "B02", "B08") if name in band_files),
-            next(iter(band_files)),
+        ref_name = self._reference_band_name_for_alignment(
+            available_band_files=band_files,
+            requested_band_names=requested_band_names,
         )
         ref_file = band_files[ref_name]
         logger.debug(f"Reading reference band {ref_name} from {ref_file}")
-        ref_da = self._calibrate_band(
-            self._read_band(ref_file),
+        ref_da = self._load_aligned_band(
             band_name=ref_name,
+            band_file=ref_file,
+            reference_grid=None,
             quantification=quantification,
             offset=float(offsets.get(ref_name, 0.0)),
+            subset_bounds=self._subset_bounds,
+            subset_crs=self._subset_crs,
         )
         self._reference_grid = self._ensure_float32(ref_da, name=ref_name)
         aligned_vars: dict[str, xr.DataArray] = {}
-        aligned_vars[ref_name] = self._reference_grid
+        if ref_name in requested_band_names:
+            aligned_vars[ref_name] = self._reference_grid
 
         # Align all bands to a single high-resolution reference grid before creating
         # the Dataset. Building a Dataset from mixed-resolution coordinates causes
         # xarray to align on the union grid, introducing sparse/warped coordinates.
-        for band_name in self.BAND_PATTERNS:
-            band_file = band_files.get(band_name)
-            if band_file is None:
-                logger.warning(f"Band {band_name} not found")
-                continue
+        for band_name in requested_band_names:
             if band_name == ref_name:
                 continue
-
-            logger.debug(f"Reading {band_name} from {band_file}")
-            da = self._calibrate_band(
-                self._read_band(band_file),
+            band_file = band_files[band_name]
+            aligned_vars[band_name] = self._load_aligned_band(
                 band_name=band_name,
+                band_file=band_file,
+                reference_grid=self._reference_grid,
                 quantification=quantification,
                 offset=float(offsets.get(band_name, 0.0)),
+                subset_bounds=self._subset_bounds,
+                subset_crs=self._subset_crs,
             )
 
-            if self._coords_match(da, self._reference_grid):
-                aligned_vars[band_name] = da
-                continue
-
-            try:
-                aligned = reproject_match(da, self._reference_grid, resampling="bilinear")
-            except Exception as exc:
-                logger.debug(
-                    "Failed to reproject %s onto %s grid; falling back to interp (%s)",
-                    band_name,
-                    ref_name,
-                    exc,
-                )
-                aligned = da.interp(
-                    y=self._reference_grid.coords["y"],
-                    x=self._reference_grid.coords["x"],
-                    method="linear",
-                )
-
-            aligned.name = band_name
-            aligned_vars[band_name] = self._ensure_float32(aligned, name=band_name)
-
         ds = xr.Dataset(aligned_vars)
+        ds.attrs[_TOA_BAND_LOADER_ATTR] = self._make_band_loader(
+            band_files=band_files,
+            quantification=quantification,
+            offsets=offsets,
+            reference_grid=self._reference_grid,
+            subset_bounds=self._subset_bounds,
+            subset_crs=self._subset_crs,
+            loaded_band_names=tuple(aligned_vars),
+        )
+        ds.attrs["loaded_toa_bands"] = tuple(aligned_vars)
 
         # Add metadata
         ds.attrs["sensor"] = "MSI"
@@ -193,6 +193,49 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             ds.attrs["observation_time"] = ""
 
         return ds
+
+    def _resolve_requested_band_names(
+        self,
+        *,
+        band_names: tuple[str, ...] | list[str] | None,
+        available_band_files: dict[str, Path],
+    ) -> tuple[str, ...]:
+        requested = band_names or tuple(self.BAND_PATTERNS)
+        resolved: list[str] = []
+        for band_name in requested:
+            name = str(band_name)
+            if name not in self.BAND_PATTERNS:
+                logger.warning("Ignoring unsupported Sentinel-2 band request %s", name)
+                continue
+            if name not in available_band_files:
+                logger.warning("Band %s not found", name)
+                continue
+            if name not in resolved:
+                resolved.append(name)
+        if not resolved:
+            raise RuntimeError("No requested Sentinel-2 bands were available for TOA loading.")
+        return tuple(resolved)
+
+    def _reference_band_name_for_alignment(
+        self,
+        *,
+        available_band_files: dict[str, Path],
+        requested_band_names: tuple[str, ...],
+    ) -> str:
+        preference = {"B04": 0, "B03": 1, "B02": 2, "B08": 3}
+
+        def _sort_key(name: str) -> tuple[float, int, str]:
+            try:
+                band = self.sensor_config.get_band(name)
+                resolution = float(band.resolution)
+            except Exception:
+                resolution = float("inf")
+            return (resolution, preference.get(name, 99), name)
+
+        available_names = tuple(available_band_files)
+        if available_names:
+            return min(available_names, key=_sort_key)
+        return requested_band_names[0]
 
     @classmethod
     def _discover_band_files(cls, img_data_path: Path) -> dict[str, Path]:
@@ -209,13 +252,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     @staticmethod
     def _ensure_float32(da: xr.DataArray, *, name: str | None = None) -> xr.DataArray:
-        values = np.asarray(da.data, dtype=np.float32)
-        if values is da.data and (name is None or da.name == name):
-            return da
-        out = da.copy(deep=False)
-        out.data = values
-        if name is not None:
-            out.name = name
+        out = da if da.dtype == np.float32 else da.astype(np.float32)
+        if name is not None and out.name != name:
+            out = out.rename(name)
         return out
 
     def _calibrate_band(
@@ -226,16 +265,92 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         quantification: float,
         offset: float,
     ) -> xr.DataArray:
-        values = np.array(da.data, dtype=np.float32, copy=True)
+        out = da.astype(np.float32)
         if offset != 0.0:
-            np.add(values, np.float32(offset), out=values)
-        np.divide(values, np.float32(quantification), out=values)
-        np.clip(values, np.float32(0.0), np.float32(1.5), out=values)
-
-        out = da.copy(deep=False)
-        out.data = values
+            out = out + np.float32(offset)
+        out = out / np.float32(quantification)
+        out = out.clip(np.float32(0.0), np.float32(1.5))
         out.name = band_name
         return out
+
+    def _load_aligned_band(
+        self,
+        *,
+        band_name: str,
+        band_file: Path,
+        reference_grid: xr.DataArray | None,
+        quantification: float,
+        offset: float,
+        subset_bounds: tuple[float, float, float, float] | None,
+        subset_crs: str | None,
+    ) -> xr.DataArray:
+        logger.debug(f"Reading {band_name} from {band_file}")
+        da = self._calibrate_band(
+            self._read_band_with_subset(
+                band_file,
+                subset_bounds=subset_bounds,
+                subset_crs=subset_crs,
+            ),
+            band_name=band_name,
+            quantification=quantification,
+            offset=offset,
+        )
+
+        if reference_grid is None or self._coords_match(da, reference_grid):
+            return self._ensure_float32(da, name=band_name)
+
+        try:
+            aligned = reproject_match(da, reference_grid, resampling="bilinear")
+        except Exception as exc:
+            logger.debug(
+                "Failed to reproject %s onto %s grid; falling back to interp (%s)",
+                band_name,
+                reference_grid.name or "reference",
+                exc,
+            )
+            aligned = da.interp(
+                y=reference_grid.coords["y"],
+                x=reference_grid.coords["x"],
+                method="linear",
+            )
+
+        return self._ensure_float32(aligned, name=band_name)
+
+    def _make_band_loader(
+        self,
+        *,
+        band_files: dict[str, Path],
+        quantification: float,
+        offsets: dict[str, Any],
+        reference_grid: xr.DataArray,
+        subset_bounds: tuple[float, float, float, float] | None,
+        subset_crs: str | None,
+        loaded_band_names: tuple[str, ...],
+    ) -> Any:
+        cache: dict[str, xr.DataArray] = {}
+        loaded = set(loaded_band_names)
+
+        def _load_band(band_name: str) -> xr.DataArray:
+            if band_name in cache:
+                return cache[band_name]
+            if band_name in loaded:
+                raise KeyError(f"Band {band_name!r} is already present in the loaded TOA dataset.")
+            band_file = band_files.get(band_name)
+            if band_file is None:
+                raise KeyError(f"Band {band_name!r} is not available in the Sentinel-2 SAFE.")
+            band = self._load_aligned_band(
+                band_name=band_name,
+                band_file=band_file,
+                reference_grid=reference_grid,
+                quantification=quantification,
+                offset=float(offsets.get(band_name, 0.0)),
+                subset_bounds=subset_bounds,
+                subset_crs=subset_crs,
+            )
+            cache[band_name] = band
+            return band
+
+        return _load_band
 
     def extract_geometry(self, input_path: str | Path) -> GeometryAngles:
         """Extract sun and view angles from metadata."""
@@ -287,12 +402,25 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         )
 
     def _read_band(self, path: str | Path) -> xr.DataArray:
-        if self._subset_bounds is None or self._subset_crs is None:
+        return self._read_band_with_subset(
+            path,
+            subset_bounds=self._subset_bounds,
+            subset_crs=self._subset_crs,
+        )
+
+    @staticmethod
+    def _read_band_with_subset(
+        path: str | Path,
+        *,
+        subset_bounds: tuple[float, float, float, float] | None,
+        subset_crs: str | None,
+    ) -> xr.DataArray:
+        if subset_bounds is None or subset_crs is None:
             return read_raster(path)
         return read_raster_window(
             path,
-            bounds=self._subset_bounds,
-            bounds_crs=self._subset_crs,
+            bounds=subset_bounds,
+            bounds_crs=subset_crs,
         )
 
     def extract_cloud_mask(
@@ -308,32 +436,19 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if toa is None:
             toa = self.load_toa(input_path)
         settings = self._cloud_mask_settings(input_path)
-        try:
-            cloud_classes = build_cloud_classes(
-                toa,
-                self.sensor_config,
-                mode=settings["mode"],
-                provider=settings["provider"],
-                class_mapping=settings["class_mapping"],
-                external_mask_path=settings["external_mask_path"],
-                user_callable=settings["user_callable"],
-                target_resolution_m=settings["target_resolution_m"],
-                resolution_policy=settings["resolution_policy"],
-                allow_upsample_to_target=settings["allow_upsample_to_target"],
-                unmapped_to_missing=settings["unmapped_to_missing"],
-            )
-        except ValueError as exc:
-            if settings["mode"] != "auto" or "Could not find any" not in str(exc):
-                raise
-            logger.warning(
-                "Auto cloud-mask mode needs red/green/nir bands; "
-                "falling back to clear mask because required bands are missing."
-            )
-            cloud_classes = build_cloud_classes(
-                toa,
-                self.sensor_config,
-                mode="none",
-            )
+        cloud_classes = build_cloud_classes(
+            toa,
+            self.sensor_config,
+            mode=settings["mode"],
+            provider=settings["provider"],
+            class_mapping=settings["class_mapping"],
+            external_mask_path=settings["external_mask_path"],
+            user_callable=settings["user_callable"],
+            target_resolution_m=settings["target_resolution_m"],
+            resolution_policy=settings["resolution_policy"],
+            allow_upsample_to_target=settings["allow_upsample_to_target"],
+            unmapped_to_missing=settings["unmapped_to_missing"],
+        )
         self._last_cloud_classes = cloud_classes
 
         return classes_to_bool_mask(cloud_classes)

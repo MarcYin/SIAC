@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from siac.domain import SensorConfig
 
 _EXPECTED_CLASS_VALUES = (0, 1, 2, 3)
+_TOA_BAND_LOADER_ATTR = "_siac_toa_band_loader"
+_TOA_BAND_CACHE_ATTR = "_siac_cloud_mask_toa_band_cache"
 _COLOR_WINDOWS = {
     "green": (530.0, 590.0),
     "red": (630.0, 690.0),
@@ -41,6 +43,33 @@ def _extract_band(da: xr.DataArray) -> xr.DataArray:
             return da.squeeze("band", drop=True)
         return da.isel(band=0, drop=True)
     return da
+
+
+def _get_toa_band(toa: xr.Dataset, band_name: str) -> xr.DataArray:
+    band = toa.data_vars.get(band_name)
+    if band is not None:
+        return _extract_band(band)
+
+    cache = toa.attrs.get(_TOA_BAND_CACHE_ATTR)
+    if isinstance(cache, dict):
+        cached = cache.get(band_name)
+        if isinstance(cached, xr.DataArray):
+            return _extract_band(cached)
+    else:
+        cache = {}
+        toa.attrs[_TOA_BAND_CACHE_ATTR] = cache
+
+    band_loader = toa.attrs.get(_TOA_BAND_LOADER_ATTR)
+    if not callable(band_loader):
+        raise KeyError(band_name)
+
+    loaded = band_loader(band_name)
+    if not isinstance(loaded, xr.DataArray):
+        raise TypeError(
+            f"TOA band loader must return an xarray.DataArray for {band_name!r}"
+        )
+    cache[band_name] = loaded
+    return _extract_band(loaded)
 
 
 def _resample_continuous(
@@ -112,9 +141,11 @@ def _group_band_names(
     names: list[str] = []
 
     for band in sensor_config.bands:
-        if band.name not in toa.data_vars:
-            continue
         if wl_min <= band.center_wavelength <= wl_max:
+            try:
+                _get_toa_band(toa, band.name)
+            except KeyError:
+                continue
             names.append(band.name)
 
     if not names:
@@ -136,7 +167,7 @@ def _mean_group(
 ) -> xr.DataArray:
     arrays: list[xr.DataArray] = []
     for name in names:
-        da = _extract_band(toa[name])
+        da = _get_toa_band(toa, name)
         da = _resample_continuous(
             da,
             target_resolution_m=target_resolution_m,

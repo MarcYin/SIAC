@@ -503,7 +503,7 @@ class TestZarrLUTBackend:
         trans_total = 0.85 * 0.90
         np.testing.assert_allclose(coeffs.xap.values, 1.0 / trans_total, rtol=1e-6)
         np.testing.assert_allclose(coeffs.xbp.values, 0.02 / trans_total, rtol=1e-6)
-        np.testing.assert_allclose(coeffs.xcp.values, 0.03 / 0.90, rtol=1e-6)
+        np.testing.assert_allclose(coeffs.xcp.values, 0.03, rtol=1e-6)
 
     def test_spectral_lut_derives_standard_coefficients(self, tmp_path: Path):
         lut_path, expected = _write_small_spectral_lut(tmp_path / "lut_spectral.zarr")

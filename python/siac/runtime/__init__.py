@@ -1,6 +1,7 @@
 """Runtime payloads and validators for SIAC execution."""
 
 from siac.runtime.models import (
+    AOTScatterBandDiagnostics,
     AtmosphericState,
     BRDFKernelWeights,
     CorrectionDiagnostics,
@@ -15,6 +16,7 @@ from siac.runtime.models import (
 )
 
 __all__ = [
+    "AOTScatterBandDiagnostics",
     "AtmosphericState",
     "BRDFKernelWeights",
     "CorrectionDiagnostics",

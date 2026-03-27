@@ -127,6 +127,13 @@ class TestRTCoefficients:
         expected = 0.17 / 1.017
         np.testing.assert_allclose(boa.values, expected, rtol=1e-5)
 
+    def test_simulate_toa_roundtrips_apply_correction(self, sample_coeffs):
+        toa = xr.DataArray(np.full((10, 10), 0.2), dims=["y", "x"])
+
+        simulated = sample_coeffs.simulate_toa(sample_coeffs.apply_correction(toa))
+
+        np.testing.assert_allclose(simulated.values, toa.values, rtol=1e-5)
+
     def test_has_jacobian(self, sample_coeffs):
         """has_jacobian should return False when no Jacobians."""
         assert not sample_coeffs.has_jacobian
@@ -165,6 +172,9 @@ class TestSensorConfig:
 
         assert band is not None
         assert band.name == "B04"
+
+    def test_default_aerosol_solver_bands(self):
+        assert [band.name for band in SENTINEL2A_CONFIG.default_aerosol_solver_bands()] == ["B02", "B04"]
 
     def test_get_sensor_config(self):
         """get_sensor_config should return correct config."""

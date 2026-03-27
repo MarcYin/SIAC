@@ -22,6 +22,7 @@ from siac.algorithms.solver.multigrid import (
     MultiGridConfig,
     MultiGridSolver,
     SolverResult,
+    build_solver_valid_mask,
     solve_atmospheric_parameters,
 )
 
@@ -36,5 +37,6 @@ __all__ = [
     "MultiGridSolver",
     "MultiGridConfig",
     "SolverResult",
+    "build_solver_valid_mask",
     "solve_atmospheric_parameters",
 ]

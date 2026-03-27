@@ -332,7 +332,7 @@ def assemble_grids(
 
     This is the M4 module callable.  It:
 
-    1. Selects aerosol-sensitive bands (400-520 nm) from the sensor config.
+    1. Selects default aerosol-retrieval bands from the sensor config.
     2. Resamples TOA, geometry, cloud mask to the aerosol retrieval resolution.
     3. Resamples atmospheric state and surface prior to the same grid.
     4. Returns a validated ``SolverInputBundle``.
@@ -348,11 +348,8 @@ def assemble_grids(
     Returns:
         SolverInputBundle ready for the solver.
     """
-    # 1. Select solver bands by wavelength (aerosol-sensitive: 400-520 nm)
-    bands = obs.sensor_config.select_bands_in_range(400.0, 520.0)
-    if not bands:
-        # Fallback: use first two bands
-        bands = list(obs.sensor_config.bands[:2])
+    # 1. Select solver bands using the sensor defaults.
+    bands = obs.sensor_config.default_aerosol_solver_bands()
     logger.info(f"Selected {len(bands)} solver bands: {[b.name for b in bands]}")
 
     # 2. Determine the solver grid from the configured aerosol retrieval
@@ -382,10 +379,12 @@ def assemble_grids(
             toa_arrays.append(resampled)
     if toa_arrays:
         toa_da = xr.concat(toa_arrays, dim="band")
+        toa_da = toa_da.assign_coords(band=band_names)
     else:
         # Fallback: use first available variable
         first = list(obs.toa.data_vars)[0]
         toa_da = _resample_da(obs.toa[first], target_shape, "area", template=target_template).expand_dims("band")
+        toa_da = toa_da.assign_coords(band=[first])
     toa_da = copy_spatial_metadata_like(toa_da, target_template)
 
     # 4. Resample geometry, cloud mask, atmo, surface

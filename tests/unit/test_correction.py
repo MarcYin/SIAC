@@ -8,6 +8,7 @@ import xarray as xr
 
 from siac.algorithms.correction.atmospheric import AtmosphericCorrector, CorrectionResult
 from siac.catalog import SENTINEL2A_CONFIG
+from siac.domain import SensorConfig
 from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
@@ -100,6 +101,51 @@ class TestAtmosphericCorrector:
         # cloud_mask contract: True = cloudy (consistent with ObservationBundle)
         assert result.cloud_mask.values[10:20, 10:20].all()
 
+    def test_correct_merges_invalid_boa_into_supplied_cloud_mask(self, sample_inputs, mock_rt_model):
+        """Invalid corrected BOA pixels should be marked even when a mask is already supplied."""
+        toa, geometry, atmo_state = sample_inputs
+        toa["B02"].values[0, 0] = np.nan
+
+        cloud_mask = xr.DataArray(np.zeros((50, 50), dtype=bool), dims=["y", "x"])
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
+
+        result = corrector.correct(toa, geometry, atmo_state, cloud_mask=cloud_mask)
+
+        assert bool(result.cloud_mask.values[0, 0])
+        assert np.isnan(result.boa["B02"].values[0, 0])
+
+    def test_correct_resamples_supplied_cloud_mask_before_merge(self, sample_inputs, mock_rt_model):
+        """Supplied masks on shifted coordinates should be remapped before merging invalid BOA pixels."""
+        toa, geometry, atmo_state = sample_inputs
+        toa["B02"].values[0, 0] = np.nan
+
+        shifted_coords = {
+            "y": np.arange(50, dtype=np.float32) + 0.25,
+            "x": np.arange(50, dtype=np.float32) + 0.25,
+        }
+        cloud_mask = xr.DataArray(np.zeros((50, 50), dtype=bool), dims=["y", "x"], coords=shifted_coords)
+        cloud_mask.values[10, 10] = True
+
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
+        result = corrector.correct(toa, geometry, atmo_state, cloud_mask=cloud_mask)
+
+        assert result.cloud_mask.sizes == {"y": 50, "x": 50}
+        assert bool(result.cloud_mask.values[0, 0])
+        assert bool(result.cloud_mask.values[10, 10])
+
+    def test_correct_keeps_valid_sibling_bands_when_one_band_is_invalid(self, sample_inputs, mock_rt_model):
+        """A one-band failure should not erase valid BOA values from other bands."""
+        toa, geometry, atmo_state = sample_inputs
+        toa["B02"].values[0, 0] = np.nan
+
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
+        result = corrector.correct(toa, geometry, atmo_state)
+
+        assert np.isnan(result.boa["B02"].values[0, 0])
+        assert np.isfinite(result.boa["B03"].values[0, 0])
+        assert np.isfinite(result.boa["B04"].values[0, 0])
+        assert bool(result.cloud_mask.values[0, 0])
+
     def test_result_has_aot_tcwv(self, sample_inputs, mock_rt_model):
         """Result should include AOT and TCWV."""
         toa, geometry, atmo_state = sample_inputs
@@ -135,6 +181,92 @@ class TestAtmosphericCorrector:
         np.testing.assert_allclose(
             result.boa["B02"].values, expected.values, rtol=1e-6
         )
+
+    def test_correct_late_loads_missing_bands_from_toa_attrs(self, sample_inputs, mock_rt_model):
+        """Correction should request missing bands on demand instead of requiring full TOA upfront."""
+        toa, geometry, atmo_state = sample_inputs
+        subset = xr.Dataset({"B02": toa["B02"]})
+        late_calls: list[str] = []
+
+        def _load_band(name: str) -> xr.DataArray:
+            late_calls.append(name)
+            if name == "B03":
+                return toa["B03"]
+            if name == "B04":
+                return toa["B04"]
+            raise KeyError(name)
+
+        subset.attrs["_siac_toa_band_loader"] = _load_band
+        sensor_config = SensorConfig(
+            sensor_id="MSI",
+            satellite_id="S2A",
+            bands=tuple(
+                SENTINEL2A_CONFIG.get_band(name)
+                for name in ("B02", "B03", "B04")
+            ),
+        )
+        corrector = AtmosphericCorrector(mock_rt_model, sensor_config)
+
+        result = corrector.correct(subset, geometry, atmo_state)
+
+        assert set(result.boa.data_vars) == {"B02", "B03", "B04"}
+        assert late_calls == ["B03", "B04"]
+
+    def test_correct_resamples_coefficients_to_band_grid(self):
+        """Coefficient computation may stay on the atmospheric grid and upsample afterwards."""
+        toa = xr.Dataset(
+            {
+                "B02": xr.DataArray(
+                    np.full((4, 4), 0.15, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [3.0, 2.0, 1.0, 0.0], "x": [0.0, 1.0, 2.0, 3.0]},
+                )
+            }
+        )
+        coarse_coords = {"y": [3.0, 1.0], "x": [0.0, 2.0]}
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full((2, 2), 0.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            saa=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            vza=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            vaa=xr.DataArray(np.full((2, 2), 1.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        )
+        atmo_state = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            tcwv=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.05, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        )
+
+        class _CoarseRTModel:
+            backend_name = "coarse"
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (geometry, atmo_state, band, compute_jacobian)
+                coords = coarse_coords
+                return RTCoefficients(
+                    xap=xr.DataArray(np.full((2, 2), 0.95, dtype=np.float32), dims=["y", "x"], coords=coords),
+                    xbp=xr.DataArray(np.full((2, 2), 0.02, dtype=np.float32), dims=["y", "x"], coords=coords),
+                    xcp=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coords),
+                )
+
+        corrector = AtmosphericCorrector(_CoarseRTModel(), SENTINEL2A_CONFIG)
+
+        result = corrector.correct(toa, geometry, atmo_state)
+
+        assert result.boa["B02"].shape == (4, 4)
+        assert result.boa["B02"].coords["x"].identical(toa["B02"].coords["x"])
+        assert result.boa["B02"].coords["y"].identical(toa["B02"].coords["y"])
+        assert np.isfinite(result.boa["B02"].values).all()
 
 
 class TestCorrectionPhysics:

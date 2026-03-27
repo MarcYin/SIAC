@@ -224,13 +224,13 @@ class ZarrLUTBackend:
             # From RT parameters:
             #   xap = 1 / (trans_down * trans_up)
             #   xbp = path_ref / (trans_down * trans_up)
-            #   xcp = sph_alb / trans_up
+            #   xcp = sph_alb
             trans_total = trans_down * trans_up
             trans_total = np.maximum(trans_total, 1e-10)  # Avoid division by zero
 
             xap = 1.0 / trans_total
             xbp = path_ref / trans_total
-            xcp = sph_alb / np.maximum(trans_up, 1e-10)
+            xcp = sph_alb
         elif self._supports_spectral_lut():
             xap, xbp, xcp = self._compute_spectral_with_retry(
                 sza_deg=sza_deg,

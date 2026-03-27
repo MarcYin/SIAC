@@ -22,14 +22,6 @@ def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> x
     import rioxarray  # noqa: F401
 
     out = data
-    coord_updates = {
-        dim: reference.coords[dim]
-        for dim in reference.dims
-        if dim in out.dims and dim in reference.coords and out.sizes[dim] == reference.sizes[dim]
-    }
-    if coord_updates:
-        out = out.assign_coords(coord_updates)
-
     x_dim: str | None = None
     y_dim: str | None = None
     try:
@@ -40,6 +32,14 @@ def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> x
             x_dim, y_dim = "x", "y"
         elif "longitude" in reference.dims and "latitude" in reference.dims:
             x_dim, y_dim = "longitude", "latitude"
+
+    coord_updates = {
+        dim: reference.coords[dim]
+        for dim in (x_dim, y_dim)
+        if dim is not None and dim in out.dims and dim in reference.coords and out.sizes[dim] == reference.sizes[dim]
+    }
+    if coord_updates:
+        out = out.assign_coords(coord_updates)
 
     spatial_sizes_match = (
         x_dim is not None
@@ -177,6 +177,14 @@ class RTCoefficients:
         y = _as_data_array(self.xap * toa - self.xbp)
         return _as_data_array(y / (1.0 + self.xcp * y))
 
+    def simulate_toa(self, boa: xr.DataArray) -> xr.DataArray:
+        """Forward-simulate TOA reflectance from BOA under the current RT coefficients."""
+        denom = _as_data_array(1.0 - self.xcp * boa)
+        stable = _as_data_array(np.isfinite(denom) & (np.abs(denom) > 1.0e-6) & (np.abs(self.xap) > 1.0e-12))
+        y = _as_data_array(boa / denom)
+        toa = _as_data_array((y + self.xbp) / self.xap)
+        return _as_data_array(toa.where(stable))
+
     def compute_boa_jacobian(
         self,
         toa: xr.DataArray,
@@ -284,6 +292,17 @@ class SolverInputBundle:
 
 
 @dataclass(frozen=True)
+class AOTScatterBandDiagnostics:
+    """Sampled scatter diagnostics for one aerosol-solver band."""
+
+    band_name: str
+    surface_reflectance: np.ndarray
+    observed_toa: np.ndarray
+    simulated_toa: np.ndarray
+    total_valid_count: int
+
+
+@dataclass(frozen=True)
 class SolvedAtmosphere:
     """Solver output: retrieved atmospheric parameters + diagnostics."""
 
@@ -302,6 +321,7 @@ class CorrectionDiagnostics:
     """Structured diagnostics produced by the correction stage."""
 
     processing_time_s: float | None = None
+    aot_scatter_plots: tuple[AOTScatterBandDiagnostics, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -322,6 +342,7 @@ class CorrectionResult:
 
 __all__ = [
     "AtmosphericState",
+    "AOTScatterBandDiagnostics",
     "BRDFKernelWeights",
     "copy_spatial_metadata_like",
     "CorrectionDiagnostics",

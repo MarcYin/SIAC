@@ -42,6 +42,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def build_solver_valid_mask(
+    cloud_mask: xr.DataArray,
+    toa: xr.DataArray,
+    surface_prior: SurfacePrior,
+) -> xr.DataArray:
+    """Build the same valid-pixel mask used by the aerosol solver."""
+    valid = ~cloud_mask.values.astype(bool)
+
+    if toa.ndim == 3:
+        valid = valid & np.all((toa.values > 0) & (toa.values < 1), axis=0)
+    else:
+        valid = valid & (toa.values > 0) & (toa.values < 1)
+
+    if surface_prior.mask is not None:
+        surface_mask = surface_prior.mask.values
+        if surface_mask.ndim == 3:
+            surface_mask = np.all(surface_mask, axis=0)
+        valid = valid & surface_mask.astype(bool)
+
+    return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
+
+
 @dataclass
 class MultiGridConfig:
     """Configuration for multi-grid solver."""
@@ -498,23 +520,7 @@ class MultiGridSolver:
         surface_prior: SurfacePrior,
     ) -> xr.DataArray:
         """Create combined valid pixel mask."""
-        # Not cloudy
-        valid = ~cloud_mask.values
-
-        # Valid TOA
-        if toa.ndim == 3:
-            valid = valid & np.all((toa.values > 0) & (toa.values < 1), axis=0)
-        else:
-            valid = valid & (toa.values > 0) & (toa.values < 1)
-
-        # Valid surface prior
-        if surface_prior.mask is not None:
-            surface_mask = surface_prior.mask.values
-            if surface_mask.ndim == 3:
-                surface_mask = np.all(surface_mask, axis=0)
-            valid = valid & surface_mask
-
-        return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
+        return build_solver_valid_mask(cloud_mask, toa, surface_prior)
 
     def _compute_grid_levels(
         self, full_shape: tuple[int, int]

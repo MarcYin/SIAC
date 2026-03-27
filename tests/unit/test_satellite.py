@@ -4,6 +4,7 @@ Unit tests for satellite preprocessors.
 
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -250,6 +251,169 @@ class TestSentinel2Preprocessor:
         assert ds["B02"].shape == (2, 2)
         assert ds["B04"].shape == (2, 2)
 
+    def test_load_toa_supports_selective_preload_and_late_band_loader(self, monkeypatch, tmp_path):
+        """Selective TOA loads should defer missing bands until explicitly requested."""
+        from siac.adapters.satellite import sentinel2 as s2mod
+
+        pre = s2mod.Sentinel2Preprocessor()
+        granule_dir = tmp_path / "GRANULE" / "L1C_TEST"
+        img_data = granule_dir / "IMG_DATA"
+        img_data.mkdir(parents=True)
+        for band_name in ("B02", "B04", "B11"):
+            (img_data / f"T50QLD_TEST_{band_name}.jp2").touch()
+
+        pre._granule_path = granule_dir
+        pre._satellite_id = "S2A"
+        monkeypatch.setattr(pre, "_resolve_paths", lambda _: None)
+        monkeypatch.setattr(
+            pre,
+            "get_metadata",
+            lambda _: {
+                "quantification_value": 10000.0,
+                "radiometric_offsets": {},
+                "observation_time": datetime(2026, 1, 2, 2, 41, 21),
+            },
+        )
+
+        read_calls: list[str] = []
+
+        def _da(values: np.ndarray, x: np.ndarray, y: np.ndarray) -> xr.DataArray:
+            da = xr.DataArray(values.astype(np.float32), dims=("y", "x"), coords={"x": x, "y": y})
+            return da.rio.write_crs("EPSG:32650")
+
+        def fake_read_raster(path):  # noqa: ANN001
+            read_calls.append(Path(path).name)
+            name = str(path)
+            if "B11" in name:
+                return _da(
+                    np.array([[500.0, 600.0], [700.0, 800.0]]),
+                    np.array([0.0, 30.0]),
+                    np.array([30.0, 0.0]),
+                )
+            if "B02" in name:
+                return _da(
+                    np.full((4, 4), 1000.0),
+                    np.array([0.0, 10.0, 20.0, 30.0]),
+                    np.array([30.0, 20.0, 10.0, 0.0]),
+                )
+            return _da(
+                np.full((4, 4), 2000.0),
+                np.array([0.0, 10.0, 20.0, 30.0]),
+                np.array([30.0, 20.0, 10.0, 0.0]),
+            )
+
+        def fake_reproject_match(source, target, resampling="bilinear"):  # noqa: ANN001
+            del resampling
+            out = source.interp(y=target.coords["y"], x=target.coords["x"], method="linear")
+            return out.rio.write_crs(target.rio.crs)
+
+        monkeypatch.setattr(s2mod, "read_raster", fake_read_raster)
+        monkeypatch.setattr(s2mod, "reproject_match", fake_reproject_match)
+
+        ds = pre.load_toa(tmp_path, band_names=("B02", "B04"))
+
+        assert set(ds.data_vars) == {"B02", "B04"}
+        assert read_calls == ["T50QLD_TEST_B04.jp2", "T50QLD_TEST_B02.jp2"]
+
+        loader = ds.attrs["_siac_toa_band_loader"]
+        late_b11 = loader("B11")
+
+        assert late_b11.shape == (4, 4)
+        assert np.isfinite(late_b11.values).all()
+        assert read_calls == [
+            "T50QLD_TEST_B04.jp2",
+            "T50QLD_TEST_B02.jp2",
+            "T50QLD_TEST_B11.jp2",
+        ]
+
+    def test_load_toa_uses_finest_available_reference_grid_for_late_loaded_bands(self, monkeypatch, tmp_path):
+        """A coarse-first subset should still keep the loader anchored to the finest SAFE grid."""
+        from siac.adapters.satellite import sentinel2 as s2mod
+
+        pre = s2mod.Sentinel2Preprocessor()
+        granule_dir = tmp_path / "GRANULE" / "L1C_TEST"
+        img_data = granule_dir / "IMG_DATA"
+        img_data.mkdir(parents=True)
+        for band_name in ("B02", "B04", "B11"):
+            (img_data / f"T50QLD_TEST_{band_name}.jp2").touch()
+
+        pre._granule_path = granule_dir
+        pre._satellite_id = "S2A"
+        monkeypatch.setattr(pre, "_resolve_paths", lambda _: None)
+        monkeypatch.setattr(
+            pre,
+            "get_metadata",
+            lambda _: {
+                "quantification_value": 10000.0,
+                "radiometric_offsets": {},
+                "observation_time": datetime(2026, 1, 2, 2, 41, 21),
+            },
+        )
+
+        read_calls: list[str] = []
+
+        def _da(values: np.ndarray, x: np.ndarray, y: np.ndarray) -> xr.DataArray:
+            da = xr.DataArray(values.astype(np.float32), dims=("y", "x"), coords={"x": x, "y": y})
+            return da.rio.write_crs("EPSG:32650")
+
+        def fake_read_raster(path):  # noqa: ANN001
+            read_calls.append(Path(path).name)
+            name = str(path)
+            if "B11" in name:
+                return _da(
+                    np.array([[500.0, 600.0], [700.0, 800.0]]),
+                    np.array([0.0, 30.0]),
+                    np.array([30.0, 0.0]),
+                )
+            if "B02" in name:
+                return _da(
+                    np.full((4, 4), 1000.0),
+                    np.array([0.0, 10.0, 20.0, 30.0]),
+                    np.array([30.0, 20.0, 10.0, 0.0]),
+                )
+            return _da(
+                np.full((4, 4), 2000.0),
+                np.array([0.0, 10.0, 20.0, 30.0]),
+                np.array([30.0, 20.0, 10.0, 0.0]),
+            )
+
+        def fake_reproject_match(source, target, resampling="bilinear"):  # noqa: ANN001
+            del resampling
+            out = source.interp(y=target.coords["y"], x=target.coords["x"], method="linear")
+            return out.rio.write_crs(target.rio.crs)
+
+        monkeypatch.setattr(s2mod, "read_raster", fake_read_raster)
+        monkeypatch.setattr(s2mod, "reproject_match", fake_reproject_match)
+
+        ds = pre.load_toa(tmp_path, band_names=("B11",))
+
+        assert set(ds.data_vars) == {"B11"}
+        assert ds["B11"].shape == (4, 4)
+        assert read_calls[:2] == ["T50QLD_TEST_B04.jp2", "T50QLD_TEST_B11.jp2"]
+
+        loader = ds.attrs["_siac_toa_band_loader"]
+        late_b02 = loader("B02")
+
+        assert late_b02.shape == (4, 4)
+        assert np.isfinite(late_b02.values).all()
+        assert read_calls == [
+            "T50QLD_TEST_B04.jp2",
+            "T50QLD_TEST_B11.jp2",
+            "T50QLD_TEST_B02.jp2",
+        ]
+
+    def test_extract_cloud_mask_auto_requires_green_band(self, tmp_path):
+        pre = get_preprocessor("s2")
+        toa = xr.Dataset(
+            {
+                "B04": xr.DataArray(np.full((4, 4), 0.2, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=["y", "x"]),
+            }
+        )
+
+        with pytest.raises(ValueError, match="Could not find any green band"):
+            pre.extract_cloud_mask(tmp_path / "missing-green.SAFE", toa=toa)
+
     def test_discover_band_files_distinguishes_b08_and_b8a(self, tmp_path):
         from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
 
@@ -396,3 +560,40 @@ class TestPreprocessorBase:
         assert geom_started.is_set()
         assert cloud_started.is_set()
         assert "cloud_mask" in result
+
+    def test_preprocess_passes_configured_toa_band_subset_when_supported(self):
+        """Preprocess should forward configured preload bands to compatible loaders."""
+
+        class TestPreprocessor(BaseSatellitePreprocessor):
+            def __init__(self):
+                super().__init__({"preload_toa_bands": ("B02", "B03")})
+                self.seen_band_names = None
+
+            @property
+            def sensor_config(self):
+                from siac.catalog import SENTINEL2A_CONFIG
+                return SENTINEL2A_CONFIG
+
+            def load_toa(self, input_path, *, band_names=None):
+                del input_path
+                self.seen_band_names = band_names
+                return xr.Dataset({"B02": xr.DataArray(np.ones((4, 4), dtype=np.float32), dims=["y", "x"])})
+
+            def extract_geometry(self, input_path):
+                del input_path
+                from siac.runtime import GeometryAngles
+                arr = xr.DataArray(np.ones((4, 4), dtype=np.float32), dims=["y", "x"])
+                return GeometryAngles(sza=arr, saa=arr, vza=arr, vaa=arr)
+
+            def extract_cloud_mask(self, input_path, toa=None):
+                del input_path, toa
+                return xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"])
+
+            def get_metadata(self, input_path):
+                del input_path
+                return {"observation_time": datetime(2024, 1, 1)}
+
+        preprocessor = TestPreprocessor()
+        preprocessor.preprocess("/fake/path")
+
+        assert preprocessor.seen_band_names == ("B02", "B03")

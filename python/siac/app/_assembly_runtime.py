@@ -14,7 +14,13 @@ from siac.adapters.satellite import detect_sensor, get_preprocessor
 from siac.algorithms.correction import AtmosphericCorrector, CorrectionResult
 from siac.algorithms.solver import MultiGridConfig, MultiGridSolver
 from siac.domain.aoi import AOI
-from siac.runtime import AtmosphericState, ObservationBundle, SolvedAtmosphere, SolverInputBundle
+from siac.runtime import (
+    AtmosphericState,
+    GeometryAngles,
+    ObservationBundle,
+    SolvedAtmosphere,
+    SolverInputBundle,
+)
 
 if TYPE_CHECKING:
     import xarray as xr
@@ -29,6 +35,45 @@ class PreprocessorRuntime:
 
     preprocessor: PreprocessorFn
     sensor_config: SensorConfig
+
+
+def _ordered_unique_band_names(names: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
+def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[str, ...] | None:
+    if not hasattr(sensor_config, "select_nearest_band") or not hasattr(sensor_config, "bands"):
+        return None
+    cloud_mask = getattr(config, "cloud_mask", None)
+    cloud_mode = str(getattr(cloud_mask, "mode", "auto")).lower()
+    if cloud_mode == "user_callable":
+        return None
+
+    names: list[str] = []
+    ref_band = sensor_config.select_nearest_band(665.0, tolerance_nm=80.0)
+    if ref_band is None:
+        ref_band = sensor_config.bands[0]
+    names.append(ref_band.name)
+
+    names.extend(band.name for band in sensor_config.default_aerosol_solver_bands())
+
+    if cloud_mode == "auto":
+        for wl_min, wl_max in ((530.0, 590.0), (630.0, 690.0), (760.0, 900.0)):
+            names.extend(
+                band.name
+                for band in sensor_config.select_bands_in_range(wl_min, wl_max)
+            )
+
+    surface_prior = getattr(config, "surface_prior", None)
+    if str(getattr(surface_prior, "method", "")).lower() == "monthly_database":
+        from siac.app._assembly_surface import _select_route_b_query_bands
+
+        names.extend(
+            band.name for band in _select_route_b_query_bands(sensor_config)
+        )
+
+    resolved = _ordered_unique_band_names(names)
+    return resolved or None
 
 
 def build_preprocessor_runtime(
@@ -76,6 +121,13 @@ def build_preprocessor_runtime(
         preprocessor_obj.get_metadata(Path(input_path))
 
     sensor_config = preprocessor_obj.sensor_config
+    preload_toa_bands = _toa_preload_band_names(config, sensor_config)
+    if hasattr(preprocessor_obj, "config") and isinstance(preprocessor_obj.config, dict):
+        if rsrf_root is not None:
+            preprocessor_obj.config.setdefault("rsrf_root", rsrf_root)
+        preprocessor_obj.config.setdefault("cloud_mask", cloud_mask_config)
+        if preload_toa_bands is not None:
+            preprocessor_obj.config.setdefault("preload_toa_bands", preload_toa_bands)
 
     def _resolve_default_aoi(toa: xr.Dataset) -> AOI:
         if callable(default_aoi_resolver):
@@ -344,18 +396,23 @@ def resolve_corrector(_config: Any) -> CorrectorFn:
         rt_model: Any,
     ) -> CorrectionResult:
         corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
-        first_band = obs.toa[next(iter(obs.toa.data_vars))]
         atmo = solved.atmo_state
         matched_atmo = AtmosphericState(
-            aot=_resample_field_to_template_for_correction(atmo.aot, first_band),
-            tcwv=_resample_field_to_template_for_correction(atmo.tcwv, first_band),
-            tco3=_resample_field_to_template_for_correction(atmo.tco3, first_band),
-            aot_unc=_resample_field_to_template_for_correction(atmo.aot_unc, first_band),
-            tcwv_unc=_resample_field_to_template_for_correction(atmo.tcwv_unc, first_band),
-            tco3_unc=_resample_field_to_template_for_correction(atmo.tco3_unc, first_band),
-            elevation=_resample_field_to_template_for_correction(atmo.elevation, first_band),
+            aot=_resample_field_to_template_for_correction(atmo.aot, atmo.aot),
+            tcwv=_resample_field_to_template_for_correction(atmo.tcwv, atmo.aot),
+            tco3=_resample_field_to_template_for_correction(atmo.tco3, atmo.aot),
+            aot_unc=_resample_field_to_template_for_correction(atmo.aot_unc, atmo.aot),
+            tcwv_unc=_resample_field_to_template_for_correction(atmo.tcwv_unc, atmo.aot),
+            tco3_unc=_resample_field_to_template_for_correction(atmo.tco3_unc, atmo.aot),
+            elevation=_resample_field_to_template_for_correction(atmo.elevation, atmo.aot),
         )
-        corrected = corrector_obj.correct(obs.toa, obs.geometry, matched_atmo, obs.cloud_mask)
+        coeff_geometry = GeometryAngles(
+            sza=_resample_field_to_template_for_correction(obs.geometry.sza, atmo.aot),
+            saa=_resample_field_to_template_for_correction(obs.geometry.saa, atmo.aot),
+            vza=_resample_field_to_template_for_correction(obs.geometry.vza, atmo.aot),
+            vaa=_resample_field_to_template_for_correction(obs.geometry.vaa, atmo.aot),
+        )
+        corrected = corrector_obj.correct(obs.toa, coeff_geometry, matched_atmo, obs.cloud_mask)
         if not isinstance(corrected, CorrectionResult):
             return corrected
         return CorrectionResult(
