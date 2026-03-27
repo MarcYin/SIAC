@@ -199,11 +199,11 @@ def merge_reprojected_tiles(
             resolution_name="resolution",
         )
     else:
-        resolved_resolution = _normalize_resolution_value(
+        normalized_resolution = _normalize_resolution_value(
             resolution,
             resolution_name="resolution",
         )
-        if resolved_resolution is None:
+        if normalized_resolution is None:
             target, resolved_resolution = _build_source_aligned_target_template_from_array(
                 reference,
                 bounds=bounds,
@@ -212,6 +212,7 @@ def merge_reprojected_tiles(
                 resolution_name="resolution",
             )
         else:
+            resolved_resolution = normalized_resolution
             target = build_target_template(bounds, crs, resolved_resolution)
     if reproject_native_to_target is not _DEFAULT_REPROJECT_NATIVE_TO_TARGET:
         reprojected = [
@@ -260,11 +261,11 @@ def reproject_native_to_target(
             resolution_name="resolution",
         )
     else:
-        resolved_resolution = _normalize_resolution_value(
+        normalized_resolution = _normalize_resolution_value(
             resolution,
             resolution_name="resolution",
         )
-        if resolved_resolution is None:
+        if normalized_resolution is None:
             target, resolved_resolution = _build_source_aligned_target_template_from_array(
                 data,
                 bounds=bounds,
@@ -273,6 +274,7 @@ def reproject_native_to_target(
                 resolution_name="resolution",
             )
         else:
+            resolved_resolution = normalized_resolution
             target = build_target_template(bounds, crs, resolved_resolution)
     return _merge_tiles_via_vrt(
         [data],
@@ -316,11 +318,11 @@ def read_virtual_stack_to_target(
             resolution_name="resolution",
         )
     else:
-        resolved_resolution = _normalize_resolution_value(
+        normalized_resolution = _normalize_resolution_value(
             resolution,
             resolution_name="resolution",
         )
-        if resolved_resolution is None:
+        if normalized_resolution is None:
             first_source = next((group[0] for group in source_groups if group), None)
             if first_source is None:
                 raise ValueError("Expected at least one source path")
@@ -332,6 +334,7 @@ def read_virtual_stack_to_target(
                 resolution_name="resolution",
             )
         else:
+            resolved_resolution = normalized_resolution
             target = build_target_template(bounds, crs, resolved_resolution)
     target_transform = _target_transform(target, resolution=resolved_resolution)
     target_bounds = _target_bounds_from_template(target, resolution=resolved_resolution)
@@ -545,7 +548,7 @@ def build_source_aligned_target_template(
     resolution: float | None,
     resolution_name: str = "resolution",
 ) -> tuple[xr.DataArray, float]:
-    from osgeo import gdal  # type: ignore[import-untyped]
+    from osgeo import gdal
 
     gdal.UseExceptions()
     dataset = gdal.Open(str(source_path))
@@ -745,7 +748,12 @@ def _transform_bounds_to_crs(
     target_crs: str,
 ) -> tuple[float, float, float, float]:
     if str(source_crs) == str(target_crs):
-        return tuple(float(value) for value in bounds)
+        return (
+            float(bounds[0]),
+            float(bounds[1]),
+            float(bounds[2]),
+            float(bounds[3]),
+        )
     return transform_bounds(bounds, source_crs, target_crs)
 
 

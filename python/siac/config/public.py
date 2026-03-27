@@ -119,7 +119,7 @@ class SIACConfig(SystemConfig):
         return resolve_config(self.with_env_overlay(), request)
 
     def snapshot(self, *, redact_secrets: bool = True) -> dict[str, Any]:
-        return cast("dict[str, Any]", snapshot_system_config(self, redact_secrets=redact_secrets))
+        return snapshot_system_config(self, redact_secrets=redact_secrets)
 
     def write_state_snapshot(self, path: Path | str, *, redact_secrets: bool = True) -> None:
         resolved = resolve_config(self.with_env_overlay(), RunRequest(sensor=self.sensor, aoi=self.aoi))
@@ -127,7 +127,7 @@ class SIACConfig(SystemConfig):
 
     @classmethod
     def write_default_config(cls, path: Path | str = DEFAULT_CONFIG_PATH) -> Path:
-        return cast("Path", write_default_system_config(path))
+        return write_default_system_config(path)
 
     def _system_only(self) -> SystemConfig:
         return cast(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from siac.adapters.auth import CredentialManager
 from siac.api.requests import (
@@ -86,7 +86,7 @@ def resolve_s2_input(
     auth: CredentialManager | None = None,
 ) -> Path:
     request = Sentinel2ResolveRequest(config=config, query=query, auth=auth)
-    return cast("Path", app_resolve_s2_input(request))
+    return app_resolve_s2_input(request)
 
 
 def search_sentinel2(
@@ -114,7 +114,7 @@ def search_sentinel2(
         config=config,
         auth=auth,
     )
-    return cast("list[S2Product]", app_search_sentinel2(request))
+    return app_search_sentinel2(request)
 
 
 def process_sentinel2(

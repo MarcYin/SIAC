@@ -649,7 +649,7 @@ class _EarthAccessBRDFProvider:
         short_name: str,
     ) -> list[Path]:
         dest = earthaccess_cache_dir(self.cache_dir, short_name)
-        return self.source.download_granules(granules, dest)
+        return cast("list[Path]", self.source.download_granules(granules, dest))
 
     @staticmethod
     def _merge_search_batches(
@@ -1464,9 +1464,9 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
         dataset_names: tuple[str, ...],
     ) -> dict[str, tuple[np.ndarray, dict[str, Any]]]:
         if self._read_dataset is _ORIGINAL_HDF4_READER:
-            return read_hdf4_datasets(path, dataset_names)
+            return cast("dict[str, tuple[np.ndarray, dict[str, Any]]]", read_hdf4_datasets(path, dataset_names))
         if self._read_dataset is _ORIGINAL_HDF5_READER:
-            return read_hdf5_datasets(path, dataset_names)
+            return cast("dict[str, tuple[np.ndarray, dict[str, Any]]]", read_hdf5_datasets(path, dataset_names))
         return {
             dataset_name: self._read_dataset(path, dataset_name)
             for dataset_name in dataset_names
@@ -1478,9 +1478,9 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
         dataset_names: tuple[str, ...],
     ) -> dict[str, dict[str, Any]]:
         if self._read_dataset is _ORIGINAL_HDF4_READER:
-            return read_hdf4_datasets_attrs(path, dataset_names)
+            return cast("dict[str, dict[str, Any]]", read_hdf4_datasets_attrs(path, dataset_names))
         if self._read_dataset is _ORIGINAL_HDF5_READER:
-            return read_hdf5_datasets_attrs(path, dataset_names)
+            return cast("dict[str, dict[str, Any]]", read_hdf5_datasets_attrs(path, dataset_names))
         return {
             dataset_name: self._read_dataset(path, dataset_name)[1]
             for dataset_name in dataset_names
