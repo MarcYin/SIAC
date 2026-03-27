@@ -15,14 +15,15 @@ import xarray as xr
 from affine import Affine
 from rasterio.transform import from_bounds
 
-from siac.algorithms.grid.assembler import _resample_da
 from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyBestPixelComposite,
     MonthlyCompositeCollection,
     MonthlyKernelWeightComposite,
 )
 from siac.domain import SensorBand
+from siac.geo.reprojection import reproject_match
 from siac.runtime import BRDFKernelWeights
+from siac.runtime.models import copy_spatial_metadata_like
 from siac.storage.writers import write_raster
 
 _MANIFEST_NAME = "manifest.json"
@@ -304,12 +305,14 @@ def _write_geotiff_asset(
     dtype: str,
     grid: MonthlyCompositeStoreGridSpec | None = None,
 ) -> None:
-    prepared = _prepare_raster_asset(data, grid=grid)
+    nodata = _asset_nodata_value(asset_name=asset_name, dtype=dtype)
+    prepared = _prepare_raster_asset(data, grid=grid, nodata=nodata)
     write_raster(
         prepared,
         path,
         compression="deflate",
         dtype=dtype,
+        nodata=nodata,
         blockxsize=_tiff_block_size(int(prepared.sizes["x"])),
         blockysize=_tiff_block_size(int(prepared.sizes["y"])),
     )
@@ -323,8 +326,10 @@ def _prepare_raster_asset(
     data: xr.DataArray,
     *,
     grid: MonthlyCompositeStoreGridSpec | None = None,
+    nodata: float | int | None = None,
 ) -> xr.DataArray:
-    extra_coords = [name for name in data.coords if name not in data.dims]
+    source_crs = _data_array_crs(data)
+    extra_coords = [name for name in data.coords if name not in data.dims and name != "spatial_ref"]
     if extra_coords:
         data = data.drop_vars(extra_coords, errors="ignore")
     if "x" not in data.coords or "y" not in data.coords:
@@ -332,22 +337,37 @@ def _prepare_raster_asset(
     prepared = data.transpose("band", "y", "x") if "band" in data.dims else data.transpose("y", "x")
     transform = _affine_from_coords(prepared.coords["x"].values, prepared.coords["y"].values)
     prepared = prepared.rio.set_spatial_dims(x_dim="x", y_dim="y")
-    crs = _data_array_crs(prepared)
-    if crs is not None:
-        prepared = prepared.rio.write_crs(crs)
+    if source_crs is not None:
+        prepared = prepared.rio.write_crs(source_crs)
     prepared = prepared.rio.write_transform(transform)
+    if nodata is not None:
+        prepared = prepared.rio.write_nodata(nodata)
     if grid is None:
         return prepared
-    return _align_raster_asset_to_grid(prepared, grid)
+    return _align_raster_asset_to_grid(prepared, grid, nodata=nodata)
 
 
 def _align_raster_asset_to_grid(
     data: xr.DataArray,
     grid: MonthlyCompositeStoreGridSpec,
+    *,
+    nodata: float | int | None,
 ) -> xr.DataArray:
     template = _grid_template(grid)
-    target_shape = (int(grid.height), int(grid.width))
-    return _resample_da(data, target_shape, "nearest", template=template).astype(data.dtype, copy=False)
+    if _data_array_crs(data) is None:
+        if _matches_template_grid(data, template):
+            aligned = copy_spatial_metadata_like(data, template)
+            return aligned.astype(data.dtype, copy=False)
+        raise ValueError(
+            "Monthly composite assets require source CRS metadata for explicit-grid reprojection"
+        )
+    aligned = reproject_match(
+        data,
+        template,
+        resampling="nearest",
+        nodata=nodata,
+    )
+    return aligned.astype(data.dtype, copy=False)
 
 
 def _grid_template(grid: MonthlyCompositeStoreGridSpec) -> xr.DataArray:
@@ -364,6 +384,29 @@ def _grid_template(grid: MonthlyCompositeStoreGridSpec) -> xr.DataArray:
     template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
     template = template.rio.write_crs(grid.crs)
     return template.rio.write_transform(transform)
+
+
+def _matches_template_grid(data: xr.DataArray, template: xr.DataArray) -> bool:
+    if data.sizes.get("x") != template.sizes.get("x") or data.sizes.get("y") != template.sizes.get("y"):
+        return False
+    return np.array_equal(np.asarray(data.coords["x"].values), np.asarray(template.coords["x"].values)) and np.array_equal(
+        np.asarray(data.coords["y"].values),
+        np.asarray(template.coords["y"].values),
+    )
+
+
+def _asset_nodata_value(
+    *,
+    asset_name: str,
+    dtype: str,
+) -> float | int | None:
+    if np.dtype(dtype).kind == "f":
+        return np.nan
+    if asset_name == "sample_index":
+        return -1
+    if np.dtype(dtype).kind in {"i", "u"}:
+        return 0 if np.dtype(dtype).kind == "u" else -9999
+    return None
 
 
 def _asset_band_descriptions(
@@ -505,7 +548,10 @@ def _read_geotiff_asset(
 def _read_sample_index_asset(path: Path) -> xr.DataArray:
     data = _read_geotiff_asset(path)
     rounded = np.rint(np.asarray(data.values, dtype=np.float32)).astype(np.int16)
-    return xr.DataArray(rounded, dims=data.dims, coords=data.coords)
+    return copy_spatial_metadata_like(
+        xr.DataArray(rounded, dims=data.dims, coords=data.coords),
+        data,
+    )
 
 
 def _resolve_asset_band_names(

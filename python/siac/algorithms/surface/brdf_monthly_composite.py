@@ -9,6 +9,7 @@ import numpy as np
 import xarray as xr
 
 from siac.runtime import BRDFKernelWeights
+from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.domain import SensorBand
@@ -86,17 +87,28 @@ def build_monthly_best_pixel_composite(
         "y": reflectance.coords["y"],
         "x": reflectance.coords["x"],
     }
+    reflectance_reference = reflectance.isel(time=0, drop=True)
+    quality_reference = quality.isel(time=0, drop=True)
     return MonthlyBestPixelComposite(
-        reflectance=xr.DataArray(selected, dims=["band", "y", "x"], coords=coords),
-        quality=xr.DataArray(
-            selected_quality,
-            dims=["y", "x"],
-            coords={"y": reflectance.coords["y"], "x": reflectance.coords["x"]},
+        reflectance=copy_spatial_metadata_like(
+            xr.DataArray(selected, dims=["band", "y", "x"], coords=coords),
+            reflectance_reference,
         ),
-        sample_index=xr.DataArray(
-            sample_index,
-            dims=["y", "x"],
-            coords={"y": reflectance.coords["y"], "x": reflectance.coords["x"]},
+        quality=copy_spatial_metadata_like(
+            xr.DataArray(
+                selected_quality,
+                dims=["y", "x"],
+                coords={"y": reflectance.coords["y"], "x": reflectance.coords["x"]},
+            ),
+            quality_reference,
+        ),
+        sample_index=copy_spatial_metadata_like(
+            xr.DataArray(
+                sample_index,
+                dims=["y", "x"],
+                coords={"y": reflectance.coords["y"], "x": reflectance.coords["x"]},
+            ),
+            quality_reference,
         ),
         year=int(year),
         month=int(month),
@@ -158,14 +170,17 @@ def build_monthly_best_pixel_kernel_composite(
         gather_index = sample_index[np.newaxis, np.newaxis, ...]
         selected = np.take_along_axis(values, gather_index, axis=0)[0]
         selected = np.where(has_valid[np.newaxis, ...], selected, np.nan)
-        return xr.DataArray(
-            selected,
-            dims=["band", "y", "x"],
-            coords={
-                "band": data.coords["band"],
-                "y": data.coords["y"],
-                "x": data.coords["x"],
-            },
+        return copy_spatial_metadata_like(
+            xr.DataArray(
+                selected,
+                dims=["band", "y", "x"],
+                coords={
+                    "band": data.coords["band"],
+                    "y": data.coords["y"],
+                    "x": data.coords["x"],
+                },
+            ),
+            data.isel(time=0, drop=True),
         )
 
     selected_quality = np.take_along_axis(
@@ -181,6 +196,7 @@ def build_monthly_best_pixel_kernel_composite(
         if temporal_weights.reflectance_unc is not None
         else None
     )
+    quality_reference = quality.isel(time=0, drop=True)
     return MonthlyKernelWeightComposite(
         kernels=BRDFKernelWeights(
             f0=_select(temporal_weights.f0),
@@ -191,15 +207,21 @@ def build_monthly_best_pixel_kernel_composite(
             f2_unc=_select(temporal_weights.f2_unc),
             reflectance_unc=reflectance_unc,
         ),
-        quality=xr.DataArray(
-            selected_quality,
-            dims=["y", "x"],
-            coords={"y": quality.coords["y"], "x": quality.coords["x"]},
+        quality=copy_spatial_metadata_like(
+            xr.DataArray(
+                selected_quality,
+                dims=["y", "x"],
+                coords={"y": quality.coords["y"], "x": quality.coords["x"]},
+            ),
+            quality_reference,
         ),
-        sample_index=xr.DataArray(
-            sample_index,
-            dims=["y", "x"],
-            coords={"y": quality.coords["y"], "x": quality.coords["x"]},
+        sample_index=copy_spatial_metadata_like(
+            xr.DataArray(
+                sample_index,
+                dims=["y", "x"],
+                coords={"y": quality.coords["y"], "x": quality.coords["x"]},
+            ),
+            quality_reference,
         ),
         year=int(year),
         month=int(month),

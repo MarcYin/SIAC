@@ -665,6 +665,10 @@ def test_payload_stack_round_trips_through_real_merge_helper() -> None:
     params, unc = provider._unpack_payload_stack(merged, requested=[("B02", provider._product_bands[0])])
 
     assert merged.dims == ("layer", "y", "x")
+    assert params.rio.crs is not None
+    assert params.rio.crs.to_string() == "EPSG:4326"
+    assert unc.rio.crs is not None
+    assert unc.rio.crs.to_string() == "EPSG:4326"
     np.testing.assert_allclose(params.sel(band="B02", parameter="f0").values, np.array([[1.0, 2.0, 10.0], [3.0, 4.0, 12.0]], dtype=np.float32))
     np.testing.assert_allclose(params.sel(band="B02", parameter="f1").values, np.array([[10.0, 20.0, 100.0], [30.0, 40.0, 120.0]], dtype=np.float32))
     np.testing.assert_allclose(params.sel(band="B02", parameter="f2").values, np.array([[100.0, 200.0, 1000.0], [300.0, 400.0, 1200.0]], dtype=np.float32))
@@ -773,6 +777,8 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
     assert resampling_seen == ["nearest"]
     np.testing.assert_allclose(weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32))
     np.testing.assert_allclose(weights.f2.sel(band="B03").values, np.full((1, 1), 22.0, dtype=np.float32))
+    assert weights.f0.rio.crs is not None
+    assert weights.f0.rio.crs.to_string() == "EPSG:32615"
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(0.015)
     assert float(weights.reflectance_unc.sel(band="B03").values[0, 0]) == pytest.approx(
         0.015 * (2.0**1.6)
@@ -982,6 +988,8 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
         temporal.f2.sel(time=np.datetime64("2024-01-03"), band="B03").values,
         np.full((1, 1), 42.0, dtype=np.float32),
     )
+    assert temporal.f0.rio.crs is not None
+    assert temporal.f0.rio.crs.to_string() == "EPSG:32615"
     assert np.isnan(temporal.f0.sel(time=np.datetime64("2024-01-02")).values).all()
     assert float(temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B02").values[0, 0]) == pytest.approx(
         0.015 * (3.0**1.6)
@@ -1211,6 +1219,8 @@ def test_mcd19_provider_uses_direct_temporal_vrt_payload_path(
         temporal.f2.sel(time=np.datetime64("2024-01-03"), band="B03").values,
         np.full((1, 1), 120.0, dtype=np.float32),
     )
+    assert temporal.f0.rio.crs is not None
+    assert temporal.f0.rio.crs.to_string() == "EPSG:32615"
     assert np.isnan(temporal.f0.sel(time=np.datetime64("2024-01-02")).values).all()
     assert float(temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B03").values[0, 0]) == pytest.approx(
         0.015 * (3.0**1.6)
@@ -1276,6 +1286,8 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
     assert float(temporal.f0.sel(time=np.datetime64("2024-01-03")).mean()) == pytest.approx(0.3)
     assert list(temporal.f0.coords["y"].values) == [10.0, 20.0]
     assert "extra" not in temporal.f0.coords
+    assert temporal.f0.rio.crs is not None
+    assert temporal.f0.rio.crs.to_string() == "EPSG:32615"
 
     monkeypatch.setattr(
         provider,
@@ -1301,6 +1313,27 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
     assert np.isnan(fallback.reflectance_unc.values).all()
     assert list(fallback.f0.coords["y"].values) == [10.0, 20.0]
     assert list(fallback.f0.coords["x"].values) == [30.0, 40.0]
+    assert fallback.f0.rio.crs is not None
+    assert fallback.f0.rio.crs.to_string() == "EPSG:32615"
+
+
+def test_default_temporal_weights_preserve_target_crs() -> None:
+    provider = _DummyProvider(probe_earthdata=False)
+    time_axis = np.array(["2024-01-01", "2024-01-02"], dtype="datetime64[D]")
+
+    weights = provider._default_temporal_weights(
+        bounds=(399960.0, 4590240.0, 400960.0, 4600240.0),
+        resolution=500.0,
+        bands=["B02"],
+        time_axis=time_axis,
+        crs="EPSG:32615",
+    )
+
+    assert weights.f0.rio.crs is not None
+    assert weights.f0.rio.crs.to_string() == "EPSG:32615"
+    assert weights.reflectance_unc is not None
+    assert weights.reflectance_unc.rio.crs is not None
+    assert weights.reflectance_unc.rio.crs.to_string() == "EPSG:32615"
 
 
 def test_temporal_loading_fallback_batches_requested_bands_into_one_payload_merge_per_day(

@@ -36,6 +36,7 @@ from siac.algorithms.surface._spectral_curve_utils import (
 from siac.algorithms.surface._spectral_curve_utils import (
     segmentize_curve as _segmentize_curve,
 )
+from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -866,8 +867,14 @@ class SpectralMapper:
         uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
         logger.info("Spectral mapping complete: output_shape=%s", tuple(reflectance_da.shape))
         return (
-            reflectance_da.transpose(*original_dims).astype(np.float32),
-            uncertainty_da.transpose(*original_dims).astype(np.float32),
+            copy_spatial_metadata_like(
+                reflectance_da.transpose(*original_dims).astype(np.float32),
+                flattened.source_data,
+            ),
+            copy_spatial_metadata_like(
+                uncertainty_da.transpose(*original_dims).astype(np.float32),
+                flattened.source_data,
+            ),
         )
 
     def _map_reflectance_batch(
@@ -1051,7 +1058,10 @@ class SpectralMapper:
                 if dim in flattened.source_data.coords
             }
         )
-        return xr.DataArray(values, dims=flattened.transpose_dims, coords=coords)
+        return copy_spatial_metadata_like(
+            xr.DataArray(values, dims=flattened.transpose_dims, coords=coords),
+            flattened.source_data,
+        )
 
     def _estimate_uncertainty(
         self,

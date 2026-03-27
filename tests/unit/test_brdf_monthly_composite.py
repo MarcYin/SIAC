@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import numpy as np
+import rasterio
 import xarray as xr
 
 from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyBestPixelComposite,
     build_monthly_best_pixel_composite,
+    build_monthly_best_pixel_kernel_composite,
 )
+from siac.runtime import BRDFKernelWeights
 
 
 def _reflectance_cube() -> xr.DataArray:
@@ -37,6 +40,12 @@ def _reflectance_cube() -> xr.DataArray:
             "x": [0, 1],
         },
     )
+
+
+def _georeferenced_reflectance_cube() -> xr.DataArray:
+    cube = _reflectance_cube()
+    transform = rasterio.transform.from_bounds(399960.0, 4699040.0, 400960.0, 4700040.0, 2, 2)
+    return cube.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615").rio.write_transform(transform)
 
 
 def test_monthly_best_pixel_composite_uses_lowest_quality_pixel() -> None:
@@ -101,3 +110,61 @@ def test_monthly_best_pixel_composite_skips_invalid_samples() -> None:
         float(result.reflectance.sel(band="B02", y=0, x=0)),
         0.11,
     )
+
+
+def test_monthly_best_pixel_composite_preserves_spatial_metadata() -> None:
+    reflectance = _georeferenced_reflectance_cube()
+    quality = xr.DataArray(
+        np.array(
+            [
+                [[3, 2], [2, 1]],
+                [[2, 3], [1, 2]],
+                [[1, 1], [3, 3]],
+            ],
+            dtype=np.float32,
+        ),
+        dims=["time", "y", "x"],
+        coords={"time": reflectance.time, "y": reflectance.y, "x": reflectance.x},
+    ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615").rio.write_transform(
+        reflectance.isel(time=0, band=0, drop=True).rio.transform(recalc=True)
+    )
+
+    result = build_monthly_best_pixel_composite(reflectance, quality, year=2024, month=7)
+
+    assert str(result.reflectance.rio.crs) == "EPSG:32615"
+    assert result.reflectance.rio.transform(recalc=True) == reflectance.isel(time=0, drop=True).rio.transform(recalc=True)
+    assert str(result.quality.rio.crs) == "EPSG:32615"
+    assert result.quality.rio.transform(recalc=True) == quality.isel(time=0, drop=True).rio.transform(recalc=True)
+
+
+def test_monthly_best_pixel_kernel_composite_preserves_spatial_metadata() -> None:
+    reflectance = _georeferenced_reflectance_cube()
+    quality = xr.DataArray(
+        np.array(
+            [
+                [[0.3, 0.2], [0.2, 0.1]],
+                [[0.2, 0.3], [0.1, 0.2]],
+                [[0.1, 0.1], [0.3, 0.3]],
+            ],
+            dtype=np.float32,
+        ),
+        dims=["time", "y", "x"],
+        coords={"time": reflectance.time, "y": reflectance.y, "x": reflectance.x},
+    ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615").rio.write_transform(
+        reflectance.isel(time=0, band=0, drop=True).rio.transform(recalc=True)
+    )
+    weights = BRDFKernelWeights(
+        f0=reflectance,
+        f1=reflectance + 1.0,
+        f2=reflectance + 2.0,
+        f0_unc=reflectance + 3.0,
+        f1_unc=reflectance + 4.0,
+        f2_unc=reflectance + 5.0,
+    )
+
+    result = build_monthly_best_pixel_kernel_composite(weights, quality, year=2024, month=7)
+
+    assert str(result.kernels.f0.rio.crs) == "EPSG:32615"
+    assert result.kernels.f0.rio.transform(recalc=True) == reflectance.isel(time=0, drop=True).rio.transform(recalc=True)
+    assert str(result.quality.rio.crs) == "EPSG:32615"
+    assert result.quality.rio.transform(recalc=True) == quality.isel(time=0, drop=True).rio.transform(recalc=True)

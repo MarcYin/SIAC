@@ -197,6 +197,115 @@ def test_query_surface_prior_combines_cloud_mask_resampling_and_invalid_pixels(
     assert prior.mask.values.tolist() == [[True, False], [False, False]]
 
 
+def test_query_surface_prior_masks_out_of_range_query_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observation = _observation()
+    observation.toa["B08"].values[1, 1] = 1.2
+    correction = SimpleNamespace(
+        boa=xr.Dataset(
+            {
+                "B08": xr.DataArray(np.full((2, 2), 0.4, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"]),
+    )
+
+    class _FiniteDatabase(_StubDatabase):
+        def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+            assert k_neighbors == 4
+            assert set(corrected_query.data_vars) == {"B08", "B11"}
+            coords = {"band": ["B02"], "y": [0, 1], "x": [0, 1]}
+            values = np.full((1, 2, 2), 0.2, dtype=np.float32)
+            uncertainty = np.full((1, 2, 2), 0.05, dtype=np.float32)
+            return (
+                xr.DataArray(values, dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
+            )
+
+    def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
+        return correction
+
+    monkeypatch.setattr(swir_refine.AtmosphericCorrector, "correct", fake_correct)
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=observation,
+        atmo_prior=_atmo((2, 2)),
+        rt_model=_IdentityRTModel(),
+        database=_FiniteDatabase(),
+        query_band_names=("B08", "B11"),
+        visible_band_names=("B02",),
+        k_neighbors=4,
+    )
+
+    assert prior.mask.values.tolist() == [[True, True], [True, False]]
+
+
+def test_query_surface_prior_excludes_invalid_native_query_pixels_before_resampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, float | bool] = {}
+    observation = _observation()
+    observation.toa["B08"].values[:] = np.array([[0.4, 0.5], [0.6, 1.2]], dtype=np.float32)
+    observation.toa["B11"].values[:] = np.array([[0.3, 0.4], [0.5, 0.6]], dtype=np.float32)
+
+    class _SinglePixelDatabase:
+        query_band_names = ("B08", "B11")
+        visible_band_names = ("B02",)
+
+        def __init__(self) -> None:
+            self.median_summary = xr.DataArray(
+                np.zeros((1, 1), dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0], "x": [0]},
+            )
+
+        def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+            assert k_neighbors == 4
+            seen["query_b08"] = float(corrected_query["B08"].values[0, 0])
+            seen["query_b11"] = float(corrected_query["B11"].values[0, 0])
+            coords = {"band": ["B02"], "y": [0], "x": [0]}
+            return (
+                xr.DataArray(np.array([[[0.2]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(np.array([[[0.05]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords),
+            )
+
+    def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
+        seen["toa_b08"] = float(toa["B08"].values[0, 0])
+        seen["toa_b11"] = float(toa["B11"].values[0, 0])
+        seen["cloud_mask"] = bool(cloud_mask.values[0, 0])
+        return SimpleNamespace(boa=toa, cloud_mask=cloud_mask)
+
+    def fake_resample(data, target_shape, method, *, template=None):  # type: ignore[no-untyped-def]
+        if tuple(target_shape) != (1, 1):
+            return data
+        mean_value = float(np.nanmean(np.asarray(data.values, dtype=np.float32)))
+        dims = tuple(template.dims) if template is not None else ("y", "x")
+        coords = {dim: template.coords[dim] for dim in dims if template is not None and dim in template.coords}
+        return xr.DataArray(np.array([[mean_value]], dtype=np.float32), dims=dims, coords=coords)
+
+    monkeypatch.setattr(swir_refine.AtmosphericCorrector, "correct", fake_correct)
+    monkeypatch.setattr(swir_refine, "_resample_da", fake_resample)
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=observation,
+        atmo_prior=_atmo((1, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_SinglePixelDatabase(),
+        query_band_names=("B08", "B11"),
+        visible_band_names=("B02",),
+        k_neighbors=4,
+    )
+
+    assert seen["toa_b08"] == pytest.approx((0.4 + 0.5 + 0.6) / 3.0)
+    assert seen["toa_b11"] == pytest.approx((0.3 + 0.4 + 0.5) / 3.0)
+    assert seen["query_b08"] == pytest.approx((0.4 + 0.5 + 0.6) / 3.0)
+    assert seen["query_b11"] == pytest.approx((0.3 + 0.4 + 0.5) / 3.0)
+    assert seen["cloud_mask"] is False
+    assert prior.mask.values.tolist() == [[True]]
+
+
 def test_query_surface_prior_corrects_only_resampled_query_bands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

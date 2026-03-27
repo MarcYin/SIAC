@@ -305,6 +305,7 @@ class _EarthAccessBRDFProvider:
             target_resolution,
             [coord for coord, _band in requested],
             time_axis,
+            crs=crs,
         )
 
     def get_temporal_brdf_parameters_batch(
@@ -458,6 +459,7 @@ class _EarthAccessBRDFProvider:
                 target_resolution,
                 [coord for coord, _band in requested],
                 time_axis,
+                crs=crs,
             )
             for _obs_time, time_axis in request_specs
         ]
@@ -916,31 +918,45 @@ class _EarthAccessBRDFProvider:
         resolution: float,
         bands: list[int | str],
         time_axis: np.ndarray,
+        *,
+        crs: str | None = None,
+        target_template: xr.DataArray | None = None,
     ) -> BRDFKernelWeights:
-        base = self._default_weights(bounds, resolution, bands)
+        if target_template is None:
+            if crs is None:
+                raise ValueError("crs is required when target_template is not provided")
+            target_template = build_target_template(bounds, crs, resolution)
         time_coords = xr.IndexVariable("time", time_axis)
+        y_coords = target_template.coords["y"]
+        x_coords = target_template.coords["x"]
+        shape = (
+            len(time_axis),
+            len(bands),
+            int(target_template.sizes["y"]),
+            int(target_template.sizes["x"]),
+        )
 
-        def _repeat(data: xr.DataArray) -> xr.DataArray:
-            repeated = np.repeat(data.values[np.newaxis, ...], len(time_axis), axis=0)
-            return xr.DataArray(
-                repeated,
-                dims=["time", "band", "y", "x"],
+        def _constant(fill_value: float) -> xr.DataArray:
+            return self._target_array_like(
+                target_template,
+                np.full(shape, np.float32(fill_value), dtype=np.float32),
+                dims=("time", "band", "y", "x"),
                 coords={
                     "time": time_coords,
-                    "band": data.coords["band"],
-                    "y": data.coords["y"],
-                    "x": data.coords["x"],
+                    "band": xr.IndexVariable("band", bands),
+                    "y": y_coords,
+                    "x": x_coords,
                 },
             )
 
         return BRDFKernelWeights(
-            f0=_repeat(base.f0),
-            f1=_repeat(base.f1),
-            f2=_repeat(base.f2),
-            f0_unc=_repeat(base.f0_unc),
-            f1_unc=_repeat(base.f1_unc),
-            f2_unc=_repeat(base.f2_unc),
-            reflectance_unc=_repeat(base.reflectance_unc) if base.reflectance_unc is not None else None,
+            f0=_constant(0.20),
+            f1=_constant(0.05),
+            f2=_constant(0.02),
+            f0_unc=_constant(0.03),
+            f1_unc=_constant(0.02),
+            f2_unc=_constant(0.02),
+            reflectance_unc=_constant(0.08),
         )
 
     def _nan_temporal_weights(
@@ -949,8 +965,18 @@ class _EarthAccessBRDFProvider:
         resolution: float,
         bands: list[int | str],
         time_axis: np.ndarray,
+        *,
+        crs: str | None = None,
+        target_template: xr.DataArray | None = None,
     ) -> BRDFKernelWeights:
-        base = self._default_temporal_weights(bounds, resolution, bands, time_axis)
+        base = self._default_temporal_weights(
+            bounds,
+            resolution,
+            bands,
+            time_axis,
+            crs=crs,
+            target_template=target_template,
+        )
 
         def _nan_like(data: xr.DataArray | None) -> xr.DataArray | None:
             if data is None:
@@ -1006,25 +1032,30 @@ class _EarthAccessBRDFProvider:
         )
         return params_values, unc_values
 
-    @staticmethod
+    @classmethod
     def _temporal_weights_from_arrays(
+        cls,
         params_values: np.ndarray,
         unc_values: np.ndarray,
         *,
         requested: Sequence[_RequestedBandSpec],
         time_axis: np.ndarray,
-        y_coords: np.ndarray,
-        x_coords: np.ndarray,
+        target_template: xr.DataArray,
     ) -> BRDFKernelWeights:
         coords = {
             "time": xr.IndexVariable("time", time_axis),
             "band": xr.IndexVariable("band", [band_coord for band_coord, _band in requested]),
-            "y": y_coords,
-            "x": x_coords,
+            "y": target_template.coords["y"],
+            "x": target_template.coords["x"],
         }
 
         def _wrap(values: np.ndarray) -> xr.DataArray:
-            return xr.DataArray(values, dims=["time", "band", "y", "x"], coords=coords)
+            return cls._target_array_like(
+                target_template,
+                values,
+                dims=("time", "band", "y", "x"),
+                coords=coords,
+            )
 
         scaled_unc = unc_values * np.float32(1.1)
         return BRDFKernelWeights(
@@ -1100,8 +1131,6 @@ class _EarthAccessBRDFProvider:
             crs=crs,
             target_resolution=target_resolution,
         )
-        y_coords = np.asarray(target_template.coords["y"].values, dtype=np.float32)
-        x_coords = np.asarray(target_template.coords["x"].values, dtype=np.float32)
         logger.info(
             "%s temporal BRDF stack: attempting direct temporal VRT read for %d day(s) x %d band(s)",
             self._source_name,
@@ -1139,8 +1168,8 @@ class _EarthAccessBRDFProvider:
                 params_values, unc_values = self._allocate_temporal_payload_arrays(
                     time_axis,
                     requested,
-                    y_size=y_coords.size,
-                    x_size=x_coords.size,
+                    y_size=int(target_template.sizes["y"]),
+                    x_size=int(target_template.sizes["x"]),
                 )
             else:
                 logger.info("%s temporal BRDF stack: daily-payload fallback completed", self._source_name)
@@ -1182,8 +1211,7 @@ class _EarthAccessBRDFProvider:
             unc_values,
             requested=requested,
             time_axis=time_axis,
-            y_coords=y_coords,
-            x_coords=x_coords,
+            target_template=target_template,
         )
         if np.isfinite(temporal.f0.values).any():
             return temporal
@@ -1355,8 +1383,9 @@ class _EarthAccessBRDFProvider:
             },
         )
 
-    @staticmethod
+    @classmethod
     def _unpack_payload_stack(
+        cls,
         payload: xr.DataArray,
         *,
         requested: Sequence[_RequestedBandSpec],
@@ -1380,7 +1409,8 @@ class _EarthAccessBRDFProvider:
             "y": payload.coords["y"],
             "x": payload.coords["x"],
         }
-        params = xr.DataArray(
+        params = cls._native_array_like(
+            payload,
             values[:, :3, :, :],
             dims=("band", "parameter", "y", "x"),
             coords={
@@ -1388,7 +1418,8 @@ class _EarthAccessBRDFProvider:
                 "parameter": xr.IndexVariable("parameter", ["f0", "f1", "f2"]),
             },
         )
-        unc = xr.DataArray(
+        unc = cls._native_array_like(
+            payload,
             values[:, 3, :, :],
             dims=("band", "y", "x"),
             coords=coords,

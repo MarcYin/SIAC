@@ -300,15 +300,18 @@ def _assert_matching_store_grid(
             f"but the observation requires {expected.crs!r}."
         )
     tolerance = max(1e-6, expected.resolution * 1e-6)
-    if not np.isclose(float(grid.resolution), expected.resolution, rtol=0.0, atol=tolerance):
+    grid_resolution = float(grid.resolution)
+    expected_resolution = float(expected.resolution)
+    if grid_resolution > (expected_resolution + tolerance):
         raise ValueError(
             f"Prepared monthly composite store {store_path} uses resolution {grid.resolution}, "
-            f"but the observation requires {expected.resolution}."
+            f"but the observation requires {expected.resolution} or finer."
         )
-    if int(grid.width) != expected.width or int(grid.height) != expected.height:
+    resolution_ratio = expected_resolution / grid_resolution
+    if resolution_ratio < (1.0 - 1e-6) or not np.isclose(resolution_ratio, round(resolution_ratio), rtol=0.0, atol=1e-6):
         raise ValueError(
-            f"Prepared monthly composite store {store_path} uses shape {(grid.height, grid.width)}, "
-            f"but the observation requires {(expected.height, expected.width)}."
+            f"Prepared monthly composite store {store_path} uses resolution {grid.resolution}, "
+            f"which is not an integer finer subdivision of the observation resolution {expected.resolution}."
         )
     if not np.allclose(
         np.asarray(grid.bounds, dtype=np.float64),

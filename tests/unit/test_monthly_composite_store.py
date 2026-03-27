@@ -121,6 +121,56 @@ def _reflectance_collection() -> MonthlyCompositeCollection:
     )
 
 
+def _georeferenced_kernel_collection() -> MonthlyCompositeCollection:
+    bands = ["B02", "B08"]
+    x = [400210.0, 400710.0]
+    y = [4699790.0, 4699290.0]
+    transform = rasterio.transform.from_bounds(399960.0, 4699040.0, 400960.0, 4700040.0, 2, 2)
+    def _with_geo(data: xr.DataArray) -> xr.DataArray:
+        return data.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615").rio.write_transform(transform)
+
+    cube = _with_geo(xr.DataArray(
+        np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[10.0, 20.0], [30.0, 40.0]],
+            ],
+            dtype=np.float32,
+        ),
+        dims=["band", "y", "x"],
+        coords={"band": bands, "y": y, "x": x},
+    ))
+    quality = _with_geo(xr.DataArray(
+        np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": y, "x": x},
+    ))
+    sample_index = _with_geo(xr.DataArray(
+        np.array([[0, 1], [2, 3]], dtype=np.int16),
+        dims=["y", "x"],
+        coords={"y": y, "x": x},
+    ))
+    composite = MonthlyKernelWeightComposite(
+        kernels=BRDFKernelWeights(
+            f0=cube,
+            f1=_with_geo((cube + 100.0).astype(np.float32)),
+            f2=_with_geo((cube + 200.0).astype(np.float32)),
+            f0_unc=_with_geo(xr.full_like(cube, 0.01)),
+            f1_unc=_with_geo(xr.full_like(cube, 0.02)),
+            f2_unc=_with_geo(xr.full_like(cube, 0.03)),
+        ),
+        quality=quality,
+        sample_index=sample_index,
+        year=2023,
+        month=7,
+    )
+    return MonthlyCompositeCollection(
+        composites=(composite,),
+        source_bands=_source_bands(),
+        source_name="test-georeferenced-kernel-store",
+    )
+
+
 def test_monthly_composite_store_round_trips_kernel_collection(tmp_path) -> None:
     store_path = write_monthly_composite_collection(_kernel_collection(), tmp_path / "kernel_store")
     loaded = read_monthly_composite_collection(store_path)
@@ -163,7 +213,7 @@ def test_monthly_composite_store_honors_explicit_grid_metadata(tmp_path) -> None
         resolution=500.0,
     )
     store_path = write_monthly_composite_collection(
-        _kernel_collection(),
+        _georeferenced_kernel_collection(),
         tmp_path / "kernel_store_on_target_grid",
         grid=grid,
     )
@@ -177,11 +227,21 @@ def test_monthly_composite_store_honors_explicit_grid_metadata(tmp_path) -> None
         assert src.height == grid.height
         assert src.bounds == pytest.approx(grid.bounds)
         assert src.transform == rasterio.transform.from_bounds(*grid.bounds, grid.width, grid.height)
+        b02 = src.read(1)
+        np.testing.assert_allclose(b02[:2, :2], np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        assert int(np.isfinite(b02).sum()) == 4
 
     loaded = read_monthly_composite_collection(store_path)
     composite = cast("MonthlyKernelWeightComposite", loaded.composites[0])
     assert composite.kernels.f0.sizes["x"] == grid.width
     assert composite.kernels.f0.sizes["y"] == grid.height
+    assert composite.sample_index.rio.crs is not None
+    assert composite.sample_index.rio.crs.to_string() == "EPSG:32615"
+    assert composite.sample_index.rio.transform(recalc=True) == rasterio.transform.from_bounds(
+        *grid.bounds,
+        grid.width,
+        grid.height,
+    )
     np.testing.assert_allclose(
         np.asarray(composite.kernels.f0.coords["x"].values, dtype=np.float64),
         np.linspace(
@@ -198,6 +258,9 @@ def test_monthly_composite_store_honors_explicit_grid_metadata(tmp_path) -> None
             grid.height,
         ),
     )
+    loaded_b02 = composite.kernels.f0.sel(band="B02").values
+    np.testing.assert_allclose(loaded_b02[:2, :2], np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+    assert int(np.isfinite(loaded_b02).sum()) == 4
 
 
 def test_monthly_composite_store_round_trips_reflectance_collection(tmp_path) -> None:

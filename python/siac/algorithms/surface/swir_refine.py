@@ -82,6 +82,16 @@ class _MonthlyModeledReflectance:
 
 
 @dataclass(frozen=True)
+class _PreparedMonthlyComposite:
+    year: int
+    month: int
+    reflectance: xr.DataArray
+    quality: xr.DataArray
+    sample_index: xr.DataArray
+    reflectance_unc: xr.DataArray | None
+
+
+@dataclass(frozen=True)
 class _MonthSpec:
     year: int
     month: int
@@ -140,15 +150,12 @@ def build_monthly_surface_prior_database(
         if tuple(band.name for band in source_bands) != tuple(band.name for band in target_bands)
         else None
     )
-    composites = [
-        _normalize_monthly_composite_to_target_basis(
-            composite,
-            geometry=geometry,
-            target_bands=target_bands,
-            spectral_mapper=spectral_mapper,
-        )
-        for composite in monthly_composites.composites
-    ]
+    composites = _normalize_monthly_composites_to_target_basis(
+        monthly_composites.composites,
+        geometry=geometry,
+        target_bands=target_bands,
+        spectral_mapper=spectral_mapper,
+    )
     logger.info("Monthly surface-prior database: assembling final database from %d composite(s)", len(composites))
     database = build_monthly_composite_database(
         composites,
@@ -386,33 +393,52 @@ def query_surface_prior_from_monthly_database(
         int(database.median_summary.sizes["y"]),
         int(database.median_summary.sizes["x"]),
     )
-    coarse_query_toa = _resample_dataset(
+    query_template = _database_query_template(database)
+    native_query_valid = _query_observation_valid_mask(
         observation.toa,
         band_names=expected_query,
+        cloud_mask=observation.cloud_mask,
+    )
+    coarse_query_toa, coarse_query_valid = _resample_dataset_with_validity(
+        observation.toa,
+        band_names=expected_query,
+        valid_mask=native_query_valid,
         target_shape=target_shape,
+        template=query_template,
     )
     coarse_geometry = _resample_geometry_to_target_shape(observation.geometry, target_shape)
     coarse_atmo = _resample_atmo_to_target_shape(atmo_prior, target_shape)
     coarse_cloud_mask = _resample_cloud_mask_to_target_shape(observation.cloud_mask, target_shape)
+    coarse_invalid = coarse_cloud_mask | (~coarse_query_valid)
     corrector = AtmosphericCorrector(rt_model, observation.sensor_config)
     correction = corrector.correct(
         coarse_query_toa,
         coarse_geometry,
         coarse_atmo,
-        cloud_mask=coarse_cloud_mask,
+        cloud_mask=coarse_invalid,
     )
-    corrected_query = _resample_dataset(
-        correction.boa,
+    corrected_query_mask = _resample_cloud_mask_to_target_shape(correction.cloud_mask, target_shape)
+    corrected_query = _apply_invalid_mask_to_dataset(
+        _resample_dataset(
+            correction.boa,
+            band_names=expected_query,
+            target_shape=target_shape,
+            template=query_template,
+        ),
         band_names=expected_query,
-        target_shape=target_shape,
+        invalid_mask=corrected_query_mask,
     )
     predicted_visible, predicted_unc = database.predict_visible(
         corrected_query,
         k_neighbors=k_neighbors,
     )
 
-    cloud_mask = _resample_cloud_mask_to_target_shape(correction.cloud_mask, target_shape)
-    valid = np.all(np.isfinite(predicted_visible.values), axis=0) & np.all(np.isfinite(predicted_unc.values), axis=0)
+    cloud_mask = corrected_query_mask
+    valid = (
+        np.all(np.isfinite(predicted_visible.values), axis=0)
+        & np.all(np.isfinite(predicted_unc.values), axis=0)
+        & coarse_query_valid.values
+    )
     mask = xr.DataArray(
         valid & (~cloud_mask.values.astype(bool)),
         dims=["y", "x"],
@@ -675,9 +701,7 @@ def _normalize_monthly_composite_to_target_basis(
     composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
     *,
     geometry: GeometryAngles,
-    target_bands: collections.abc.Sequence[SensorBand],
-    spectral_mapper: SpectralMapper | None,
-) -> MonthlyBestPixelComposite:
+) -> _PreparedMonthlyComposite:
     template = geometry.sza
     quality = _resample_spatial_field_to_template(composite.quality.astype(np.float32), template, "bilinear")
     sample_index = _resample_spatial_field_to_template(
@@ -693,22 +717,86 @@ def _normalize_monthly_composite_to_target_basis(
         reflectance = _resample_band_cube_to_template(composite.reflectance.astype(np.float32), template, "bilinear")
         reflectance_unc = None
 
-    if spectral_mapper is not None:
-        reflectance, mapped_unc = spectral_mapper.map(
-            reflectance,
-            source_uncertainty=reflectance_unc,
-        )
-        quality = _combine_composite_quality_with_mapping_uncertainty(quality, mapped_unc)
-    else:
-        reflectance = reflectance.sel(band=[band.name for band in target_bands]).astype(np.float32)
+    if reflectance_unc is not None:
+        reflectance_unc = reflectance_unc.astype(np.float32)
 
-    return MonthlyBestPixelComposite(
+    return _PreparedMonthlyComposite(
         reflectance=reflectance.astype(np.float32),
         quality=quality.astype(np.float32),
         sample_index=sample_index.astype(np.int16),
         year=composite.year,
         month=composite.month,
+        reflectance_unc=reflectance_unc,
     )
+
+
+def _normalize_monthly_composites_to_target_basis(
+    composites: collections.abc.Sequence[MonthlyBestPixelComposite | MonthlyKernelWeightComposite],
+    *,
+    geometry: GeometryAngles,
+    target_bands: collections.abc.Sequence[SensorBand],
+    spectral_mapper: SpectralMapper | None,
+) -> list[MonthlyBestPixelComposite]:
+    prepared = [
+        _normalize_monthly_composite_to_target_basis(
+            composite,
+            geometry=geometry,
+        )
+        for composite in composites
+    ]
+    if not prepared:
+        return []
+
+    if spectral_mapper is None:
+        return [
+            MonthlyBestPixelComposite(
+                reflectance=prepared_composite.reflectance.sel(band=[band.name for band in target_bands]).astype(np.float32),
+                quality=prepared_composite.quality.astype(np.float32),
+                sample_index=prepared_composite.sample_index.astype(np.int16),
+                year=prepared_composite.year,
+                month=prepared_composite.month,
+            )
+            for prepared_composite in prepared
+        ]
+
+    remapped: list[MonthlyBestPixelComposite | None] = [None] * len(prepared)
+    groups: dict[bool, list[tuple[int, _PreparedMonthlyComposite]]] = {False: [], True: []}
+    for index, prepared_composite in enumerate(prepared):
+        groups[prepared_composite.reflectance_unc is not None].append((index, prepared_composite))
+
+    for has_uncertainty, group in groups.items():
+        if not group:
+            continue
+        stacked_reflectance = xr.concat(
+            [entry.reflectance for _, entry in group],
+            dim=xr.IndexVariable("time", np.arange(len(group), dtype=np.int32)),
+        ).transpose("time", "band", "y", "x")
+        stacked_uncertainty = None
+        if has_uncertainty:
+            stacked_uncertainty = xr.concat(
+                [cast("xr.DataArray", entry.reflectance_unc) for _, entry in group],
+                dim=xr.IndexVariable("time", np.arange(len(group), dtype=np.int32)),
+            ).transpose("time", "band", "y", "x")
+
+        mapped_reflectance, mapped_uncertainty = spectral_mapper.map(
+            stacked_reflectance,
+            source_uncertainty=stacked_uncertainty,
+        )
+        for time_index, (result_index, entry) in enumerate(group):
+            mapped_reflectance_entry = mapped_reflectance.isel(time=time_index, drop=True).astype(np.float32)
+            mapped_uncertainty_entry = mapped_uncertainty.isel(time=time_index, drop=True).astype(np.float32)
+            remapped[result_index] = MonthlyBestPixelComposite(
+                reflectance=mapped_reflectance_entry,
+                quality=_combine_composite_quality_with_mapping_uncertainty(
+                    entry.quality,
+                    mapped_uncertainty_entry,
+                ).astype(np.float32),
+                sample_index=entry.sample_index.astype(np.int16),
+                year=entry.year,
+                month=entry.month,
+            )
+
+    return [cast("MonthlyBestPixelComposite", composite) for composite in remapped]
 
 
 def _reflectance_from_kernel_weights(
@@ -965,20 +1053,83 @@ def _resample_cloud_mask_to_target_shape(
     return _resample_cloud_mask(cloud_mask, target_shape)
 
 
+def _query_observation_valid_mask(
+    dataset: xr.Dataset,
+    *,
+    band_names: collections.abc.Sequence[str],
+    cloud_mask: xr.DataArray,
+) -> xr.DataArray:
+    valid = ~cloud_mask.values.astype(bool)
+    for name in band_names:
+        if name not in dataset.data_vars:
+            continue
+        band = dataset[name].values
+        valid &= np.isfinite(band) & (band > 0.0) & (band < 1.0)
+    return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
+
+
+def _resample_dataset_with_validity(
+    dataset: xr.Dataset,
+    *,
+    band_names: collections.abc.Sequence[str],
+    valid_mask: xr.DataArray,
+    target_shape: tuple[int, int],
+    template: xr.DataArray | None = None,
+) -> tuple[xr.Dataset, xr.DataArray]:
+    valid_fraction = _resample_da(valid_mask.astype(np.float32), target_shape, "area", template=template)
+    valid_support = valid_fraction > 0.0
+    valid_denominator = valid_fraction.where(valid_support)
+    data_vars = {}
+    for name in band_names:
+        if name not in dataset.data_vars:
+            continue
+        masked_band = dataset[name].where(valid_mask, 0.0)
+        masked_mean = _resample_da(masked_band, target_shape, "area", template=template)
+        data_vars[name] = masked_mean / valid_denominator
+    if not data_vars:
+        raise ValueError("No query bands were available in the corrected reflectance dataset")
+    return xr.Dataset(data_vars), valid_support.astype(bool)
+
+
 def _resample_dataset(
     dataset: xr.Dataset,
     *,
     band_names: collections.abc.Sequence[str],
     target_shape: tuple[int, int],
+    template: xr.DataArray | None = None,
 ) -> xr.Dataset:
     data_vars = {
-        name: _resample_da(dataset[name], target_shape, "area")
+        name: _resample_da(dataset[name], target_shape, "area", template=template)
         for name in band_names
         if name in dataset.data_vars
     }
     if not data_vars:
         raise ValueError("No query bands were available in the corrected reflectance dataset")
     return xr.Dataset(data_vars)
+
+
+def _apply_invalid_mask_to_dataset(
+    dataset: xr.Dataset,
+    *,
+    band_names: collections.abc.Sequence[str],
+    invalid_mask: xr.DataArray,
+) -> xr.Dataset:
+    invalid = invalid_mask.astype(bool)
+    data_vars = {
+        name: dataset[name].where(~invalid)
+        for name in band_names
+        if name in dataset.data_vars
+    }
+    if not data_vars:
+        raise ValueError("No query bands were available in the corrected reflectance dataset")
+    return xr.Dataset(data_vars)
+
+
+def _database_query_template(database: MonthlyCompositeDatabase) -> xr.DataArray:
+    summary = database.median_summary
+    if "feature" in summary.dims:
+        return cast("xr.DataArray", summary.isel(feature=0, drop=True))
+    return cast("xr.DataArray", summary)
 
 
 def _resolve_provider_source_bands(

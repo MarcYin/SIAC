@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
 
 from siac.algorithms.grid import assembler as grid_assembler_mod
@@ -20,6 +21,7 @@ from siac.algorithms.surface.monthly_composite_store import (
 from siac.app import _assembly_providers as providers_mod
 from siac.app import _assembly_runtime as runtime_mod
 from siac.app import _assembly_surface as surface_mod
+from siac.catalog import SENTINEL2A_CONFIG
 from siac.domain import SensorBand, SensorConfig
 from siac.runtime import BRDFKernelWeights, SolvedAtmosphere, SolverInputBundle
 
@@ -223,6 +225,42 @@ def test_build_preprocessor_runtime_primes_path_sensitive_sensor_config() -> Non
     assert result.sensor_config is resolved_sensor_config
 
 
+def test_build_preprocessor_runtime_sets_s2_preload_band_plan() -> None:
+    fake_preprocessor = SimpleNamespace(
+        sensor_config=SENTINEL2A_CONFIG,
+        config={},
+        preprocess=lambda _path: {
+            "toa": xr.Dataset({"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}),
+            "geometry": "geometry",
+            "cloud_mask": xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"]),
+            "metadata": {"observation_time": "2024-01-03T00:00:00"},
+        },
+    )
+    config = SimpleNamespace(
+        sensor="s2",
+        cloud_mask=SimpleNamespace(model_dump=lambda **_kwargs: {"method": "mock"}, mode="auto"),
+        surface_prior=SimpleNamespace(method="monthly_database"),
+        paths=None,
+    )
+
+    runtime_mod.build_preprocessor_runtime(
+        config,
+        input_path=Path("scene.safe"),
+        get_preprocessor_fn=lambda *_args, **_kwargs: fake_preprocessor,
+    )
+
+    assert fake_preprocessor.config["preload_toa_bands"] == (
+        "B04",
+        "B02",
+        "B03",
+        "B07",
+        "B08",
+        "B8A",
+        "B11",
+        "B12",
+    )
+
+
 def test_resolve_solver_and_rt_model_forward_expected_inputs(
     monkeypatch: pytest.MonkeyPatch,
     mock_observation_bundle,
@@ -380,6 +418,10 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
             captured["init"] = (rt_model, sensor_config)
 
         def correct(self, toa, geometry, atmo, cloud_mask):  # noqa: ANN001
+            captured["geometry_shapes"] = {
+                "sza": geometry.sza.shape,
+                "vza": geometry.vza.shape,
+            }
             captured["atmo_shapes"] = {
                 "aot": atmo.aot.shape,
                 "tcwv": atmo.tcwv.shape,
@@ -416,7 +458,8 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
 
     assert result == "corrected"
     assert captured["init"] == ("rt-model", mock_observation_bundle.sensor_config)
-    assert captured["atmo_shapes"]["aot"] == template.shape
+    assert captured["geometry_shapes"]["sza"] == small.shape
+    assert captured["atmo_shapes"]["aot"] == small.shape
 
 
 def test_resolve_corrector_preserves_coarse_atmo_outputs(
@@ -427,6 +470,7 @@ def test_resolve_corrector_preserves_coarse_atmo_outputs(
 
     from siac.runtime import AtmosphericState
 
+    captured: dict[str, tuple[int, int]] = {}
     coarse = xr.DataArray(
         np.array([[0.2, 0.3], [0.4, 0.5]], dtype=np.float32),
         dims=["y", "x"],
@@ -459,7 +503,9 @@ def test_resolve_corrector_preserves_coarse_atmo_outputs(
         def correct(self, toa, geometry, atmo, cloud_mask):  # noqa: ANN001
             from siac.runtime import CorrectionResult
 
-            _ = (toa, geometry)
+            _ = toa
+            captured["geometry_shape"] = tuple(geometry.sza.shape)
+            captured["atmo_shape"] = tuple(atmo.aot.shape)
             return CorrectionResult(
                 boa=mock_observation_bundle.toa,
                 boa_unc=None,
@@ -482,6 +528,8 @@ def test_resolve_corrector_preserves_coarse_atmo_outputs(
     assert result.aot.rio.crs.to_string() == "EPSG:32632"
     assert result.aot.coords["x"].values.tolist() == [500.0, 1500.0]
     assert result.aot.coords["y"].values.tolist() == [1500.0, 500.0]
+    assert captured["geometry_shape"] == (2, 2)
+    assert captured["atmo_shape"] == (2, 2)
 
 
 def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
@@ -991,5 +1039,79 @@ def test_prepared_store_monthly_provider_rejects_mismatched_grid_when_strict(tmp
     provider = providers_mod.resolve_monthly_composite_provider(config)
     observation = SimpleNamespace(bounds=(0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632")
 
-    with pytest.raises(ValueError, match="uses shape"):
+    with pytest.raises(ValueError, match="covers bounds"):
         provider.get_monthly_composites(observation, 500.0)
+
+
+def test_prepared_store_monthly_provider_accepts_finer_grid_when_strict(tmp_path) -> None:
+    bands = (
+        SensorBand("B02", 490.0, 65.0, 10.0, 0),
+        SensorBand("B08", 842.0, 115.0, 10.0, 1),
+    )
+    transform = rasterio.transform.from_bounds(0.0, 0.0, 2000.0, 1000.0, 4, 2)
+
+    def _with_geo(data: xr.DataArray) -> xr.DataArray:
+        return data.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32632").rio.write_transform(transform)
+
+    coords = {"band": ["B02", "B08"], "y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
+    cube = _with_geo(xr.DataArray(np.full((2, 2, 4), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords))
+    collection = MonthlyCompositeCollection(
+        composites=(
+            MonthlyKernelWeightComposite(
+                kernels=BRDFKernelWeights(
+                    f0=cube,
+                    f1=xr.zeros_like(cube),
+                    f2=xr.zeros_like(cube),
+                    f0_unc=xr.full_like(cube, 0.01),
+                    f1_unc=xr.full_like(cube, 0.01),
+                    f2_unc=xr.full_like(cube, 0.01),
+                ),
+                quality=xr.DataArray(
+                    np.full((2, 4), 0.03, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]},
+                ),
+                sample_index=_with_geo(xr.DataArray(
+                    np.zeros((2, 4), dtype=np.int16),
+                    dims=["y", "x"],
+                    coords={"y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]},
+                )),
+                year=2023,
+                month=7,
+            ),
+        ),
+        source_bands=bands,
+        source_name="prepared-test",
+    )
+    collection = MonthlyCompositeCollection(
+        composites=(
+            MonthlyKernelWeightComposite(
+                kernels=collection.composites[0].kernels,
+                quality=_with_geo(collection.composites[0].quality),
+                sample_index=collection.composites[0].sample_index,
+                year=2023,
+                month=7,
+            ),
+        ),
+        source_bands=collection.source_bands,
+        source_name=collection.source_name,
+    )
+    store_path = write_monthly_composite_collection(
+        collection,
+        tmp_path / "prepared_store",
+        grid=MonthlyCompositeStoreGridSpec.from_bounds((0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632", resolution=500.0),
+    )
+    config = SimpleNamespace(
+        monthly_composites=SimpleNamespace(
+            provider="prepared_store",
+            store_path=store_path,
+            strict_coverage=True,
+        )
+    )
+
+    provider = providers_mod.resolve_monthly_composite_provider(config)
+    observation = SimpleNamespace(bounds=(0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632")
+
+    loaded = provider.get_monthly_composites(observation, 1000.0)
+
+    assert isinstance(loaded.composites[0], MonthlyKernelWeightComposite)

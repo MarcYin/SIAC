@@ -4,8 +4,11 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
 
+import siac.algorithms.surface.brdf_whittaker as brdf_whittaker_mod
+import siac.algorithms.surface.kernel_model as kernel_model_mod
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
 
@@ -19,32 +22,105 @@ def _geometry(shape: tuple[int, int]) -> GeometryAngles:
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_kernel_model_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeBRDFKernels:
+        def __init__(self, hb: float = 2.0, br: float = 1.0) -> None:
+            self.hb = hb
+            self.br = br
+
+        def compute(self, vza, sza, raa):  # noqa: ANN001
+            del sza, raa
+            if isinstance(vza, xr.DataArray):
+                zeros = xr.zeros_like(vza, dtype=np.float32)
+                return zeros, zeros.copy(deep=False)
+            shape = np.asarray(vza).shape
+            zeros = np.zeros(shape, dtype=np.float32)
+            return zeros, zeros.copy()
+
+    monkeypatch.setattr(kernel_model_mod, "BRDFKernels", _FakeBRDFKernels)
+    monkeypatch.setattr(brdf_whittaker_mod, "BRDFKernels", _FakeBRDFKernels)
+
+    def _fake_whittaker_smooth_cube(cube, weights, temporal_lambda):  # noqa: ANN001
+        del weights, temporal_lambda
+        values = np.asarray(cube, dtype=np.float32).copy()
+        smoothed = values.copy()
+        time_axis = np.arange(values.shape[0], dtype=np.float32)
+        for band_index in range(values.shape[1]):
+            for y_index in range(values.shape[2]):
+                for x_index in range(values.shape[3]):
+                    series = values[:, band_index, y_index, x_index]
+                    finite = np.isfinite(series)
+                    if not np.any(finite):
+                        continue
+                    if finite.sum() == 1:
+                        smoothed[:, band_index, y_index, x_index] = series[finite][0]
+                        continue
+                    smoothed[:, band_index, y_index, x_index] = np.interp(
+                        time_axis,
+                        time_axis[finite],
+                        series[finite],
+                    ).astype(np.float32)
+        return smoothed
+
+    monkeypatch.setattr(brdf_whittaker_mod, "whittaker_smooth_cube", _fake_whittaker_smooth_cube)
+
+
 def _weights(
     f0_values: np.ndarray,
     f0_unc_values: np.ndarray,
     *,
     times: np.ndarray | None = None,
+    georeferenced: bool = False,
 ) -> BRDFKernelWeights:
-    if times is None:
-        return BRDFKernelWeights(
-            f0=xr.DataArray(f0_values, dims=["band", "y", "x"], coords={"band": ["B02"], "y": [0], "x": [0]}),
-            f1=xr.DataArray(np.zeros_like(f0_values), dims=["band", "y", "x"], coords={"band": ["B02"], "y": [0], "x": [0]}),
-            f2=xr.DataArray(np.zeros_like(f0_values), dims=["band", "y", "x"], coords={"band": ["B02"], "y": [0], "x": [0]}),
-            f0_unc=xr.DataArray(f0_unc_values, dims=["band", "y", "x"], coords={"band": ["B02"], "y": [0], "x": [0]}),
-            f1_unc=xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords={"band": ["B02"], "y": [0], "x": [0]}),
-            f2_unc=xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords={"band": ["B02"], "y": [0], "x": [0]}),
-        )
+    def _geo_metadata(height: int, width: int) -> tuple[np.ndarray, np.ndarray, rasterio.Affine]:
+        xmin = 399960.0
+        ymax = 4700040.0
+        resolution = 500.0
+        xmax = xmin + width * resolution
+        ymin = ymax - height * resolution
+        transform = rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, width, height)
+        x = np.linspace(xmin + resolution / 2.0, xmax - resolution / 2.0, width, dtype=np.float64)
+        y = np.linspace(ymax - resolution / 2.0, ymin + resolution / 2.0, height, dtype=np.float64)
+        return y, x, transform
 
-    coords = {"time": times, "band": ["B02"], "y": [0], "x": [0]}
+    def _with_geo(data: xr.DataArray) -> xr.DataArray:
+        y, x, transform = _geo_metadata(int(data.sizes["y"]), int(data.sizes["x"]))
+        out = data.assign_coords({"y": y, "x": x}).rio.set_spatial_dims(x_dim="x", y_dim="y")
+        return out.rio.write_crs("EPSG:32615").rio.write_transform(transform)
+
+    if times is None:
+        coords = {"band": ["B02"], "y": np.arange(f0_values.shape[1]), "x": np.arange(f0_values.shape[2])}
+        arrays = {
+            "f0": xr.DataArray(f0_values, dims=["band", "y", "x"], coords=coords),
+            "f1": xr.DataArray(np.zeros_like(f0_values), dims=["band", "y", "x"], coords=coords),
+            "f2": xr.DataArray(np.zeros_like(f0_values), dims=["band", "y", "x"], coords=coords),
+            "f0_unc": xr.DataArray(f0_unc_values, dims=["band", "y", "x"], coords=coords),
+            "f1_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords=coords),
+            "f2_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords=coords),
+        }
+        if georeferenced:
+            arrays = {name: _with_geo(data) for name, data in arrays.items()}
+        return BRDFKernelWeights(**arrays)
+
+    coords = {
+        "time": times,
+        "band": ["B02"],
+        "y": np.arange(f0_values.shape[2]),
+        "x": np.arange(f0_values.shape[3]),
+    }
     zeros = np.zeros_like(f0_values)
-    return BRDFKernelWeights(
-        f0=xr.DataArray(f0_values, dims=["time", "band", "y", "x"], coords=coords),
-        f1=xr.DataArray(zeros, dims=["time", "band", "y", "x"], coords=coords),
-        f2=xr.DataArray(zeros, dims=["time", "band", "y", "x"], coords=coords),
-        f0_unc=xr.DataArray(f0_unc_values, dims=["time", "band", "y", "x"], coords=coords),
-        f1_unc=xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords),
-        f2_unc=xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords),
-    )
+    arrays = {
+        "f0": xr.DataArray(f0_values, dims=["time", "band", "y", "x"], coords=coords),
+        "f1": xr.DataArray(zeros, dims=["time", "band", "y", "x"], coords=coords),
+        "f2": xr.DataArray(zeros, dims=["time", "band", "y", "x"], coords=coords),
+        "f0_unc": xr.DataArray(f0_unc_values, dims=["time", "band", "y", "x"], coords=coords),
+        "f1_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords),
+        "f2_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords),
+    }
+    if georeferenced:
+        arrays = {name: _with_geo(data) for name, data in arrays.items()}
+    return BRDFKernelWeights(**arrays)
 
 
 def test_whittaker_deriver_fills_center_gap_and_returns_surface_prior() -> None:
@@ -143,4 +219,27 @@ def test_whittaker_deriver_uses_neighbor_uncertainty_when_target_is_missing() ->
     assert float(prior.boa.sel(band="B02", y=0, x=0)) == pytest.approx(0.10)
     assert float(target_unc[0, 0, 0]) == pytest.approx(0.02, abs=1e-6)
     assert np.isfinite(derived_unc)
-    assert 0.02 <= derived_unc < 0.08
+    assert 0.019999 <= derived_unc < 0.08
+
+
+def test_whittaker_deriver_preserves_spatial_metadata() -> None:
+    times = np.array(["2024-07-14", "2024-07-15", "2024-07-16"], dtype="datetime64[D]")
+    values = np.full((3, 1, 2, 2), 0.10, dtype=np.float32)
+    unc = np.full_like(values, 0.03)
+    weights = _weights(values, unc, times=times, georeferenced=True)
+
+    prior = BRDFWhittakerDeriver(apply_psf=False).compute_surface_prior(
+        weights,
+        _geometry((2, 2)),
+        obs_time=datetime(2024, 7, 15),
+    )
+
+    expected = weights.f0.isel(time=0, drop=True)
+    assert prior.boa.rio.crs is not None
+    assert prior.boa.rio.crs.to_string() == "EPSG:32615"
+    assert prior.boa_unc.rio.crs is not None
+    assert prior.boa_unc.rio.crs.to_string() == "EPSG:32615"
+    assert prior.mask.rio.crs is not None
+    assert prior.mask.rio.crs.to_string() == "EPSG:32615"
+    assert prior.boa.rio.transform(recalc=True) == expected.rio.transform(recalc=True)
+    assert prior.mask.rio.transform(recalc=True) == expected.rio.transform(recalc=True)

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import siac.algorithms.surface.swir_refine as swir_refine_mod
 from siac.algorithms.surface.brdf_monthly_composite import MonthlyBestPixelComposite
 from siac.algorithms.surface.brdf_monthly_database import build_monthly_composite_database
 from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary
@@ -266,6 +267,52 @@ def test_query_surface_prior_from_monthly_database_resamples_coarse_atmo_prior()
         k_neighbors=1,
     )
 
+    assert prior.boa.shape == (2, 2, 1)
+
+
+def test_query_surface_prior_from_monthly_database_uses_template_backed_area_resampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor_config = _sensor_config()
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((4, 2), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((4, 2), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((4, 2), 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((4, 2), 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((4, 2), 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((4, 2)),
+        cloud_mask=xr.DataArray(np.zeros((4, 2), dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 2.0, 4.0),
+    )
+    calls: list[tuple[str, bool]] = []
+    original = swir_refine_mod._resample_da
+
+    def _capture(da, target_shape, method="bilinear", *, template=None):  # noqa: ANN001
+        calls.append((str(method), template is not None))
+        return original(da, target_shape, method, template=template)
+
+    monkeypatch.setattr(swir_refine_mod, "_resample_da", _capture)
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_database(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        k_neighbors=1,
+    )
+
+    area_calls = [template_present for method, template_present in calls if method == "area"]
+    assert area_calls
+    assert all(area_calls)
     assert prior.boa.shape == (2, 2, 1)
 
 
@@ -621,16 +668,46 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
             if seen["calls"] == 1:
                 seen["bands"] = tuple(reflectance.coords["band"].values.tolist())
                 seen["dims"] = tuple(reflectance.dims)
+                seen["time"] = int(reflectance.sizes.get("time", 0))
                 seen["has_unc"] = source_uncertainty is not None
-            mapped = xr.DataArray(
-                np.array([0.10, 0.20, 0.40, 0.30, 0.20], dtype=np.float32).reshape(5, 1, 1),
-                dims=["band", "y", "x"],
-                coords={
-                    "band": self._target_band_names,
-                    "y": reflectance.coords["y"],
-                    "x": reflectance.coords["x"],
-                },
-            )
+            if "time" in reflectance.dims:
+                mapped = xr.DataArray(
+                    np.full(
+                        (
+                            int(reflectance.sizes["time"]),
+                            len(self._target_band_names),
+                            int(reflectance.sizes["y"]),
+                            int(reflectance.sizes["x"]),
+                        ),
+                        0.2,
+                        dtype=np.float32,
+                    ),
+                    dims=["time", "band", "y", "x"],
+                    coords={
+                        "time": reflectance.coords["time"],
+                        "band": self._target_band_names,
+                        "y": reflectance.coords["y"],
+                        "x": reflectance.coords["x"],
+                    },
+                )
+            else:
+                mapped = xr.DataArray(
+                    np.full(
+                        (
+                            len(self._target_band_names),
+                            int(reflectance.sizes["y"]),
+                            int(reflectance.sizes["x"]),
+                        ),
+                        0.2,
+                        dtype=np.float32,
+                    ),
+                    dims=["band", "y", "x"],
+                    coords={
+                        "band": self._target_band_names,
+                        "y": reflectance.coords["y"],
+                        "x": reflectance.coords["x"],
+                    },
+                )
             mapped_unc = xr.full_like(mapped, 0.03)
             return mapped, mapped_unc
 
@@ -650,9 +727,10 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
     )
 
     assert seen["bands"] == ("Band3", "Band4", "Band2", "Band6", "Band7")
-    assert seen["dims"] == ("band", "y", "x")
+    assert seen["dims"] == ("time", "band", "y", "x")
+    assert seen["time"] == 15
     assert seen["has_unc"] is True
-    assert seen["calls"] == 15
+    assert seen["calls"] == 1
 
 
 def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for_identical_months(
@@ -715,7 +793,7 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
                 )
             return outputs
 
-    calls = {"map": 0, "band_counts": []}
+    calls = {"map": 0, "band_counts": [], "time_counts": []}
 
     class _CountingMapper:
         def __init__(self, _source_bands, target_bands, *, spectral_library, k_neighbors):  # noqa: ANN001
@@ -726,23 +804,45 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
             del source_uncertainty
             calls["map"] += 1
             calls["band_counts"].append(int(reflectance.sizes["band"]))
-            mapped = xr.DataArray(
-                np.full(
-                    (
-                        len(self._target_band_names),
-                        int(reflectance.sizes["y"]),
-                        int(reflectance.sizes["x"]),
+            calls["time_counts"].append(int(reflectance.sizes.get("time", 0)))
+            if "time" in reflectance.dims:
+                mapped = xr.DataArray(
+                    np.full(
+                        (
+                            int(reflectance.sizes["time"]),
+                            len(self._target_band_names),
+                            int(reflectance.sizes["y"]),
+                            int(reflectance.sizes["x"]),
+                        ),
+                        0.2,
+                        dtype=np.float32,
                     ),
-                    0.2,
-                    dtype=np.float32,
-                ),
-                dims=["band", "y", "x"],
-                coords={
-                    "band": self._target_band_names,
-                    "y": reflectance.coords["y"],
-                    "x": reflectance.coords["x"],
-                },
-            )
+                    dims=["time", "band", "y", "x"],
+                    coords={
+                        "time": reflectance.coords["time"],
+                        "band": self._target_band_names,
+                        "y": reflectance.coords["y"],
+                        "x": reflectance.coords["x"],
+                    },
+                )
+            else:
+                mapped = xr.DataArray(
+                    np.full(
+                        (
+                            len(self._target_band_names),
+                            int(reflectance.sizes["y"]),
+                            int(reflectance.sizes["x"]),
+                        ),
+                        0.2,
+                        dtype=np.float32,
+                    ),
+                    dims=["band", "y", "x"],
+                    coords={
+                        "band": self._target_band_names,
+                        "y": reflectance.coords["y"],
+                        "x": reflectance.coords["x"],
+                    },
+                )
             return mapped, xr.full_like(mapped, 0.01)
 
     monkeypatch.setattr("siac.algorithms.surface.swir_refine.SpectralMapper", _CountingMapper)
@@ -760,8 +860,9 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
         spectral_library=_spectral_library(),
     )
 
-    assert calls["map"] == 15
-    assert calls["band_counts"] == [5] * 15
+    assert calls["map"] == 1
+    assert calls["band_counts"] == [5]
+    assert calls["time_counts"] == [15]
     assert database.entries_features.shape[0] == 15
 
 

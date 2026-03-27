@@ -14,6 +14,7 @@ from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectance
 from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
+from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -124,8 +125,14 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             "y": brdf_weights.f0.coords["y"],
             "x": brdf_weights.f0.coords["x"],
         }
-        boa = xr.DataArray(prior, dims=["band", "y", "x"], coords=coords)
-        boa_unc = xr.DataArray(prior_unc, dims=["band", "y", "x"], coords=coords)
+        boa = copy_spatial_metadata_like(
+            xr.DataArray(prior, dims=["band", "y", "x"], coords=coords),
+            ref,
+        )
+        boa_unc = copy_spatial_metadata_like(
+            xr.DataArray(prior_unc, dims=["band", "y", "x"], coords=coords),
+            ref,
+        )
 
         if source_bands and target_bands:
             boa, boa_unc = map_multispectral_reflectance(
@@ -138,13 +145,16 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             )
 
         if self.apply_psf and sigma_x > 0 and sigma_y > 0:
-            boa = self._apply_psf(boa, sigma_x, sigma_y)
-            boa_unc = self._apply_psf(boa_unc, sigma_x, sigma_y)
+            boa = copy_spatial_metadata_like(self._apply_psf(boa, sigma_x, sigma_y), boa)
+            boa_unc = copy_spatial_metadata_like(self._apply_psf(boa_unc, sigma_x, sigma_y), boa_unc)
 
-        mask = xr.DataArray(
-            np.all(np.isfinite(boa.values), axis=0) & np.all(np.isfinite(boa_unc.values), axis=0),
-            dims=["y", "x"],
-            coords={"y": boa.coords["y"], "x": boa.coords["x"]},
+        mask = copy_spatial_metadata_like(
+            xr.DataArray(
+                np.all(np.isfinite(boa.values), axis=0) & np.all(np.isfinite(boa_unc.values), axis=0),
+                dims=["y", "x"],
+                coords={"y": boa.coords["y"], "x": boa.coords["x"]},
+            ),
+            boa,
         )
         return SurfacePrior(
             boa=boa,

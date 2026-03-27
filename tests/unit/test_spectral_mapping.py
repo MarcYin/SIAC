@@ -7,8 +7,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
 
+import siac.algorithms.surface.brdf_whittaker as brdf_whittaker_mod
+import siac.algorithms.surface.kernel_model as kernel_model_mod
 import siac.algorithms.surface.spectral_mapping as spectral_mapping_mod
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.algorithms.surface.spectral_mapping import (
@@ -20,6 +23,50 @@ from siac.algorithms.surface.spectral_mapping import (
 )
 from siac.domain import SensorBand
 from siac.runtime import BRDFKernelWeights, GeometryAngles
+
+
+@pytest.fixture(autouse=True)
+def _stub_kernel_model_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeBRDFKernels:
+        def __init__(self, hb: float = 2.0, br: float = 1.0) -> None:
+            self.hb = hb
+            self.br = br
+
+        def compute(self, vza, sza, raa):  # noqa: ANN001
+            del sza, raa
+            if isinstance(vza, xr.DataArray):
+                zeros = xr.zeros_like(vza, dtype=np.float32)
+                return zeros, zeros.copy(deep=False)
+            shape = np.asarray(vza).shape
+            zeros = np.zeros(shape, dtype=np.float32)
+            return zeros, zeros.copy()
+
+    monkeypatch.setattr(kernel_model_mod, "BRDFKernels", _FakeBRDFKernels)
+    monkeypatch.setattr(brdf_whittaker_mod, "BRDFKernels", _FakeBRDFKernels)
+
+    def _fake_whittaker_smooth_cube(cube, weights, temporal_lambda):  # noqa: ANN001
+        del weights, temporal_lambda
+        values = np.asarray(cube, dtype=np.float32).copy()
+        smoothed = values.copy()
+        time_axis = np.arange(values.shape[0], dtype=np.float32)
+        for band_index in range(values.shape[1]):
+            for y_index in range(values.shape[2]):
+                for x_index in range(values.shape[3]):
+                    series = values[:, band_index, y_index, x_index]
+                    finite = np.isfinite(series)
+                    if not np.any(finite):
+                        continue
+                    if finite.sum() == 1:
+                        smoothed[:, band_index, y_index, x_index] = series[finite][0]
+                        continue
+                    smoothed[:, band_index, y_index, x_index] = np.interp(
+                        time_axis,
+                        time_axis[finite],
+                        series[finite],
+                    ).astype(np.float32)
+        return smoothed
+
+    monkeypatch.setattr(brdf_whittaker_mod, "whittaker_smooth_cube", _fake_whittaker_smooth_cube)
 
 
 def _library() -> HyperspectralLibrary:
@@ -80,6 +127,21 @@ def _geometry(shape: tuple[int, int]) -> GeometryAngles:
         vza=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
         vaa=xr.DataArray(np.full(shape, 1.7, dtype=np.float32), dims=["y", "x"]),
     )
+
+
+def _with_geo(data: xr.DataArray) -> xr.DataArray:
+    height = int(data.sizes["y"])
+    width = int(data.sizes["x"])
+    xmin = 399960.0
+    ymax = 4700040.0
+    resolution = 500.0
+    xmax = xmin + width * resolution
+    ymin = ymax - height * resolution
+    transform = rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, width, height)
+    x = np.linspace(xmin + resolution / 2.0, xmax - resolution / 2.0, width, dtype=np.float64)
+    y = np.linspace(ymax - resolution / 2.0, ymin + resolution / 2.0, height, dtype=np.float64)
+    out = data.assign_coords({"y": y, "x": x}).rio.set_spatial_dims(x_dim="x", y_dim="y")
+    return out.rio.write_crs("EPSG:32615").rio.write_transform(transform)
 
 
 def test_identity_mapping_keeps_reflectance_and_uncertainty() -> None:
@@ -198,7 +260,8 @@ def test_spectral_mapper_handles_time_dimension() -> None:
     source0 = convolve_hyperspectral_reflectance(sample0, library.wavelengths_nm, _source_bands())
     source1 = convolve_hyperspectral_reflectance(sample1, library.wavelengths_nm, _source_bands())
     source = xr.concat([source0, source1], dim=xr.IndexVariable("time", np.array(["2024-07-01", "2024-07-08"], dtype="datetime64[D]")))
-    unc = xr.full_like(source, 0.02)
+    source = _with_geo(source)
+    unc = _with_geo(xr.full_like(source, 0.02))
 
     mapper = SpectralMapper(_source_bands(), _target_bands(), spectral_library=library, k_neighbors=1)
     mapped, mapped_unc = mapper.map(source, source_uncertainty=unc)
@@ -206,6 +269,12 @@ def test_spectral_mapper_handles_time_dimension() -> None:
     assert mapped.dims == ("time", "band", "y", "x")
     assert mapped_unc.shape == mapped.shape
     assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
+    assert mapped.rio.crs is not None
+    assert mapped.rio.crs.to_string() == "EPSG:32615"
+    assert mapped_unc.rio.crs is not None
+    assert mapped_unc.rio.crs.to_string() == "EPSG:32615"
+    assert mapped.rio.transform(recalc=True) == source.rio.transform(recalc=True)
+    assert mapped_unc.rio.transform(recalc=True) == source.rio.transform(recalc=True)
 
 
 def test_mapping_uses_rsrf_resolution_when_requested(monkeypatch) -> None:
