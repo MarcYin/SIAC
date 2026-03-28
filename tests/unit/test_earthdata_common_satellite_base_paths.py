@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 def _load_satellite_base_module() -> ModuleType:
-    path = Path("/Users/fengyin/Documents/SIAC/python/siac/adapters/satellite/base.py")
+    path = Path(__file__).resolve().parents[2] / "python" / "siac" / "adapters" / "satellite" / "base.py"
     spec = importlib.util.spec_from_file_location("siac_satellite_base_test_module", path)
     assert spec is not None
     assert spec.loader is not None

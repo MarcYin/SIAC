@@ -173,7 +173,17 @@ def _aerosol_resolution(config: Any) -> float:
 
 def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
     """Mirror M4 band-selection logic for LUT preloading hints."""
-    return list(sensor_config.default_aerosol_solver_bands())
+    default_selector = getattr(sensor_config, "default_aerosol_solver_bands", None)
+    if callable(default_selector):
+        return list(default_selector())
+
+    range_selector = getattr(sensor_config, "select_bands_in_range", None)
+    if callable(range_selector):
+        bands = list(range_selector(400.0, 520.0))
+        if bands:
+            return bands
+
+    return list(getattr(sensor_config, "bands", ())[:2])
 
 
 def _should_capture_aot_scatter(config: Any) -> bool:

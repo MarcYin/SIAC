@@ -434,6 +434,7 @@ class _EarthAccessBRDFProvider:
                                 target_resolution,
                                 requested_coords,
                                 time_axis,
+                                crs=crs,
                             )
                         )
                     return outputs
@@ -449,6 +450,7 @@ class _EarthAccessBRDFProvider:
                             target_resolution,
                             requested_coords,
                             time_axis,
+                            crs=crs,
                         )
                         for _obs_time, time_axis in request_specs
                     ]
