@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import xarray as xr
 from scipy.spatial import cKDTree
 
 from siac.algorithms.grid.assembler import _resample_da
+from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -111,24 +112,25 @@ class MonthlyCompositeDatabase:
         y_coords = query_cube.coords["y"] if "y" in query_cube.coords else np.arange(ny)
         x_coords = query_cube.coords["x"] if "x" in query_cube.coords else np.arange(nx)
 
+        def _output_arrays() -> tuple[xr.DataArray, xr.DataArray]:
+            coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
+            predicted_da = xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords)
+            uncertainty_da = xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords)
+            return (
+                copy_spatial_metadata_like(predicted_da, query_cube),
+                copy_spatial_metadata_like(uncertainty_da, query_cube),
+            )
+
         features_flat = np.empty((n_pixels, n_query + median_values.shape[0]), dtype=np.float32)
         features_flat[:, :n_query] = query_values.reshape(n_query, n_pixels).T
         features_flat[:, n_query:] = median_values.reshape(median_values.shape[0], n_pixels).T
         valid_query_rows = np.flatnonzero(np.all(np.isfinite(features_flat), axis=1))
         if valid_query_rows.size == 0 or self.entries_features.size == 0:
-            coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
-            return (
-                xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
-                xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
-            )
+            return _output_arrays()
 
         neighbor_index = self._neighbor_index
         if neighbor_index is None:
-            coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
-            return (
-                xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
-                xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
-            )
+            return _output_arrays()
 
         neighbor_count = min(k_neighbors, self.entries_features.shape[0])
         predicted_flat = predicted.reshape(n_visible, n_pixels).T
@@ -183,11 +185,7 @@ class MonthlyCompositeDatabase:
                     predicted_flat[flat_index] = estimate.astype(np.float32, copy=False)
                     uncertainty_flat[flat_index] = spread.astype(np.float32, copy=False)
 
-        coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
-        return (
-            xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords),
-            xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
-        )
+        return _output_arrays()
 
 
 def build_monthly_composite_database(
@@ -252,10 +250,8 @@ def build_monthly_composite_database(
         int(n_composites * n_pixels),
     )
 
-    return MonthlyCompositeDatabase(
-        entries_features=entries_features,
-        entries_visible=entries_visible,
-        median_summary=xr.DataArray(
+    median_summary_da = copy_spatial_metadata_like(
+        xr.DataArray(
             median_summary,
             dims=["feature", "y", "x"],
             coords={
@@ -264,6 +260,13 @@ def build_monthly_composite_database(
                 "x": first.coords["x"],
             },
         ),
+        cast("xr.DataArray", first.isel(band=0, drop=True)),
+    )
+
+    return MonthlyCompositeDatabase(
+        entries_features=entries_features,
+        entries_visible=entries_visible,
+        median_summary=median_summary_da,
         visible_band_names=visible_names,
         query_band_names=query_names,
         feature_names=_feature_names_for_query_bands(query_names),

@@ -1,6 +1,7 @@
 """Atmospheric correction: TOA to BOA conversion."""
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,8 @@ from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.domain import SensorConfig
+
+logger = logging.getLogger(__name__)
 
 _TOA_BAND_LOADER_ATTR = "_siac_toa_band_loader"
 
@@ -93,8 +96,11 @@ def _resample_mask_to_template(mask: xr.DataArray, template: xr.DataArray) -> xr
                 ),
                 template,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Mask coordinate-based resampling failed (%s); falling back to zoom resampling",
+                exc,
+            )
 
     src = np.asarray(mask.values, dtype=np.float32)
     h_out = int(template.sizes[template.dims[0]])
@@ -139,8 +145,12 @@ def _resample_field_to_template(field: xr.DataArray, template: xr.DataArray) -> 
                 method="linear",
             )
             resampled = copy_spatial_metadata_like(interpolated, template)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Linear interpolation failed for field %s (%s); falling back to zoom resampling",
+                getattr(field, "name", "?"),
+                exc,
+            )
 
     if resampled is None:
         src = np.asarray(field.values, dtype=np.float32)
@@ -184,13 +194,25 @@ def _resample_field_to_template(field: xr.DataArray, template: xr.DataArray) -> 
                 method="nearest",
             )
             filled = np.where(np.isfinite(filled), filled, np.asarray(nearest.values, dtype=np.float32))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Nearest-neighbour gap-fill failed for field %s (%s); "
+                "remaining NaN values will be filled with source mean",
+                getattr(field, "name", "?"),
+                exc,
+            )
 
     if not np.all(np.isfinite(filled)):
         source_values = np.asarray(field.values, dtype=np.float32)
         finite_source = source_values[np.isfinite(source_values)]
         fill_value = float(finite_source.mean()) if finite_source.size else 0.0
+        n_nan = int(np.sum(~np.isfinite(filled)))
+        logger.warning(
+            "Filling %d remaining NaN pixels in field %s with source mean %.4g",
+            n_nan,
+            getattr(field, "name", "?"),
+            fill_value,
+        )
         filled = np.where(np.isfinite(filled), filled, np.float32(fill_value))
 
     return resampled.copy(data=filled)

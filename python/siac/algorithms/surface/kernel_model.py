@@ -41,19 +41,35 @@ class KernelModelDeriver:
     surface reflectance at the observation geometry.
 
     Args:
-        psf_sigma_x: PSF standard deviation in x direction (pixels)
-        psf_sigma_y: PSF standard deviation in y direction (pixels)
-        apply_psf: Whether to apply PSF convolution for scale matching
+        psf_sigma_x: PSF standard deviation in x direction (pixels).
+            If *None*, computed automatically from ``source_resolution_m``
+            and ``target_resolution_m``.
+        psf_sigma_y: PSF standard deviation in y direction (pixels).
+            If *None*, uses the same value as *psf_sigma_x*.
+        apply_psf: Whether to apply PSF convolution for scale matching.
+        source_resolution_m: Spatial resolution of the BRDF source (metres).
+        target_resolution_m: Spatial resolution of the target sensor (metres).
     """
 
     def __init__(
         self,
-        psf_sigma_x: float = 29.75,
-        psf_sigma_y: float = 39.0,
+        psf_sigma_x: float | None = None,
+        psf_sigma_y: float | None = None,
         apply_psf: bool = True,
+        source_resolution_m: float = 500.0,
+        target_resolution_m: float = 10.0,
     ) -> None:
-        self.psf_sigma_x = psf_sigma_x
-        self.psf_sigma_y = psf_sigma_y
+        if psf_sigma_x is not None:
+            self.psf_sigma_x = psf_sigma_x
+            self.psf_sigma_y = psf_sigma_y if psf_sigma_y is not None else psf_sigma_x
+        else:
+            # Derive sigma (in target pixels) from the resolution ratio.
+            # The PSF FWHM ≈ source_resolution / target_resolution, so
+            # σ = (source / target) / (2 √(2 ln 2)) ≈ ratio / 2.355
+            ratio = source_resolution_m / target_resolution_m
+            sigma = ratio / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+            self.psf_sigma_x = sigma
+            self.psf_sigma_y = psf_sigma_y if psf_sigma_y is not None else sigma
         self.apply_psf = apply_psf
         self._kernels = BRDFKernels(hb=2.0, br=1.0)
 
@@ -241,26 +257,45 @@ class KernelModelDeriver:
         (500m) and the target satellite resolution (e.g., 10m for S2).
         """
         if "band" in data.dims:
-            # Process each band separately
-            result_list = []
-            for band in data.band.values:
-                band_data = data.sel(band=band)
-                convolved = self._convolve_2d(band_data.values, sigma_x, sigma_y)
-                result_list.append(convolved)
-
-            result = np.stack(result_list, axis=0)
-            return xr.DataArray(
-                result,
-                dims=data.dims,
-                coords=data.coords,
-            )
+            # Batch all bands in one call with sigma=0 along the band axis.
+            result = self._convolve_nd(data.values, sigma_x, sigma_y, band_axis=0)
+            return xr.DataArray(result, dims=data.dims, coords=data.coords)
         else:
             result = self._convolve_2d(data.values, sigma_x, sigma_y)
-            return xr.DataArray(
-                result,
-                dims=data.dims,
-                coords=data.coords,
-            )
+            return xr.DataArray(result, dims=data.dims, coords=data.coords)
+
+    def _convolve_nd(
+        self,
+        data: FloatArray,
+        sigma_x: float,
+        sigma_y: float,
+        band_axis: int = 0,
+    ) -> FloatArray:
+        """Apply 2D Gaussian convolution to each band in a 3-D cube."""
+        data_arr = np.asarray(data, dtype=np.float32)
+        mask = np.isfinite(data_arr)
+        data_filled = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
+
+        # Build per-axis sigma: 0 for band axis, sigma_y/sigma_x for spatial.
+        sigma_nd = [0.0] * data_arr.ndim
+        sigma_nd[band_axis] = 0.0
+        # Spatial axes are the remaining two (in order: y, x).
+        spatial = [i for i in range(data_arr.ndim) if i != band_axis]
+        sigma_nd[spatial[0]] = sigma_y
+        sigma_nd[spatial[1]] = sigma_x
+
+        convolved = np.asarray(
+            ndimage.gaussian_filter(data_filled, sigma=sigma_nd, mode="reflect"),
+            dtype=np.float32,
+        )
+        norm = np.asarray(
+            ndimage.gaussian_filter(mask.astype(np.float32), sigma=sigma_nd, mode="reflect"),
+            dtype=np.float32,
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            result: FloatArray = np.asarray(convolved / np.maximum(norm, 1.0e-10), dtype=np.float32)
+        restored: FloatArray = np.asarray(np.where(norm > 0.01, result, np.nan), dtype=np.float32)
+        return restored
 
     def _convolve_2d(
         self,

@@ -139,10 +139,17 @@ class CostFunction:
             self.surface_prior.boa_unc.values, self.config.min_boa_unc
         )
 
-        # Ensure finite values
-        self.aot_unc = np.where(np.isfinite(self.aot_unc), self.aot_unc, 1.0)
-        self.tcwv_unc = np.where(np.isfinite(self.tcwv_unc), self.tcwv_unc, 1.0)
-        self.boa_unc = np.where(np.isfinite(self.boa_unc), self.boa_unc, 1.0)
+        # Ensure finite values – fall back to the configured minimum uncertainty
+        # rather than an arbitrary 1.0 which is far too large for AOT/TCWV.
+        self.aot_unc = np.where(
+            np.isfinite(self.aot_unc), self.aot_unc, self.config.min_aot_unc
+        )
+        self.tcwv_unc = np.where(
+            np.isfinite(self.tcwv_unc), self.tcwv_unc, self.config.min_tcwv_unc
+        )
+        self.boa_unc = np.where(
+            np.isfinite(self.boa_unc), self.boa_unc, self.config.min_boa_unc
+        )
 
     def _setup_band_weights(self) -> None:
         """Setup wavelength-based band weights."""
@@ -286,6 +293,12 @@ class CostFunction:
             else:
                 boa_prior_band = self.boa_prior
                 boa_unc_band = self.boa_unc
+                if i == 0:
+                    logger.warning(
+                        "boa_prior is %dD; using the same surface prior for all %d bands.",
+                        self.boa_prior.ndim,
+                        len(self.bands),
+                    )
 
             # Residual
             diff = boa_model - boa_prior_band

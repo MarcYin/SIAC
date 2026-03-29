@@ -530,9 +530,10 @@ class MultiGridSolver:
         min_size = self.config.min_grid_size
 
         # Compute number of levels based on image size
+        ratio = min(ny, nx) / min_size
         max_levels = min(
             self.config.n_levels,
-            int(np.log2(min(ny, nx) / min_size)) + 1
+            max(1, int(np.log2(max(ratio, 1.0))) + 1),
         )
 
         shapes = []
@@ -579,21 +580,26 @@ class MultiGridSolver:
         if mask.shape == shape:
             return mask
 
-        # Block reduce with logical AND (valid only if all sub-pixels valid)
-        block_y = mask.shape[0] // shape[0]
-        block_x = mask.shape[1] // shape[1]
+        if shape[0] <= mask.shape[0] and shape[1] <= mask.shape[1]:
+            # Match the center-based coarse-grid assignment used for numeric
+            # field remapping so coarse validity covers the same source pixels.
+            result = np.ones(shape, dtype=bool)
+            src = np.asarray(mask.values, dtype=bool)
+            for iy in range(src.shape[0]):
+                dst_y = min(((2 * iy + 1) * shape[0]) // (2 * src.shape[0]), shape[0] - 1)
+                for ix in range(src.shape[1]):
+                    dst_x = min(((2 * ix + 1) * shape[1]) // (2 * src.shape[1]), shape[1] - 1)
+                    result[dst_y, dst_x] &= bool(src[iy, ix])
+            return xr.DataArray(result, dims=["y", "x"])
 
-        # Reshape and reduce
-        result = np.zeros(shape, dtype=bool)
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                block = mask.values[
-                    i * block_y : (i + 1) * block_y,
-                    j * block_x : (j + 1) * block_x,
-                ]
-                result[i, j] = block.mean() > 0.5  # Majority valid
-
-        return xr.DataArray(result, dims=["y", "x"])
+        upsampled = np.asarray(
+            interpolate_to_fine_grid(
+                np.asarray(mask.values, dtype=np.float64),
+                shape[0],
+                shape[1],
+            )
+        )
+        return xr.DataArray(upsampled > 0.5, dims=["y", "x"])
 
     def _resample_geometry_to_grid(
         self, geometry: GeometryAngles, shape: tuple[int, int]

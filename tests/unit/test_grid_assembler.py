@@ -9,7 +9,9 @@ import pytest
 import xarray as xr
 from rasterio.enums import Resampling as RasterioResampling
 
+import siac.algorithms.grid.assembler as assembler_mod
 from siac.algorithms.grid.assembler import assemble_grids
+from siac.catalog import SENTINEL2A_CONFIG
 from siac.domain import SensorBand, SensorConfig
 from siac.runtime import (
     AtmosphericState,
@@ -133,6 +135,74 @@ class TestAssembleGrids:
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
         assert [b.name for b in sib.bands] == ["B01", "B02"]
 
+    def test_surface_prior_is_aligned_to_solver_band_names(self, large_atmo, mock_rt_model):
+        shape = (4, 4)
+        toa = xr.Dataset(
+            {
+                "B01": xr.DataArray(np.full(shape, 0.08, dtype=np.float32), dims=["y", "x"]),
+                "B02": xr.DataArray(np.full(shape, 0.12, dtype=np.float32), dims=["y", "x"]),
+                "B04": xr.DataArray(np.full(shape, 0.18, dtype=np.float32), dims=["y", "x"]),
+            }
+        )
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5, dtype=np.float32), dims=["y", "x"]),
+        )
+        obs = ObservationBundle(
+            toa=toa,
+            geometry=geometry,
+            cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+            sensor_config=SensorConfig(
+                sensor_id="MSI",
+                satellite_id="S2A",
+                bands=tuple(SENTINEL2A_CONFIG.get_band(name) for name in ("B01", "B02", "B04")),
+            ),
+            metadata={"observation_time": None},
+            crs="EPSG:32632",
+            bounds=(300000.0, 5500000.0, 300040.0, 5500040.0),
+        )
+        surface = SurfacePrior(
+            boa=xr.DataArray(
+                np.stack(
+                    [
+                        np.full(shape, 0.44, dtype=np.float32),
+                        np.full(shape, 0.11, dtype=np.float32),
+                        np.full(shape, 0.22, dtype=np.float32),
+                    ],
+                    axis=0,
+                ),
+                dims=["band", "y", "x"],
+                coords={"band": ["B04", "B01", "B02"]},
+            ),
+            boa_unc=xr.DataArray(
+                np.stack(
+                    [
+                        np.full(shape, 0.04, dtype=np.float32),
+                        np.full(shape, 0.01, dtype=np.float32),
+                        np.full(shape, 0.02, dtype=np.float32),
+                    ],
+                    axis=0,
+                ),
+                dims=["band", "y", "x"],
+                coords={"band": ["B04", "B01", "B02"]},
+            ),
+            kernels=None,
+            mask=xr.DataArray(
+                np.ones((3, *shape), dtype=bool),
+                dims=["band", "y", "x"],
+                coords={"band": ["B04", "B01", "B02"]},
+            ),
+        )
+
+        sib = assemble_grids(obs, large_atmo, surface, mock_rt_model, aerosol_resolution_m=10.0)
+
+        assert [band.name for band in sib.bands] == ["B02", "B04"]
+        assert list(sib.surface_prior.boa.coords["band"].values) == ["B02", "B04"]
+        np.testing.assert_allclose(sib.surface_prior.boa.sel(band="B02").values, 0.22)
+        np.testing.assert_allclose(sib.surface_prior.boa.sel(band="B04").values, 0.44)
+
     def test_cloud_mask_conservative(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Any native pixel that is cloud → aux pixel is cloud."""
         import dataclasses
@@ -146,6 +216,15 @@ class TestAssembleGrids:
         sib = assemble_grids(obs, large_atmo, large_surface, mock_rt_model)
         # The cloud region should still have True values after resampling
         assert sib.cloud_mask.values.any(), "Cloud region should be preserved"
+
+    def test_cloud_mask_preserves_non_divisible_edge_clouds(self):
+        mask = xr.DataArray(np.zeros((5, 5), dtype=bool), dims=["y", "x"])
+        mask.values[-1, -1] = True
+
+        resampled = assembler_mod._resample_cloud_mask(mask, (2, 2))
+
+        expected = np.array([[False, False], [False, True]])
+        np.testing.assert_array_equal(resampled.values, expected)
 
     def test_identity_same_res(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """When aerosol_resolution matches the scene pixel size, output ≈ input."""

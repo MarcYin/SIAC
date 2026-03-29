@@ -74,17 +74,6 @@ impl RossThickLiSparse {
 
         Ok((ross.into_pyarray(py), li.into_pyarray(py)))
     }
-
-    /// Compute kernels for 1D arrays (flattened pixels)
-    fn compute_1d<'py>(
-        &self,
-        py: Python<'py>,
-        vza: PyReadonlyArray2<f64>,
-        sza: PyReadonlyArray2<f64>,
-        raa: PyReadonlyArray2<f64>,
-    ) -> PyResult<(&'py PyArray2<f64>, &'py PyArray2<f64>)> {
-        self.compute(py, vza, sza, raa)
-    }
 }
 
 impl RossThickLiSparse {
@@ -94,7 +83,9 @@ impl RossThickLiSparse {
         let cos_vza = vza.cos();
         let sin_sza = sza.sin();
         let sin_vza = vza.sin();
-        let cos_raa = raa.abs().cos();
+        let raa_abs = raa.abs();
+        let cos_raa = raa_abs.cos();
+        let sin_raa = raa_abs.sin();
 
         // Phase angle
         let cos_phase = (cos_sza * cos_vza + sin_sza * sin_vza * cos_raa).clamp(-1.0, 1.0);
@@ -104,7 +95,7 @@ impl RossThickLiSparse {
         let ross = self.ross_thick(cos_sza, cos_vza, cos_phase, phase);
 
         // Li-Sparse kernel
-        let li = self.li_sparse(cos_sza, cos_vza, sin_sza, sin_vza, cos_raa);
+        let li = self.li_sparse(cos_sza, cos_vza, sin_sza, sin_vza, cos_raa, sin_raa);
 
         (ross, li)
     }
@@ -128,6 +119,7 @@ impl RossThickLiSparse {
         sin_sza: f64,
         sin_vza: f64,
         cos_raa: f64,
+        sin_raa: f64,
     ) -> f64 {
         // Prime angles (scaled by br for sparse vegetation)
         let tan_sza = sin_sza / cos_sza.max(1e-10);
@@ -158,7 +150,7 @@ impl RossThickLiSparse {
 
         // Overlap function
         let cost = self.hb
-            * ((d2 + (tan_sza_prime * tan_vza_prime * cos_raa.sin()).powi(2)).sqrt()
+            * ((d2 + (tan_sza_prime * tan_vza_prime * sin_raa).powi(2)).sqrt()
                 / (sec_sza_prime + sec_vza_prime));
         let cost = cost.clamp(-1.0, 1.0);
         let t = cost.acos();

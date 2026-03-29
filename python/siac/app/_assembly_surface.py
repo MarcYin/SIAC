@@ -14,7 +14,10 @@ if TYPE_CHECKING:
 def _select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]:
     if sensor_config is None:
         return list(range(1, 8))
-    selected: list[Any] = list(sensor_config.select_bands_in_range(400.0, 520.0))
+    selected: list[Any] = list(sensor_config.default_aerosol_solver_bands())
+    if selected:
+        return selected
+    selected = list(sensor_config.select_bands_in_range(400.0, 520.0))
     if selected:
         return selected
     return list(sensor_config.bands[:2])

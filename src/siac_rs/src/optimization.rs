@@ -9,6 +9,7 @@ use numpy::{
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 /// Remap high-resolution data to coarse grid by averaging
 ///
@@ -31,11 +32,11 @@ pub fn remap_to_coarse_grid<'py>(
     let mut coarse = Array2::<f64>::zeros((coarse_rows, coarse_cols));
     let mut counts = Array2::<f64>::zeros((coarse_rows, coarse_cols));
 
-    // Map each high-res pixel to coarse grid cell
+    // Map each high-res pixel to coarse grid cell (center-based to avoid aliasing)
     for i in 0..high_rows {
         for j in 0..high_cols {
-            let ci = (i * coarse_rows) / high_rows;
-            let cj = (j * coarse_cols) / high_cols;
+            let ci = ((2 * i + 1) * coarse_rows / (2 * high_rows)).min(coarse_rows - 1);
+            let cj = ((2 * j + 1) * coarse_cols / (2 * high_cols)).min(coarse_cols - 1);
 
             let val = data[[i, j]];
             if val.is_finite() {
@@ -244,83 +245,110 @@ pub fn evaluate_grid_search_candidate_cost<'py>(
 
     let mut cost = Array2::<f32>::zeros((ny, nx));
 
-    for ib in 0..n_band {
-        let band_w = band_weights[ib] as f64;
-        for iy in 0..ny {
+    // Parallel observation cost: compute per-row slices in parallel.
+    let row_costs: Vec<Vec<f32>> = (0..ny)
+        .into_par_iter()
+        .map(|iy| {
+            let mut row = vec![0.0f32; nx];
             for ix in 0..nx {
                 if !valid[[iy, ix]] {
                     continue;
                 }
+                let mut pixel_cost = 0.0_f64;
+                for ib in 0..n_band {
+                    let band_w = band_weights[ib] as f64;
+                    let unc = boa_unc[[ib, iy, ix]] as f64;
+                    if !unc.is_finite() || unc <= 0.0 {
+                        continue;
+                    }
 
-                let unc = boa_unc[[ib, iy, ix]] as f64;
-                if !unc.is_finite() || unc <= 0.0 {
-                    continue;
-                }
+                    let toa_v = toa[[ib, iy, ix]] as f64;
+                    let xap_v = xap[[ib, iy, ix]] as f64;
+                    let xbp_v = xbp[[ib, iy, ix]] as f64;
+                    let xcp_v = xcp[[ib, iy, ix]] as f64;
+                    let prior_v = boa_prior[[ib, iy, ix]] as f64;
+                    if !toa_v.is_finite()
+                        || !xap_v.is_finite()
+                        || !xbp_v.is_finite()
+                        || !xcp_v.is_finite()
+                        || !prior_v.is_finite()
+                    {
+                        continue;
+                    }
 
-                let toa_v = toa[[ib, iy, ix]] as f64;
-                let xap_v = xap[[ib, iy, ix]] as f64;
-                let xbp_v = xbp[[ib, iy, ix]] as f64;
-                let xcp_v = xcp[[ib, iy, ix]] as f64;
-                let prior_v = boa_prior[[ib, iy, ix]] as f64;
-                if !toa_v.is_finite()
-                    || !xap_v.is_finite()
-                    || !xbp_v.is_finite()
-                    || !xcp_v.is_finite()
-                    || !prior_v.is_finite()
-                {
-                    continue;
-                }
+                    let y = xap_v * toa_v - xbp_v;
+                    let denom = 1.0 + xcp_v * y;
+                    if !denom.is_finite() || denom.abs() < 1e-12 {
+                        continue;
+                    }
 
-                let y = xap_v * toa_v - xbp_v;
-                let denom = 1.0 + xcp_v * y;
-                if !denom.is_finite() || denom.abs() < 1e-12 {
-                    continue;
-                }
+                    let boa_model = y / denom;
+                    let diff = boa_model - prior_v;
+                    if !diff.is_finite() {
+                        continue;
+                    }
 
-                let boa_model = y / denom;
-                let diff = boa_model - prior_v;
-                if !diff.is_finite() {
-                    continue;
+                    let w = band_w / (unc * unc).max(1e-12);
+                    if !w.is_finite() {
+                        continue;
+                    }
+                    let add = 0.5 * w * diff * diff;
+                    if add.is_finite() {
+                        pixel_cost += add;
+                    }
                 }
-
-                let w = band_w / (unc * unc).max(1e-12);
-                if !w.is_finite() {
-                    continue;
-                }
-                let add = 0.5 * w * diff * diff;
-                if add.is_finite() {
-                    cost[[iy, ix]] += add as f32;
-                }
+                row[ix] = pixel_cost as f32;
             }
+            row
+        })
+        .collect();
+
+    for (iy, row) in row_costs.into_iter().enumerate() {
+        for (ix, val) in row.into_iter().enumerate() {
+            cost[[iy, ix]] = val;
         }
     }
 
     let aot_val = aot_val as f64;
     let tcwv_val = tcwv_val as f64;
-    for iy in 0..ny {
-        for ix in 0..nx {
-            if !valid[[iy, ix]] {
-                continue;
-            }
 
-            let aot_p = aot_prior[[iy, ix]] as f64;
-            let tcwv_p = tcwv_prior[[iy, ix]] as f64;
-            let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
-            let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
-            if !aot_p.is_finite()
-                || !tcwv_p.is_finite()
-                || !aot_u.is_finite()
-                || !tcwv_u.is_finite()
-            {
-                continue;
-            }
+    // Parallel prior cost: compute per-row in parallel.
+    let prior_costs: Vec<Vec<f32>> = (0..ny)
+        .into_par_iter()
+        .map(|iy| {
+            let mut row = vec![0.0f32; nx];
+            for ix in 0..nx {
+                if !valid[[iy, ix]] {
+                    continue;
+                }
 
-            let prior = 0.5
-                * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
-                    + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p)) / (tcwv_u * tcwv_u).max(1e-12));
-            if prior.is_finite() {
-                cost[[iy, ix]] += prior as f32;
+                let aot_p = aot_prior[[iy, ix]] as f64;
+                let tcwv_p = tcwv_prior[[iy, ix]] as f64;
+                let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
+                let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
+                if !aot_p.is_finite()
+                    || !tcwv_p.is_finite()
+                    || !aot_u.is_finite()
+                    || !tcwv_u.is_finite()
+                {
+                    continue;
+                }
+
+                let prior = 0.5
+                    * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
+                        + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p))
+                            / (tcwv_u * tcwv_u).max(1e-12));
+                if prior.is_finite() {
+                    row[ix] = prior as f32;
+                }
             }
+            row
+        })
+        .collect();
+
+    for (iy, row) in prior_costs.into_iter().enumerate() {
+        for (ix, val) in row.into_iter().enumerate() {
+            cost[[iy, ix]] += val;
         }
     }
 
@@ -424,84 +452,94 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
                 }
             }
 
-            for ib in 0..n_band {
-                let band_w = band_weights[ib] as f64;
-                for iy in 0..ny {
+            // Compute observation + prior cost per-row in parallel for this (aot, tcwv) slice.
+            let aot_val_f64 = *aot_val as f64;
+            let tcwv_val_f64 = *tcwv_val as f64;
+
+            let row_costs: Vec<Vec<f32>> = (0..ny)
+                .into_par_iter()
+                .map(|iy| {
+                    let mut row = vec![0.0f32; nx];
                     for ix in 0..nx {
                         if !valid[[iy, ix]] {
                             continue;
                         }
 
-                        let unc = boa_unc[[ib, iy, ix]] as f64;
-                        if !unc.is_finite() || unc <= 0.0 {
-                            continue;
+                        let mut pixel_cost = 0.0_f64;
+
+                        // Observation term
+                        for ib in 0..n_band {
+                            let band_w = band_weights[ib] as f64;
+                            let unc = boa_unc[[ib, iy, ix]] as f64;
+                            if !unc.is_finite() || unc <= 0.0 {
+                                continue;
+                            }
+
+                            let toa_v = toa[[ib, iy, ix]] as f64;
+                            let xap_v = xap[[ib, iy, ix]] as f64;
+                            let xbp_v = xbp[[ib, iy, ix]] as f64;
+                            let xcp_v = xcp[[ib, iy, ix]] as f64;
+                            let prior_v = boa_prior[[ib, iy, ix]] as f64;
+                            if !toa_v.is_finite()
+                                || !xap_v.is_finite()
+                                || !xbp_v.is_finite()
+                                || !xcp_v.is_finite()
+                                || !prior_v.is_finite()
+                            {
+                                continue;
+                            }
+
+                            let y = xap_v * toa_v - xbp_v;
+                            let denom = 1.0 + xcp_v * y;
+                            if !denom.is_finite() || denom.abs() < 1e-12 {
+                                continue;
+                            }
+
+                            let boa_model = y / denom;
+                            let diff = boa_model - prior_v;
+                            if !diff.is_finite() {
+                                continue;
+                            }
+
+                            let w = band_w / (unc * unc).max(1e-12);
+                            if !w.is_finite() {
+                                continue;
+                            }
+                            let add = 0.5 * w * diff * diff;
+                            if add.is_finite() {
+                                pixel_cost += add;
+                            }
                         }
 
-                        let toa_v = toa[[ib, iy, ix]] as f64;
-                        let xap_v = xap[[ib, iy, ix]] as f64;
-                        let xbp_v = xbp[[ib, iy, ix]] as f64;
-                        let xcp_v = xcp[[ib, iy, ix]] as f64;
-                        let prior_v = boa_prior[[ib, iy, ix]] as f64;
-                        if !toa_v.is_finite()
-                            || !xap_v.is_finite()
-                            || !xbp_v.is_finite()
-                            || !xcp_v.is_finite()
-                            || !prior_v.is_finite()
+                        // Prior term
+                        let aot_p = aot_prior[[iy, ix]] as f64;
+                        let tcwv_p = tcwv_prior[[iy, ix]] as f64;
+                        let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
+                        let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
+                        if aot_p.is_finite()
+                            && tcwv_p.is_finite()
+                            && aot_u.is_finite()
+                            && tcwv_u.is_finite()
                         {
-                            continue;
+                            let prior = 0.5
+                                * (((aot_val_f64 - aot_p) * (aot_val_f64 - aot_p))
+                                    / (aot_u * aot_u).max(1e-12)
+                                    + ((tcwv_val_f64 - tcwv_p) * (tcwv_val_f64 - tcwv_p))
+                                        / (tcwv_u * tcwv_u).max(1e-12));
+                            if prior.is_finite() {
+                                pixel_cost += prior;
+                            }
                         }
 
-                        let y = xap_v * toa_v - xbp_v;
-                        let denom = 1.0 + xcp_v * y;
-                        if !denom.is_finite() || denom.abs() < 1e-12 {
-                            continue;
-                        }
-
-                        let boa_model = y / denom;
-                        let diff = boa_model - prior_v;
-                        if !diff.is_finite() {
-                            continue;
-                        }
-
-                        let w = band_w / (unc * unc).max(1e-12);
-                        if !w.is_finite() {
-                            continue;
-                        }
-                        let add = 0.5 * w * diff * diff;
-                        if add.is_finite() {
-                            costs[[ia, it, iy, ix]] += add as f32;
-                        }
+                        row[ix] = pixel_cost as f32;
                     }
-                }
-            }
+                    row
+                })
+                .collect();
 
-            let aot_val = *aot_val as f64;
-            let tcwv_val = *tcwv_val as f64;
-            for iy in 0..ny {
-                for ix in 0..nx {
-                    if !valid[[iy, ix]] {
-                        continue;
-                    }
-
-                    let aot_p = aot_prior[[iy, ix]] as f64;
-                    let tcwv_p = tcwv_prior[[iy, ix]] as f64;
-                    let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
-                    let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
-                    if !aot_p.is_finite()
-                        || !tcwv_p.is_finite()
-                        || !aot_u.is_finite()
-                        || !tcwv_u.is_finite()
-                    {
-                        continue;
-                    }
-
-                    let prior = 0.5
-                        * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
-                            + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p))
-                                / (tcwv_u * tcwv_u).max(1e-12));
-                    if prior.is_finite() {
-                        costs[[ia, it, iy, ix]] += prior as f32;
-                    }
+            for (iy, row) in row_costs.into_iter().enumerate() {
+                for (ix, val) in row.into_iter().enumerate() {
+                    costs[[ia, it, iy, ix]] = val;
                 }
             }
         }
@@ -638,7 +676,9 @@ pub fn quadratic_refine_grid_search<'py>(
             let b = d2fdxdy;
             let c = d2fdy2;
             let det = a * c - b * b;
-            if !(a > 1e-12 && c > 1e-12 && det > 1e-12) {
+            // Use 1e-6 threshold: data originates from f32, so tighter bounds
+            // cause spurious NaN/inf from ill-conditioned Hessians.
+            if !(a > 1e-6 && c > 1e-6 && det > 1e-6) {
                 continue;
             }
 
@@ -693,8 +733,8 @@ mod tests {
 
         for i in 0..high_rows {
             for j in 0..high_cols {
-                let ci = (i * coarse_rows) / high_rows;
-                let cj = (j * coarse_cols) / high_cols;
+                let ci = ((2 * i + 1) * coarse_rows / (2 * high_rows)).min(coarse_rows - 1);
+                let cj = ((2 * j + 1) * coarse_cols / (2 * high_cols)).min(coarse_cols - 1);
                 coarse[[ci, cj]] += data[[i, j]];
                 counts[[ci, cj]] += 1.0;
             }

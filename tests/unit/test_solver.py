@@ -301,6 +301,16 @@ class TestMultiGridSolver:
 
         np.testing.assert_array_equal(resampled, field)
 
+    def test_resample_mask_to_grid_uses_center_assigned_footprint(self):
+        solver = MultiGridSolver()
+        mask = xr.DataArray(np.ones((5, 5), dtype=bool), dims=["y", "x"])
+        mask.values[-1, -1] = False
+
+        resampled = solver._resample_mask_to_grid(mask, (2, 2))
+
+        expected = np.array([[True, True], [True, False]])
+        np.testing.assert_array_equal(resampled.values, expected)
+
     def test_solve_returns_prior_when_no_valid_pixels(self):
         """Solver should short-circuit when cloud/quality masking leaves no valid pixels."""
         solver = MultiGridSolver()

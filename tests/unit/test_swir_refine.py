@@ -511,6 +511,84 @@ def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty
     )
 
 
+def test_build_monthly_surface_prior_database_preserves_target_grid_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rioxarray  # noqa: F401
+
+    _patch_kernel_to_reflectance(monkeypatch)
+
+    shape = (4, 4)
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full(shape, 0.4, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full(shape, 0.2, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry(shape),
+        cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+        sensor_config=_sensor_config(),
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(300000.0, 5500000.0, 302000.0, 5502000.0),
+    )
+    geometry = swir_refine_mod.resample_geometry_for_surface_prior(obs, resolution=500.0)
+
+    class _CoarseBRDFProvider:
+        def __init__(self) -> None:
+            self.source_bands = tuple(_sensor_config().bands)
+
+        def get_temporal_brdf_parameters_batch(self, **kwargs):
+            outputs = []
+            for sample_dates in kwargs["sample_date_sets"]:
+                coords = {
+                    "time": np.array([np.datetime64(dt.date(), "D") for dt in sample_dates]),
+                    "band": [band.name for band in self.source_bands],
+                    "y": [0.0],
+                    "x": [0.0],
+                }
+                base = np.array([0.1, 0.12, 0.42, 0.31, 0.21], dtype=np.float32).reshape(1, 5, 1, 1)
+                data = np.repeat(base, len(sample_dates), axis=0)
+                unc = np.full_like(data, 0.02)
+                outputs.append(
+                    BRDFKernelWeights(
+                        f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                        f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
+                    )
+                )
+            return outputs
+
+    sensor_config = _sensor_config()
+    visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
+    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    database = build_monthly_surface_prior_database(
+        observation=obs,
+        brdf_provider=_CoarseBRDFProvider(),
+        resolution=500.0,
+        geometry=geometry,
+        visible_bands=visible_bands,
+        query_bands=query_bands,
+    )
+
+    assert database.median_summary.rio.crs is not None
+    assert database.median_summary.rio.crs.to_string() == "EPSG:32632"
+    assert tuple(database.median_summary.coords["x"].values.tolist()) == pytest.approx(
+        tuple(geometry.sza.coords["x"].values.tolist())
+    )
+    assert tuple(database.median_summary.coords["y"].values.tolist()) == pytest.approx(
+        tuple(geometry.sza.coords["y"].values.tolist())
+    )
+    assert database.median_summary.rio.transform(recalc=True) == geometry.sza.rio.transform(recalc=True)
+
+
 def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -44,6 +44,8 @@ pub fn whittaker_smooth_cube<'py>(
     let shape = values.shape();
     let (n_time, n_band, ny, nx) = (shape[0], shape[1], shape[2], shape[3]);
     let penalty = second_difference_penalty(n_time, lambda_);
+    // Store penalty as a flat Vec for cheaper cloning per-pixel.
+    let penalty_flat: Vec<f64> = penalty.as_slice().to_vec();
     let series_count = n_band * ny * nx;
 
     let smoothed_series: Vec<Vec<f32>> = (0..series_count)
@@ -55,7 +57,8 @@ pub fn whittaker_smooth_cube<'py>(
             let x = rem % nx;
 
             let mut rhs = DVector::<f64>::zeros(n_time);
-            let mut system = penalty.clone();
+            // Reconstruct from flat vec – avoids nalgebra clone overhead.
+            let mut system = DMatrix::from_column_slice(n_time, n_time, &penalty_flat);
             let mut has_valid = false;
 
             for t in 0..n_time {
@@ -72,11 +75,18 @@ pub fn whittaker_smooth_cube<'py>(
                 return vec![f32::NAN; n_time];
             }
 
-            let lu = system.lu();
-            if let Some(solution) = lu.solve(&rhs) {
+            // System is symmetric positive-definite → Cholesky is ~2× faster than LU.
+            if let Some(chol) = system.clone().cholesky() {
+                let solution = chol.solve(&rhs);
                 solution.iter().map(|value| *value as f32).collect()
             } else {
-                vec![f32::NAN; n_time]
+                // Fallback to LU if Cholesky fails (e.g. near-zero lambda).
+                let lu = system.lu();
+                if let Some(solution) = lu.solve(&rhs) {
+                    solution.iter().map(|value| *value as f32).collect()
+                } else {
+                    vec![f32::NAN; n_time]
+                }
             }
         })
         .collect();

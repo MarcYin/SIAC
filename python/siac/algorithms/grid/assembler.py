@@ -72,18 +72,6 @@ def _build_target_template(
     return _ensure_template_transform(template)
 
 
-def _compute_target_shape(
-    source_shape: tuple[int, int],
-    source_resolution: float,
-    target_resolution: float,
-) -> tuple[int, int]:
-    """Compute target (H, W) for a resolution change."""
-    factor = source_resolution / target_resolution
-    h = max(1, int(round(source_shape[0] * factor)))
-    w = max(1, int(round(source_shape[1] * factor)))
-    return (h, w)
-
-
 def _resample_da(
     da: xr.DataArray,
     target_shape: tuple[int, int],
@@ -172,6 +160,7 @@ def _resample_da_gdal_average(
         import rioxarray  # noqa: F401
         from rasterio.enums import Resampling as RasterioResampling
     except Exception:
+        logger.debug("rioxarray/rasterio not available; skipping GDAL average resampling.")
         return None
 
     try:
@@ -181,6 +170,7 @@ def _resample_da_gdal_average(
         if "x" in template.dims and "y" in template.dims:
             x_dim, y_dim = "x", "y"
         else:
+            logger.debug("Cannot determine spatial dims for GDAL resampling.")
             return None
 
     if x_dim not in da.dims or y_dim not in da.dims:
@@ -191,6 +181,7 @@ def _resample_da_gdal_average(
     try:
         source = da.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
     except Exception:
+        logger.debug("Failed to set spatial dims for GDAL resampling.", exc_info=True)
         return None
 
     try:
@@ -202,6 +193,7 @@ def _resample_da_gdal_average(
         target = _ensure_template_transform(template)
         target_crs = target.rio.crs
     except Exception:
+        logger.debug("Failed to read target CRS/transform.", exc_info=True)
         return None
 
     if target_crs is None:
@@ -215,6 +207,7 @@ def _resample_da_gdal_average(
     try:
         out = source.rio.reproject_match(target, resampling=RasterioResampling.average)
     except Exception:
+        logger.debug("GDAL reproject_match failed; falling back to scipy.", exc_info=True)
         return None
 
     out = out.astype(np.float32).assign_attrs(da.attrs)
@@ -238,17 +231,20 @@ def _resample_cloud_mask(
     if src.shape == target_shape:
         return copy_spatial_metadata_like(mask, template) if template is not None else mask
 
-    # Use max-pooling: zoom with nearest to upscale the "any-cloud" signal
-    # First apply block-max via uniform_filter > 0 trick
-    factor_y = max(1, src.shape[0] // h_out)
-    factor_x = max(1, src.shape[1] // w_out)
-    # Block-max: dilate by box, then check > 0
-    from scipy.ndimage import maximum_filter
-    dilated = maximum_filter(src, size=(factor_y, factor_x), mode="nearest")
-    zoom_y = h_out / dilated.shape[0]
-    zoom_x = w_out / dilated.shape[1]
-    out = zoom(dilated, (zoom_y, zoom_x), order=0)
-    out = out[:h_out, :w_out]
+    if src.ndim == 2 and h_out <= src.shape[0] and w_out <= src.shape[1]:
+        # Match the center-based coarse-grid assignment used by the Rust field
+        # remapper so masks and resampled fields describe the same footprint.
+        out = np.zeros(target_shape, dtype=np.float64)
+        for iy in range(src.shape[0]):
+            dst_y = min(((2 * iy + 1) * h_out) // (2 * src.shape[0]), h_out - 1)
+            for ix in range(src.shape[1]):
+                if src[iy, ix] <= 0.5:
+                    continue
+                dst_x = min(((2 * ix + 1) * w_out) // (2 * src.shape[1]), w_out - 1)
+                out[dst_y, dst_x] = 1.0
+    else:
+        out = zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=0)
+        out = out[:h_out, :w_out]
 
     if out.shape != target_shape:
         padded: np.ndarray[Any, Any] = np.ones(target_shape, dtype=np.float64)
@@ -308,13 +304,47 @@ def _resample_surface_prior(
     """Resample surface prior fields to target shape."""
     mask = sp.mask
     if "band" in mask.dims:
-        mask = mask.any(dim="band")
+        mask = mask.all(dim="band")
 
     return SurfacePrior(
-        boa=_resample_da(sp.boa, target_shape, "bilinear", template=template),
-        boa_unc=_resample_da(sp.boa_unc, target_shape, "bilinear", template=template),
+        boa=_resample_da(sp.boa, target_shape, "area", template=template),
+        boa_unc=_resample_da(sp.boa_unc, target_shape, "area", template=template),
         kernels=sp.kernels,  # keep original (used for spectral, not spatial)
         mask=_resample_cloud_mask(mask, target_shape, template=template),
+        monthly_composites=sp.monthly_composites,
+    )
+
+
+def _align_surface_prior_to_bands(
+    sp: SurfacePrior,
+    band_names: list[str],
+) -> SurfacePrior:
+    """Reorder/select a banded surface prior to match the solver-band order."""
+    boa = sp.boa
+    boa_unc = sp.boa_unc
+    mask = sp.mask
+
+    if "band" in boa.dims and "band" in boa.coords:
+        available = [str(value) for value in np.asarray(boa.coords["band"].values).tolist()]
+        # Only align if the coords look like actual band names (strings matching
+        # solver band names).  When coords are numeric indices (e.g. [1, 2]),
+        # the surface prior is positional — skip alignment.
+        if any(name in available for name in band_names):
+            missing = [name for name in band_names if name not in available]
+            if missing:
+                raise ValueError(f"Surface prior is missing solver bands: {missing}")
+            boa = boa.sel(band=band_names)
+            if "band" in boa_unc.dims and "band" in boa_unc.coords:
+                boa_unc = boa_unc.sel(band=band_names)
+            if "band" in mask.dims and "band" in mask.coords:
+                mask = mask.sel(band=band_names)
+
+    return SurfacePrior(
+        boa=boa,
+        boa_unc=boa_unc,
+        kernels=sp.kernels,
+        mask=mask,
+        monthly_composites=sp.monthly_composites,
     )
 
 
@@ -391,7 +421,8 @@ def assemble_grids(
     geometry = _resample_geometry(obs.geometry, target_shape, template=target_template)
     cloud_mask = _resample_cloud_mask(obs.cloud_mask, target_shape, template=target_template)
     atmo_resampled = _resample_atmo_state(atmo, target_shape, template=target_template)
-    surface_resampled = _resample_surface_prior(surface, target_shape, template=target_template)
+    surface_aligned = _align_surface_prior_to_bands(surface, band_names)
+    surface_resampled = _resample_surface_prior(surface_aligned, target_shape, template=target_template)
 
     return SolverInputBundle(
         toa=toa_da,

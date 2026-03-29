@@ -13,6 +13,59 @@ from siac.algorithms.brdf.kernels import (
 )
 
 
+def _li_sparse_reference(
+    vza: np.ndarray,
+    sza: np.ndarray,
+    raa: np.ndarray,
+    *,
+    hb: float = 2.0,
+    br: float = 1.0,
+) -> np.ndarray:
+    cos_sza = np.cos(sza)
+    cos_vza = np.cos(vza)
+    sin_sza = np.sin(sza)
+    sin_vza = np.sin(vza)
+    raa_abs = np.abs(raa)
+    cos_raa = np.cos(raa_abs)
+    sin_raa = np.sin(raa_abs)
+
+    tan_sza_prime = br * (sin_sza / np.maximum(cos_sza, 1.0e-10))
+    tan_vza_prime = br * (sin_vza / np.maximum(cos_vza, 1.0e-10))
+
+    sza_prime = np.arctan(tan_sza_prime)
+    vza_prime = np.arctan(tan_vza_prime)
+
+    cos_sza_prime = np.cos(sza_prime)
+    cos_vza_prime = np.cos(vza_prime)
+    sin_sza_prime = np.sin(sza_prime)
+    sin_vza_prime = np.sin(vza_prime)
+
+    cos_phase_prime = np.clip(
+        cos_sza_prime * cos_vza_prime + sin_sza_prime * sin_vza_prime * cos_raa,
+        -1.0,
+        1.0,
+    )
+
+    d2 = tan_sza_prime**2 + tan_vza_prime**2 - 2.0 * tan_sza_prime * tan_vza_prime * cos_raa
+    sec_sza_prime = 1.0 / np.maximum(cos_sza_prime, 1.0e-10)
+    sec_vza_prime = 1.0 / np.maximum(cos_vza_prime, 1.0e-10)
+
+    cost = hb * (
+        np.sqrt(d2 + (tan_sza_prime * tan_vza_prime * sin_raa) ** 2)
+        / (sec_sza_prime + sec_vza_prime)
+    )
+    cost = np.clip(cost, -1.0, 1.0)
+    t = np.arccos(cost)
+    overlap = (1.0 / np.pi) * (t - np.sin(t) * np.cos(t)) * (sec_sza_prime + sec_vza_prime)
+
+    return (
+        overlap
+        - sec_sza_prime
+        - sec_vza_prime
+        + 0.5 * (1.0 + cos_phase_prime) * sec_sza_prime * sec_vza_prime
+    )
+
+
 class TestBRDFKernels:
     """Tests for BRDFKernels class."""
 
@@ -64,6 +117,17 @@ class TestBRDFKernels:
 
         np.testing.assert_allclose(k_vol_pos, k_vol_neg, rtol=1e-5)
         np.testing.assert_allclose(k_geo_pos, k_geo_neg, rtol=1e-5)
+
+    def test_compute_li_sparse_matches_reference_formula(self, kernels):
+        """Li-Sparse kernel should match the analytical overlap formula."""
+        vza = np.array([[np.deg2rad(20.0), np.deg2rad(20.0)]], dtype=np.float64)
+        sza = np.array([[np.deg2rad(35.0), np.deg2rad(35.0)]], dtype=np.float64)
+        raa = np.array([[0.0, np.deg2rad(60.0)]], dtype=np.float64)
+
+        _, k_geo = kernels.compute(vza, sza, raa)
+        expected = _li_sparse_reference(vza, sza, raa, hb=kernels.hb, br=kernels.br)
+
+        np.testing.assert_allclose(k_geo, expected, rtol=1e-7, atol=1e-7)
 
     def test_compute_xarray_input(self, kernels):
         """Should handle xarray inputs."""

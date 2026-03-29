@@ -17,6 +17,7 @@ where:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -24,6 +25,7 @@ import xarray as xr
 
 from siac._rust_compat import RossThickLiSparse as _RustKernels
 
+logger = logging.getLogger(__name__)
 FloatArray = np.ndarray[Any, np.dtype[np.float64]]
 
 
@@ -165,13 +167,30 @@ def compute_white_sky_albedo(
     Returns:
         White-sky albedo
     """
-    # Integration weights for white-sky albedo
-    # These are pre-computed integrals of the kernels
-    g0 = 1.0
-    g1 = 0.189184  # Integral of Ross-Thick kernel
-    g2 = -1.377622  # Integral of Li-Sparse kernel
+    # Pre-computed analytical integrals of Ross-Thick and Li-Sparse kernels
+    # over the full hemisphere (Lucht et al. 2000, Table 1).
+    g0 = 1.0                # Integral of isotropic kernel (≡ 1)
+    g1 = 0.189184           # Integral of Ross-Thick volumetric kernel
+    g2 = -1.377622          # Integral of Li-Sparse geometric kernel (negative is expected)
 
     albedo: np.ndarray | xr.DataArray = f0 * g0 + f1 * g1 + f2 * g2
+
+    # Flag pixels where the albedo falls outside the physically plausible
+    # range [0, 1].  The negative g2 weight on a large geometric kernel can
+    # drive the result below zero for certain BRDF parameter combinations.
+    albedo_arr = np.asarray(albedo)
+    n_negative = int(np.sum(albedo_arr[np.isfinite(albedo_arr)] < 0.0))
+    n_over_one = int(np.sum(albedo_arr[np.isfinite(albedo_arr)] > 1.0))
+    if n_negative > 0 or n_over_one > 0:
+        logger.warning(
+            "White-sky albedo out of [0, 1]: %d negative, %d > 1 "
+            "(total finite pixels: %d). Clamping to [0, 1].",
+            n_negative,
+            n_over_one,
+            int(np.sum(np.isfinite(albedo_arr))),
+        )
+        albedo = np.clip(albedo, 0.0, 1.0)
+
     return albedo
 
 def compute_black_sky_albedo(
@@ -192,13 +211,14 @@ def compute_black_sky_albedo(
     Returns:
         Black-sky albedo
     """
-    # Polynomial coefficients for black-sky albedo
+    # Polynomial coefficients for black-sky albedo approximation
+    # (Lucht et al. 2000, Table 2).
     # a_k(sza) = g0_k + g1_k * sza + g2_k * sza^2 + g3_k * sza^3
 
-    # Ross-Thick polynomial coefficients
+    # Ross-Thick volumetric polynomial coefficients
     g_ross = np.asarray([-0.007574, -0.070987, 0.307588, 0.0], dtype=np.float64)
 
-    # Li-Sparse polynomial coefficients
+    # Li-Sparse geometric polynomial coefficients
     g_li = np.asarray([-1.284909, -0.166314, 0.041840, 0.0], dtype=np.float64)
 
     sza2: np.ndarray | xr.DataArray = sza * sza

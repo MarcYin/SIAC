@@ -50,57 +50,74 @@ impl PSFConvolver {
         let result = self.dct_convolve(image);
         Ok(result.into_pyarray(py))
     }
-
-    /// Get the Gaussian kernel in frequency domain
-    fn get_frequency_kernel<'py>(
-        &self,
-        py: Python<'py>,
-        height: usize,
-        width: usize,
-    ) -> PyResult<&'py PyArray2<f64>> {
-        let kernel = self.gaussian_dct_kernel(height, width);
-        Ok(kernel.into_pyarray(py))
-    }
 }
 
 impl PSFConvolver {
-    /// DCT-based Gaussian convolution
+    /// DCT-based Gaussian convolution.
+    ///
+    /// **NOTE**: This is a simplified spatial-domain implementation that applies
+    /// the PSF via direct Gaussian-weighted averaging.  For production use,
+    /// prefer the Python-side `scipy.ndimage.gaussian_filter` path in
+    /// `kernel_model.KernelModelDeriver._convolve_2d` which handles NaN masking
+    /// correctly.
     fn dct_convolve(&self, image: ArrayView2<f64>) -> Array2<f64> {
         let (height, width) = (image.shape()[0], image.shape()[1]);
 
-        // Get Gaussian kernel in DCT domain
-        let kernel = self.gaussian_dct_kernel(height, width);
+        // Spatial-domain Gaussian convolution (separable, truncated at 4σ).
+        // We apply the filter in two passes: first along rows (x), then cols (y).
+        let mut tmp = Array2::zeros((height, width));
+        let radius_x = (4.0 * self.sigma_x).ceil() as usize;
+        let radius_y = (4.0 * self.sigma_y).ceil() as usize;
 
-        // For now, return a placeholder - full DCT implementation would go here
-        // In production, use rustfft for efficient DCT computation
+        // Pre-compute 1-D Gaussian weights for x and y.
+        let weights_x: Vec<f64> = (0..=radius_x)
+            .map(|d| (-0.5 * (d as f64 / self.sigma_x).powi(2)).exp())
+            .collect();
+        let weights_y: Vec<f64> = (0..=radius_y)
+            .map(|d| (-0.5 * (d as f64 / self.sigma_y).powi(2)).exp())
+            .collect();
+
+        // Pass 1: convolve along x (columns) for each row.
+        for i in 0..height {
+            for j in 0..width {
+                let mut sum = 0.0_f64;
+                let mut wsum = 0.0_f64;
+                let j_lo = if j >= radius_x { j - radius_x } else { 0 };
+                let j_hi = (j + radius_x).min(width - 1);
+                for jj in j_lo..=j_hi {
+                    let d = if jj >= j { jj - j } else { j - jj };
+                    let w = weights_x[d];
+                    let v = image[[i, jj]];
+                    if v.is_finite() {
+                        sum += w * v;
+                        wsum += w;
+                    }
+                }
+                tmp[[i, j]] = if wsum > 0.0 { sum / wsum } else { f64::NAN };
+            }
+        }
+
+        // Pass 2: convolve along y (rows) for each column.
         let mut result = Array2::zeros((height, width));
-        for i in 0..height {
-            for j in 0..width {
-                result[[i, j]] = image[[i, j]] * kernel[[i, j]];
+        for j in 0..width {
+            for i in 0..height {
+                let mut sum = 0.0_f64;
+                let mut wsum = 0.0_f64;
+                let i_lo = if i >= radius_y { i - radius_y } else { 0 };
+                let i_hi = (i + radius_y).min(height - 1);
+                for ii in i_lo..=i_hi {
+                    let d = if ii >= i { ii - i } else { i - ii };
+                    let w = weights_y[d];
+                    let v = tmp[[ii, j]];
+                    if v.is_finite() {
+                        sum += w * v;
+                        wsum += w;
+                    }
+                }
+                result[[i, j]] = if wsum > 0.0 { sum / wsum } else { f64::NAN };
             }
         }
+
         result
-    }
-
-    /// Generate Gaussian kernel in DCT frequency domain
-    fn gaussian_dct_kernel(&self, height: usize, width: usize) -> Array2<f64> {
-        let mut kernel = Array2::zeros((height, width));
-
-        for i in 0..height {
-            for j in 0..width {
-                let u = i as f64 / height as f64;
-                let v = j as f64 / width as f64;
-
-                // Gaussian in frequency domain
-                let gx =
-                    (-2.0 * std::f64::consts::PI.powi(2) * self.sigma_x.powi(2) * u.powi(2)).exp();
-                let gy =
-                    (-2.0 * std::f64::consts::PI.powi(2) * self.sigma_y.powi(2) * v.powi(2)).exp();
-
-                kernel[[i, j]] = gx * gy;
-            }
-        }
-
-        kernel
     }
 }

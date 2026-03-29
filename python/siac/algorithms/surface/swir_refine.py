@@ -43,6 +43,7 @@ from siac.runtime import (
     ObservationBundle,
     SurfacePrior,
 )
+from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -841,13 +842,13 @@ def _resample_band_cube_to_template(
     method: str,
 ) -> xr.DataArray:
     if _shares_spatial_grid(data, template):
-        return data.astype(np.float32)
+        return copy_spatial_metadata_like(data.astype(np.float32), template)
 
     target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
     band_coords = data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
     resampled = xr.concat(
         [
-            _resample_da(data.sel(band=band, drop=True), target_shape, method)
+            _resample_da(data.sel(band=band, drop=True), target_shape, method, template=template)
             for band in band_coords
         ],
         dim=xr.IndexVariable("band", band_coords),
@@ -857,7 +858,7 @@ def _resample_band_cube_to_template(
         coords["y"] = template.coords["y"]
     if "x" in template.coords:
         coords["x"] = template.coords["x"]
-    return resampled.assign_coords(**coords).astype(np.float32)
+    return copy_spatial_metadata_like(resampled.assign_coords(**coords).astype(np.float32), template)
 
 
 def _resample_spatial_field_to_template(
@@ -866,15 +867,15 @@ def _resample_spatial_field_to_template(
     method: str,
 ) -> xr.DataArray:
     if _shares_spatial_grid(data, template):
-        return data.astype(np.float32)
+        return copy_spatial_metadata_like(data.astype(np.float32), template)
     target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
-    resampled = _resample_da(data, target_shape, method)
+    resampled = _resample_da(data, target_shape, method, template=template)
     coords: dict[str, object] = {}
     if "y" in template.coords:
         coords["y"] = template.coords["y"]
     if "x" in template.coords:
         coords["x"] = template.coords["x"]
-    return resampled.assign_coords(**coords).astype(np.float32)
+    return copy_spatial_metadata_like(resampled.assign_coords(**coords).astype(np.float32), template)
 
 
 def _shares_spatial_grid(data: xr.DataArray, template: xr.DataArray) -> bool:

@@ -24,9 +24,6 @@ nalgebra = "0.32"
 # Parallelism
 rayon = "1.8"
 
-# FFT for PSF convolution
-rustfft = "6.2"
-
 # Fast math
 num-traits = "0.2"
 
