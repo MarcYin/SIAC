@@ -318,8 +318,9 @@ class TestCAMSProvider:
 
         assert state.aot.size > 0
         assert float(state.aot.mean()) == pytest.approx(0.2)
-        # Ozone conversion path executes
-        assert float(state.tco3.mean()) > 0.0
+        assert float(state.tcwv.mean()) == pytest.approx(0.22)
+        expected_tco3 = 0.006 / 2.1415e-5 / 1000
+        assert float(state.tco3.mean()) == pytest.approx(expected_tco3, rel=1e-6)
         assert float(state.aot_unc.mean()) >= 0.05
 
     def test_load_cams_handles_open_error(self, tmp_path: Path):
@@ -392,7 +393,7 @@ class TestCAMSProvider:
 
         state = p.get_prior((0.0, 0.0, 2.0, 2.0), "EPSG:4326", datetime(2024, 1, 1), 1.0)
         assert float(state.aot.mean()) == pytest.approx(0.2)
-        assert float(state.tcwv.mean()) == pytest.approx(2.5)
+        assert float(state.tcwv.mean()) == pytest.approx(0.25)
         expected_tco3 = 0.006 / 2.1415e-5 / 1000
         assert float(state.tco3.mean()) == pytest.approx(expected_tco3, rel=1e-6)
 
@@ -420,7 +421,7 @@ class TestCAMSProvider:
 
         p = CAMSProvider(tif_path)
         state = p.get_prior((0.0, 0.0, 2.0, 2.0), "EPSG:4326", datetime(2024, 1, 1), 1.0)
-        assert float(state.tcwv.mean()) == pytest.approx(3.0)
+        assert float(state.tcwv.mean()) == pytest.approx(0.3)
         assert float(state.aot.mean()) == pytest.approx(0.15)
         assert float(state.tco3.mean()) == pytest.approx(0.3)
 

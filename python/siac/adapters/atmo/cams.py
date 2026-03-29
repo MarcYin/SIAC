@@ -3,6 +3,23 @@ CAMS atmospheric prior provider.
 
 Fetches atmospheric parameters (AOT, TCWV, TCO3) from ECMWF CAMS
 (Copernicus Atmosphere Monitoring Service) near real-time data.
+
+This provider assumes the underlying NetCDF/GeoTIFF variables are raw CAMS
+fields and converts them into the SIAC radiative-transfer convention used by
+both the LUT backend and the neural-network emulators:
+
+- ``aod550``: aerosol optical depth at 550 nm, unitless
+- ``tcwv``: total column water vapour in cm precipitable water
+  (numerically equivalent to g cm^-2)
+- ``gtco3``: total column ozone in atm-cm (DU / 1000)
+- ``elevation``: km above mean sea level
+
+The raw CAMS/JASMIN variables for ``tcwv`` and ``gtco3`` are typically stored in
+kg m^-2, so SIAC applies the legacy conversion factors from the original
+project:
+
+- ``tcwv``: ``kg m^-2 -> cm`` via ``* 0.1``
+- ``gtco3``: ``kg m^-2 -> atm-cm`` via ``/ 2.1415e-5 / 1000``
 """
 
 from __future__ import annotations
@@ -112,6 +129,16 @@ class CAMSProvider:
     ]
     _CDS_DATASET = "cams-global-atmospheric-composition-forecasts"
     _CDS_LEAD_TIMES = [str(hour) for hour in range(24)]
+    _RAW_CAMS_TO_SIAC_SCALE = {
+        "aod550": np.float32(1.0),
+        "tcwv": np.float32(0.1),
+        "gtco3": np.float32(1.0 / 2.1415e-5 / 1000.0),
+    }
+    _SIAC_TARGET_UNITS = {
+        "aod550": "1",
+        "tcwv": "cm",
+        "gtco3": "atm-cm",
+    }
 
     def __init__(
         self,
@@ -138,7 +165,7 @@ class CAMSProvider:
         obs_time: datetime,
         resolution: float,
     ) -> AtmosphericState:
-        """Retrieve atmospheric priors for a given region and time."""
+        """Retrieve atmospheric priors in the shared SIAC RT unit convention."""
         # Load CAMS data for the observation date
         cams_data = self._load_cams_data(obs_time)
 
@@ -146,13 +173,20 @@ class CAMSProvider:
             logger.warning("CAMS data not available, using defaults")
             return self._default_prior(bounds, crs, resolution)
 
-        # Extract and interpolate to target grid
-        aot = self._extract_variable(cams_data, "aod550", bounds, crs, resolution, obs_time)
-        tcwv = self._extract_variable(cams_data, "tcwv", bounds, crs, resolution, obs_time)
-        tco3 = self._extract_variable(cams_data, "gtco3", bounds, crs, resolution, obs_time)
-
-        # Convert ozone from kg/m2 to atm-cm (DU/1000)
-        tco3 = tco3 / 2.1415e-5 / 1000
+        # Extract raw CAMS fields, then convert them into the SIAC unit
+        # convention expected by the solver, LUT backend, and emulators.
+        aot = self._convert_raw_cams_field(
+            self._extract_variable(cams_data, "aod550", bounds, crs, resolution, obs_time),
+            "aod550",
+        )
+        tcwv = self._convert_raw_cams_field(
+            self._extract_variable(cams_data, "tcwv", bounds, crs, resolution, obs_time),
+            "tcwv",
+        )
+        tco3 = self._convert_raw_cams_field(
+            self._extract_variable(cams_data, "gtco3", bounds, crs, resolution, obs_time),
+            "gtco3",
+        )
 
         # Uncertainties (empirical estimates)
         aot_unc = np.maximum(aot * 0.5, 0.05)
@@ -167,6 +201,23 @@ class CAMSProvider:
             aot_unc=aot_unc, tcwv_unc=tcwv_unc, tco3_unc=tco3_unc,
             elevation=elevation
         )
+
+    @classmethod
+    def _convert_raw_cams_field(
+        cls,
+        field: xr.DataArray,
+        var_name: str,
+    ) -> xr.DataArray:
+        """Convert a raw CAMS variable into the SIAC RT unit convention."""
+        scale = cls._RAW_CAMS_TO_SIAC_SCALE[var_name]
+        converted = (field.astype(np.float32) * scale).astype(np.float32)
+        attrs = dict(field.attrs)
+        raw_units = attrs.get("units")
+        if raw_units is not None:
+            attrs["source_units"] = raw_units
+        attrs["siac_units"] = cls._SIAC_TARGET_UNITS[var_name]
+        attrs["conversion_scale_to_siac"] = float(scale)
+        return converted.assign_attrs(attrs)
 
     def _load_cams_data(self, obs_time: datetime) -> xr.Dataset | None:
         """Load CAMS data for the observation date."""
@@ -360,8 +411,9 @@ class CAMSProvider:
             logger.warning(f"Variable {var_name} not in CAMS data")
             defaults = {
                 "aod550": 0.15,
-                "tcwv": 1.5,
-                # Native CAMS ozone unit is kg/m2; this value converts to 0.3 atm-cm.
+                # Native CAMS TCWV is kg m^-2; 15.0 converts to 1.5 cm.
+                "tcwv": 15.0,
+                # Native CAMS ozone is kg m^-2; this value converts to 0.3 atm-cm.
                 "gtco3": 0.0064245,
             }
             return self._create_default_array(bounds, crs, resolution, defaults.get(var_name, 0.0))

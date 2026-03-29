@@ -61,6 +61,21 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         "B12": "*B12*.jp2",
     }
     _BAND_TOKEN_BY_NAME = {band_name: f"_{band_name}" for band_name in BAND_PATTERNS}
+    _BAND_NAME_BY_OFFSET_ID = {
+        0: "B01",
+        1: "B02",
+        2: "B03",
+        3: "B04",
+        4: "B05",
+        5: "B06",
+        6: "B07",
+        7: "B08",
+        8: "B8A",
+        9: "B09",
+        10: "B10",
+        11: "B11",
+        12: "B12",
+    }
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
@@ -558,21 +573,25 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         ns = self._get_namespace(root)
 
         # Processing baseline
-        baseline_elem = root.find(f".//{ns}PROCESSING_BASELINE")
+        baseline_elem = self._find_descendant(root, "PROCESSING_BASELINE", ns)
         if baseline_elem is not None and baseline_elem.text is not None:
             metadata["processing_baseline"] = baseline_elem.text.strip()
 
         # Quantification value
-        quant_elem = root.find(f".//{ns}QUANTIFICATION_VALUE")
+        quant_elem = self._find_descendant(root, "QUANTIFICATION_VALUE", ns)
         if quant_elem is not None and quant_elem.text is not None:
             metadata["quantification_value"] = float(quant_elem.text)
 
         # Radiometric offsets (Processing Baseline >= 04.00)
         offsets: dict[str, float] = {}
-        for offset_elem in root.findall(f".//{ns}RADIO_ADD_OFFSET"):
+        for offset_elem in self._findall_descendants(root, "RADIO_ADD_OFFSET", ns):
             band_id = offset_elem.get("band_id")
             if band_id and offset_elem.text is not None:
-                offsets[f"B{int(band_id):02d}"] = float(offset_elem.text)
+                band_name = self._band_name_for_offset_id(band_id)
+                if band_name is None:
+                    logger.warning("Ignoring unknown Sentinel-2 RADIO_ADD_OFFSET band_id=%r", band_id)
+                    continue
+                offsets[band_name] = float(offset_elem.text)
         if offsets:
             metadata["radiometric_offsets"] = offsets
 
@@ -584,7 +603,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         ns = self._get_namespace(root)
 
         # Sensing time
-        time_elem = root.find(f".//{ns}SENSING_TIME")
+        time_elem = self._find_descendant(root, "SENSING_TIME", ns)
         if time_elem is not None and time_elem.text:
             time_text = time_elem.text.strip()
             try:
@@ -596,7 +615,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                     logger.warning("Could not parse Sentinel-2 sensing time %r", time_text)
 
         # Tile ID
-        tile_elem = root.find(f".//{ns}TILE_ID")
+        tile_elem = self._find_descendant(root, "TILE_ID", ns)
         if tile_elem is not None and tile_elem.text is not None:
             metadata["tile_id"] = tile_elem.text.strip()
 
@@ -807,3 +826,25 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if match:
             return "{" + match.group(1) + "}"
         return ""
+
+    @staticmethod
+    def _find_descendant(root: ET.Element, tag: str, ns: str) -> ET.Element | None:
+        elem = root.find(f".//{ns}{tag}") if ns else None
+        if elem is None:
+            elem = root.find(f".//{tag}")
+        return elem
+
+    @staticmethod
+    def _findall_descendants(root: ET.Element, tag: str, ns: str) -> list[ET.Element]:
+        elems = root.findall(f".//{ns}{tag}") if ns else []
+        if elems:
+            return list(elems)
+        return list(root.findall(f".//{tag}"))
+
+    @classmethod
+    def _band_name_for_offset_id(cls, band_id: str) -> str | None:
+        try:
+            index = int(band_id)
+        except (TypeError, ValueError):
+            return None
+        return cls._BAND_NAME_BY_OFFSET_ID.get(index)

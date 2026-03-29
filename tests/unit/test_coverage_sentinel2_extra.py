@@ -165,12 +165,14 @@ class TestSentinel2Internals:
         safe = _safe_tree(tmp_path)
         p._resolve_paths(safe)
 
-        product_xml = """<root>
-            <PROCESSING_BASELINE>05.00</PROCESSING_BASELINE>
-            <QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE>
-            <RADIO_ADD_OFFSET band_id="1">-100</RADIO_ADD_OFFSET>
-            <RADIO_ADD_OFFSET band_id="2">-50</RADIO_ADD_OFFSET>
-        </root>"""
+        product_xml = """<n1:Level-1C_User_Product xmlns:n1="https://psd-15.sentinel2.eo.esa.int/PSD/User_Product_Level-1C.xsd">
+            <Product_Image_Characteristics>
+                <PROCESSING_BASELINE>05.00</PROCESSING_BASELINE>
+                <QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE>
+                <RADIO_ADD_OFFSET band_id="1">-100</RADIO_ADD_OFFSET>
+                <RADIO_ADD_OFFSET band_id="3">-50</RADIO_ADD_OFFSET>
+            </Product_Image_Characteristics>
+        </n1:Level-1C_User_Product>"""
         granule_xml = """<root>
             <SENSING_TIME>2024-01-01T10:00:00.000Z</SENSING_TIME>
             <TILE_ID>T31UDQ</TILE_ID>
@@ -183,7 +185,8 @@ class TestSentinel2Internals:
 
         md_prod = p._parse_product_metadata(ET.fromstring(product_xml))
         assert md_prod["quantification_value"] == 10000.0
-        assert md_prod["radiometric_offsets"]["B01"] == -100.0
+        assert md_prod["radiometric_offsets"]["B02"] == -100.0
+        assert md_prod["radiometric_offsets"]["B04"] == -50.0
 
         md_gran = p._parse_granule_metadata(ET.fromstring(granule_xml))
         assert md_gran["tile_id"] == "T31UDQ"

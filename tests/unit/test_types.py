@@ -102,6 +102,26 @@ class TestAtmosphericState:
         # TCO3 preserved
         np.testing.assert_allclose(updated.tco3.values, 0.3)
 
+    def test_to_emulator_input_uses_shared_rt_units(self, sample_state):
+        """to_emulator_input should expose the solver/LUT/emulator unit contract."""
+        shape = (10, 10)
+        geom = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+
+        ds = sample_state.to_emulator_input(geom)
+
+        np.testing.assert_allclose(ds["cos_sza"].values, np.cos(0.5))
+        np.testing.assert_allclose(ds["cos_vza"].values, np.cos(0.1))
+        np.testing.assert_allclose(ds["cos_raa"].values, np.cos(1.5 - 2.5))
+        np.testing.assert_allclose(ds["aot"].values, 0.15)
+        np.testing.assert_allclose(ds["tcwv"].values, 2.5)
+        np.testing.assert_allclose(ds["tco3"].values, 0.3)
+        np.testing.assert_allclose(ds["elevation"].values, 0.1)
+
 
 class TestRTCoefficients:
     """Tests for RTCoefficients dataclass."""

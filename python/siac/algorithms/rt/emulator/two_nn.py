@@ -9,11 +9,22 @@ the RT coefficients (xap, xbp, xcp) used in the correction equation:
     boa = y / (1 + xcp * y)
 
 The emulators support analytical Jacobian computation for use in optimization.
+
+Atmospheric inputs follow the shared SIAC RT unit convention:
+
+- ``aot``: unitless aerosol optical depth at 550 nm
+- ``tcwv``: total column water vapour in cm precipitable water
+- ``tco3``: total column ozone in atm-cm (DU / 1000)
+- ``elevation``: km above mean sea level
+
+Geometry angles are stored in radians upstream and are converted here to the
+legacy emulator features ``[cos(sza), cos(vza), cos(raa)]``.
 """
 
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,7 +50,17 @@ class TwoLayerNNEmulator:
     The network architecture is:
         Input (7) -> Hidden1 (64, ReLU) -> Hidden2 (64, ReLU) -> Output (3)
 
-    Input features: [cos(sza), cos(vza), cos(raa), aot, tcwv, tco3, elevation]
+    Input features:
+        [cos(sza), cos(vza), cos(raa), aot, tcwv, tco3, elevation]
+
+    Input units:
+        - sza, vza, raa arrive as radians in ``GeometryAngles`` and are converted
+          to cosines before the NN forward pass
+        - aot is unitless
+        - tcwv is in cm precipitable water
+        - tco3 is in atm-cm
+        - elevation is in km
+
     Output: [xap, xbp, xcp]
 
     Args:
@@ -64,8 +85,9 @@ class TwoLayerNNEmulator:
         self.sensor_id = sensor_id
         self.satellite_id = satellite_id
 
-        # Loaded emulators per band
-        self._band_emulators: dict[str, _BandEmulator] = {}
+        # Bounded LRU cache for loaded band emulators (limit: 32 bands).
+        self._band_emulators: OrderedDict[str, _BandEmulator] = OrderedDict()
+        self._max_cached_bands = 32
 
         # Discover available bands
         self._available_bands = self._discover_bands()
@@ -75,6 +97,9 @@ class TwoLayerNNEmulator:
                 f"No emulators found for {sensor_id}/{satellite_id} "
                 f"in {emulator_dir}"
             )
+
+    # Satellites whose emulator weights can be substituted from another platform.
+    _SATELLITE_FALLBACKS: dict[str, str] = {"S2C": "S2A"}
 
     def _discover_bands(self) -> list[str]:
         """Discover available band emulators in the directory."""
@@ -91,6 +116,23 @@ class TwoLayerNNEmulator:
         for pattern in patterns:
             found_files.update(self.emulator_dir.glob(pattern))
 
+        # Fallback: try the substitute satellite if no files found.
+        if not found_files:
+            fallback_sat = self._SATELLITE_FALLBACKS.get(self.satellite_id)
+            if fallback_sat is not None:
+                fallback_patterns = [
+                    f"*{fallback_sat}*_B*.npz",
+                    f"{fallback_sat}_B*.npz",
+                ]
+                for pattern in fallback_patterns:
+                    found_files.update(self.emulator_dir.glob(pattern))
+                if found_files:
+                    logger.info(
+                        "No emulators found for %s; using %s weights as fallback",
+                        self.satellite_id,
+                        fallback_sat,
+                    )
+
         # Extract band names from filenames
         for path in found_files:
             name = path.stem
@@ -103,24 +145,34 @@ class TwoLayerNNEmulator:
         return sorted(set(available))
 
     def _get_emulator_path(self, band_name: str) -> Path | None:
-        """Find emulator file for a specific band."""
-        patterns = [
-            f"*{self.satellite_id}*_{band_name}*.npz",
-            f"*{self.satellite_id}*_{band_name.lower()}*.npz",
-            f"{self.satellite_id}_{band_name}*.npz",
-            f"*{self.sensor_id}*_{band_name}*.npz",
-        ]
-
-        for pattern in patterns:
-            matches = list(self.emulator_dir.glob(pattern))
-            if matches:
-                return matches[0]
+        """Find emulator file for a specific band, falling back to substitute satellite."""
+        for sat_id in (self.satellite_id, self._SATELLITE_FALLBACKS.get(self.satellite_id)):
+            if sat_id is None:
+                continue
+            patterns = [
+                f"*{sat_id}*_{band_name}*.npz",
+                f"*{sat_id}*_{band_name.lower()}*.npz",
+                f"{sat_id}_{band_name}*.npz",
+                f"*{self.sensor_id}*_{band_name}*.npz",
+            ]
+            for pattern in patterns:
+                matches = list(self.emulator_dir.glob(pattern))
+                if matches:
+                    if sat_id != self.satellite_id:
+                        logger.debug(
+                            "Using %s emulator as fallback for %s band %s",
+                            sat_id,
+                            self.satellite_id,
+                            band_name,
+                        )
+                    return matches[0]
 
         return None
 
     def _load_band_emulator(self, band_name: str) -> _BandEmulator:
-        """Load emulator weights for a specific band."""
+        """Load emulator weights for a specific band (LRU-cached)."""
         if band_name in self._band_emulators:
+            self._band_emulators.move_to_end(band_name)
             return self._band_emulators[band_name]
 
         path = self._get_emulator_path(band_name)
@@ -132,8 +184,17 @@ class TwoLayerNNEmulator:
 
         logger.debug(f"Loading emulator from {path}")
 
-        # Load numpy model file
-        data = np.load(path, allow_pickle=True)
+        # Load numpy model file.
+        # allow_pickle is required because the emulator .npz files store
+        # layer weights as object arrays (lists of [weight, bias] pairs).
+        # Only files resolved from the trusted emulator_dir are loaded.
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self.emulator_dir.resolve()):
+            raise ValueError(
+                f"Emulator path {resolved} is outside the trusted "
+                f"emulator directory {self.emulator_dir.resolve()}"
+            )
+        data = np.load(path, allow_pickle=True)  # noqa: S301
 
         hidden_layers = data["Hidden_Layers"].tolist()
         output_layers = data["Output_Layers"].tolist()
@@ -151,47 +212,35 @@ class TwoLayerNNEmulator:
         )
 
         self._band_emulators[band_name] = emulator
+        if len(self._band_emulators) > self._max_cached_bands:
+            self._band_emulators.popitem(last=False)
         return emulator
 
-    def compute_coefficients(
+    def _prepare_inputs(
         self,
         geometry: GeometryAngles,
         atmo_state: AtmosphericState,
-        band: SensorBand,
-        compute_jacobian: bool = False,
-    ) -> RTCoefficients:
+    ) -> tuple[np.ndarray, tuple[int, ...], xr.DataArray]:
+        """Prepare common NN inputs from geometry and atmospheric state.
+
+        ``GeometryAngles`` are stored in radians; the legacy NN consumes the
+        cosine-transformed geometry features. ``AtmosphericState`` is expected in
+        the shared SIAC RT units: unitless ``aot``, ``tcwv`` in cm, ``tco3`` in
+        atm-cm, and elevation in km.
+
+        Returns ``(inputs, original_shape, template)``.
         """
-        Compute radiative transfer coefficients for atmospheric correction.
-
-        Args:
-            geometry: Viewing geometry (sza, vza, raa in radians)
-            atmo_state: Atmospheric state (aot, tcwv, tco3, elevation)
-            band: Sensor band specification
-            compute_jacobian: Whether to compute d(coeff)/d(aot,tcwv)
-
-        Returns:
-            RTCoefficients with xap, xbp, xcp and optional Jacobians.
-        """
-        # Load band emulator
-        emulator = self._load_band_emulator(band.name)
-
-        # Prepare input array
-        # Input order: [cos_sza, cos_vza, cos_raa, aot, tcwv, tco3, elevation]
         cos_sza = np.cos(geometry.sza.values)
         cos_vza = np.cos(geometry.vza.values)
         cos_raa = np.cos(geometry.raa.values)
 
-        # Get atmospheric parameters
         aot = atmo_state.aot.values
         tcwv = atmo_state.tcwv.values
         tco3 = atmo_state.tco3.values
         elevation = atmo_state.elevation.values
 
-        # Stack inputs
         original_shape = cos_sza.shape
-        np.prod(original_shape)
 
-        # Flatten and stack
         inputs = np.column_stack(
             [
                 cos_sza.ravel(),
@@ -204,30 +253,27 @@ class TwoLayerNNEmulator:
             ]
         ).astype(np.float32)
 
-        # Run forward pass
-        outputs, jacobians = emulator.forward(inputs, compute_jacobian=compute_jacobian)
+        return inputs, original_shape, geometry.sza
 
-        # Parse outputs - each output is [xap, xbp, xcp]
+    def _build_rt_coefficients(
+        self,
+        outputs: np.ndarray,
+        jacobians: np.ndarray | None,
+        original_shape: tuple[int, ...],
+        template: xr.DataArray,
+        compute_jacobian: bool,
+    ) -> RTCoefficients:
+        """Convert raw NN outputs and Jacobians into an RTCoefficients."""
         xap = outputs[:, 0].reshape(original_shape)
         xbp = outputs[:, 1].reshape(original_shape)
         xcp = outputs[:, 2].reshape(original_shape)
 
-        # Create DataArrays
-        template = geometry.sza
         xap_da = xr.DataArray(xap, dims=template.dims, coords=template.coords)
         xbp_da = xr.DataArray(xbp, dims=template.dims, coords=template.coords)
         xcp_da = xr.DataArray(xcp, dims=template.dims, coords=template.coords)
 
-        # Handle Jacobians if computed
-        d_xap = None
-        d_xbp = None
-        d_xcp = None
-
+        d_xap = d_xbp = d_xcp = None
         if compute_jacobian and jacobians is not None:
-            # Jacobians have shape (n_pixels, 3, 7) for (outputs, inputs)
-            # We want derivatives w.r.t. aot (idx 3) and tcwv (idx 4)
-
-            # Extract relevant derivatives
             d_xap_aot = jacobians[:, 0, 3].reshape(original_shape)
             d_xap_tcwv = jacobians[:, 0, 4].reshape(original_shape)
             d_xbp_aot = jacobians[:, 1, 3].reshape(original_shape)
@@ -235,7 +281,6 @@ class TwoLayerNNEmulator:
             d_xcp_aot = jacobians[:, 2, 3].reshape(original_shape)
             d_xcp_tcwv = jacobians[:, 2, 4].reshape(original_shape)
 
-            # Create DataArrays with param dimension
             d_xap = xr.concat(
                 [
                     xr.DataArray(d_xap_aot, dims=template.dims, coords=template.coords),
@@ -261,12 +306,35 @@ class TwoLayerNNEmulator:
             ).assign_coords(param=["aot", "tcwv"])
 
         return RTCoefficients(
-            xap=xap_da,
-            xbp=xbp_da,
-            xcp=xcp_da,
-            d_xap=d_xap,
-            d_xbp=d_xbp,
-            d_xcp=d_xcp,
+            xap=xap_da, xbp=xbp_da, xcp=xcp_da,
+            d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp,
+        )
+
+    def compute_coefficients(
+        self,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        band: SensorBand,
+        compute_jacobian: bool = False,
+    ) -> RTCoefficients:
+        """
+        Compute radiative transfer coefficients for atmospheric correction.
+
+        Args:
+            geometry: Viewing geometry (sza, vza, raa in radians)
+            atmo_state: Atmospheric state in shared SIAC RT units
+                (unitless aot, tcwv in cm, tco3 in atm-cm, elevation in km)
+            band: Sensor band specification
+            compute_jacobian: Whether to compute d(coeff)/d(aot,tcwv)
+
+        Returns:
+            RTCoefficients with xap, xbp, xcp and optional Jacobians.
+        """
+        emulator = self._load_band_emulator(band.name)
+        inputs, original_shape, template = self._prepare_inputs(geometry, atmo_state)
+        outputs, jacobians = emulator.forward(inputs, compute_jacobian=compute_jacobian)
+        return self._build_rt_coefficients(
+            outputs, jacobians, original_shape, template, compute_jacobian,
         )
 
     def compute_coefficients_multi(
@@ -288,80 +356,14 @@ class TwoLayerNNEmulator:
         Returns:
             List of RTCoefficients, one per band.
         """
-        # Prepare input array once for all bands
-        cos_sza = np.cos(geometry.sza.values)
-        cos_vza = np.cos(geometry.vza.values)
-        cos_raa = np.cos(geometry.raa.values)
-
-        aot = atmo_state.aot.values
-        tcwv = atmo_state.tcwv.values
-        tco3 = atmo_state.tco3.values
-        elevation = atmo_state.elevation.values
-
-        original_shape = cos_sza.shape
-        template = geometry.sza
-
-        inputs = np.column_stack(
-            [
-                cos_sza.ravel(),
-                cos_vza.ravel(),
-                cos_raa.ravel(),
-                aot.ravel(),
-                tcwv.ravel(),
-                tco3.ravel(),
-                elevation.ravel(),
-            ]
-        ).astype(np.float32)
+        inputs, original_shape, template = self._prepare_inputs(geometry, atmo_state)
 
         results = []
         for band in bands:
             emulator = self._load_band_emulator(band.name)
             outputs, jacobians = emulator.forward(inputs, compute_jacobian=compute_jacobian)
-
-            xap = outputs[:, 0].reshape(original_shape)
-            xbp = outputs[:, 1].reshape(original_shape)
-            xcp = outputs[:, 2].reshape(original_shape)
-
-            xap_da = xr.DataArray(xap, dims=template.dims, coords=template.coords)
-            xbp_da = xr.DataArray(xbp, dims=template.dims, coords=template.coords)
-            xcp_da = xr.DataArray(xcp, dims=template.dims, coords=template.coords)
-
-            d_xap = d_xbp = d_xcp = None
-            if compute_jacobian and jacobians is not None:
-                d_xap_aot = jacobians[:, 0, 3].reshape(original_shape)
-                d_xap_tcwv = jacobians[:, 0, 4].reshape(original_shape)
-                d_xbp_aot = jacobians[:, 1, 3].reshape(original_shape)
-                d_xbp_tcwv = jacobians[:, 1, 4].reshape(original_shape)
-                d_xcp_aot = jacobians[:, 2, 3].reshape(original_shape)
-                d_xcp_tcwv = jacobians[:, 2, 4].reshape(original_shape)
-
-                d_xap = xr.concat(
-                    [
-                        xr.DataArray(d_xap_aot, dims=template.dims, coords=template.coords),
-                        xr.DataArray(d_xap_tcwv, dims=template.dims, coords=template.coords),
-                    ],
-                    dim="param",
-                ).assign_coords(param=["aot", "tcwv"])
-
-                d_xbp = xr.concat(
-                    [
-                        xr.DataArray(d_xbp_aot, dims=template.dims, coords=template.coords),
-                        xr.DataArray(d_xbp_tcwv, dims=template.dims, coords=template.coords),
-                    ],
-                    dim="param",
-                ).assign_coords(param=["aot", "tcwv"])
-
-                d_xcp = xr.concat(
-                    [
-                        xr.DataArray(d_xcp_aot, dims=template.dims, coords=template.coords),
-                        xr.DataArray(d_xcp_tcwv, dims=template.dims, coords=template.coords),
-                    ],
-                    dim="param",
-                ).assign_coords(param=["aot", "tcwv"])
-
-            results.append(RTCoefficients(
-                xap=xap_da, xbp=xbp_da, xcp=xcp_da,
-                d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp,
+            results.append(self._build_rt_coefficients(
+                outputs, jacobians, original_shape, template, compute_jacobian,
             ))
 
         return results

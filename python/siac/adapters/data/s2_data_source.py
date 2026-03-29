@@ -148,8 +148,9 @@ def _parse_query(query: S2Query | str) -> S2Query:
     if isinstance(query, S2Query):
         return query
     s = str(query).strip()
-    # Try product ID first (contains .SAFE or MSIL1C)
-    if "MSIL1C" in s or ".SAFE" in s:
+    # Try product ID first (contains .SAFE or MSIL1C/MSIL2A)
+    s_upper = s.upper()
+    if "MSIL1C" in s_upper or "MSIL2A" in s_upper or ".SAFE" in s_upper:
         return S2Query.from_product_id(s.replace(".SAFE", ""))
     # Try tile+date shorthand
     try:

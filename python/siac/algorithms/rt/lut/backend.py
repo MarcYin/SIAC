@@ -41,6 +41,18 @@ class ZarrLUTBackend:
     Implements the RTModelBackend protocol using multi-dimensional
     interpolation in a pre-computed look-up table.
 
+    Shared SIAC RT input convention:
+
+    - geometry angles are stored upstream in radians and converted to degrees
+      before LUT interpolation
+    - ``aot`` is unitless aerosol optical depth at 550 nm
+    - ``tcwv`` is total column water vapour in cm precipitable water
+    - ``tco3`` is total column ozone in atm-cm (DU / 1000)
+    - ``elevation`` is terrain altitude in km above mean sea level
+
+    Ozone LUTs may be indexed either in atm-cm or Dobson Units. The backend
+    normalizes ``tco3`` automatically when the LUT ozone axis is in DU.
+
     Args:
         lut_path: Path to the Zarr LUT store
         interpolation_method: Interpolation method ("linear" or "nearest")
@@ -103,7 +115,22 @@ class ZarrLUTBackend:
         """Lazily load the LUT dataset."""
         if self._lut is None:
             self._load_lut()
+            self._validate_lut()
         return self._lut
+
+    def _validate_lut(self) -> None:
+        """Check that the loaded LUT contains a usable RT representation."""
+        if self._lut is None:
+            return
+        has_compact = all(v in self._lut.data_vars for v in self._COEFFICIENT_VARS)
+        has_spectral = all(v in self._lut.data_vars for v in self._SPECTRAL_VARS)
+        if not has_compact and not has_spectral:
+            available = sorted(self._lut.data_vars)
+            raise ValueError(
+                "LUT does not contain a supported RT representation. "
+                f"Expected compact vars {self._COEFFICIENT_VARS} or spectral vars "
+                f"{self._SPECTRAL_VARS}; found: {available}"
+            )
 
     def _load_lut(self) -> None:
         """Load the Zarr LUT dataset."""
@@ -116,6 +143,7 @@ class ZarrLUTBackend:
         # Open with dask for lazy loading. Store may be local path, fsspec mapper, or zip mapper.
         store = build_lut_store(self.lut_path, self.storage_options)
         if self._store_contains_key(store, "zarr.json"):
+            _prev = os.environ.get("ZARR_V3_EXPERIMENTAL_API")
             os.environ.setdefault("ZARR_V3_EXPERIMENTAL_API", "1")
             try:
                 self._lut = xr.open_zarr(
@@ -128,6 +156,12 @@ class ZarrLUTBackend:
                     "Failed to open LUT as zarr v3 (%s); retrying with zarr v2 paths",
                     e,
                 )
+            finally:
+                # Restore env to avoid leaking global state.
+                if _prev is None:
+                    os.environ.pop("ZARR_V3_EXPERIMENTAL_API", None)
+                else:
+                    os.environ["ZARR_V3_EXPERIMENTAL_API"] = _prev
 
         if self._lut is None:
             try:
@@ -174,7 +208,8 @@ class ZarrLUTBackend:
 
         Args:
             geometry: Viewing geometry (sza, vza, raa in radians)
-            atmo_state: Atmospheric state (aot, tcwv, tco3, elevation)
+            atmo_state: Atmospheric state in the shared SIAC RT units
+                (unitless aot, tcwv in cm, tco3 in atm-cm, elevation in km)
             band: Sensor band specification
             compute_jacobian: Whether to compute d(coeff)/d(aot,tcwv)
 
@@ -445,7 +480,11 @@ class ZarrLUTBackend:
         return cls._point_indexer(cls._require_finite_values(values, name=name))
 
     def _normalize_ozone_point_values(self, tco3: np.ndarray) -> np.ndarray:
-        """Normalize ozone values to the LUT unit convention when needed."""
+        """Normalize ozone values to the LUT unit convention when needed.
+
+        SIAC carries ozone in atm-cm. Some LUTs index ozone in DU, so values are
+        upscaled by 1000 when the LUT axis is clearly in the DU regime.
+        """
         ozone = np.asarray(tco3, dtype=np.float32)
         ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
         # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
@@ -479,7 +518,17 @@ class ZarrLUTBackend:
         tco3: np.ndarray,
         elevation: np.ndarray,
     ) -> dict[str, xr.DataArray]:
-        """Build point-indexer coordinates for interpolation."""
+        """Build point-indexer coordinates for interpolation.
+
+        Expected units:
+
+        - ``sza``, ``vza``, ``raa`` in degrees
+        - ``aot`` unitless
+        - ``tcwv`` in cm precipitable water
+        - ``tco3`` in atm-cm; converted to DU automatically when the LUT ozone
+          axis uses DU
+        - ``elevation`` in km
+        """
         coords: dict[str, xr.DataArray] = {
             "sza": self._required_point_indexer(sza, name="sza"),
             "vza": self._required_point_indexer(vza, name="vza"),
@@ -584,7 +633,12 @@ class ZarrLUTBackend:
     def _geometry_to_lut_inputs(
         geometry: GeometryAngles,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Convert geometry angles to LUT-ready degrees with normalized relative azimuth."""
+        """Convert radian geometry into LUT-ready degrees.
+
+        ``GeometryAngles`` stores angles in radians. LUT interpolation uses
+        solar/view zenith and relative azimuth in degrees, with relative azimuth
+        normalized to ``[0, 180]``.
+        """
         sza_deg = np.rad2deg(geometry.sza.values)
         vza_deg = np.rad2deg(geometry.vza.values)
         raa_deg = np.abs(np.rad2deg(geometry.raa.values))
@@ -1022,7 +1076,7 @@ class ZarrLUTBackend:
         aot: np.ndarray,
         tcwv: np.ndarray,
     ) -> dict[str, xr.DataArray]:
-        """Build point interpolation coordinates for variables solved per-pixel."""
+        """Build per-pixel LUT coordinates for unitless AOT and TCWV in cm."""
         return cast(
             "dict[str, xr.DataArray]",
             build_point_interpolation_coords(

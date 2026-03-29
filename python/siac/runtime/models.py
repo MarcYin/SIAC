@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
@@ -14,7 +14,13 @@ if TYPE_CHECKING:
 
 
 def _as_data_array(value: object) -> xr.DataArray:
-    return cast("xr.DataArray", value)
+    if not isinstance(value, xr.DataArray):
+        if isinstance(value, (np.ndarray, np.generic, int, float)):
+            return xr.DataArray(np.asarray(value))
+        raise TypeError(
+            f"Expected xr.DataArray, got {type(value).__name__}"
+        )
+    return value
 
 
 def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> xr.DataArray:
@@ -66,12 +72,31 @@ def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> x
 
 @dataclass(frozen=True)
 class GeometryAngles:
-    """View and sun geometry for atmospheric correction."""
+    """View and sun geometry for atmospheric correction.
+
+    Internal SIAC convention:
+
+    - ``sza``, ``saa``, ``vza``, ``vaa`` are stored in radians.
+    - ``raa`` is derived as ``vaa - saa`` in radians.
+    - neural-network emulators consume ``cos(sza)``, ``cos(vza)``, and
+      ``cos(raa)``.
+    - the LUT backend converts the radian fields back to degrees before LUT
+      interpolation.
+    """
 
     sza: xr.DataArray
     saa: xr.DataArray
     vza: xr.DataArray
     vaa: xr.DataArray
+
+    def __post_init__(self) -> None:
+        for name in ("sza", "saa", "vza", "vaa"):
+            val = getattr(self, name)
+            if not isinstance(val, xr.DataArray):
+                raise TypeError(
+                    f"GeometryAngles.{name} must be xr.DataArray, "
+                    f"got {type(val).__name__}"
+                )
 
     @property
     def raa(self) -> xr.DataArray:
@@ -90,6 +115,7 @@ class GeometryAngles:
         return _as_data_array(np.cos(self.raa))
 
     def to_emulator_input(self) -> xr.Dataset:
+        """Return emulator-ready geometry features from the radian angle fields."""
         return xr.Dataset(
             {
                 "cos_sza": self.cos_sza,
@@ -117,7 +143,16 @@ class GeometryAngles:
 
 @dataclass(frozen=True)
 class AtmosphericState:
-    """Atmospheric parameters for radiative transfer calculations."""
+    """Atmospheric parameters for radiative transfer calculations.
+
+    Shared SIAC RT units used by the solver, LUT backend, and emulator backend:
+
+    - ``aot``: aerosol optical depth at 550 nm, unitless
+    - ``tcwv``: total column water vapour in cm precipitable water
+      (numerically equal to g cm^-2)
+    - ``tco3``: total column ozone in atm-cm (DU / 1000)
+    - ``elevation``: terrain altitude in km above mean sea level
+    """
 
     aot: xr.DataArray
     tcwv: xr.DataArray
@@ -127,7 +162,23 @@ class AtmosphericState:
     tco3_unc: xr.DataArray
     elevation: xr.DataArray
 
+    def __post_init__(self) -> None:
+        for name in ("aot", "tcwv", "tco3", "aot_unc", "tcwv_unc", "tco3_unc", "elevation"):
+            val = getattr(self, name)
+            if not isinstance(val, xr.DataArray):
+                raise TypeError(
+                    f"AtmosphericState.{name} must be xr.DataArray, "
+                    f"got {type(val).__name__}"
+                )
+
     def to_emulator_input(self, geometry: GeometryAngles) -> xr.Dataset:
+        """Return the shared RT state in the emulator feature convention.
+
+        Geometry is emitted as cosines of the radian angle fields. Atmospheric
+        variables are passed through unchanged in the shared SIAC RT units:
+        ``aot`` unitless, ``tcwv`` in cm, ``tco3`` in atm-cm, and elevation in
+        km.
+        """
         return xr.Dataset(
             {
                 "cos_sza": geometry.cos_sza,
@@ -178,7 +229,7 @@ class RTCoefficients:
         return _as_data_array(y / (1.0 + self.xcp * y))
 
     def simulate_toa(self, boa: xr.DataArray) -> xr.DataArray:
-        """Forward-simulate TOA reflectance from BOA under the current RT coefficients."""
+        """Forward-simulate dimensionless TOA reflectance from BOA reflectance."""
         denom = _as_data_array(1.0 - self.xcp * boa)
         stable = _as_data_array(np.isfinite(denom) & (np.abs(denom) > 1.0e-6) & (np.abs(self.xap) > 1.0e-12))
         y = _as_data_array(boa / denom)
@@ -191,9 +242,10 @@ class RTCoefficients:
     ) -> tuple[xr.DataArray, xr.DataArray]:
         if not self.has_jacobian:
             raise ValueError("RTCoefficients does not have Jacobian information")
-        assert self.d_xap is not None
-        assert self.d_xbp is not None
-        assert self.d_xcp is not None
+        if self.d_xap is None or self.d_xbp is None or self.d_xcp is None:
+            raise ValueError(
+                "Jacobian arrays (d_xap, d_xbp, d_xcp) must all be non-None"
+            )
 
         y = _as_data_array(self.xap * toa - self.xbp)
         denom = _as_data_array(1.0 + self.xcp * y)
