@@ -37,6 +37,7 @@ from siac.algorithms.surface._spectral_curve_utils import (
     segmentize_curve as _segmentize_curve,
 )
 from siac.runtime.models import copy_spatial_metadata_like
+from siac.storage.writers import write_raster
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -666,8 +667,15 @@ def _atomic_write_npz(path: Path, arrays: dict[str, Float32Array]) -> None:
     tmp_path.replace(path)
 
 
+def _atomic_write_geotiff(path: Path, data: xr.DataArray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.stem}.{os.getpid()}.tmp{path.suffix}")
+    write_raster(data, tmp_path, compression="deflate", dtype="float32", tiled=False)
+    tmp_path.replace(path)
+
+
 def _diagnostic_signature(
-    metrics: dict[str, Float32Array],
+    metrics: dict[str, xr.DataArray],
     metadata: dict[str, object],
 ) -> str:
     payload = [
@@ -676,8 +684,21 @@ def _diagnostic_signature(
             _hash_bytes(
                 name.encode("utf-8"),
                 str(array.dtype).encode("utf-8"),
+                "|".join(array.dims).encode("utf-8"),
                 np.asarray(array.shape, dtype=np.int64).tobytes(),
-                np.asarray(array, dtype=np.float32).tobytes(),
+                np.asarray(array.values, dtype=np.float32).tobytes(),
+                *[
+                    _hash_bytes(
+                        dim.encode("utf-8"),
+                        str(np.asarray(array.coords[dim].values).dtype).encode("utf-8"),
+                        np.asarray(np.asarray(array.coords[dim].values).shape, dtype=np.int64).tobytes(),
+                        np.asarray(array.coords[dim].values).tobytes(),
+                    ).encode("utf-8")
+                    for dim in array.dims
+                    if dim in array.coords
+                ],
+                str(array.rio.crs).encode("utf-8"),
+                str(array.rio.transform(recalc=True)).encode("utf-8"),
             )
             for name, array in sorted(metrics.items())
         ],
@@ -689,38 +710,53 @@ def _write_distance_metric_diagnostics(
     cache_root: Path | str | None,
     *,
     prefix: str,
-    metrics: dict[str, Float32Array],
+    metrics: dict[str, xr.DataArray],
     metadata: dict[str, object],
 ) -> Path | None:
     if cache_root is None or not metrics:
         return None
 
-    normalized_metrics = {
-        str(name): np.asarray(values, dtype=np.float32)
-        for name, values in metrics.items()
-        if np.asarray(values).size > 0
-    }
+    normalized_metrics: dict[str, xr.DataArray] = {}
+    for name, values in metrics.items():
+        metric = values.astype(np.float32)
+        if metric.size == 0:
+            continue
+        try:
+            crs = metric.rio.crs
+            transform = metric.rio.transform(recalc=True)
+        except Exception:
+            crs = None
+            transform = None
+        if crs is None or transform is None:
+            logger.warning("Skipping diagnostic GeoTIFF for %s: spatial metadata is incomplete", name)
+            continue
+        normalized_metrics[str(name)] = metric
     if not normalized_metrics:
         return None
 
     diagnostics_root = Path(cache_root).expanduser().resolve() / "diagnostics"
     signature = _diagnostic_signature(normalized_metrics, metadata)
-    data_path = diagnostics_root / f"{prefix}_{signature[:16]}.npz"
     metadata_path = diagnostics_root / f"{prefix}_{signature[:16]}.json"
-    if not data_path.exists():
-        _atomic_write_npz(data_path, normalized_metrics)
+    metric_paths = {
+        name: diagnostics_root / f"{prefix}_{signature[:16]}_{name}.tif"
+        for name in sorted(normalized_metrics)
+    }
+    for name, data_path in metric_paths.items():
+        if data_path.exists():
+            continue
+        _atomic_write_geotiff(data_path, normalized_metrics[name])
     if not metadata_path.exists():
         payload = dict(metadata)
         payload["metrics"] = {
             name: {
-                "dtype": str(array.dtype),
-                "shape": [int(size) for size in array.shape],
+                "dtype": str(metric.dtype),
+                "shape": [int(size) for size in metric.shape],
+                "path": str(metric_paths[name]),
             }
-            for name, array in sorted(normalized_metrics.items())
+            for name, metric in sorted(normalized_metrics.items())
         }
-        payload["data_path"] = str(data_path)
         _atomic_write_json(metadata_path, payload)
-    return data_path
+    return metadata_path
 
 
 def _prepare_runtime(
@@ -954,6 +990,12 @@ class SpectralMapper:
             segment: self._restore_spatial_field(flat_values, flattened)
             for segment, flat_values in segment_fit_flat.items()
         }
+        spatial_reference = cast("xr.DataArray", flattened.source_data.isel(band=0, drop=True))
+        source_fit_da = copy_spatial_metadata_like(source_fit_da.astype(np.float32), spatial_reference)
+        segment_fit_da = {
+            segment: copy_spatial_metadata_like(metric.astype(np.float32), spatial_reference)
+            for segment, metric in segment_fit_da.items()
+        }
         self._cache_distance_metrics(
             {
                 "source_fit_rmse": source_fit_da,
@@ -971,10 +1013,7 @@ class SpectralMapper:
                 uncertainty_da.transpose(*original_dims).astype(np.float32),
                 flattened.source_data,
             ),
-            copy_spatial_metadata_like(
-                source_fit_da.astype(np.float32),
-                cast("xr.DataArray", flattened.source_data.isel(band=0, drop=True)),
-            ),
+            source_fit_da,
         )
 
     def _cache_distance_metrics(self, metrics: dict[str, xr.DataArray]) -> None:
@@ -986,10 +1025,7 @@ class SpectralMapper:
         _write_distance_metric_diagnostics(
             Path(prepared_root).parent,
             prefix="spectral_mapping_distances",
-            metrics={
-                name: np.asarray(metric.values, dtype=np.float32)
-                for name, metric in metrics.items()
-            },
+            metrics=metrics,
             metadata={
                 "source_sensor_id": self._runtime.source_sensor_id,
                 "target_sensor_id": self._runtime.target_sensor_id,

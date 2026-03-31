@@ -465,12 +465,16 @@ def query_surface_prior_from_monthly_database(
             dtype=np.float32,
         )
 
+    spatial_reference = cast("xr.DataArray", predicted_visible.isel(band=0, drop=True))
+    predicted_source_fit = copy_spatial_metadata_like(predicted_source_fit.astype(np.float32), spatial_reference)
+    predicted_distance = copy_spatial_metadata_like(predicted_distance.astype(np.float32), spatial_reference)
+
     _write_distance_metric_diagnostics(
         diagnostic_cache_dir,
         prefix="swir_refine_distances",
         metrics={
-            "source_fit_rmse": np.asarray(predicted_source_fit.values, dtype=np.float32),
-            "knn_feature_distance": np.asarray(predicted_distance.values, dtype=np.float32),
+            "source_fit_rmse": predicted_source_fit,
+            "knn_feature_distance": predicted_distance,
         },
         metadata={
             "query_band_names": list(expected_query),

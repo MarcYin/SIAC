@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
 
 import siac.algorithms.surface.spectral_mapping as spectral_mapping_mod
@@ -38,6 +39,19 @@ def _source_bands() -> tuple[SensorBand, ...]:
         SensorBand("B11", 1610.0, 90.0, 20.0, 2),
         SensorBand("B12", 2190.0, 180.0, 20.0, 3),
     )
+
+
+def _with_geo(data: xr.DataArray) -> xr.DataArray:
+    height = int(data.sizes["y"])
+    width = int(data.sizes["x"])
+    resolution = 10.0
+    xmin = 500000.0
+    ymax = 4100000.0
+    x = np.linspace(xmin + resolution / 2.0, xmin + width * resolution - resolution / 2.0, width, dtype=np.float64)
+    y = np.linspace(ymax - resolution / 2.0, ymax - height * resolution + resolution / 2.0, height, dtype=np.float64)
+    transform = rasterio.transform.from_origin(xmin, ymax, resolution, resolution)
+    out = data.assign_coords({"x": x, "y": y}).rio.set_spatial_dims(x_dim="x", y_dim="y")
+    return out.rio.write_crs("EPSG:32632").rio.write_transform(transform)
 
 
 def test_runtime_export_helpers_cover_hashing_and_cache_reuse(tmp_path: Path) -> None:
@@ -433,29 +447,43 @@ def test_map_caches_distance_metrics_to_disk(tmp_path: Path) -> None:
         _band_response=lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float64),
     )
 
-    source = xr.DataArray(
+    source = _with_geo(
+        xr.DataArray(
         np.array([[[0.25]]], dtype=np.float32),
         dims=["band", "y", "x"],
         coords={"band": ["B02"], "y": [0], "x": [0]},
+    )
     )
 
     mapper.map(source)
 
     diagnostics_dir = tmp_path / "runtime" / "diagnostics"
-    data_paths = sorted(diagnostics_dir.glob("spectral_mapping_distances_*.npz"))
+    data_paths = sorted(diagnostics_dir.glob("spectral_mapping_distances_*.tif"))
     metadata_paths = sorted(diagnostics_dir.glob("spectral_mapping_distances_*.json"))
-    assert len(data_paths) == 1
+    assert len(data_paths) == 3
     assert len(metadata_paths) == 1
 
-    with np.load(data_paths[0]) as payload:
-        assert set(payload.files) == {"source_fit_rmse", "vnir_source_fit_rmse", "swir_source_fit_rmse"}
-        assert float(payload["source_fit_rmse"][0, 0]) == pytest.approx(0.1)
-        assert float(payload["vnir_source_fit_rmse"][0, 0]) == pytest.approx(0.1)
-        assert np.isnan(payload["swir_source_fit_rmse"][0, 0])
+    metrics = {
+        "source_fit_rmse": 0.1,
+        "vnir_source_fit_rmse": 0.1,
+        "swir_source_fit_rmse": np.nan,
+    }
+    for path in data_paths:
+        metric_name = path.stem.split("_", 4)[-1]
+        with rasterio.open(path) as src:
+            assert src.crs.to_string() == "EPSG:32632"
+            assert src.transform == source.isel(band=0, drop=True).rio.transform()
+            value = src.read(1)[0, 0]
+        expected = metrics[metric_name]
+        if np.isnan(expected):
+            assert np.isnan(value)
+        else:
+            assert float(value) == pytest.approx(expected)
 
     metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
     assert metadata["source_sensor_id"] == "src"
     assert metadata["target_sensor_id"] == "target"
+    assert sorted(metadata["metrics"]) == sorted(metrics)
 
 
 def test_wrapper_and_input_split_helpers_cover_error_and_delegation_paths(monkeypatch: pytest.MonkeyPatch) -> None:

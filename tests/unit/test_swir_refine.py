@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
 
 import siac.algorithms.surface.swir_refine as swir_refine_mod
@@ -73,6 +74,19 @@ def _geometry(shape: tuple[int, int]) -> GeometryAngles:
         vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
         vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
     )
+
+
+def _with_geo(data: xr.DataArray) -> xr.DataArray:
+    height = int(data.sizes["y"])
+    width = int(data.sizes["x"])
+    resolution = 20.0
+    xmin = 600000.0
+    ymax = 4200000.0
+    x = np.linspace(xmin + resolution / 2.0, xmin + width * resolution - resolution / 2.0, width, dtype=np.float64)
+    y = np.linspace(ymax - resolution / 2.0, ymax - height * resolution + resolution / 2.0, height, dtype=np.float64)
+    transform = rasterio.transform.from_origin(xmin, ymax, resolution, resolution)
+    out = data.assign_coords({"x": x, "y": y}).rio.set_spatial_dims(x_dim="x", y_dim="y")
+    return out.rio.write_crs("EPSG:32632").rio.write_transform(transform)
 
 
 def _atmo(shape: tuple[int, int]) -> AtmosphericState:
@@ -546,31 +560,31 @@ def test_query_surface_prior_from_monthly_database_caches_distance_metrics(tmp_p
         def predict_visible_with_diagnostics(self, corrected_reflectance, *, k_neighbors=3):  # noqa: ANN001
             del corrected_reflectance, k_neighbors
             coords = {"band": ["B02", "B03"], "y": [0, 1], "x": [0]}
-            predicted = xr.DataArray(
+            predicted = _with_geo(xr.DataArray(
                 np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
                 dims=["band", "y", "x"],
                 coords=coords,
-            )
-            predicted_unc = xr.DataArray(
+            ))
+            predicted_unc = _with_geo(xr.DataArray(
                 np.full((2, 2, 1), 0.01, dtype=np.float32),
                 dims=["band", "y", "x"],
                 coords=coords,
-            )
-            predicted_quality = xr.DataArray(
+            ))
+            predicted_quality = _with_geo(xr.DataArray(
                 np.full((2, 1), 0.02, dtype=np.float32),
                 dims=["y", "x"],
                 coords={"y": [0, 1], "x": [0]},
-            )
-            predicted_source_fit = xr.DataArray(
+            ))
+            predicted_source_fit = _with_geo(xr.DataArray(
                 np.array([[0.01], [0.03]], dtype=np.float32),
                 dims=["y", "x"],
                 coords={"y": [0, 1], "x": [0]},
-            )
-            predicted_distance = xr.DataArray(
+            ))
+            predicted_distance = _with_geo(xr.DataArray(
                 np.array([[0.01], [0.09]], dtype=np.float32),
                 dims=["y", "x"],
                 coords={"y": [0, 1], "x": [0]},
-            )
+            ))
             return SimpleNamespace(
                 predicted=predicted,
                 uncertainty=predicted_unc,
@@ -590,19 +604,27 @@ def test_query_surface_prior_from_monthly_database_caches_distance_metrics(tmp_p
     )
 
     diagnostics_dir = tmp_path / "diagnostics"
-    data_paths = sorted(diagnostics_dir.glob("swir_refine_distances_*.npz"))
+    data_paths = sorted(diagnostics_dir.glob("swir_refine_distances_*.tif"))
     metadata_paths = sorted(diagnostics_dir.glob("swir_refine_distances_*.json"))
-    assert len(data_paths) == 1
+    assert len(data_paths) == 2
     assert len(metadata_paths) == 1
 
-    with np.load(data_paths[0]) as payload:
-        assert set(payload.files) == {"source_fit_rmse", "knn_feature_distance"}
-        np.testing.assert_allclose(payload["source_fit_rmse"][:, 0], np.array([0.01, 0.03], dtype=np.float32))
-        np.testing.assert_allclose(payload["knn_feature_distance"][:, 0], np.array([0.01, 0.09], dtype=np.float32))
+    expected = {
+        "source_fit_rmse": np.array([0.01, 0.03], dtype=np.float32),
+        "knn_feature_distance": np.array([0.01, 0.09], dtype=np.float32),
+    }
+    expected_transform = rasterio.transform.from_origin(600000.0, 4200000.0, 20.0, 20.0)
+    for path in data_paths:
+        metric_name = path.stem.split("_", 4)[-1]
+        with rasterio.open(path) as src:
+            assert src.crs.to_string() == "EPSG:32632"
+            assert src.transform == expected_transform
+            np.testing.assert_allclose(src.read(1)[:, 0], expected[metric_name])
 
     metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
     assert metadata["query_band_names"] == ["B08", "B11", "B12"]
     assert metadata["visible_band_names"] == ["B02", "B03"]
+    assert sorted(metadata["metrics"]) == sorted(expected)
 
 
 def test_weekly_sample_dates_use_weekly_spacing() -> None:
