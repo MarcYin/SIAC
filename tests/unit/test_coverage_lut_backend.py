@@ -179,7 +179,15 @@ class TestZarrLUTBackend:
         import siac.algorithms.rt.lut.backend as lut_backend
 
         calls: list[dict[str, object]] = []
-        dataset = xr.Dataset(coords={"sza": [30.0], "vza": [10.0], "aot": [0.2]})
+        dataset = xr.Dataset(
+            {
+                "path_reflectance": ("sza", np.array([0.01], dtype=np.float32)),
+                "transmittance_down": ("sza", np.array([0.8], dtype=np.float32)),
+                "transmittance_up": ("sza", np.array([0.9], dtype=np.float32)),
+                "spherical_albedo": ("sza", np.array([0.05], dtype=np.float32)),
+            },
+            coords={"sza": [30.0], "vza": [10.0], "aot": [0.2]},
+        )
 
         def _fake_open_zarr(*, store, consolidated, zarr_format=None):  # noqa: ANN001
             calls.append(
