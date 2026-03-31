@@ -7,6 +7,7 @@ import collections.abc
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
@@ -34,6 +35,7 @@ from siac.algorithms.surface.spectral_mapping import (
     HyperspectralLibrary,
     SpectralMapper,
     SpectralMappingConfig,
+    _write_distance_metric_diagnostics,
 )
 from siac.domain import SensorBand
 from siac.runtime import (
@@ -386,6 +388,7 @@ def query_surface_prior_from_monthly_database(
     max_prediction_uncertainty: float | None = 0.05,
     max_composite_quality: float | None = 0.05,
     max_knn_feature_distance: float | None = 0.05,
+    diagnostic_cache_dir: Path | str | None = None,
 ) -> SurfacePrior:
     """Build a visible-band surface prior from first-pass corrected NIR/SWIR."""
     expected_query = tuple(database.query_band_names)
@@ -443,16 +446,36 @@ def query_surface_prior_from_monthly_database(
         predicted_visible = prediction.predicted
         predicted_unc = prediction.uncertainty
         predicted_quality = prediction.quality
+        predicted_source_fit = prediction.source_fit_rmse
         predicted_distance = prediction.knn_feature_distance
     else:
         predicted_visible, predicted_unc, predicted_quality = database.predict_visible(
             corrected_query,
             k_neighbors=k_neighbors,
         )
+        predicted_source_fit = xr.zeros_like(
+            cast("xr.DataArray", predicted_quality),
+            dtype=np.float32,
+        )
         predicted_distance = xr.zeros_like(
             cast("xr.DataArray", predicted_quality),
             dtype=np.float32,
         )
+
+    _write_distance_metric_diagnostics(
+        diagnostic_cache_dir,
+        prefix="swir_refine_distances",
+        metrics={
+            "source_fit_rmse": np.asarray(predicted_source_fit.values, dtype=np.float32),
+            "knn_feature_distance": np.asarray(predicted_distance.values, dtype=np.float32),
+        },
+        metadata={
+            "query_band_names": list(expected_query),
+            "visible_band_names": list(expected_visible),
+            "k_neighbors": int(k_neighbors),
+            "target_shape": [int(size) for size in target_shape],
+        },
+    )
 
     cloud_mask = corrected_query_mask
     uncertainty_ok = np.ones(target_shape, dtype=bool)

@@ -306,6 +306,7 @@ def _query_monthly_surface_prior(
         max_prediction_uncertainty=runtime.max_prediction_uncertainty,
         max_composite_quality=runtime.max_composite_quality,
         max_knn_feature_distance=runtime.max_knn_feature_distance,
+        diagnostic_cache_dir=getattr(runtime.spectral_library, "cache_dir", None),
     )
     composites = tuple(getattr(runtime.database, "composites", ()))
     if not composites or not hasattr(prior, "monthly_composites"):
