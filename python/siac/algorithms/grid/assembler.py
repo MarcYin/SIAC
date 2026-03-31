@@ -2,7 +2,7 @@
 M4 Grid Assembler — resample and align all upstream outputs to solver grids.
 
 Produces a ``SolverInputBundle`` where every raster field lives on the same
-spatial grid (the aerosol retrieval grid, typically 1000 m).
+spatial grid (the aerosol retrieval grid, typically 120 m).
 
 See PLANS.md §4.4 for the full specification.
 """
@@ -356,7 +356,7 @@ def assemble_grids(
     surface: SurfacePrior,
     rt_model: Any,
     aux_resolution_m: float = 500.0,
-    aerosol_resolution_m: float = 1000.0,
+    aerosol_resolution_m: float = 120.0,
 ) -> SolverInputBundle:
     """Resample and align all upstream outputs to solver grids.
 
@@ -373,7 +373,7 @@ def assemble_grids(
         surface: M3 output (surface prior).
         rt_model: RT model backend (passed through, not resampled).
         aux_resolution_m: Legacy metadata field retained for compatibility.
-        aerosol_resolution_m: Target resolution for AOT/TCWV retrieval (default 1000 m).
+        aerosol_resolution_m: Target resolution for AOT/TCWV retrieval (default 120 m).
 
     Returns:
         SolverInputBundle ready for the solver.
@@ -386,7 +386,7 @@ def assemble_grids(
     #    resolution and scene bounds. If callers still set only the legacy
     #    aux-resolution knob, preserve that behavior.
     resolved_aerosol_resolution = float(aerosol_resolution_m)
-    if aerosol_resolution_m == 1000.0 and aux_resolution_m != 500.0:
+    if aerosol_resolution_m == 120.0 and aux_resolution_m != 500.0:
         resolved_aerosol_resolution = float(aux_resolution_m)
         logger.info(
             "assemble_grids: using aux_resolution_m=%s as the solver grid for legacy compatibility",

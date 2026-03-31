@@ -264,10 +264,11 @@ def test_spectral_mapper_handles_time_dimension() -> None:
     unc = _with_geo(xr.full_like(source, 0.02))
 
     mapper = SpectralMapper(_source_bands(), _target_bands(), spectral_library=library, k_neighbors=1)
-    mapped, mapped_unc = mapper.map(source, source_uncertainty=unc)
+    mapped, mapped_unc, source_fit = mapper.map(source, source_uncertainty=unc)
 
     assert mapped.dims == ("time", "band", "y", "x")
     assert mapped_unc.shape == mapped.shape
+    assert source_fit.dims == ("time", "y", "x")
     assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
     assert mapped.rio.crs is not None
     assert mapped.rio.crs.to_string() == "EPSG:32615"
@@ -400,7 +401,7 @@ def test_spectral_mapper_preserves_original_dim_order() -> None:
     ).transpose("time", "y", "band", "x")
     unc = xr.full_like(source, 0.02)
 
-    mapped, mapped_unc = SpectralMapper(
+    mapped, mapped_unc, source_fit = SpectralMapper(
         _source_bands(),
         _target_bands(),
         spectral_library=library,
@@ -409,6 +410,7 @@ def test_spectral_mapper_preserves_original_dim_order() -> None:
 
     assert mapped.dims == ("time", "y", "band", "x")
     assert mapped_unc.dims == mapped.dims
+    assert source_fit.dims == ("time", "y", "x")
     assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
 
 

@@ -80,6 +80,7 @@ class _MonthlyModeledReflectance:
     reflectance: xr.DataArray
     quality: xr.DataArray
     reflectance_unc: xr.DataArray
+    source_fit_rmse: xr.DataArray | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ def build_monthly_surface_prior_database(
     query_bands: collections.abc.Sequence[SensorBand],
     spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
     spectral_k_neighbors: int = 5,
+    max_source_fit_rmse: float | None = None,
 ) -> MonthlyCompositeDatabase:
     """Build a Route-B database from prepared monthly composites."""
     target_bands = _deduplicate_bands([*visible_bands, *query_bands])
@@ -162,6 +164,7 @@ def build_monthly_surface_prior_database(
         composites,
         query_bands=tuple(band.name for band in query_bands),
         visible_bands=tuple(band.name for band in visible_bands),
+        max_source_fit_rmse=max_source_fit_rmse,
     )
     logger.info(
         "Monthly surface-prior database complete: entries=%d visible_bands=%d query_bands=%d",
@@ -380,6 +383,9 @@ def query_surface_prior_from_monthly_database(
     query_band_names: tuple[str, ...] | None = None,
     visible_band_names: tuple[str, ...] | None = None,
     k_neighbors: int = 3,
+    max_prediction_uncertainty: float | None = 0.05,
+    max_composite_quality: float | None = 0.05,
+    max_knn_feature_distance: float | None = 0.05,
 ) -> SurfacePrior:
     """Build a visible-band surface prior from first-pass corrected NIR/SWIR."""
     expected_query = tuple(database.query_band_names)
@@ -429,16 +435,44 @@ def query_surface_prior_from_monthly_database(
         band_names=expected_query,
         invalid_mask=corrected_query_mask,
     )
-    predicted_visible, predicted_unc = database.predict_visible(
-        corrected_query,
-        k_neighbors=k_neighbors,
-    )
+    if hasattr(database, "predict_visible_with_diagnostics"):
+        prediction = database.predict_visible_with_diagnostics(
+            corrected_query,
+            k_neighbors=k_neighbors,
+        )
+        predicted_visible = prediction.predicted
+        predicted_unc = prediction.uncertainty
+        predicted_quality = prediction.quality
+        predicted_distance = prediction.knn_feature_distance
+    else:
+        predicted_visible, predicted_unc, predicted_quality = database.predict_visible(
+            corrected_query,
+            k_neighbors=k_neighbors,
+        )
+        predicted_distance = xr.zeros_like(
+            cast("xr.DataArray", predicted_quality),
+            dtype=np.float32,
+        )
 
     cloud_mask = corrected_query_mask
+    uncertainty_ok = np.ones(target_shape, dtype=bool)
+    if max_prediction_uncertainty is not None:
+        uncertainty_ok = np.all(predicted_unc.values <= float(max_prediction_uncertainty), axis=0)
+    quality_ok = np.ones(target_shape, dtype=bool)
+    if max_composite_quality is not None:
+        quality_ok = predicted_quality.values <= float(max_composite_quality)
+    distance_ok = np.ones(target_shape, dtype=bool)
+    if max_knn_feature_distance is not None:
+        distance_ok = predicted_distance.values <= float(max_knn_feature_distance)
     valid = (
         np.all(np.isfinite(predicted_visible.values), axis=0)
         & np.all(np.isfinite(predicted_unc.values), axis=0)
+        & np.isfinite(predicted_quality.values)
+        & np.isfinite(predicted_distance.values)
         & coarse_query_valid.values
+        & uncertainty_ok
+        & quality_ok
+        & distance_ok
     )
     mask = xr.DataArray(
         valid & (~cloud_mask.values.astype(bool)),
@@ -637,7 +671,7 @@ def _map_monthly_inputs_to_target_basis(
         [monthly_input.reflectance_unc for monthly_input in monthly_inputs],
         dim="time",
     ).transpose("time", "band", "y", "x")
-    mapped_reflectance, mapped_uncertainty = spectral_mapper.map(
+    mapped_reflectance, mapped_uncertainty, mapped_source_fit_rmse = spectral_mapper.map(
         stacked_reflectance,
         source_uncertainty=stacked_uncertainty,
     )
@@ -648,13 +682,19 @@ def _map_monthly_inputs_to_target_basis(
         stop = start + int(monthly_input.reflectance.sizes["time"])
         mapped_month = mapped_reflectance.isel(time=slice(start, stop))
         mapped_unc_month = mapped_uncertainty.isel(time=slice(start, stop))
+        mapped_fit_month = mapped_source_fit_rmse.isel(time=slice(start, stop))
         remapped.append(
             _MonthlyModeledReflectance(
                 year=monthly_input.year,
                 month=monthly_input.month,
                 reflectance=mapped_month,
-                quality=_combine_quality_with_mapping_uncertainty(monthly_input.quality, mapped_unc_month),
+                quality=_combine_quality_with_mapping_uncertainty(
+                    monthly_input.quality,
+                    mapped_unc_month,
+                    mapped_fit_month,
+                ),
                 reflectance_unc=mapped_unc_month,
+                source_fit_rmse=mapped_fit_month.mean(dim="time", skipna=True).astype(np.float32),
             )
         )
         start = stop
@@ -664,10 +704,12 @@ def _map_monthly_inputs_to_target_basis(
 def _combine_quality_with_mapping_uncertainty(
     quality: xr.DataArray,
     mapped_uncertainty: xr.DataArray,
+    mapped_source_fit_rmse: xr.DataArray,
 ) -> xr.DataArray:
     combined = np.sqrt(
         np.square(quality.values, dtype=np.float32)
         + np.square(mapped_uncertainty.mean(dim="band", skipna=True).values, dtype=np.float32)
+        + np.square(mapped_source_fit_rmse.values, dtype=np.float32)
     ).astype(np.float32)
     return xr.DataArray(
         combined,
@@ -683,10 +725,12 @@ def _combine_quality_with_mapping_uncertainty(
 def _combine_composite_quality_with_mapping_uncertainty(
     quality: xr.DataArray,
     mapped_uncertainty: xr.DataArray,
+    mapped_source_fit_rmse: xr.DataArray,
 ) -> xr.DataArray:
     combined = np.sqrt(
         np.square(quality.values, dtype=np.float32)
         + np.square(mapped_uncertainty.mean(dim="band", skipna=True).values, dtype=np.float32)
+        + np.square(mapped_source_fit_rmse.values, dtype=np.float32)
     ).astype(np.float32)
     return xr.DataArray(
         combined,
@@ -704,7 +748,12 @@ def _normalize_monthly_composite_to_target_basis(
     geometry: GeometryAngles,
 ) -> _PreparedMonthlyComposite:
     template = geometry.sza
-    quality = _resample_spatial_field_to_template(composite.quality.astype(np.float32), template, "bilinear")
+    downsample_method = _monthly_composite_downsample_method(composite, template)
+    quality = _resample_spatial_field_to_template(
+        composite.quality.astype(np.float32),
+        template,
+        downsample_method,
+    )
     sample_index = _resample_spatial_field_to_template(
         composite.sample_index.astype(np.float32),
         template,
@@ -712,10 +761,14 @@ def _normalize_monthly_composite_to_target_basis(
     ).round().astype(np.int16)
 
     if isinstance(composite, MonthlyKernelWeightComposite):
-        weights = _resample_brdf_weights_to_template(composite.kernels, template)
+        weights = _resample_brdf_weights_to_template(composite.kernels, template, method=downsample_method)
         reflectance, reflectance_unc = _reflectance_from_kernel_weights(weights, geometry)
     else:
-        reflectance = _resample_band_cube_to_template(composite.reflectance.astype(np.float32), template, "bilinear")
+        reflectance = _resample_band_cube_to_template(
+            composite.reflectance.astype(np.float32),
+            template,
+            downsample_method,
+        )
         reflectance_unc = None
 
     if reflectance_unc is not None:
@@ -779,19 +832,22 @@ def _normalize_monthly_composites_to_target_basis(
                 dim=xr.IndexVariable("time", np.arange(len(group), dtype=np.int32)),
             ).transpose("time", "band", "y", "x")
 
-        mapped_reflectance, mapped_uncertainty = spectral_mapper.map(
+        mapped_reflectance, mapped_uncertainty, mapped_source_fit_rmse = spectral_mapper.map(
             stacked_reflectance,
             source_uncertainty=stacked_uncertainty,
         )
         for time_index, (result_index, entry) in enumerate(group):
             mapped_reflectance_entry = mapped_reflectance.isel(time=time_index, drop=True).astype(np.float32)
             mapped_uncertainty_entry = mapped_uncertainty.isel(time=time_index, drop=True).astype(np.float32)
+            mapped_source_fit_entry = mapped_source_fit_rmse.isel(time=time_index, drop=True).astype(np.float32)
             remapped[result_index] = MonthlyBestPixelComposite(
                 reflectance=mapped_reflectance_entry,
                 quality=_combine_composite_quality_with_mapping_uncertainty(
                     entry.quality,
                     mapped_uncertainty_entry,
+                    mapped_source_fit_entry,
                 ).astype(np.float32),
+                source_fit_rmse=mapped_source_fit_entry,
                 sample_index=entry.sample_index.astype(np.int16),
                 year=entry.year,
                 month=entry.month,
@@ -820,20 +876,46 @@ def _reflectance_from_kernel_weights(
 def _resample_brdf_weights_to_template(
     weights: BRDFKernelWeights,
     template: xr.DataArray,
+    *,
+    method: str,
 ) -> BRDFKernelWeights:
     return BRDFKernelWeights(
-        f0=_resample_band_cube_to_template(weights.f0, template, "bilinear"),
-        f1=_resample_band_cube_to_template(weights.f1, template, "bilinear"),
-        f2=_resample_band_cube_to_template(weights.f2, template, "bilinear"),
-        f0_unc=_resample_band_cube_to_template(weights.f0_unc, template, "bilinear"),
-        f1_unc=_resample_band_cube_to_template(weights.f1_unc, template, "bilinear"),
-        f2_unc=_resample_band_cube_to_template(weights.f2_unc, template, "bilinear"),
+        f0=_resample_band_cube_to_template(weights.f0, template, method),
+        f1=_resample_band_cube_to_template(weights.f1, template, method),
+        f2=_resample_band_cube_to_template(weights.f2, template, method),
+        f0_unc=_resample_band_cube_to_template(weights.f0_unc, template, method),
+        f1_unc=_resample_band_cube_to_template(weights.f1_unc, template, method),
+        f2_unc=_resample_band_cube_to_template(weights.f2_unc, template, method),
         reflectance_unc=(
-            _resample_band_cube_to_template(weights.reflectance_unc, template, "bilinear")
+            _resample_band_cube_to_template(weights.reflectance_unc, template, method)
             if weights.reflectance_unc is not None
             else None
         ),
     )
+
+
+def _monthly_composite_downsample_method(
+    composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
+    template: xr.DataArray,
+) -> str:
+    if isinstance(composite, MonthlyKernelWeightComposite):
+        source = composite.kernels.f0
+    else:
+        source = composite.reflectance
+    if _is_coarser_target_grid(source, template):
+        return "area"
+    return "bilinear"
+
+
+def _is_coarser_target_grid(
+    source: xr.DataArray,
+    template: xr.DataArray,
+) -> bool:
+    source_height = int(source.sizes.get("y", 0))
+    source_width = int(source.sizes.get("x", 0))
+    target_height = int(template.sizes.get("y", 0))
+    target_width = int(template.sizes.get("x", 0))
+    return source_height > target_height or source_width > target_width
 
 
 def _resample_band_cube_to_template(

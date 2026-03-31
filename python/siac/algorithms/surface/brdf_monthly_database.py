@@ -22,6 +22,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _MonthlyPredictionDiagnostics:
+    predicted: xr.DataArray
+    uncertainty: xr.DataArray
+    quality: xr.DataArray
+    source_fit_rmse: xr.DataArray
+    knn_feature_distance: xr.DataArray
+
+
 def _feature_names_for_query_bands(query_bands: Sequence[str]) -> tuple[str, ...]:
     if len(query_bands) == 3:
         return ("nir", "swir1", "swir2", "median_nir", "median_swir1", "median_swir2")
@@ -72,6 +81,8 @@ class MonthlyCompositeDatabase:
 
     entries_features: np.ndarray
     entries_visible: np.ndarray
+    entries_quality: np.ndarray
+    entries_source_fit_rmse: np.ndarray
     median_summary: xr.DataArray
     visible_band_names: tuple[str, ...]
     query_band_names: tuple[str, ...]
@@ -91,8 +102,21 @@ class MonthlyCompositeDatabase:
         corrected_reflectance: xr.Dataset | xr.DataArray,
         *,
         k_neighbors: int = 3,
-    ) -> tuple[xr.DataArray, xr.DataArray]:
+    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
         """Predict visible reflectance from corrected NIR/SWIR query bands."""
+        diagnostics = self.predict_visible_with_diagnostics(
+            corrected_reflectance,
+            k_neighbors=k_neighbors,
+        )
+        return diagnostics.predicted, diagnostics.uncertainty, diagnostics.quality
+
+    def predict_visible_with_diagnostics(
+        self,
+        corrected_reflectance: xr.Dataset | xr.DataArray,
+        *,
+        k_neighbors: int = 3,
+    ) -> _MonthlyPredictionDiagnostics:
+        """Predict visible reflectance plus query-quality diagnostics."""
         if k_neighbors < 1:
             raise ValueError("k_neighbors must be >= 1")
 
@@ -109,16 +133,33 @@ class MonthlyCompositeDatabase:
         n_pixels = ny * nx
         predicted = np.full((n_visible, ny, nx), np.nan, dtype=np.float32)
         uncertainty = np.full((n_visible, ny, nx), np.nan, dtype=np.float32)
+        quality = np.full((ny, nx), np.nan, dtype=np.float32)
+        source_fit_rmse = np.full((ny, nx), np.nan, dtype=np.float32)
+        knn_feature_distance = np.full((ny, nx), np.nan, dtype=np.float32)
         y_coords = query_cube.coords["y"] if "y" in query_cube.coords else np.arange(ny)
         x_coords = query_cube.coords["x"] if "x" in query_cube.coords else np.arange(nx)
 
-        def _output_arrays() -> tuple[xr.DataArray, xr.DataArray]:
+        def _output_arrays() -> _MonthlyPredictionDiagnostics:
             coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
             predicted_da = xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords)
             uncertainty_da = xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords)
-            return (
+            quality_da = xr.DataArray(quality, dims=["y", "x"], coords={"y": y_coords, "x": x_coords})
+            source_fit_da = xr.DataArray(
+                source_fit_rmse,
+                dims=["y", "x"],
+                coords={"y": y_coords, "x": x_coords},
+            )
+            distance_da = xr.DataArray(
+                knn_feature_distance,
+                dims=["y", "x"],
+                coords={"y": y_coords, "x": x_coords},
+            )
+            return _MonthlyPredictionDiagnostics(
                 copy_spatial_metadata_like(predicted_da, query_cube),
                 copy_spatial_metadata_like(uncertainty_da, query_cube),
+                copy_spatial_metadata_like(quality_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))),
+                copy_spatial_metadata_like(source_fit_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))),
+                copy_spatial_metadata_like(distance_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))),
             )
 
         features_flat = np.empty((n_pixels, n_query + median_values.shape[0]), dtype=np.float32)
@@ -135,10 +176,14 @@ class MonthlyCompositeDatabase:
         neighbor_count = min(k_neighbors, self.entries_features.shape[0])
         predicted_flat = predicted.reshape(n_visible, n_pixels).T
         uncertainty_flat = uncertainty.reshape(n_visible, n_pixels).T
+        quality_flat = quality.reshape(n_pixels)
+        source_fit_flat = source_fit_rmse.reshape(n_pixels)
+        distance_flat = knn_feature_distance.reshape(n_pixels)
         chunk_size = 4096
 
         for start in range(0, valid_query_rows.size, chunk_size):
             query_rows = valid_query_rows[start : start + chunk_size]
+            query_feature_values = features_flat[query_rows, :n_query]
             distances, neighbor_rows = neighbor_index.query(
                 features_flat[query_rows],
                 k=neighbor_count,
@@ -152,6 +197,19 @@ class MonthlyCompositeDatabase:
                 neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)
 
             selected_visible = self.entries_visible[neighbor_rows]
+            selected_quality = self.entries_quality[neighbor_rows]
+            selected_source_fit = self.entries_source_fit_rmse[neighbor_rows]
+            selected_query_features = self.entries_features[neighbor_rows, :n_query]
+            feature_distance = np.sqrt(
+                np.mean(
+                    np.square(
+                        selected_query_features - query_feature_values[:, np.newaxis, :],
+                        dtype=np.float32,
+                    ),
+                    axis=2,
+                    dtype=np.float32,
+                )
+            ).astype(np.float32, copy=False)
             zero_mask = distances == 0.0
             nonzero_rows = ~np.any(zero_mask, axis=1)
 
@@ -170,11 +228,16 @@ class MonthlyCompositeDatabase:
                 )
                 predicted_flat[query_rows[nonzero_rows]] = estimate.astype(np.float32, copy=False)
                 uncertainty_flat[query_rows[nonzero_rows]] = spread.astype(np.float32, copy=False)
+                quality_flat[query_rows[nonzero_rows]] = np.sum(selected_quality[nonzero_rows] * weights, axis=1)
+                source_fit_flat[query_rows[nonzero_rows]] = np.sum(selected_source_fit[nonzero_rows] * weights, axis=1)
+                distance_flat[query_rows[nonzero_rows]] = np.sum(feature_distance[nonzero_rows] * weights, axis=1)
 
             if np.any(~nonzero_rows):
                 zero_rows = np.flatnonzero(~nonzero_rows)
                 for local_index in zero_rows:
                     matched = selected_visible[local_index][zero_mask[local_index]]
+                    matched_quality = selected_quality[local_index][zero_mask[local_index]]
+                    matched_source_fit = selected_source_fit[local_index][zero_mask[local_index]]
                     estimate = matched.mean(axis=0)
                     spread = (
                         matched.std(axis=0)
@@ -184,6 +247,9 @@ class MonthlyCompositeDatabase:
                     flat_index = query_rows[local_index]
                     predicted_flat[flat_index] = estimate.astype(np.float32, copy=False)
                     uncertainty_flat[flat_index] = spread.astype(np.float32, copy=False)
+                    quality_flat[flat_index] = np.float32(matched_quality.mean())
+                    source_fit_flat[flat_index] = np.float32(matched_source_fit.mean())
+                    distance_flat[flat_index] = 0.0
 
         return _output_arrays()
 
@@ -193,6 +259,7 @@ def build_monthly_composite_database(
     *,
     query_bands: Sequence[str],
     visible_bands: Sequence[str],
+    max_source_fit_rmse: float | None = None,
 ) -> MonthlyCompositeDatabase:
     """Build the Route-B database from one or more monthly composites."""
     if len(composites) < 1:
@@ -222,14 +289,25 @@ def build_monthly_composite_database(
 
     query_values = np.empty((n_composites, n_query, ny, nx), dtype=np.float32)
     entries_visible = np.empty((n_composites * n_pixels, n_visible), dtype=np.float32)
+    entries_quality = np.empty(n_composites * n_pixels, dtype=np.float32)
+    entries_source_fit_rmse = np.zeros(n_composites * n_pixels, dtype=np.float32)
     for index, composite in enumerate(composites):
         if composite.reflectance.sizes.get("y") != ny or composite.reflectance.sizes.get("x") != nx:
             raise ValueError("All monthly composites must share the same spatial shape")
         query_values[index] = composite.reflectance.sel(band=list(query_names)).values.astype(np.float32)
         visible_values = composite.reflectance.sel(band=list(visible_names)).values.astype(np.float32)
+        quality_values = composite.quality.values.astype(np.float32)
+        source_fit_rmse = getattr(composite, "source_fit_rmse", None)
+        source_fit_values = (
+            source_fit_rmse.values.astype(np.float32)
+            if source_fit_rmse is not None
+            else np.zeros((ny, nx), dtype=np.float32)
+        )
         start = index * n_pixels
         end = start + n_pixels
         entries_visible[start:end] = visible_values.reshape(n_visible, n_pixels).T
+        entries_quality[start:end] = quality_values.reshape(n_pixels)
+        entries_source_fit_rmse[start:end] = source_fit_values.reshape(n_pixels)
 
     median_summary = np.nanmedian(query_values, axis=0)
 
@@ -241,9 +319,18 @@ def build_monthly_composite_database(
         entries_features[start:end, :n_query] = query_values[index].reshape(n_query, n_pixels).T
         entries_features[start:end, n_query:] = median_flat
 
-    valid_entries = np.all(np.isfinite(entries_features), axis=1) & np.all(np.isfinite(entries_visible), axis=1)
+    valid_entries = (
+        np.all(np.isfinite(entries_features), axis=1)
+        & np.all(np.isfinite(entries_visible), axis=1)
+        & np.isfinite(entries_quality)
+        & np.isfinite(entries_source_fit_rmse)
+    )
+    if max_source_fit_rmse is not None:
+        valid_entries &= entries_source_fit_rmse <= float(max_source_fit_rmse)
     entries_features = entries_features[valid_entries]
     entries_visible = entries_visible[valid_entries]
+    entries_quality = entries_quality[valid_entries]
+    entries_source_fit_rmse = entries_source_fit_rmse[valid_entries]
     logger.info(
         "Monthly composite database build complete: valid_entries=%d total_entries=%d",
         int(entries_features.shape[0]),
@@ -266,6 +353,8 @@ def build_monthly_composite_database(
     return MonthlyCompositeDatabase(
         entries_features=entries_features,
         entries_visible=entries_visible,
+        entries_quality=entries_quality,
+        entries_source_fit_rmse=entries_source_fit_rmse,
         median_summary=median_summary_da,
         visible_band_names=visible_names,
         query_band_names=query_names,

@@ -123,7 +123,7 @@ def test_small_adapter_and_monthly_validation_paths() -> None:
             xr.Dataset({"B08": xr.DataArray([[0.1]], dims=["y", "x"]), "B11": xr.DataArray([[0.1]], dims=["y", "x"]), "B12": xr.DataArray([[0.1]], dims=["y", "x"])}),
             k_neighbors=0,
         )
-    visible, visible_unc = database.predict_visible(
+    visible, visible_unc, visible_quality = database.predict_visible(
         xr.Dataset(
             {
                 "B08": xr.DataArray(np.ones((2, 1), dtype=np.float32), dims=["y", "x"]),
@@ -134,6 +134,7 @@ def test_small_adapter_and_monthly_validation_paths() -> None:
     )
     assert visible.shape == (1, 2, 1)
     assert visible_unc.shape == visible.shape
+    assert visible_quality.shape == (2, 1)
 
 
 def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path) -> None:

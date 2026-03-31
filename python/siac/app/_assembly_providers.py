@@ -152,6 +152,8 @@ def _build_generated_brdf_monthly_composite_provider(
     brdf_provider = resolve_brdf_provider(config, auth=auth)
 
     class _GeneratedBRDFMonthlyCompositeProvider:
+        resolution_m: float | None = None
+
         @property
         def source_name(self) -> str:
             return f"{brdf_provider.source_name} monthly composites"
@@ -193,6 +195,7 @@ def _build_user_callable_monthly_composite_provider(
     class _CallableMonthlyCompositeProvider:
         source_name = "user_callable"
         source_bands: tuple[Any, ...] = ()
+        resolution_m = getattr(provider, "resolution_m", None)
 
         def get_monthly_composites(
             self,
@@ -266,6 +269,13 @@ def _build_prepared_store_monthly_composite_provider(
         @property
         def source_bands(self) -> Any:
             return self._load_manifest().source_bands
+
+        @property
+        def resolution_m(self) -> float | None:
+            grid = self._load_manifest().grid
+            if grid is None:
+                return None
+            return float(grid.resolution)
 
         def get_monthly_composites(
             self,

@@ -269,6 +269,14 @@ class SpectralMappingAlgorithmConfig(SIACBaseModel):
     min_valid_bands: int = Field(default=1, ge=1)
 
 
+class MonthlyDatabaseQualityFilterConfig(SIACBaseModel):
+    enabled: bool = True
+    max_prediction_uncertainty: float = Field(default=0.05, gt=0.0)
+    max_composite_quality: float = Field(default=0.05, gt=0.0)
+    max_source_fit_rmse: float = Field(default=0.05, gt=0.0)
+    max_knn_feature_distance: float = Field(default=0.05, gt=0.0)
+
+
 class SurfacePriorAlgorithmConfig(SIACBaseModel):
     method: Literal["kernel_model", "whittaker", "monthly_database", "neural", "direct"] = (
         "kernel_model"
@@ -279,6 +287,9 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     whittaker_lambda: float = Field(default=10.0, gt=0.0)
     spectral_mapping: SpectralMappingAlgorithmConfig = Field(
         default_factory=SpectralMappingAlgorithmConfig,
+    )
+    monthly_database_filter: MonthlyDatabaseQualityFilterConfig = Field(
+        default_factory=MonthlyDatabaseQualityFilterConfig,
     )
 
 
@@ -310,7 +321,7 @@ class SolverAlgorithmConfig(SIACBaseModel):
     max_iterations: int = Field(default=300, ge=1)
     gtol: float = Field(default=1e-2, gt=0.0)
     ftol: float = Field(default=1e-7, gt=0.0)
-    aerosol_resolution: float = Field(default=1000.0, gt=0.0)
+    aerosol_resolution: float = Field(default=120.0, gt=0.0)
     use_multigrid: bool = True
     min_grid_size: int = Field(default=4, ge=2)
     bounds: SolverBoundsConfig = Field(default_factory=SolverBoundsConfig)

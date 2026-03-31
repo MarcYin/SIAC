@@ -112,7 +112,12 @@ class _StubDatabase:
             coords={"y": [0, 1], "x": [0, 1]},
         )
 
-    def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+    def predict_visible(
+        self,
+        corrected_query: xr.Dataset,
+        *,
+        k_neighbors: int,
+    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
         assert k_neighbors == 4
         assert set(corrected_query.data_vars) == {"B08", "B11"}
         coords = {"band": ["B02"], "y": [0, 1], "x": [0, 1]}
@@ -126,7 +131,12 @@ class _StubDatabase:
             dims=["band", "y", "x"],
             coords=coords,
         )
-        return predicted, uncertainty
+        quality = xr.DataArray(
+            np.full((2, 2), 0.02, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": [0, 1], "x": [0, 1]},
+        )
+        return predicted, uncertainty, quality
 
 
 def test_query_surface_prior_validates_band_ordering() -> None:
@@ -213,7 +223,12 @@ def test_query_surface_prior_masks_out_of_range_query_observations(
     )
 
     class _FiniteDatabase(_StubDatabase):
-        def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+        def predict_visible(
+            self,
+            corrected_query: xr.Dataset,
+            *,
+            k_neighbors: int,
+        ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
             assert k_neighbors == 4
             assert set(corrected_query.data_vars) == {"B08", "B11"}
             coords = {"band": ["B02"], "y": [0, 1], "x": [0, 1]}
@@ -222,6 +237,11 @@ def test_query_surface_prior_masks_out_of_range_query_observations(
             return (
                 xr.DataArray(values, dims=["band", "y", "x"], coords=coords),
                 xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(
+                    np.full((2, 2), 0.02, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0, 1]},
+                ),
             )
 
     def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
@@ -261,7 +281,12 @@ def test_query_surface_prior_excludes_invalid_native_query_pixels_before_resampl
                 coords={"y": [0], "x": [0]},
             )
 
-        def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+        def predict_visible(
+            self,
+            corrected_query: xr.Dataset,
+            *,
+            k_neighbors: int,
+        ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
             assert k_neighbors == 4
             seen["query_b08"] = float(corrected_query["B08"].values[0, 0])
             seen["query_b11"] = float(corrected_query["B11"].values[0, 0])
@@ -269,6 +294,7 @@ def test_query_surface_prior_excludes_invalid_native_query_pixels_before_resampl
             return (
                 xr.DataArray(np.array([[[0.2]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords),
                 xr.DataArray(np.array([[[0.05]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(np.array([[0.02]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0]}),
             )
 
     def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
@@ -355,7 +381,12 @@ def test_query_surface_prior_uses_database_grid_for_knn_query(
                 coords={"feature": ["median_query_0", "median_query_1"], "y": np.arange(4), "x": np.arange(4)},
             )
 
-        def predict_visible(self, corrected_query: xr.Dataset, *, k_neighbors: int) -> tuple[xr.DataArray, xr.DataArray]:
+        def predict_visible(
+            self,
+            corrected_query: xr.Dataset,
+            *,
+            k_neighbors: int,
+        ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
             seen["knn_shape"] = corrected_query["B08"].shape
             assert k_neighbors == 4
             coords = {"band": ["B02"], "y": np.arange(4), "x": np.arange(4)}
@@ -363,6 +394,11 @@ def test_query_surface_prior_uses_database_grid_for_knn_query(
             return (
                 xr.DataArray(values, dims=["band", "y", "x"], coords=coords),
                 xr.DataArray(np.full_like(values, 0.05), dims=["band", "y", "x"], coords=coords),
+                xr.DataArray(
+                    np.full((4, 4), 0.02, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": np.arange(4), "x": np.arange(4)},
+                ),
             )
 
     def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]

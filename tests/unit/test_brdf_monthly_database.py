@@ -99,7 +99,7 @@ def test_monthly_composite_database_uses_median_summary_in_query() -> None:
         }
     )
 
-    visible, visible_unc = database.predict_visible(corrected, k_neighbors=1)
+    visible, visible_unc, visible_quality = database.predict_visible(corrected, k_neighbors=1)
 
     np.testing.assert_allclose(
         visible.sel(band="B02").values[:, 0],
@@ -113,6 +113,8 @@ def test_monthly_composite_database_uses_median_summary_in_query() -> None:
     )
     assert visible_unc.shape == visible.shape
     assert np.all(visible_unc.values >= 0.0)
+    assert visible_quality.shape == (2, 1)
+    assert np.all(visible_quality.values >= 0.0)
 
 
 def test_monthly_composite_database_accepts_query_on_coarser_grid() -> None:
@@ -131,10 +133,74 @@ def test_monthly_composite_database_accepts_query_on_coarser_grid() -> None:
         }
     )
 
-    visible, visible_unc = database.predict_visible(corrected, k_neighbors=1)
+    visible, visible_unc, visible_quality = database.predict_visible(corrected, k_neighbors=1)
 
     assert visible.shape == (2, 1, 1)
     assert visible_unc.shape == visible.shape
+    assert visible_quality.shape == (1, 1)
     assert list(visible.coords["y"].values) == [10]
     assert list(visible.coords["x"].values) == [20]
     assert np.isfinite(visible.values).all()
+
+
+def test_build_monthly_composite_database_filters_high_source_fit_entries() -> None:
+    composites = [_make_composite(i) for i in range(2)]
+    source_fit_low = xr.DataArray(
+        np.array([[0.01], [0.02]], dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": [0, 1], "x": [0]},
+    )
+    source_fit_high = xr.DataArray(
+        np.array([[0.01], [0.20]], dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": [0, 1], "x": [0]},
+    )
+    composites[0] = MonthlyBestPixelComposite(
+        reflectance=composites[0].reflectance,
+        quality=composites[0].quality,
+        sample_index=composites[0].sample_index,
+        year=composites[0].year,
+        month=composites[0].month,
+        source_fit_rmse=source_fit_low,
+    )
+    composites[1] = MonthlyBestPixelComposite(
+        reflectance=composites[1].reflectance,
+        quality=composites[1].quality,
+        sample_index=composites[1].sample_index,
+        year=composites[1].year,
+        month=composites[1].month,
+        source_fit_rmse=source_fit_high,
+    )
+
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+        max_source_fit_rmse=0.05,
+    )
+
+    assert database.entries_features.shape[0] == 3
+    assert np.all(database.entries_source_fit_rmse <= 0.05)
+
+
+def test_predict_visible_with_diagnostics_reports_query_feature_distance() -> None:
+    composites = [_make_composite(i) for i in range(15)]
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+    )
+
+    corrected = xr.Dataset(
+        {
+            "B08": xr.DataArray(np.array([[0.47], [0.80]], dtype=np.float32), dims=["y", "x"]),
+            "B11": xr.DataArray(np.array([[0.37], [0.70]], dtype=np.float32), dims=["y", "x"]),
+            "B12": xr.DataArray(np.array([[0.27], [0.60]], dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+
+    prediction = database.predict_visible_with_diagnostics(corrected, k_neighbors=1)
+
+    assert prediction.knn_feature_distance.shape == (2, 1)
+    assert float(prediction.knn_feature_distance.values[0, 0]) == 0.0
+    assert float(prediction.knn_feature_distance.values[1, 0]) > 0.0

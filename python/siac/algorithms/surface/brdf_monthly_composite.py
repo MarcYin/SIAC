@@ -24,6 +24,7 @@ class MonthlyBestPixelComposite:
     sample_index: xr.DataArray
     year: int
     month: int
+    source_fit_rmse: xr.DataArray | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ def build_monthly_best_pixel_composite(
             ),
             quality_reference,
         ),
+        source_fit_rmse=None,
         sample_index=copy_spatial_metadata_like(
             xr.DataArray(
                 sample_index,

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 if TYPE_CHECKING:
     from siac.domain.sensors import SensorConfig
     from siac.runtime import AtmosphericState, ObservationBundle, SurfacePrior
@@ -155,7 +157,30 @@ class _MonthlySurfacePriorRuntime:
     geometry: Any
     spectral_library: Any | None
     spectral_k_neighbors: int
+    max_prediction_uncertainty: float | None
+    max_composite_quality: float | None
+    max_source_fit_rmse: float | None
+    max_knn_feature_distance: float | None
     database: Any
+
+
+def _resolve_monthly_database_resolution(
+    monthly_composite_provider: Any,
+    requested_resolution: float,
+) -> float:
+    requested = float(requested_resolution)
+    provider_resolution = getattr(monthly_composite_provider, "resolution_m", None)
+    if provider_resolution is None:
+        return requested
+    try:
+        resolved = float(provider_resolution)
+    except (TypeError, ValueError):
+        return requested
+    if not np.isfinite(resolved) or resolved <= 0.0:
+        return requested
+    # Keep the original monthly grid when the solver is finer, but aggregate to
+    # the solver grid before Route-B database build when the solver is coarser.
+    return max(requested, resolved)
 
 
 def _prepare_monthly_surface_prior_runtime(
@@ -180,10 +205,36 @@ def _prepare_monthly_surface_prior_runtime(
 
     visible_bands = _select_visible_surface_prior_bands(observation.sensor_config)
     query_bands = _select_route_b_query_bands(observation.sensor_config)
-    geometry = resample_geometry_fn(observation, resolution=resolution)
+    monthly_filter = getattr(getattr(config, "surface_prior", None), "monthly_database_filter", None)
+    filter_enabled = bool(getattr(monthly_filter, "enabled", True))
+    max_prediction_uncertainty = (
+        float(getattr(monthly_filter, "max_prediction_uncertainty", 0.05))
+        if filter_enabled
+        else None
+    )
+    max_composite_quality = (
+        float(getattr(monthly_filter, "max_composite_quality", 0.05))
+        if filter_enabled
+        else None
+    )
+    max_source_fit_rmse = (
+        float(getattr(monthly_filter, "max_source_fit_rmse", 0.05))
+        if filter_enabled
+        else None
+    )
+    max_knn_feature_distance = (
+        float(getattr(monthly_filter, "max_knn_feature_distance", 0.05))
+        if filter_enabled
+        else None
+    )
+    database_resolution = _resolve_monthly_database_resolution(
+        monthly_composite_provider,
+        resolution,
+    )
+    geometry = resample_geometry_fn(observation, resolution=database_resolution)
     get_monthly_composites = getattr(monthly_composite_provider, "get_monthly_composites", None)
     if callable(get_monthly_composites):
-        monthly_composites = get_monthly_composites(observation, resolution)
+        monthly_composites = get_monthly_composites(observation, database_resolution)
         spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
             config,
             source_bands=tuple(monthly_composites.source_bands),
@@ -197,6 +248,7 @@ def _prepare_monthly_surface_prior_runtime(
             query_bands=query_bands,
             spectral_library=spectral_library,
             spectral_k_neighbors=spectral_k_neighbors,
+            max_source_fit_rmse=max_source_fit_rmse,
         )
     else:
         source_bands = tuple(getattr(monthly_composite_provider, "source_bands", [*visible_bands, *query_bands]))
@@ -209,12 +261,13 @@ def _prepare_monthly_surface_prior_runtime(
         database = build_database_fn(
             observation=observation,
             brdf_provider=monthly_composite_provider,
-            resolution=resolution,
+            resolution=database_resolution,
             geometry=geometry,
             visible_bands=visible_bands,
             query_bands=query_bands,
             spectral_library=spectral_library,
             spectral_k_neighbors=spectral_k_neighbors,
+            max_source_fit_rmse=max_source_fit_rmse,
         )
     return _MonthlySurfacePriorRuntime(
         visible_bands=visible_bands,
@@ -222,6 +275,10 @@ def _prepare_monthly_surface_prior_runtime(
         geometry=geometry,
         spectral_library=spectral_library,
         spectral_k_neighbors=spectral_k_neighbors,
+        max_prediction_uncertainty=max_prediction_uncertainty,
+        max_composite_quality=max_composite_quality,
+        max_source_fit_rmse=max_source_fit_rmse,
+        max_knn_feature_distance=max_knn_feature_distance,
         database=database,
     )
 
@@ -246,6 +303,9 @@ def _query_monthly_surface_prior(
         query_band_names=tuple(band.name for band in runtime.query_bands),
         visible_band_names=tuple(band.name for band in runtime.visible_bands),
         k_neighbors=runtime.spectral_k_neighbors,
+        max_prediction_uncertainty=runtime.max_prediction_uncertainty,
+        max_composite_quality=runtime.max_composite_quality,
+        max_knn_feature_distance=runtime.max_knn_feature_distance,
     )
     composites = tuple(getattr(runtime.database, "composites", ()))
     if not composites or not hasattr(prior, "monthly_composites"):

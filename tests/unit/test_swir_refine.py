@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import xarray as xr
 
 import siac.algorithms.surface.swir_refine as swir_refine_mod
-from siac.algorithms.surface.brdf_monthly_composite import MonthlyBestPixelComposite
+from siac.algorithms.surface.brdf_monthly_composite import (
+    MonthlyBestPixelComposite,
+    MonthlyKernelWeightComposite,
+)
 from siac.algorithms.surface.brdf_monthly_database import build_monthly_composite_database
 from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary
 from siac.algorithms.surface.swir_refine import (
@@ -314,6 +318,202 @@ def test_query_surface_prior_from_monthly_database_uses_template_backed_area_res
     assert area_calls
     assert all(area_calls)
     assert prior.boa.shape == (2, 2, 1)
+
+
+def test_query_surface_prior_from_monthly_database_filters_high_composite_quality() -> None:
+    sensor_config = _sensor_config()
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((2, 1), 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((2, 1), 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((2, 1), 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((2, 1)),
+        cloud_mask=xr.DataArray(np.zeros((2, 1), dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 1.0, 2.0),
+    )
+    database = _database()
+
+    class _QualityFilteringDatabase:
+        query_band_names = database.query_band_names
+        visible_band_names = database.visible_band_names
+        median_summary = database.median_summary
+
+        def predict_visible(self, corrected_reflectance, *, k_neighbors=3):  # noqa: ANN001
+            del corrected_reflectance, k_neighbors
+            coords = {"band": ["B02", "B03"], "y": [0, 1], "x": [0]}
+            predicted = xr.DataArray(
+                np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_unc = xr.DataArray(
+                np.full((2, 2, 1), 0.01, dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_quality = xr.DataArray(
+                np.array([[0.02], [0.08]], dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            return predicted, predicted_unc, predicted_quality
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_QualityFilteringDatabase(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        k_neighbors=1,
+        max_composite_quality=0.05,
+    )
+
+    np.testing.assert_array_equal(prior.mask.values[:, 0], np.array([True, False]))
+
+
+def test_query_surface_prior_from_monthly_database_filters_high_prediction_uncertainty() -> None:
+    sensor_config = _sensor_config()
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((2, 1), 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((2, 1), 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((2, 1), 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((2, 1)),
+        cloud_mask=xr.DataArray(np.zeros((2, 1), dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 1.0, 2.0),
+    )
+    database = _database()
+
+    class _UncertaintyFilteringDatabase:
+        query_band_names = database.query_band_names
+        visible_band_names = database.visible_band_names
+        median_summary = database.median_summary
+
+        def predict_visible(self, corrected_reflectance, *, k_neighbors=3):  # noqa: ANN001
+            del corrected_reflectance, k_neighbors
+            coords = {"band": ["B02", "B03"], "y": [0, 1], "x": [0]}
+            predicted = xr.DataArray(
+                np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_unc = xr.DataArray(
+                np.array([[[0.01], [0.06]], [[0.01], [0.06]]], dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_quality = xr.DataArray(
+                np.full((2, 1), 0.02, dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            return predicted, predicted_unc, predicted_quality
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_UncertaintyFilteringDatabase(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        k_neighbors=1,
+        max_prediction_uncertainty=0.05,
+    )
+
+    np.testing.assert_array_equal(prior.mask.values[:, 0], np.array([True, False]))
+
+
+def test_query_surface_prior_from_monthly_database_filters_high_knn_feature_distance() -> None:
+    sensor_config = _sensor_config()
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((2, 1), 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((2, 1), 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((2, 1), 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((2, 1)),
+        cloud_mask=xr.DataArray(np.zeros((2, 1), dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 1.0, 2.0),
+    )
+    database = _database()
+
+    class _DistanceFilteringDatabase:
+        query_band_names = database.query_band_names
+        visible_band_names = database.visible_band_names
+        median_summary = database.median_summary
+
+        def predict_visible_with_diagnostics(self, corrected_reflectance, *, k_neighbors=3):  # noqa: ANN001
+            del corrected_reflectance, k_neighbors
+            coords = {"band": ["B02", "B03"], "y": [0, 1], "x": [0]}
+            predicted = xr.DataArray(
+                np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_unc = xr.DataArray(
+                np.full((2, 2, 1), 0.01, dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_quality = xr.DataArray(
+                np.full((2, 1), 0.02, dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            predicted_source_fit = xr.DataArray(
+                np.zeros((2, 1), dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            predicted_distance = xr.DataArray(
+                np.array([[0.01], [0.09]], dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            return SimpleNamespace(
+                predicted=predicted,
+                uncertainty=predicted_unc,
+                quality=predicted_quality,
+                source_fit_rmse=predicted_source_fit,
+                knn_feature_distance=predicted_distance,
+            )
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_DistanceFilteringDatabase(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        k_neighbors=1,
+        max_knn_feature_distance=0.05,
+    )
+
+    np.testing.assert_array_equal(prior.mask.values[:, 0], np.array([True, False]))
 
 
 def test_weekly_sample_dates_use_weekly_spacing() -> None:
@@ -787,7 +987,8 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
                     },
                 )
             mapped_unc = xr.full_like(mapped, 0.03)
-            return mapped, mapped_unc
+            mapped_fit = xr.zeros_like(mapped_unc.mean(dim="band", skipna=True), dtype=np.float32)
+            return mapped, mapped_unc, mapped_fit
 
     monkeypatch.setattr("siac.algorithms.surface.swir_refine.SpectralMapper", _SwitchingMapper)
 
@@ -809,6 +1010,208 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
     assert seen["time"] == 15
     assert seen["has_unc"] is True
     assert seen["calls"] == 1
+
+
+def test_normalize_monthly_composites_uses_area_when_target_grid_is_coarser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    methods: list[str] = []
+    sensor_config = _sensor_config()
+    band_names = [band.name for band in sensor_config.bands]
+    reflectance = xr.DataArray(
+        np.full((len(band_names), 2, 2), 0.2, dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": band_names, "y": [1.5, 0.5], "x": [0.5, 1.5]},
+    )
+    quality = xr.DataArray(
+        np.full((2, 2), 0.03, dtype=np.float32),
+        dims=["y", "x"],
+        coords={"y": [1.5, 0.5], "x": [0.5, 1.5]},
+    )
+    sample_index = xr.DataArray(
+        np.arange(4, dtype=np.int16).reshape(2, 2),
+        dims=["y", "x"],
+        coords={"y": [1.5, 0.5], "x": [0.5, 1.5]},
+    )
+    composite = MonthlyBestPixelComposite(
+        reflectance=reflectance,
+        quality=quality,
+        sample_index=sample_index,
+        year=2024,
+        month=7,
+    )
+
+    def _fake_resample_da(da, target_shape, method="bilinear", *, template=None):  # noqa: ANN001
+        methods.append(method)
+        if da.ndim == 3 and "band" in da.dims:
+            band_values = da.coords["band"].values
+            return xr.DataArray(
+                np.full((len(band_values), target_shape[0], target_shape[1]), 0.2, dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords={"band": band_values, "y": template.coords["y"], "x": template.coords["x"]},
+            )
+        return xr.DataArray(
+            np.full(target_shape, float(np.asarray(da.values).mean()), dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": template.coords["y"], "x": template.coords["x"]},
+        )
+
+    monkeypatch.setattr(swir_refine_mod, "_resample_da", _fake_resample_da)
+
+    normalized = swir_refine_mod._normalize_monthly_composites_to_target_basis(
+        (composite,),
+        geometry=_geometry((1, 1)),
+        target_bands=list(sensor_config.bands),
+        spectral_mapper=None,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].reflectance.shape == (len(band_names), 1, 1)
+    assert methods.count("area") == len(band_names) + 1
+    assert methods.count("nearest") == 1
+
+
+def test_normalize_monthly_kernel_composites_uses_area_when_target_grid_is_coarser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_kernel_to_reflectance(monkeypatch)
+    methods: list[str] = []
+    sensor_config = _sensor_config()
+    band_names = [band.name for band in sensor_config.bands]
+    cube = xr.DataArray(
+        np.full((len(band_names), 2, 2), 0.2, dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": band_names, "y": [1.5, 0.5], "x": [0.5, 1.5]},
+    )
+    composite = MonthlyKernelWeightComposite(
+        kernels=BRDFKernelWeights(
+            f0=cube,
+            f1=xr.zeros_like(cube),
+            f2=xr.zeros_like(cube),
+            f0_unc=xr.full_like(cube, 0.01),
+            f1_unc=xr.full_like(cube, 0.01),
+            f2_unc=xr.full_like(cube, 0.01),
+        ),
+        quality=xr.DataArray(
+            np.full((2, 2), 0.03, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": [1.5, 0.5], "x": [0.5, 1.5]},
+        ),
+        sample_index=xr.DataArray(
+            np.arange(4, dtype=np.int16).reshape(2, 2),
+            dims=["y", "x"],
+            coords={"y": [1.5, 0.5], "x": [0.5, 1.5]},
+        ),
+        year=2024,
+        month=7,
+    )
+
+    def _fake_resample_da(da, target_shape, method="bilinear", *, template=None):  # noqa: ANN001
+        methods.append(method)
+        if da.ndim == 3 and "band" in da.dims:
+            band_values = da.coords["band"].values
+            return xr.DataArray(
+                np.full((len(band_values), target_shape[0], target_shape[1]), 0.2, dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords={"band": band_values, "y": template.coords["y"], "x": template.coords["x"]},
+            )
+        return xr.DataArray(
+            np.full(target_shape, float(np.asarray(da.values).mean()), dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": template.coords["y"], "x": template.coords["x"]},
+        )
+
+    monkeypatch.setattr(swir_refine_mod, "_resample_da", _fake_resample_da)
+
+    normalized = swir_refine_mod._normalize_monthly_composites_to_target_basis(
+        (composite,),
+        geometry=_geometry((1, 1)),
+        target_bands=list(sensor_config.bands),
+        spectral_mapper=None,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].reflectance.shape == (len(band_names), 1, 1)
+    assert methods.count("area") == (len(band_names) * 6) + 1
+    assert methods.count("nearest") == 1
+
+
+def test_normalize_monthly_composites_folds_source_fit_rmse_into_quality() -> None:
+    source_bands = (
+        SensorBand("Band3", 469.0, 20.0, 500.0, 0),
+        SensorBand("Band4", 555.0, 20.0, 500.0, 1),
+        SensorBand("Band2", 858.5, 35.0, 500.0, 2),
+        SensorBand("Band6", 1640.0, 24.0, 500.0, 3),
+        SensorBand("Band7", 2130.0, 50.0, 500.0, 4),
+    )
+    target_bands = list(_sensor_config().bands)
+    composite = MonthlyBestPixelComposite(
+        reflectance=xr.DataArray(
+            np.full((len(source_bands), 1, 1), 0.2, dtype=np.float32),
+            dims=["band", "y", "x"],
+            coords={"band": [band.name for band in source_bands], "y": [0], "x": [0]},
+        ),
+        quality=xr.DataArray(
+            np.full((1, 1), 0.03, dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": [0], "x": [0]},
+        ),
+        sample_index=xr.DataArray(
+            np.zeros((1, 1), dtype=np.int16),
+            dims=["y", "x"],
+            coords={"y": [0], "x": [0]},
+        ),
+        year=2024,
+        month=7,
+    )
+
+    class _FitAwareMapper:
+        def map(self, reflectance, *, source_uncertainty=None):  # noqa: ANN001
+            del source_uncertainty
+            mapped = xr.DataArray(
+                np.full(
+                    (
+                        int(reflectance.sizes.get("time", 1)),
+                        len(target_bands),
+                        int(reflectance.sizes["y"]),
+                        int(reflectance.sizes["x"]),
+                    ),
+                    0.2,
+                    dtype=np.float32,
+                ),
+                dims=["time", "band", "y", "x"] if "time" in reflectance.dims else ["band", "y", "x"],
+                coords=(
+                    {
+                        "time": reflectance.coords["time"],
+                        "band": [band.name for band in target_bands],
+                        "y": reflectance.coords["y"],
+                        "x": reflectance.coords["x"],
+                    }
+                    if "time" in reflectance.dims
+                    else {
+                        "band": [band.name for band in target_bands],
+                        "y": reflectance.coords["y"],
+                        "x": reflectance.coords["x"],
+                    }
+                ),
+            )
+            mapped_unc = xr.zeros_like(mapped, dtype=np.float32)
+            fit = xr.DataArray(
+                np.full(tuple(reflectance.sizes[dim] for dim in reflectance.dims if dim != "band"), 0.04, dtype=np.float32),
+                dims=tuple(dim for dim in reflectance.dims if dim != "band"),
+                coords={dim: reflectance.coords[dim] for dim in reflectance.dims if dim != "band"},
+            )
+            return mapped, mapped_unc, fit
+
+    normalized = swir_refine_mod._normalize_monthly_composites_to_target_basis(
+        (composite,),
+        geometry=_geometry((1, 1)),
+        target_bands=target_bands,
+        spectral_mapper=_FitAwareMapper(),
+    )
+
+    assert len(normalized) == 1
+    assert float(normalized[0].quality.values[0, 0]) == pytest.approx(0.05, rel=1e-6)
 
 
 def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for_identical_months(
@@ -921,7 +1324,9 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
                         "x": reflectance.coords["x"],
                     },
                 )
-            return mapped, xr.full_like(mapped, 0.01)
+            mapped_unc = xr.full_like(mapped, 0.01)
+            mapped_fit = xr.zeros_like(mapped_unc.mean(dim="band", skipna=True), dtype=np.float32)
+            return mapped, mapped_unc, mapped_fit
 
     monkeypatch.setattr("siac.algorithms.surface.swir_refine.SpectralMapper", _CountingMapper)
 

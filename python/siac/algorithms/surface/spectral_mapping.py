@@ -651,6 +651,78 @@ def _write_sensor_schema(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _atomic_write_npz(path: Path, arrays: dict[str, Float32Array]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp_path.open("wb") as handle:
+        np.savez_compressed(handle, **arrays)
+    tmp_path.replace(path)
+
+
+def _diagnostic_signature(
+    metrics: dict[str, Float32Array],
+    metadata: dict[str, object],
+) -> str:
+    payload = [
+        _json_hash(metadata),
+        *[
+            _hash_bytes(
+                name.encode("utf-8"),
+                str(array.dtype).encode("utf-8"),
+                np.asarray(array.shape, dtype=np.int64).tobytes(),
+                np.asarray(array, dtype=np.float32).tobytes(),
+            )
+            for name, array in sorted(metrics.items())
+        ],
+    ]
+    return _hash_bytes(*[item.encode("utf-8") for item in payload])
+
+
+def _write_distance_metric_diagnostics(
+    cache_root: Path | str | None,
+    *,
+    prefix: str,
+    metrics: dict[str, Float32Array],
+    metadata: dict[str, object],
+) -> Path | None:
+    if cache_root is None or not metrics:
+        return None
+
+    normalized_metrics = {
+        str(name): np.asarray(values, dtype=np.float32)
+        for name, values in metrics.items()
+        if np.asarray(values).size > 0
+    }
+    if not normalized_metrics:
+        return None
+
+    diagnostics_root = Path(cache_root).expanduser().resolve() / "diagnostics"
+    signature = _diagnostic_signature(normalized_metrics, metadata)
+    data_path = diagnostics_root / f"{prefix}_{signature[:16]}.npz"
+    metadata_path = diagnostics_root / f"{prefix}_{signature[:16]}.json"
+    if not data_path.exists():
+        _atomic_write_npz(data_path, normalized_metrics)
+    if not metadata_path.exists():
+        payload = dict(metadata)
+        payload["metrics"] = {
+            name: {
+                "dtype": str(array.dtype),
+                "shape": [int(size) for size in array.shape],
+            }
+            for name, array in sorted(normalized_metrics.items())
+        }
+        payload["data_path"] = str(data_path)
+        _atomic_write_json(metadata_path, payload)
+    return data_path
+
+
 def _prepare_runtime(
     source_bands: Sequence[SensorBand],
     target_bands: Sequence[SensorBand],
@@ -784,7 +856,7 @@ class SpectralMapper:
         source_reflectance: xr.DataArray,
         *,
         source_uncertainty: xr.DataArray | None = None,
-    ) -> tuple[xr.DataArray, xr.DataArray]:
+    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
         """Map source-basis multispectral reflectance to target bands."""
         source_data = self._align_source_data(source_reflectance)
         original_dims = tuple(source_data.dims)
@@ -799,9 +871,11 @@ class SpectralMapper:
                 unc = source_unc.assign_coords(band=self._target_band_names)
             else:
                 unc = xr.zeros_like(identity, dtype=np.float32) + _UNCERTAINTY_FLOOR
+            zero_fit = xr.zeros_like(cast("xr.DataArray", source_data.isel(band=0, drop=True)), dtype=np.float32)
             return (
                 identity.transpose(*original_dims).astype(np.float32),
                 unc.transpose(*original_dims).astype(np.float32),
+                zero_fit.astype(np.float32),
             )
 
         if self._package_mapper is None or self._runtime is None:
@@ -811,6 +885,7 @@ class SpectralMapper:
         unc_flat = self._flatten_optional_uncertainty(source_unc, flattened.transpose_dims)
         target_flat = np.full((flattened.flat_values.shape[0], len(self.target_bands)), np.nan, dtype=np.float32)
         target_unc_flat = np.full_like(target_flat, np.nan)
+        source_fit_flat = np.full(flattened.flat_values.shape[0], np.nan, dtype=np.float32)
         if np.any(flattened.valid_rows):
             valid_count = int(np.count_nonzero(flattened.valid_rows))
             logger.info(
@@ -855,6 +930,7 @@ class SpectralMapper:
                     result,
                     source_uncertainty=None if unc_flat is None else unc_flat[row_index],
                 )
+                source_fit_flat[row_index] = np.float32(self._estimate_source_fit_rmse(result))
                 if result_index == 1 or result_index == valid_indices.size or (result_index % progress_step) == 0:
                     logger.info(
                         "Spectral mapping uncertainty progress: %d/%d pixels elapsed=%.2fs",
@@ -865,6 +941,7 @@ class SpectralMapper:
 
         reflectance_da = self._restore_target_cube(target_flat, flattened)
         uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
+        source_fit_da = self._restore_spatial_field(source_fit_flat, flattened)
         logger.info("Spectral mapping complete: output_shape=%s", tuple(reflectance_da.shape))
         return (
             copy_spatial_metadata_like(
@@ -874,6 +951,10 @@ class SpectralMapper:
             copy_spatial_metadata_like(
                 uncertainty_da.transpose(*original_dims).astype(np.float32),
                 flattened.source_data,
+            ),
+            copy_spatial_metadata_like(
+                source_fit_da.astype(np.float32),
+                cast("xr.DataArray", flattened.source_data.isel(band=0, drop=True)),
             ),
         )
 
@@ -1062,6 +1143,45 @@ class SpectralMapper:
             xr.DataArray(values, dims=flattened.transpose_dims, coords=coords),
             flattened.source_data,
         )
+
+    @staticmethod
+    def _restore_spatial_field(
+        flat_values: Float32Array,
+        flattened: _FlattenedSourceCube,
+    ) -> xr.DataArray:
+        shape = tuple(flattened.source_data.sizes[dim] for dim in flattened.spatial_dims)
+        values = np.asarray(flat_values.reshape(shape), dtype=np.float32)
+        coords = {
+            dim: flattened.source_data.coords[dim]
+            for dim in flattened.spatial_dims
+            if dim in flattened.source_data.coords
+        }
+        return xr.DataArray(values, dims=flattened.spatial_dims, coords=coords)
+
+    def _estimate_source_fit_rmse(
+        self,
+        result: _PackageResultProtocol | _MinimalMappingResult,
+    ) -> float:
+        segment_rmse: list[tuple[int, float]] = []
+        for segment in ("vnir", "swir"):
+            if isinstance(result, _MinimalMappingResult):
+                prepared = result.prepared_segments.get(segment)
+            else:
+                diagnostics = result.diagnostics.get("segments", {})
+                if not isinstance(diagnostics, dict):
+                    diagnostics = {}
+                prepared = self._prepare_segment_diagnostics(diagnostics.get(segment))
+            if prepared is None:
+                continue
+            valid_count = int(np.count_nonzero(prepared.query_valid_mask))
+            if valid_count < 1:
+                continue
+            segment_rmse.append((valid_count, max(0.0, float(prepared.source_fit_rmse))))
+        if not segment_rmse:
+            return 0.0
+        weights = np.asarray([item[0] for item in segment_rmse], dtype=np.float64)
+        rmse = np.asarray([item[1] for item in segment_rmse], dtype=np.float64)
+        return float(np.sqrt(np.average(np.square(rmse, dtype=np.float64), weights=weights)))
 
     def _estimate_uncertainty(
         self,
@@ -1332,7 +1452,11 @@ def map_multispectral_reflectance(
         spectral_library=spectral_library,
         k_neighbors=k_neighbors,
     )
-    return mapper.map(source_reflectance, source_uncertainty=source_uncertainty)
+    mapped_reflectance, mapped_uncertainty, _source_fit_rmse = mapper.map(
+        source_reflectance,
+        source_uncertainty=source_uncertainty,
+    )
+    return mapped_reflectance, mapped_uncertainty
 
 
 __all__ = [

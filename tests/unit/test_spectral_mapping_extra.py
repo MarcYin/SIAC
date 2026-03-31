@@ -113,9 +113,10 @@ def test_map_identity_and_nonidentity_helpers_cover_runtime_branches() -> None:
     identity.target_bands = identity.source_bands
     identity._identity = True
     identity._target_band_names = ["B02", "B03"]
-    mapped, mapped_unc = identity.map(source, source_uncertainty=None)
+    mapped, mapped_unc, source_fit = identity.map(source, source_uncertainty=None)
     np.testing.assert_allclose(mapped.values, source.values)
     np.testing.assert_allclose(mapped_unc.values, np.full_like(source.values, 0.005))
+    np.testing.assert_allclose(source_fit.values, np.zeros((1, 1), dtype=np.float32))
 
     nonidentity = object.__new__(SpectralMapper)
     nonidentity.source_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
@@ -153,9 +154,10 @@ def test_map_identity_and_nonidentity_helpers_cover_runtime_branches() -> None:
         dims=["band", "y", "x"],
         coords={"band": ["B02"], "y": [0], "x": [0]},
     )
-    mapped, mapped_unc = nonidentity.map(single, source_uncertainty=unc.sel(band=["B02"]))
+    mapped, mapped_unc, source_fit = nonidentity.map(single, source_uncertainty=unc.sel(band=["B02"]))
     assert float(mapped.values[0, 0, 0]) == pytest.approx(0.4)
     assert float(mapped_unc.values[0, 0, 0]) == pytest.approx(0.005)
+    assert float(source_fit.values[0, 0]) == pytest.approx(0.0)
 
     uninitialized = object.__new__(SpectralMapper)
     uninitialized.source_bands = nonidentity.source_bands
@@ -312,12 +314,72 @@ def test_map_prefers_minimal_batch_path_when_package_private_hooks_exist() -> No
     )
     source_unc = xr.full_like(source, 0.02)
 
-    mapped, mapped_unc = mapper.map(source, source_uncertainty=source_unc)
+    mapped, mapped_unc, source_fit = mapper.map(source, source_uncertainty=source_unc)
 
     assert calls["public"] == 0
     assert calls["private"] == 2
     assert float(mapped.values[0, 0, 0]) == pytest.approx(0.5)
     assert float(mapped_unc.values[0, 0, 0]) > 0.1
+    assert float(source_fit.values[0, 0]) == pytest.approx(0.1)
+
+
+def test_map_returns_source_fit_rmse() -> None:
+    mapper = object.__new__(SpectralMapper)
+    mapper.source_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
+    mapper.target_bands = (SensorBand("T01", 500.0, 50.0, 10.0, 0),)
+    mapper.k_neighbors = 1
+    mapper._identity = False
+    mapper._target_band_names = ["T01"]
+    mapper._mapping_config = SimpleNamespace(
+        min_valid_bands=1,
+        neighbor_estimator="distance_weighted_mean",
+        knn_backend="numpy",
+        knn_eps=0.0,
+    )
+    mapper._runtime = SimpleNamespace(source_sensor_id="src", target_sensor_id="target")
+    mapper._target_internal_to_output_index = {"T01": 0}
+    mapper._source_retrieval_indices_by_segment = {
+        "vnir": np.array([0], dtype=np.int32),
+        "swir": np.array([], dtype=np.int32),
+    }
+    mapper._target_schema_by_band_id = {"T01": SimpleNamespace(band_id="T01", segment="vnir")}
+
+    retrieval_ok = SimpleNamespace(
+        success=True,
+        reconstructed=np.array([0.4, 0.6], dtype=np.float64),
+        neighbor_ids=("n1",),
+        neighbor_weights=np.array([1.0], dtype=np.float64),
+        query_valid_mask=np.array([True], dtype=np.bool_),
+        source_fit_rmse=0.1,
+    )
+    retrieval_empty = SimpleNamespace(
+        success=False,
+        reconstructed=None,
+        neighbor_ids=(),
+        neighbor_weights=np.array([], dtype=np.float64),
+        query_valid_mask=np.array([], dtype=np.bool_),
+        source_fit_rmse=0.0,
+    )
+
+    mapper._package_mapper = SimpleNamespace(
+        _candidate_rows=lambda _candidate_rows: np.array([0], dtype=np.int64),
+        _retrieve_segment_batch=lambda *, segment, **_kwargs: ((retrieval_ok,) if segment == "vnir" else (retrieval_empty,)),
+        _row_index_by_id={"n1": 0},
+        _load_hyperspectral=lambda _segment: np.array([[0.4, 0.6]], dtype=np.float64),
+        _band_response=lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float64),
+    )
+
+    source = xr.DataArray(
+        np.array([[[0.25]]], dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["B02"], "y": [0], "x": [0]},
+    )
+
+    mapped, mapped_unc, source_fit = mapper.map(source)
+
+    assert float(mapped.values[0, 0, 0]) == pytest.approx(0.5)
+    assert float(mapped_unc.values[0, 0, 0]) > 0.1
+    assert float(source_fit.values[0, 0]) == pytest.approx(0.1)
 
 
 def test_wrapper_and_input_split_helpers_cover_error_and_delegation_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -341,7 +403,7 @@ def test_wrapper_and_input_split_helpers_cover_error_and_delegation_paths(monkey
                 "source_reflectance": source_reflectance,
                 "source_uncertainty": source_uncertainty,
             }
-            return "mapped", "unc"
+            return "mapped", "unc", "fit"
 
     monkeypatch.setattr(spectral_mapping_mod, "SpectralMapper", _FakeMapper)
     source = xr.DataArray(
