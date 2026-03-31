@@ -27,14 +27,15 @@ import xarray as xr
 from scipy import optimize
 
 from siac._rust_compat import (
-    evaluate_grid_search_cost_cube_with_provider,
+    evaluate_grid_search_cost_cube_with_provider_qa,
     interpolate_to_fine_grid,
-    quadratic_refine_grid_search,
+    quadratic_refine_grid_search_qa,
     remap_to_coarse_grid,
 )
 from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig
 from siac.domain.protocols import RTModelBackend
 from siac.runtime import AtmosphericState, GeometryAngles, SurfacePrior
+from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.domain import SensorBand
@@ -111,6 +112,7 @@ class SolverResult:
     final_cost: float
     success: bool
     message: str
+    qa: xr.Dataset | None = None
     level_history: list[dict] = field(default_factory=list)
 
 
@@ -189,6 +191,7 @@ class MultiGridSolver:
                 final_cost=float("nan"),
                 success=False,
                 message="No valid pixels after cloud/quality masking",
+                qa=None,
                 level_history=[],
             )
 
@@ -220,6 +223,8 @@ class MultiGridSolver:
         final_success = True
         final_message = "ok"
         cost_func_last: CostFunction | None = None
+        final_invalid_mask: np.ndarray | None = None
+        final_zero_obs_mask: np.ndarray | None = None
 
         # Multi-grid solve from coarse to fine
         for level, shape in enumerate(grid_shapes):
@@ -265,8 +270,29 @@ class MultiGridSolver:
                 )
                 level_iterations = int(level_diag["evaluations"])
                 level_cost = float(level_diag["cost"])
-                level_success = True
-                level_message = "grid-search"
+                valid_pixels = int(level_diag.get("valid_pixels", 0))
+                invalid_pixels = int(level_diag.get("qa_invalid_pixels", 0))
+                final_invalid_mask = self._resample_boolean_mask(
+                    np.asarray(level_diag["qa_invalid_mask"], dtype=bool),
+                    full_shape,
+                )
+                final_zero_obs_mask = self._resample_boolean_mask(
+                    np.asarray(level_diag["qa_zero_obs_mask"], dtype=bool),
+                    full_shape,
+                )
+                level_success = valid_pixels > 0 and invalid_pixels < valid_pixels
+                level_message = (
+                    "grid-search "
+                    f"invalid={invalid_pixels} "
+                    f"zero_obs={int(level_diag.get('qa_zero_obs_pixels', 0))} "
+                    f"boundary={int(level_diag.get('qa_boundary_pixels', 0))} "
+                    f"lower_aot_boundary={int(level_diag.get('qa_lower_aot_boundary_pixels', 0))}"
+                )
+                level_diag = {
+                    key: value
+                    for key, value in level_diag.items()
+                    if key not in {"qa_invalid_mask", "qa_zero_obs_mask"}
+                }
             else:
                 # Create cost function
                 cost_func = CostFunction(
@@ -298,14 +324,17 @@ class MultiGridSolver:
                 tcwv_unc_final = self._resample_field(tcwv_unc_level, full_shape)
 
             # Record history
-            level_history.append({
+            history_entry = {
                 "level": level,
                 "shape": shape,
                 "iterations": level_iterations,
                 "cost": level_cost,
                 "success": level_success,
                 "method": "grid_search" if use_grid_search else "lbfgsb",
-            })
+            }
+            if use_grid_search:
+                history_entry.update(level_diag)
+            level_history.append(history_entry)
 
             total_iterations += level_iterations
             logger.info(
@@ -328,6 +357,16 @@ class MultiGridSolver:
 
         # Create result
         template = cloud_mask
+        qa = self._build_solver_qa_dataset(
+            template=template,
+            valid_mask=mask.values.astype(bool),
+            aot=aot,
+            tcwv=tcwv,
+            invalid_mask=final_invalid_mask,
+            zero_obs_mask=final_zero_obs_mask,
+        )
+        if level_history:
+            level_history[-1].update(self._summarize_solver_qa(qa))
         result = SolverResult(
             aot=xr.DataArray(aot, dims=template.dims, coords=template.coords),
             tcwv=xr.DataArray(tcwv, dims=template.dims, coords=template.coords),
@@ -337,6 +376,7 @@ class MultiGridSolver:
             final_cost=final_cost,
             success=final_success,
             message=final_message,
+            qa=qa,
             level_history=level_history,
         )
 
@@ -356,6 +396,99 @@ class MultiGridSolver:
             except Exception:
                 return False
         return False
+
+    @staticmethod
+    def _bound_tolerance(bounds: tuple[float, float]) -> float:
+        span = max(float(bounds[1]) - float(bounds[0]), 0.0)
+        return max(1.0e-6, span * 1.0e-5)
+
+    def _boundary_hit_masks(
+        self,
+        values: np.ndarray,
+        bounds: tuple[float, float],
+        valid_mask: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        atol = self._bound_tolerance(bounds)
+        finite = np.isfinite(values)
+        lower = valid_mask & finite & np.isclose(values, float(bounds[0]), rtol=0.0, atol=atol)
+        upper = valid_mask & finite & np.isclose(values, float(bounds[1]), rtol=0.0, atol=atol)
+        return lower, upper
+
+    def _resample_boolean_mask(
+        self,
+        mask: np.ndarray,
+        target_shape: tuple[int, int],
+    ) -> np.ndarray:
+        resampled = self._resample_mask_to_grid(
+            xr.DataArray(np.asarray(mask, dtype=bool), dims=["y", "x"]),
+            target_shape,
+        )
+        return np.asarray(resampled.values, dtype=bool)
+
+    def _mask_to_data_array(
+        self,
+        mask: np.ndarray,
+        template: xr.DataArray,
+    ) -> xr.DataArray:
+        coords = {
+            dim: template.coords[dim]
+            for dim in template.dims
+            if dim in template.coords
+        }
+        out = xr.DataArray(np.asarray(mask, dtype=bool), dims=template.dims, coords=coords)
+        return copy_spatial_metadata_like(out, template)
+
+    def _build_solver_qa_dataset(
+        self,
+        *,
+        template: xr.DataArray,
+        valid_mask: np.ndarray,
+        aot: np.ndarray,
+        tcwv: np.ndarray,
+        invalid_mask: np.ndarray | None,
+        zero_obs_mask: np.ndarray | None,
+    ) -> xr.Dataset:
+        valid = np.asarray(valid_mask, dtype=bool)
+        invalid = np.zeros_like(valid, dtype=bool) if invalid_mask is None else np.asarray(invalid_mask, dtype=bool) & valid
+        zero_obs = np.zeros_like(valid, dtype=bool) if zero_obs_mask is None else np.asarray(zero_obs_mask, dtype=bool) & valid
+        aot_lower, aot_upper = self._boundary_hit_masks(
+            np.asarray(aot, dtype=np.float32),
+            self.config.aot_bounds,
+            valid,
+        )
+        tcwv_lower, tcwv_upper = self._boundary_hit_masks(
+            np.asarray(tcwv, dtype=np.float32),
+            self.config.tcwv_bounds,
+            valid,
+        )
+        parameter_boundary = aot_lower | aot_upper | tcwv_lower | tcwv_upper
+        low_quality = invalid | parameter_boundary
+
+        return xr.Dataset(
+            {
+                "invalid_retrieval": self._mask_to_data_array(invalid, template),
+                "zero_obs_support": self._mask_to_data_array(zero_obs, template),
+                "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
+                "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
+                "tcwv_lower_boundary": self._mask_to_data_array(tcwv_lower, template),
+                "tcwv_upper_boundary": self._mask_to_data_array(tcwv_upper, template),
+                "parameter_boundary": self._mask_to_data_array(parameter_boundary, template),
+                "low_quality": self._mask_to_data_array(low_quality, template),
+            }
+        )
+
+    @staticmethod
+    def _summarize_solver_qa(qa: xr.Dataset) -> dict[str, float]:
+        return {
+            "qa_final_invalid_pixels": float(np.count_nonzero(np.asarray(qa["invalid_retrieval"].values, dtype=bool))),
+            "qa_final_zero_obs_pixels": float(np.count_nonzero(np.asarray(qa["zero_obs_support"].values, dtype=bool))),
+            "qa_final_aot_lower_boundary_pixels": float(np.count_nonzero(np.asarray(qa["aot_lower_boundary"].values, dtype=bool))),
+            "qa_final_aot_upper_boundary_pixels": float(np.count_nonzero(np.asarray(qa["aot_upper_boundary"].values, dtype=bool))),
+            "qa_final_tcwv_lower_boundary_pixels": float(np.count_nonzero(np.asarray(qa["tcwv_lower_boundary"].values, dtype=bool))),
+            "qa_final_tcwv_upper_boundary_pixels": float(np.count_nonzero(np.asarray(qa["tcwv_upper_boundary"].values, dtype=bool))),
+            "qa_final_parameter_boundary_pixels": float(np.count_nonzero(np.asarray(qa["parameter_boundary"].values, dtype=bool))),
+            "qa_final_low_quality_pixels": float(np.count_nonzero(np.asarray(qa["low_quality"].values, dtype=bool))),
+        }
 
     @staticmethod
     def _compute_band_weights(bands: list[SensorBand], power: float) -> np.ndarray:
@@ -379,7 +512,7 @@ class MultiGridSolver:
         mask: xr.DataArray,
         bands: list[SensorBand],
         cost_config: CostFunctionConfig,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, float]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         """
         Solve one grid level via exhaustive AOT/TCWV candidates + local quadratic fit.
 
@@ -467,26 +600,35 @@ class MultiGridSolver:
                 xcp_stack[ib] = np.asarray(coeffs.xcp.values, dtype=np.float32)
             return xap_stack, xbp_stack, xcp_stack
 
-        costs = np.asarray(
-            evaluate_grid_search_cost_cube_with_provider(
-                _candidate_coeff_provider,
-                aot_axis.astype(np.float32, copy=False),
-                tcwv_axis.astype(np.float32, copy=False),
-                toa_values,
-                boa_prior,
-                boa_unc,
-                band_weights,
-                valid_mask.astype(bool, copy=False),
-                aot_prior,
-                tcwv_prior,
-                aot_prior_unc,
-                tcwv_prior_unc,
-            ),
-            dtype=np.float32,
+        costs_raw, obs_counts_raw = evaluate_grid_search_cost_cube_with_provider_qa(
+            _candidate_coeff_provider,
+            aot_axis.astype(np.float32, copy=False),
+            tcwv_axis.astype(np.float32, copy=False),
+            toa_values,
+            boa_prior,
+            boa_unc,
+            band_weights,
+            valid_mask.astype(bool, copy=False),
+            aot_prior,
+            tcwv_prior,
+            aot_prior_unc,
+            tcwv_prior_unc,
         )
+        costs = np.asarray(costs_raw, dtype=np.float32)
+        obs_counts = np.asarray(obs_counts_raw, dtype=np.uint16)
 
-        aot_best, tcwv_best, aot_unc, tcwv_unc = quadratic_refine_grid_search(
+        (
+            aot_best,
+            tcwv_best,
+            aot_unc,
+            tcwv_unc,
+            invalid_mask,
+            boundary_mask,
+            lower_aot_boundary_mask,
+            zero_obs_mask,
+        ) = quadratic_refine_grid_search_qa(
             costs.astype(np.float32, copy=False),
+            obs_counts.astype(np.uint16, copy=False),
             aot_axis.astype(np.float32, copy=False),
             tcwv_axis.astype(np.float32, copy=False),
             valid_mask.astype(bool, copy=False),
@@ -495,16 +637,74 @@ class MultiGridSolver:
         tcwv_best = np.asarray(tcwv_best, dtype=np.float32)
         aot_unc = np.asarray(aot_unc, dtype=np.float32)
         tcwv_unc = np.asarray(tcwv_unc, dtype=np.float32)
+        invalid_mask = np.asarray(invalid_mask, dtype=bool)
+        boundary_mask = np.asarray(boundary_mask, dtype=bool)
+        lower_aot_boundary_mask = np.asarray(lower_aot_boundary_mask, dtype=bool)
+        zero_obs_mask = np.asarray(zero_obs_mask, dtype=bool)
+
+        invalid_floor_pixels = int(
+            np.count_nonzero(
+                invalid_mask
+                & valid_mask
+                & np.isclose(aot_best, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
+            )
+        )
+        prior_floor_pixels = int(
+            np.count_nonzero(
+                invalid_mask
+                & valid_mask
+                & np.isclose(aot_prior, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
+            )
+        )
+        if np.any(invalid_mask):
+            aot_best = np.where(invalid_mask, aot_prior, aot_best).astype(np.float32, copy=False)
+            tcwv_best = np.where(invalid_mask, tcwv_prior, tcwv_best).astype(np.float32, copy=False)
+            aot_unc = np.where(invalid_mask, aot_prior_unc, aot_unc).astype(np.float32, copy=False)
+            tcwv_unc = np.where(invalid_mask, tcwv_prior_unc, tcwv_unc).astype(np.float32, copy=False)
 
         flat = costs.reshape(n_aot * n_tcwv, -1)
-        best_flat = np.argmin(flat, axis=0)
-        mean_cost = float(np.mean(flat[best_flat, np.arange(flat.shape[1])]))
+        safe_flat = np.where(np.isfinite(flat), flat, np.inf)
+        best_flat = np.argmin(safe_flat, axis=0)
+        selected_costs = safe_flat[best_flat, np.arange(safe_flat.shape[1])]
+        supported = (valid_mask & ~invalid_mask).reshape(-1)
+        mean_cost = (
+            float(np.mean(selected_costs[supported]))
+            if np.any(supported)
+            else float("nan")
+        )
+        valid_pixels = int(np.count_nonzero(valid_mask))
+        invalid_pixels = int(np.count_nonzero(invalid_mask & valid_mask))
+        zero_obs_pixels = int(np.count_nonzero(zero_obs_mask & valid_mask))
+        boundary_pixels = int(np.count_nonzero(boundary_mask & valid_mask))
+        lower_aot_boundary_pixels = int(
+            np.count_nonzero(lower_aot_boundary_mask & valid_mask)
+        )
+        if invalid_pixels:
+            logger.warning(
+                "Grid-search QA flagged %d/%d valid pixels as invalid; %d had zero observation support and %d collapsed to the AOT floor.",
+                invalid_pixels,
+                valid_pixels,
+                zero_obs_pixels,
+                invalid_floor_pixels,
+            )
         return (
             aot_best.astype(np.float32),
             tcwv_best.astype(np.float32),
             aot_unc.astype(np.float32),
             tcwv_unc.astype(np.float32),
-            {"cost": mean_cost, "evaluations": float(n_aot * n_tcwv)},
+            {
+                "cost": mean_cost,
+                "evaluations": float(n_aot * n_tcwv),
+                "valid_pixels": float(valid_pixels),
+                "qa_invalid_pixels": float(invalid_pixels),
+                "qa_zero_obs_pixels": float(zero_obs_pixels),
+                "qa_boundary_pixels": float(boundary_pixels),
+                "qa_lower_aot_boundary_pixels": float(lower_aot_boundary_pixels),
+                "qa_invalid_floor_pixels": float(invalid_floor_pixels),
+                "qa_prior_floor_pixels": float(prior_floor_pixels),
+                "qa_invalid_mask": invalid_mask.astype(bool, copy=False),
+                "qa_zero_obs_mask": zero_obs_mask.astype(bool, copy=False),
+            },
         )
 
     def _get_shape(self, arr: xr.DataArray) -> tuple[int, int]:

@@ -2,7 +2,7 @@
 //!
 //! Helper functions for the multi-grid L-BFGS-B solver used in aerosol retrieval.
 
-use ndarray::{Array2, Array4};
+use ndarray::{Array2, Array4, ArrayView1, ArrayView2, ArrayView4};
 use numpy::{
     IntoPyArray, PyArray2, PyArray3, PyArray4, PyReadonlyArray1, PyReadonlyArray2,
     PyReadonlyArray3, PyReadonlyArray4,
@@ -375,6 +375,75 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
     aot_prior_unc: PyReadonlyArray2<f32>,
     tcwv_prior_unc: PyReadonlyArray2<f32>,
 ) -> PyResult<&'py PyArray4<f32>> {
+    let (costs, _obs_counts) = compute_grid_search_cost_cube(
+        py,
+        coeff_provider,
+        aot_axis,
+        tcwv_axis,
+        toa,
+        boa_prior,
+        boa_unc,
+        band_weights,
+        valid_mask,
+        aot_prior,
+        tcwv_prior,
+        aot_prior_unc,
+        tcwv_prior_unc,
+    )?;
+
+    Ok(costs.into_pyarray(py))
+}
+
+#[pyfunction]
+pub fn evaluate_grid_search_cost_cube_with_provider_qa<'py>(
+    py: Python<'py>,
+    coeff_provider: PyObject,
+    aot_axis: PyReadonlyArray1<f32>,
+    tcwv_axis: PyReadonlyArray1<f32>,
+    toa: PyReadonlyArray3<f32>,
+    boa_prior: PyReadonlyArray3<f32>,
+    boa_unc: PyReadonlyArray3<f32>,
+    band_weights: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+    aot_prior: PyReadonlyArray2<f32>,
+    tcwv_prior: PyReadonlyArray2<f32>,
+    aot_prior_unc: PyReadonlyArray2<f32>,
+    tcwv_prior_unc: PyReadonlyArray2<f32>,
+) -> PyResult<(&'py PyArray4<f32>, &'py PyArray4<u16>)> {
+    let (costs, obs_counts) = compute_grid_search_cost_cube(
+        py,
+        coeff_provider,
+        aot_axis,
+        tcwv_axis,
+        toa,
+        boa_prior,
+        boa_unc,
+        band_weights,
+        valid_mask,
+        aot_prior,
+        tcwv_prior,
+        aot_prior_unc,
+        tcwv_prior_unc,
+    )?;
+
+    Ok((costs.into_pyarray(py), obs_counts.into_pyarray(py)))
+}
+
+fn compute_grid_search_cost_cube<'py>(
+    py: Python<'py>,
+    coeff_provider: PyObject,
+    aot_axis: PyReadonlyArray1<f32>,
+    tcwv_axis: PyReadonlyArray1<f32>,
+    toa: PyReadonlyArray3<f32>,
+    boa_prior: PyReadonlyArray3<f32>,
+    boa_unc: PyReadonlyArray3<f32>,
+    band_weights: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+    aot_prior: PyReadonlyArray2<f32>,
+    tcwv_prior: PyReadonlyArray2<f32>,
+    aot_prior_unc: PyReadonlyArray2<f32>,
+    tcwv_prior_unc: PyReadonlyArray2<f32>,
+) -> PyResult<(Array4<f32>, Array4<u16>)> {
     let aot_axis = aot_axis.as_array();
     let tcwv_axis = tcwv_axis.as_array();
     let toa = toa.as_array();
@@ -426,6 +495,7 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
     }
 
     let mut costs = Array4::<f32>::zeros((aot_axis.len(), tcwv_axis.len(), ny, nx));
+    let mut obs_counts = Array4::<u16>::zeros((aot_axis.len(), tcwv_axis.len(), ny, nx));
 
     for (ia, aot_val) in aot_axis.iter().enumerate() {
         for (it, tcwv_val) in tcwv_axis.iter().enumerate() {
@@ -456,16 +526,18 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
             let aot_val_f64 = *aot_val as f64;
             let tcwv_val_f64 = *tcwv_val as f64;
 
-            let row_costs: Vec<Vec<f32>> = (0..ny)
+            let row_results: Vec<(Vec<f32>, Vec<u16>)> = (0..ny)
                 .into_par_iter()
                 .map(|iy| {
-                    let mut row = vec![0.0f32; nx];
+                    let mut row_costs = vec![0.0f32; nx];
+                    let mut row_counts = vec![0u16; nx];
                     for ix in 0..nx {
                         if !valid[[iy, ix]] {
                             continue;
                         }
 
                         let mut pixel_cost = 0.0_f64;
+                        let mut pixel_obs_count = 0u16;
 
                         // Observation term
                         for ib in 0..n_band {
@@ -502,12 +574,13 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
                             }
 
                             let w = band_w / (unc * unc).max(1e-12);
-                            if !w.is_finite() {
+                            if !w.is_finite() || w <= 0.0 {
                                 continue;
                             }
                             let add = 0.5 * w * diff * diff;
                             if add.is_finite() {
                                 pixel_cost += add;
+                                pixel_obs_count = pixel_obs_count.saturating_add(1);
                             }
                         }
 
@@ -531,21 +604,25 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
                             }
                         }
 
-                        row[ix] = pixel_cost as f32;
+                        row_costs[ix] = pixel_cost as f32;
+                        row_counts[ix] = pixel_obs_count;
                     }
-                    row
+                    (row_costs, row_counts)
                 })
                 .collect();
 
-            for (iy, row) in row_costs.into_iter().enumerate() {
-                for (ix, val) in row.into_iter().enumerate() {
+            for (iy, (row_costs, row_counts)) in row_results.into_iter().enumerate() {
+                for (ix, val) in row_costs.into_iter().enumerate() {
                     costs[[ia, it, iy, ix]] = val;
+                }
+                for (ix, count) in row_counts.into_iter().enumerate() {
+                    obs_counts[[ia, it, iy, ix]] = count;
                 }
             }
         }
     }
 
-    Ok(costs.into_pyarray(py))
+    Ok((costs, obs_counts))
 }
 
 /// Refine per-pixel AOT/TCWV estimates from a discrete cost cube.
@@ -567,11 +644,94 @@ pub fn quadratic_refine_grid_search<'py>(
     &'py PyArray2<f32>,
     &'py PyArray2<f32>,
 )> {
-    let costs = costs.as_array();
-    let aot_axis = aot_axis.as_array();
-    let tcwv_axis = tcwv_axis.as_array();
-    let valid = valid_mask.as_array();
+    let (
+        aot_best,
+        tcwv_best,
+        aot_unc,
+        tcwv_unc,
+        _invalid,
+        _boundary,
+        _lower_aot_boundary,
+        _zero_obs,
+    ) = refine_grid_search_with_qa(
+        costs.as_array(),
+        None,
+        aot_axis.as_array(),
+        tcwv_axis.as_array(),
+        valid_mask.as_array(),
+    )?;
 
+    Ok((
+        aot_best.into_pyarray(py),
+        tcwv_best.into_pyarray(py),
+        aot_unc.into_pyarray(py),
+        tcwv_unc.into_pyarray(py),
+    ))
+}
+
+#[pyfunction]
+pub fn quadratic_refine_grid_search_qa<'py>(
+    py: Python<'py>,
+    costs: PyReadonlyArray4<f32>,
+    obs_counts: PyReadonlyArray4<u16>,
+    aot_axis: PyReadonlyArray1<f32>,
+    tcwv_axis: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+) -> PyResult<(
+    &'py PyArray2<f32>,
+    &'py PyArray2<f32>,
+    &'py PyArray2<f32>,
+    &'py PyArray2<f32>,
+    &'py PyArray2<bool>,
+    &'py PyArray2<bool>,
+    &'py PyArray2<bool>,
+    &'py PyArray2<bool>,
+)> {
+    let (
+        aot_best,
+        tcwv_best,
+        aot_unc,
+        tcwv_unc,
+        invalid_mask,
+        boundary_mask,
+        lower_aot_boundary_mask,
+        zero_obs_mask,
+    ) = refine_grid_search_with_qa(
+        costs.as_array(),
+        Some(obs_counts.as_array()),
+        aot_axis.as_array(),
+        tcwv_axis.as_array(),
+        valid_mask.as_array(),
+    )?;
+
+    Ok((
+        aot_best.into_pyarray(py),
+        tcwv_best.into_pyarray(py),
+        aot_unc.into_pyarray(py),
+        tcwv_unc.into_pyarray(py),
+        invalid_mask.into_pyarray(py),
+        boundary_mask.into_pyarray(py),
+        lower_aot_boundary_mask.into_pyarray(py),
+        zero_obs_mask.into_pyarray(py),
+    ))
+}
+
+fn refine_grid_search_with_qa(
+    costs: ArrayView4<'_, f32>,
+    obs_counts: Option<ArrayView4<'_, u16>>,
+    aot_axis: ArrayView1<'_, f32>,
+    tcwv_axis: ArrayView1<'_, f32>,
+    valid: ArrayView2<'_, bool>,
+) -> PyResult<(
+    Array2<f32>,
+    Array2<f32>,
+    Array2<f32>,
+    Array2<f32>,
+    Array2<bool>,
+    Array2<bool>,
+    Array2<bool>,
+    Array2<bool>,
+)> {
     let shape = costs.shape();
     let (n_aot, n_tcwv, ny, nx) = (shape[0], shape[1], shape[2], shape[3]);
 
@@ -590,11 +750,22 @@ pub fn quadratic_refine_grid_search<'py>(
             "valid_mask shape must match costs.shape[2:4]",
         ));
     }
+    if let Some(obs_counts) = obs_counts {
+        if obs_counts.shape() != [n_aot, n_tcwv, ny, nx] {
+            return Err(PyValueError::new_err(
+                "obs_counts shape must match costs.shape",
+            ));
+        }
+    }
 
     let mut aot_best = Array2::<f32>::zeros((ny, nx));
     let mut tcwv_best = Array2::<f32>::zeros((ny, nx));
     let mut aot_unc = Array2::<f32>::zeros((ny, nx));
     let mut tcwv_unc = Array2::<f32>::zeros((ny, nx));
+    let mut invalid_mask = Array2::<bool>::from_elem((ny, nx), false);
+    let mut boundary_mask = Array2::<bool>::from_elem((ny, nx), false);
+    let mut lower_aot_boundary_mask = Array2::<bool>::from_elem((ny, nx), false);
+    let mut zero_obs_mask = Array2::<bool>::from_elem((ny, nx), false);
 
     let da = if n_aot > 1 {
         (aot_axis[1] - aot_axis[0]).abs().max(1e-6)
@@ -633,8 +804,25 @@ pub fn quadratic_refine_grid_search<'py>(
             aot_best[[iy, ix]] = aot_axis[best_ia];
             tcwv_best[[iy, ix]] = tcwv_axis[best_it];
 
+            if !best_cost.is_finite() {
+                invalid_mask[[iy, ix]] = true;
+                continue;
+            }
+
+            if let Some(obs_counts) = obs_counts {
+                if obs_counts[[best_ia, best_it, iy, ix]] == 0 {
+                    invalid_mask[[iy, ix]] = true;
+                    zero_obs_mask[[iy, ix]] = true;
+                    continue;
+                }
+            }
+
             // Need interior point for finite-difference Hessian.
             if best_ia == 0 || best_ia + 1 >= n_aot || best_it == 0 || best_it + 1 >= n_tcwv {
+                boundary_mask[[iy, ix]] = true;
+                if best_ia == 0 {
+                    lower_aot_boundary_mask[[iy, ix]] = true;
+                }
                 continue;
             }
 
@@ -707,10 +895,14 @@ pub fn quadratic_refine_grid_search<'py>(
     }
 
     Ok((
-        aot_best.into_pyarray(py),
-        tcwv_best.into_pyarray(py),
-        aot_unc.into_pyarray(py),
-        tcwv_unc.into_pyarray(py),
+        aot_best,
+        tcwv_best,
+        aot_unc,
+        tcwv_unc,
+        invalid_mask,
+        boundary_mask,
+        lower_aot_boundary_mask,
+        zero_obs_mask,
     ))
 }
 

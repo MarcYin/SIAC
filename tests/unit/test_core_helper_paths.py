@@ -233,8 +233,10 @@ def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pyt
         apply_laplacian=lambda *args, **kwargs: ("lap", args, kwargs),
         evaluate_grid_search_candidate_cost=lambda *args, **kwargs: ("cand", args, kwargs),
         evaluate_grid_search_cost_cube_with_provider=lambda *args, **kwargs: ("cube", args, kwargs),
+        evaluate_grid_search_cost_cube_with_provider_qa=lambda *args, **kwargs: ("cube_qa", args, kwargs),
         interpolate_to_fine_grid=lambda *args, **kwargs: ("fine", args, kwargs),
         quadratic_refine_grid_search=lambda *args, **kwargs: ("quad", args, kwargs),
+        quadratic_refine_grid_search_qa=lambda *args, **kwargs: ("quad_qa", args, kwargs),
         remap_to_coarse_grid=lambda *args, **kwargs: ("coarse", args, kwargs),
         whittaker_smooth_cube=lambda *args, **kwargs: ("smooth", args, kwargs),
     )
@@ -255,8 +257,10 @@ def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pyt
     assert rust_compat.apply_laplacian(1) == ("lap", (1,), {})
     assert rust_compat.evaluate_grid_search_candidate_cost(2) == ("cand", (2,), {})
     assert rust_compat.evaluate_grid_search_cost_cube_with_provider(3) == ("cube", (3,), {})
+    assert rust_compat.evaluate_grid_search_cost_cube_with_provider_qa(3) == ("cube_qa", (3,), {})
     assert rust_compat.interpolate_to_fine_grid(4) == ("fine", (4,), {})
     assert rust_compat.quadratic_refine_grid_search(5) == ("quad", (5,), {})
+    assert rust_compat.quadratic_refine_grid_search_qa(5) == ("quad_qa", (5,), {})
     assert rust_compat.remap_to_coarse_grid(6) == ("coarse", (6,), {})
     assert rust_compat.whittaker_smooth_cube(7) == ("smooth", (7,), {})
 

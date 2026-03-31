@@ -111,8 +111,14 @@ def test_proxy_classes_and_functions_delegate_to_native_impl(monkeypatch: pytest
             "evaluate_grid_search_cost_cube_with_provider": staticmethod(
                 lambda *args, **kwargs: ("cube", args, kwargs)
             ),
+            "evaluate_grid_search_cost_cube_with_provider_qa": staticmethod(
+                lambda *args, **kwargs: ("cube_qa", args, kwargs)
+            ),
             "interpolate_to_fine_grid": staticmethod(lambda *args, **kwargs: ("interp", args, kwargs)),
             "quadratic_refine_grid_search": staticmethod(lambda *args, **kwargs: ("quad", args, kwargs)),
+            "quadratic_refine_grid_search_qa": staticmethod(
+                lambda *args, **kwargs: ("quad_qa", args, kwargs)
+            ),
             "remap_to_coarse_grid": staticmethod(lambda *args, **kwargs: ("remap", args, kwargs)),
             "whittaker_smooth_cube": staticmethod(lambda *args, **kwargs: ("smooth", args, kwargs)),
         },
@@ -133,7 +139,9 @@ def test_proxy_classes_and_functions_delegate_to_native_impl(monkeypatch: pytest
     assert rust_compat.apply_laplacian(1) == ("lap", (1,), {})
     assert rust_compat.evaluate_grid_search_candidate_cost(2) == ("candidate", (2,), {})
     assert rust_compat.evaluate_grid_search_cost_cube_with_provider(3) == ("cube", (3,), {})
+    assert rust_compat.evaluate_grid_search_cost_cube_with_provider_qa(3) == ("cube_qa", (3,), {})
     assert rust_compat.interpolate_to_fine_grid(4) == ("interp", (4,), {})
     assert rust_compat.quadratic_refine_grid_search(5) == ("quad", (5,), {})
+    assert rust_compat.quadratic_refine_grid_search_qa(5) == ("quad_qa", (5,), {})
     assert rust_compat.remap_to_coarse_grid(6) == ("remap", (6,), {})
     assert rust_compat.whittaker_smooth_cube(7) == ("smooth", (7,), {})

@@ -170,8 +170,8 @@ def _resolve_execution_settings(
 def _aerosol_resolution(config: Any) -> float:
     solver_config = getattr(config, "solver", None)
     if solver_config is not None:
-        return float(getattr(solver_config, "aerosol_resolution", 1000.0))
-    return 1000.0
+        return float(getattr(solver_config, "aerosol_resolution", 120.0))
+    return 120.0
 
 
 def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
@@ -689,6 +689,7 @@ def _run_tail(
                 default_name="surface_prior_unc",
                 template=surface_template,
             ),
+            solver_qa=corrected.solver_qa,
             monthly_composites=_monthly_composite_outputs(
                 tuple(getattr(surface, "monthly_composites", ())),
                 template=surface_template,

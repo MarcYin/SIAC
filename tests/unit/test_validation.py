@@ -155,6 +155,20 @@ class TestValidateSolvedAtmosphere:
         assert isinstance(solved.n_iterations, int)
         assert isinstance(solved.cost_final, (int, float))
 
+    def test_validate_solved_rejects_mismatched_qa_shape(self, mock_solved_atmosphere):
+        solved = mock_solved_atmosphere
+        bad_qa = xr.Dataset(
+            {
+                "low_quality": xr.DataArray(
+                    np.ones((1, 1), dtype=bool),
+                    dims=["y", "x"],
+                )
+            }
+        )
+        bad_solved = dataclasses.replace(solved, qa=bad_qa)
+        with pytest.raises(ValidationError, match="qa.low_quality shape"):
+            validate_solved_atmosphere(bad_solved)
+
 
 # ── _validate_correction_result ───────────────────────────────────────
 
@@ -224,3 +238,29 @@ class TestValidateCorrectionResult:
             diagnostics=CorrectionDiagnostics(processing_time_s=0.01),
         )
         validate_correction_result(result)  # no error
+
+    def test_validate_result_rejects_mismatched_solver_qa_shape(
+        self,
+        mock_observation_bundle,
+        mock_solved_atmosphere,
+    ):
+        from siac.runtime import CorrectionResult
+
+        bad_qa = xr.Dataset(
+            {
+                "low_quality": xr.DataArray(
+                    np.ones((1, 1), dtype=bool),
+                    dims=["y", "x"],
+                )
+            }
+        )
+        result = CorrectionResult(
+            boa=mock_observation_bundle.toa,
+            boa_unc=None,
+            aot=mock_solved_atmosphere.aot,
+            tcwv=mock_solved_atmosphere.tcwv,
+            cloud_mask=mock_observation_bundle.cloud_mask,
+            solver_qa=bad_qa,
+        )
+        with pytest.raises(ValidationError, match="solver_qa.low_quality shape"):
+            validate_correction_result(result)

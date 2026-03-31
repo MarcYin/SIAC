@@ -194,8 +194,8 @@ def test_resolve_execution_settings_rejects_invalid_values(
 
 
 def test_aerosol_resolution_reads_solver_config() -> None:
-    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=250.0))
-    assert pipeline._aerosol_resolution(cfg) == 250.0
+    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=120.0))
+    assert pipeline._aerosol_resolution(cfg) == 120.0
 
 
 def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
@@ -214,7 +214,7 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
         captured["kwargs"] = kwargs
         return mock_solver_input_bundle
 
-    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=250.0))
+    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=120.0))
 
     result = pipeline._run_tail(
         mock_observation_bundle,
@@ -229,7 +229,7 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
 
     assert isinstance(result, CorrectionResult)
     assert captured["args"][0] is mock_observation_bundle
-    assert captured["kwargs"]["aerosol_resolution_m"] == 250.0
+    assert captured["kwargs"]["aerosol_resolution_m"] == 120.0
 
 
 def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(

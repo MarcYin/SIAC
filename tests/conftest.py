@@ -197,7 +197,7 @@ def sample_config_dict() -> dict:
         "solver": {
             "aot_gamma": 10.0,
             "tcwv_gamma": 5.0,
-            "aerosol_resolution": 1000.0,
+            "aerosol_resolution": 120.0,
         },
         "output": {
             "format": "cog",

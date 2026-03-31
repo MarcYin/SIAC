@@ -99,12 +99,20 @@ def evaluate_grid_search_cost_cube_with_provider(*args: Any, **kwargs: Any) -> A
     return _require_native("evaluate_grid_search_cost_cube_with_provider")(*args, **kwargs)
 
 
+def evaluate_grid_search_cost_cube_with_provider_qa(*args: Any, **kwargs: Any) -> Any:
+    return _require_native("evaluate_grid_search_cost_cube_with_provider_qa")(*args, **kwargs)
+
+
 def interpolate_to_fine_grid(*args: Any, **kwargs: Any) -> Any:
     return _require_native("interpolate_to_fine_grid")(*args, **kwargs)
 
 
 def quadratic_refine_grid_search(*args: Any, **kwargs: Any) -> Any:
     return _require_native("quadratic_refine_grid_search")(*args, **kwargs)
+
+
+def quadratic_refine_grid_search_qa(*args: Any, **kwargs: Any) -> Any:
+    return _require_native("quadratic_refine_grid_search_qa")(*args, **kwargs)
 
 
 def remap_to_coarse_grid(*args: Any, **kwargs: Any) -> Any:
@@ -122,8 +130,10 @@ __all__ = [
     "apply_laplacian",
     "evaluate_grid_search_candidate_cost",
     "evaluate_grid_search_cost_cube_with_provider",
+    "evaluate_grid_search_cost_cube_with_provider_qa",
     "interpolate_to_fine_grid",
     "quadratic_refine_grid_search",
+    "quadratic_refine_grid_search_qa",
     "remap_to_coarse_grid",
     "whittaker_smooth_cube",
 ]

@@ -110,6 +110,19 @@ def _cloud_mask_on_template_grid(mask: xr.DataArray, template: xr.DataArray) -> 
     return copy_spatial_metadata_like(resampled, template)
 
 
+def _auxiliary_dataset(result: CorrectionResult) -> xr.Dataset:
+    aux_template = result.aot
+    aux_vars: dict[str, xr.DataArray] = {
+        "aot": aux_template.astype(np.float32),
+        "tcwv": result.tcwv.astype(np.float32),
+        "cloud_mask": _cloud_mask_on_template_grid(result.cloud_mask, aux_template),
+    }
+    if result.solver_qa is not None:
+        for name, field in sorted(result.solver_qa.data_vars.items()):
+            aux_vars[name] = _cloud_mask_on_template_grid(field.astype(bool), aux_template)
+    return xr.Dataset(aux_vars)
+
+
 def _uint16_encode(data: xr.DataArray, *, scale: float, nodata: float) -> xr.DataArray:
     scaled = data * scale
     filled = scaled.where(np.isfinite(scaled), other=nodata)
@@ -283,16 +296,26 @@ class ConfiguredOutputWriter:
             write_fn = write_cog if as_cog else write_raster
             aux_dir = output_dir / "auxiliary"
             aux_dir.mkdir(parents=True, exist_ok=True)
-            artifacts["auxiliary.aot"] = write_fn(result.aot.astype(np.float32), aux_dir / "aot.tif")
-            artifacts["auxiliary.tcwv"] = write_fn(result.tcwv.astype(np.float32), aux_dir / "tcwv.tif")
-            cloud_mask = result.cloud_mask.astype(np.uint8)
+            aux_ds = _auxiliary_dataset(result)
+            artifacts["auxiliary.aot"] = write_fn(aux_ds["aot"], aux_dir / "aot.tif")
+            artifacts["auxiliary.tcwv"] = write_fn(aux_ds["tcwv"], aux_dir / "tcwv.tif")
             artifacts["auxiliary.cloud_mask"] = write_fn(
-                cloud_mask,
+                aux_ds["cloud_mask"],
                 aux_dir / "cloud_mask.tif",
                 compression="lzw",
                 dtype="uint8",
                 nodata=255,
             )
+            for name, field in aux_ds.data_vars.items():
+                if name in {"aot", "tcwv", "cloud_mask"}:
+                    continue
+                artifacts[f"auxiliary.qa.{name}"] = write_fn(
+                    field,
+                    aux_dir / f"qa_{name}.tif",
+                    compression="lzw",
+                    dtype="uint8",
+                    nodata=255,
+                )
 
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:
@@ -334,14 +357,7 @@ class ConfiguredOutputWriter:
                     monthly_root / f"{label}.nc",
                 )
         if self.defaults.include_auxiliary:
-            aux_template = result.aot
-            aux_ds = xr.Dataset(
-                {
-                    "aot": aux_template.astype(np.float32),
-                    "tcwv": result.tcwv.astype(np.float32),
-                    "cloud_mask": _cloud_mask_on_template_grid(result.cloud_mask, aux_template),
-                }
-            )
+            aux_ds = _auxiliary_dataset(result)
             artifacts["auxiliary"] = write_netcdf(aux_ds, output_dir / "auxiliary.nc")
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:
@@ -383,14 +399,7 @@ class ConfiguredOutputWriter:
                     monthly_root / f"{label}.zarr",
                 )
         if self.defaults.include_auxiliary:
-            aux_template = result.aot
-            aux_ds = xr.Dataset(
-                {
-                    "aot": aux_template.astype(np.float32),
-                    "tcwv": result.tcwv.astype(np.float32),
-                    "cloud_mask": _cloud_mask_on_template_grid(result.cloud_mask, aux_template),
-                }
-            )
+            aux_ds = _auxiliary_dataset(result)
             artifacts["auxiliary"] = write_zarr(aux_ds, output_dir / "auxiliary.zarr")
         quicklook = self._write_rgb_if_available(result, output_dir)
         if quicklook is not None:

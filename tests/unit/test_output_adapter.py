@@ -26,6 +26,7 @@ def _result(
     include_surface_prior: bool = False,
     include_monthly_composites: bool = False,
     include_diagnostics: bool = False,
+    include_solver_qa: bool = False,
 ) -> CorrectionResult:
     coords = {"y": [0, 1], "x": [0, 1]}
     boa = xr.Dataset(
@@ -89,6 +90,24 @@ def _result(
         if include_monthly_composites
         else None
     )
+    solver_qa = (
+        xr.Dataset(
+            {
+                "invalid_retrieval": xr.DataArray(
+                    np.array([[False, True], [False, False]], dtype=bool),
+                    dims=["y", "x"],
+                    coords=coords,
+                ),
+                "low_quality": xr.DataArray(
+                    np.array([[True, True], [False, False]], dtype=bool),
+                    dims=["y", "x"],
+                    coords=coords,
+                ),
+            }
+        )
+        if include_solver_qa
+        else None
+    )
     return CorrectionResult(
         boa=boa,
         boa_unc=boa_unc,
@@ -97,6 +116,7 @@ def _result(
         cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"], coords=coords),
         surface_prior=surface_prior,
         surface_prior_unc=surface_prior_unc,
+        solver_qa=solver_qa,
         monthly_composites=monthly_composites,
         diagnostics=CorrectionDiagnostics(
             processing_time_s=0.25,
@@ -185,6 +205,48 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
     } <= set(artifacts)
 
 
+def test_write_raster_products_emits_solver_qa_masks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raster_calls: list[tuple[Path, dict[str, object], np.dtype[np.generic]]] = []
+
+    monkeypatch.setattr(
+        output_module,
+        "write_dataset",
+        lambda dataset, output_dir, **kwargs: {name: output_dir / f"{name}.tif" for name in dataset.data_vars},
+    )
+
+    def _fake_write_cog(data: xr.DataArray, path: Path, **kwargs: object) -> Path:
+        raster_calls.append((path, kwargs, data.dtype))
+        return path
+
+    monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
+    monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda _dataset, path: path)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="cog",
+            boa_dtype="uint16",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+
+    artifacts = writer.write(_result(include_uncertainty=False, include_solver_qa=True), tmp_path)
+
+    qa_calls = [call for call in raster_calls if call[0].name.startswith("qa_")]
+    assert {path.name for path, _, _ in qa_calls} == {"qa_invalid_retrieval.tif", "qa_low_quality.tif"}
+    assert all(kwargs["dtype"] == "uint8" for _, kwargs, _ in qa_calls)
+    assert all(kwargs["nodata"] == 255 for _, kwargs, _ in qa_calls)
+    assert {
+        "auxiliary.qa.invalid_retrieval",
+        "auxiliary.qa.low_quality",
+    } <= set(artifacts)
+
+
 def test_write_netcdf_products_route_and_respects_toggles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -260,6 +322,36 @@ def test_write_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
     assert aux_ds["cloud_mask"].coords["x"].identical(result.aot.coords["x"])
     assert aux_ds["cloud_mask"].coords["y"].identical(result.aot.coords["y"])
     assert aux_ds["cloud_mask"].dtype == np.uint8
+
+
+def test_write_netcdf_auxiliary_includes_solver_qa_masks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, xr.Dataset] = {}
+
+    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+        del kwargs
+        captured[str(path)] = dataset
+        return path
+
+    monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="netcdf",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+
+    writer.write(_result(include_uncertainty=False, include_solver_qa=True), tmp_path)
+
+    aux_ds = captured[str(tmp_path / "auxiliary.nc")]
+    assert {"invalid_retrieval", "low_quality"} <= set(aux_ds.data_vars)
+    assert aux_ds["invalid_retrieval"].dtype == np.uint8
+    assert aux_ds["low_quality"].dtype == np.uint8
 
 
 def test_write_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(

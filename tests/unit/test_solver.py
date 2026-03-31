@@ -9,7 +9,9 @@ import xarray as xr
 from siac._rust import (
     evaluate_grid_search_candidate_cost,
     evaluate_grid_search_cost_cube_with_provider,
+    evaluate_grid_search_cost_cube_with_provider_qa,
     quadratic_refine_grid_search,
+    quadratic_refine_grid_search_qa,
 )
 from siac.algorithms.solver.cost import (
     CostFunction,
@@ -484,6 +486,92 @@ class TestMultiGridSolver:
         assert (result.aot_unc.values > 0).all()
         assert (result.tcwv_unc.values > 0).all()
 
+    def test_solver_marks_supported_lower_bound_solution_as_low_quality(self):
+        """Supported boundary solutions should be flagged as low-quality, not invalid."""
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (2, 3)
+        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=5, grid_search_tcwv_points=3))
+
+        toa = xr.DataArray(
+            np.stack([np.full(shape, 0.1, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+        )
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5, dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005, dtype=np.float32), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002, dtype=np.float32), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02, dtype=np.float32)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (band, compute_jacobian)
+                xap = xr.DataArray(np.ones(shape, dtype=np.float32), dims=geometry.sza.dims, coords=geometry.sza.coords)
+                xbp = xr.DataArray(
+                    0.05 * np.asarray(atmo_state.aot.values, dtype=np.float32),
+                    dims=geometry.sza.dims,
+                    coords=geometry.sza.coords,
+                )
+                return RTCoefficients(xap=xap, xbp=xbp, xcp=xr.zeros_like(xap))
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        result = solver.solve(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            cloud_mask=cloud_mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+        )
+
+        assert result.qa is not None
+        np.testing.assert_allclose(result.aot.values, np.full(shape, solver.config.aot_bounds[0], dtype=np.float32))
+        assert not np.any(result.qa["invalid_retrieval"].values)
+        assert not np.any(result.qa["zero_obs_support"].values)
+        assert np.all(result.qa["aot_lower_boundary"].values)
+        assert not np.any(result.qa["aot_upper_boundary"].values)
+        assert np.all(result.qa["parameter_boundary"].values)
+        assert np.all(result.qa["low_quality"].values)
+        assert result.level_history[-1]["qa_final_aot_lower_boundary_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert result.level_history[-1]["qa_final_low_quality_pixels"] == pytest.approx(float(np.prod(shape)))
+
     def test_grid_search_prefers_rust_refiner_when_available(self, monkeypatch):
         """Grid-search refinement should call Rust helper."""
         from siac.algorithms.solver import multigrid as mg_mod
@@ -548,18 +636,28 @@ class TestMultiGridSolver:
 
         called = {"n": 0}
 
-        def _fake_rust_refiner(costs, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+        def _fake_rust_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
             called["n"] += 1
             out_aot = np.full(valid_mask.shape, 0.33, dtype=np.float32)
             out_tcwv = np.full(valid_mask.shape, 1.23, dtype=np.float32)
             out_aot_unc = np.full(valid_mask.shape, 0.07, dtype=np.float32)
             out_tcwv_unc = np.full(valid_mask.shape, 0.21, dtype=np.float32)
             assert costs.shape[:2] == (3, 3)
+            assert obs_counts.shape == costs.shape
             assert aot_axis.shape[0] == 3
             assert tcwv_axis.shape[0] == 3
-            return out_aot, out_tcwv, out_aot_unc, out_tcwv_unc
+            return (
+                out_aot,
+                out_tcwv,
+                out_aot_unc,
+                out_tcwv_unc,
+                np.zeros(valid_mask.shape, dtype=bool),
+                np.zeros(valid_mask.shape, dtype=bool),
+                np.zeros(valid_mask.shape, dtype=bool),
+                np.zeros(valid_mask.shape, dtype=bool),
+            )
 
-        monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search", _fake_rust_refiner)
+        monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_rust_refiner)
 
         out_aot, out_tcwv, out_aot_unc, out_tcwv_unc, _ = solver._solve_level_grid_search(
             toa=toa,
@@ -577,6 +675,112 @@ class TestMultiGridSolver:
         np.testing.assert_allclose(out_tcwv, 1.23)
         np.testing.assert_allclose(out_aot_unc, 0.07)
         np.testing.assert_allclose(out_tcwv_unc, 0.21)
+
+    def test_grid_search_uses_invalid_qa_to_restore_priors(self, monkeypatch):
+        """Invalid QA pixels should fall back to the atmospheric prior."""
+        from siac.algorithms.solver import multigrid as mg_mod
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (3, 4)
+        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
+
+        toa = xr.DataArray(
+            np.stack([np.full(shape, 0.25, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+        )
+        mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (band, compute_jacobian)
+                factor = np.full(shape, 0.9, dtype=np.float32)
+                xap = xr.DataArray(factor, dims=geometry.sza.dims, coords=geometry.sza.coords)
+                return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        def _fake_rust_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+            _ = (costs, obs_counts, aot_axis, tcwv_axis)
+            out_aot = np.full(valid_mask.shape, 0.33, dtype=np.float32)
+            out_tcwv = np.full(valid_mask.shape, 1.23, dtype=np.float32)
+            out_aot_unc = np.full(valid_mask.shape, 0.07, dtype=np.float32)
+            out_tcwv_unc = np.full(valid_mask.shape, 0.21, dtype=np.float32)
+            invalid = np.zeros(valid_mask.shape, dtype=bool)
+            invalid[0, 0] = True
+            boundary = np.zeros(valid_mask.shape, dtype=bool)
+            lower_aot_boundary = np.zeros(valid_mask.shape, dtype=bool)
+            lower_aot_boundary[1, 1] = True
+            zero_obs = np.zeros(valid_mask.shape, dtype=bool)
+            return (
+                out_aot,
+                out_tcwv,
+                out_aot_unc,
+                out_tcwv_unc,
+                invalid,
+                boundary,
+                lower_aot_boundary,
+                zero_obs,
+            )
+
+        monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_rust_refiner)
+
+        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc, diag = solver._solve_level_grid_search(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            mask=mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            cost_config=CostFunctionConfig(),
+        )
+
+        assert out_aot[0, 0] == pytest.approx(0.2)
+        assert out_tcwv[0, 0] == pytest.approx(2.0)
+        assert out_aot_unc[0, 0] == pytest.approx(0.05)
+        assert out_tcwv_unc[0, 0] == pytest.approx(0.3)
+        assert out_aot[1, 1] == pytest.approx(0.33)
+        assert diag["qa_invalid_pixels"] == pytest.approx(1.0)
+        assert diag["qa_lower_aot_boundary_pixels"] == pytest.approx(1.0)
 
     def test_rust_quadratic_refiner_matches_python_reference(self):
         """Rust quadratic refiner should match Python reference behavior."""
@@ -608,6 +812,354 @@ class TestMultiGridSolver:
 
         for expected, actual in zip(ref, got, strict=True):
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
+
+    def test_rust_grid_search_qa_distinguishes_prior_only_floor_from_true_boundary(self):
+        """QA refiner should separate unsupported floor hits from supported boundary minima."""
+        aot_axis = np.linspace(0.001, 2.5, 11, dtype=np.float32)
+        tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        valid_mask = np.array([[True, True]], dtype=bool)
+
+        costs = np.zeros((len(aot_axis), len(tcwv_axis), 1, 2), dtype=np.float32)
+        obs_counts = np.zeros_like(costs, dtype=np.uint16)
+
+        prior_aot = 0.05
+        prior_tcwv = 2.0
+        for ia, aot_val in enumerate(aot_axis):
+            for it, tcwv_val in enumerate(tcwv_axis):
+                costs[ia, it, 0, 0] = np.float32(
+                    0.5 * ((float(aot_val) - prior_aot) ** 2 + (float(tcwv_val) - prior_tcwv) ** 2)
+                )
+                costs[ia, it, 0, 1] = np.float32(float(ia) + 0.1 * (float(tcwv_val) - 2.0) ** 2)
+                obs_counts[ia, it, 0, 1] = 2
+
+        (
+            aot_best,
+            tcwv_best,
+            _aot_unc,
+            _tcwv_unc,
+            invalid_mask,
+            boundary_mask,
+            lower_aot_boundary_mask,
+            zero_obs_mask,
+        ) = quadratic_refine_grid_search_qa(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+        )
+
+        aot_best = np.asarray(aot_best, dtype=np.float32)
+        tcwv_best = np.asarray(tcwv_best, dtype=np.float32)
+        invalid_mask = np.asarray(invalid_mask, dtype=bool)
+        boundary_mask = np.asarray(boundary_mask, dtype=bool)
+        lower_aot_boundary_mask = np.asarray(lower_aot_boundary_mask, dtype=bool)
+        zero_obs_mask = np.asarray(zero_obs_mask, dtype=bool)
+
+        assert aot_best[0, 0] == pytest.approx(aot_axis[0])
+        assert tcwv_best[0, 0] == pytest.approx(prior_tcwv)
+        assert invalid_mask[0, 0]
+        assert zero_obs_mask[0, 0]
+        assert not boundary_mask[0, 0]
+        assert not lower_aot_boundary_mask[0, 0]
+
+        assert aot_best[0, 1] == pytest.approx(aot_axis[0])
+        assert tcwv_best[0, 1] == pytest.approx(2.0)
+        assert not invalid_mask[0, 1]
+        assert not zero_obs_mask[0, 1]
+        assert boundary_mask[0, 1]
+        assert lower_aot_boundary_mask[0, 1]
+
+    def test_rust_cost_cube_provider_qa_reproduces_prior_only_floor_case(self):
+        """Zero observation support plus a low prior should collapse to the AOT floor in the legacy refiner."""
+        aot_axis = np.linspace(0.001, 2.5, 11, dtype=np.float32)
+        tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        valid_mask = np.array([[True]], dtype=bool)
+
+        toa = np.array([[[0.2]]], dtype=np.float32)
+        boa_prior = np.array([[[0.1]]], dtype=np.float32)
+        boa_unc = np.array([[[np.nan]]], dtype=np.float32)
+        band_weights = np.array([1.0], dtype=np.float32)
+        aot_prior = np.array([[0.05]], dtype=np.float32)
+        tcwv_prior = np.array([[2.0]], dtype=np.float32)
+        aot_prior_unc = np.array([[0.05]], dtype=np.float32)
+        tcwv_prior_unc = np.array([[0.5]], dtype=np.float32)
+
+        def _provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            xap = np.array([[[1.0]]], dtype=np.float32)
+            zeros = np.array([[[0.0]]], dtype=np.float32)
+            return xap, zeros, zeros
+
+        costs, obs_counts = evaluate_grid_search_cost_cube_with_provider_qa(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            toa,
+            boa_prior,
+            boa_unc,
+            band_weights,
+            valid_mask,
+            aot_prior,
+            tcwv_prior,
+            aot_prior_unc,
+            tcwv_prior_unc,
+        )
+        costs = np.asarray(costs, dtype=np.float32)
+        obs_counts = np.asarray(obs_counts, dtype=np.uint16)
+
+        assert np.all(obs_counts == 0)
+
+        old_aot, _old_tcwv, _old_aot_unc, _old_tcwv_unc = quadratic_refine_grid_search(
+            costs,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+        )
+        assert np.asarray(old_aot, dtype=np.float32)[0, 0] == pytest.approx(aot_axis[0])
+
+        (
+            _aot_best,
+            _tcwv_best,
+            _aot_unc,
+            _tcwv_unc,
+            invalid_mask,
+            boundary_mask,
+            lower_aot_boundary_mask,
+            zero_obs_mask,
+        ) = quadratic_refine_grid_search_qa(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+        )
+
+        invalid_mask = np.asarray(invalid_mask, dtype=bool)
+        boundary_mask = np.asarray(boundary_mask, dtype=bool)
+        lower_aot_boundary_mask = np.asarray(lower_aot_boundary_mask, dtype=bool)
+        zero_obs_mask = np.asarray(zero_obs_mask, dtype=bool)
+
+        assert invalid_mask[0, 0]
+        assert zero_obs_mask[0, 0]
+        assert not boundary_mask[0, 0]
+        assert not lower_aot_boundary_mask[0, 0]
+
+    def test_rust_cost_cube_provider_qa_does_not_count_zero_weight_support(self):
+        """Zero-weight bands should not be treated as observation support."""
+        aot_axis = np.linspace(0.001, 2.5, 11, dtype=np.float32)
+        tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        valid_mask = np.array([[True]], dtype=bool)
+
+        toa = np.array([[[0.2]]], dtype=np.float32)
+        boa_prior = np.array([[[0.1]]], dtype=np.float32)
+        boa_unc = np.array([[[0.02]]], dtype=np.float32)
+        band_weights = np.array([0.0], dtype=np.float32)
+        aot_prior = np.array([[0.05]], dtype=np.float32)
+        tcwv_prior = np.array([[2.0]], dtype=np.float32)
+        aot_prior_unc = np.array([[0.05]], dtype=np.float32)
+        tcwv_prior_unc = np.array([[0.5]], dtype=np.float32)
+
+        def _provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            xap = np.array([[[1.0]]], dtype=np.float32)
+            zeros = np.array([[[0.0]]], dtype=np.float32)
+            return xap, zeros, zeros
+
+        _costs, obs_counts = evaluate_grid_search_cost_cube_with_provider_qa(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            toa,
+            boa_prior,
+            boa_unc,
+            band_weights,
+            valid_mask,
+            aot_prior,
+            tcwv_prior,
+            aot_prior_unc,
+            tcwv_prior_unc,
+        )
+        obs_counts = np.asarray(obs_counts, dtype=np.uint16)
+
+        assert np.all(obs_counts == 0)
+
+    def test_grid_search_level_diag_reports_prior_only_floor_scenario(self):
+        """End-to-end grid search should report unsupported floor hits and restore those pixels to the prior."""
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (2, 2)
+        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=11, grid_search_tcwv_points=3))
+
+        toa = xr.DataArray(
+            np.stack([np.full(shape, 0.2, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+        )
+        mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5, dtype=np.float32), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005, dtype=np.float32), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002, dtype=np.float32), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, np.nan, dtype=np.float32)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (geometry, atmo_state, band, compute_jacobian)
+                nan = xr.DataArray(np.full(shape, np.nan, dtype=np.float32), dims=["y", "x"])
+                return RTCoefficients(xap=nan, xbp=nan.copy(), xcp=nan.copy())
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = solver._solve_level_grid_search(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            mask=mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            cost_config=CostFunctionConfig(),
+        )
+
+        np.testing.assert_allclose(out_aot, np.full(shape, 0.05, dtype=np.float32))
+        assert level_diag["qa_invalid_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert level_diag["qa_zero_obs_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert level_diag["qa_invalid_floor_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert level_diag["qa_prior_floor_pixels"] == pytest.approx(0.0)
+        assert level_diag["qa_boundary_pixels"] == pytest.approx(0.0)
+
+    def test_grid_search_level_diag_distinguishes_prior_floor_passthrough(self, monkeypatch):
+        """Final floor-valued AOT can come from prior restoration rather than a raw floor hit."""
+        from siac.algorithms.solver import multigrid as mg_mod
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (2, 2)
+        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
+
+        toa = xr.DataArray(
+            np.stack([np.full(shape, 0.25, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+        )
+        mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.001, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (band, compute_jacobian)
+                factor = np.full(shape, 0.9, dtype=np.float32)
+                xap = xr.DataArray(factor, dims=geometry.sza.dims, coords=geometry.sza.coords)
+                return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        def _fake_rust_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+            _ = (costs, obs_counts, aot_axis, tcwv_axis)
+            out_aot = np.full(valid_mask.shape, 0.33, dtype=np.float32)
+            out_tcwv = np.full(valid_mask.shape, 1.23, dtype=np.float32)
+            out_aot_unc = np.full(valid_mask.shape, 0.07, dtype=np.float32)
+            out_tcwv_unc = np.full(valid_mask.shape, 0.21, dtype=np.float32)
+            invalid = np.ones(valid_mask.shape, dtype=bool)
+            boundary = np.zeros(valid_mask.shape, dtype=bool)
+            lower_aot_boundary = np.zeros(valid_mask.shape, dtype=bool)
+            zero_obs = np.ones(valid_mask.shape, dtype=bool)
+            return (
+                out_aot,
+                out_tcwv,
+                out_aot_unc,
+                out_tcwv_unc,
+                invalid,
+                boundary,
+                lower_aot_boundary,
+                zero_obs,
+            )
+
+        monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_rust_refiner)
+
+        out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = solver._solve_level_grid_search(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            mask=mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            cost_config=CostFunctionConfig(),
+        )
+
+        np.testing.assert_allclose(out_aot, np.full(shape, 0.001, dtype=np.float32))
+        assert level_diag["qa_invalid_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert level_diag["qa_invalid_floor_pixels"] == pytest.approx(0.0)
+        assert level_diag["qa_prior_floor_pixels"] == pytest.approx(float(np.prod(shape)))
 
     def test_rust_candidate_cost_matches_python_reference(self):
         """Rust candidate cost helper should match Python reference."""

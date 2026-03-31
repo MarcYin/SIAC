@@ -886,6 +886,10 @@ class SpectralMapper:
         target_flat = np.full((flattened.flat_values.shape[0], len(self.target_bands)), np.nan, dtype=np.float32)
         target_unc_flat = np.full_like(target_flat, np.nan)
         source_fit_flat = np.full(flattened.flat_values.shape[0], np.nan, dtype=np.float32)
+        segment_fit_flat = {
+            segment: np.full(flattened.flat_values.shape[0], np.nan, dtype=np.float32)
+            for segment in ("vnir", "swir")
+        }
         if np.any(flattened.valid_rows):
             valid_count = int(np.count_nonzero(flattened.valid_rows))
             logger.info(
@@ -931,6 +935,10 @@ class SpectralMapper:
                     source_uncertainty=None if unc_flat is None else unc_flat[row_index],
                 )
                 source_fit_flat[row_index] = np.float32(self._estimate_source_fit_rmse(result))
+                for segment in ("vnir", "swir"):
+                    segment_rmse = self._segment_source_fit_rmse(result, segment)
+                    if segment_rmse is not None:
+                        segment_fit_flat[segment][row_index] = np.float32(segment_rmse)
                 if result_index == 1 or result_index == valid_indices.size or (result_index % progress_step) == 0:
                     logger.info(
                         "Spectral mapping uncertainty progress: %d/%d pixels elapsed=%.2fs",
@@ -942,6 +950,17 @@ class SpectralMapper:
         reflectance_da = self._restore_target_cube(target_flat, flattened)
         uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
         source_fit_da = self._restore_spatial_field(source_fit_flat, flattened)
+        segment_fit_da = {
+            segment: self._restore_spatial_field(flat_values, flattened)
+            for segment, flat_values in segment_fit_flat.items()
+        }
+        self._cache_distance_metrics(
+            {
+                "source_fit_rmse": source_fit_da,
+                "vnir_source_fit_rmse": segment_fit_da["vnir"],
+                "swir_source_fit_rmse": segment_fit_da["swir"],
+            }
+        )
         logger.info("Spectral mapping complete: output_shape=%s", tuple(reflectance_da.shape))
         return (
             copy_spatial_metadata_like(
@@ -956,6 +975,27 @@ class SpectralMapper:
                 source_fit_da.astype(np.float32),
                 cast("xr.DataArray", flattened.source_data.isel(band=0, drop=True)),
             ),
+        )
+
+    def _cache_distance_metrics(self, metrics: dict[str, xr.DataArray]) -> None:
+        if self._identity or self._runtime is None:
+            return
+        _write_distance_metric_diagnostics(
+            self._runtime.prepared_root.parent,
+            prefix="spectral_mapping_distances",
+            metrics={
+                name: np.asarray(metric.values, dtype=np.float32)
+                for name, metric in metrics.items()
+            },
+            metadata={
+                "source_sensor_id": self._runtime.source_sensor_id,
+                "target_sensor_id": self._runtime.target_sensor_id,
+                "source_band_names": [band.name for band in self.source_bands],
+                "target_band_names": [band.name for band in self.target_bands],
+                "k_neighbors": int(self.k_neighbors),
+                "neighbor_estimator": self._mapping_config.neighbor_estimator,
+                "knn_backend": self._mapping_config.knn_backend,
+            },
         )
 
     def _map_reflectance_batch(
@@ -1158,19 +1198,25 @@ class SpectralMapper:
         }
         return xr.DataArray(values, dims=flattened.spatial_dims, coords=coords)
 
+    @staticmethod
+    def _prepared_segment_from_result(
+        result: _PackageResultProtocol | _MinimalMappingResult,
+        segment: str,
+    ) -> _PreparedSegmentDiagnostics | None:
+        if isinstance(result, _MinimalMappingResult):
+            return result.prepared_segments.get(segment)
+        diagnostics = result.diagnostics.get("segments", {})
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        return SpectralMapper._prepare_segment_diagnostics(diagnostics.get(segment))
+
     def _estimate_source_fit_rmse(
         self,
         result: _PackageResultProtocol | _MinimalMappingResult,
     ) -> float:
         segment_rmse: list[tuple[int, float]] = []
         for segment in ("vnir", "swir"):
-            if isinstance(result, _MinimalMappingResult):
-                prepared = result.prepared_segments.get(segment)
-            else:
-                diagnostics = result.diagnostics.get("segments", {})
-                if not isinstance(diagnostics, dict):
-                    diagnostics = {}
-                prepared = self._prepare_segment_diagnostics(diagnostics.get(segment))
+            prepared = self._prepared_segment_from_result(result, segment)
             if prepared is None:
                 continue
             valid_count = int(np.count_nonzero(prepared.query_valid_mask))
@@ -1182,6 +1228,18 @@ class SpectralMapper:
         weights = np.asarray([item[0] for item in segment_rmse], dtype=np.float64)
         rmse = np.asarray([item[1] for item in segment_rmse], dtype=np.float64)
         return float(np.sqrt(np.average(np.square(rmse, dtype=np.float64), weights=weights)))
+
+    def _segment_source_fit_rmse(
+        self,
+        result: _PackageResultProtocol | _MinimalMappingResult,
+        segment: str,
+    ) -> float | None:
+        prepared = self._prepared_segment_from_result(result, segment)
+        if prepared is None:
+            return None
+        if int(np.count_nonzero(prepared.query_valid_mask)) < 1:
+            return None
+        return max(0.0, float(prepared.source_fit_rmse))
 
     def _estimate_uncertainty(
         self,
@@ -1195,13 +1253,7 @@ class SpectralMapper:
         output: Float32Array = np.full(len(self.target_bands), np.nan, dtype=np.float32)
         target_values_by_band_id = self._target_values_by_band_id(result)
         for segment in ("vnir", "swir"):
-            if isinstance(result, _MinimalMappingResult):
-                prepared = result.prepared_segments.get(segment)
-            else:
-                diagnostics = result.diagnostics.get("segments", {})
-                if not isinstance(diagnostics, dict):
-                    diagnostics = {}
-                prepared = self._prepare_segment_diagnostics(diagnostics.get(segment))
+            prepared = self._prepared_segment_from_result(result, segment)
             if prepared is None:
                 continue
             neighbor_spectra = self._load_neighbor_spectra(

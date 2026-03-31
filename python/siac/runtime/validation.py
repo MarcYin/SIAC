@@ -110,6 +110,15 @@ def validate_solver_input_bundle(sib: SolverInputBundle) -> None:
         raise ValidationError("aerosol_resolution_m must be positive")
 
 
+def _validate_mask_dataset_shape(name: str, dataset: xr.Dataset, template: xr.DataArray) -> None:
+    for var_name, field in dataset.data_vars.items():
+        if field.shape != template.shape or tuple(field.dims) != tuple(template.dims):
+            raise ValidationError(
+                f"{name}.{var_name} shape {field.shape} dims {tuple(field.dims)} "
+                f"must match {tuple(template.dims)} shape {template.shape}"
+            )
+
+
 def validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
     if not isinstance(solved.converged, bool):
         raise ValidationError("converged must be a boolean")
@@ -128,6 +137,9 @@ def validate_solved_atmosphere(solved: SolvedAtmosphere) -> None:
     if not (tcwv_vals[np.isfinite(tcwv_vals)] >= 0).all():
         raise ValidationError("solved TCWV must be non-negative")
 
+    if solved.qa is not None:
+        _validate_mask_dataset_shape("qa", solved.qa, solved.aot)
+
 
 def validate_correction_result(result: CorrectionResult) -> None:
     if len(result.boa.data_vars) == 0:
@@ -141,6 +153,9 @@ def validate_correction_result(result: CorrectionResult) -> None:
         raise ValidationError("diagnostics.processing_time_s must be finite when provided")
     if processing_time_s is not None and processing_time_s < 0:
         raise ValidationError("diagnostics.processing_time_s must be non-negative")
+
+    if result.solver_qa is not None:
+        _validate_mask_dataset_shape("solver_qa", result.solver_qa, result.aot)
 
 
 __all__ = [

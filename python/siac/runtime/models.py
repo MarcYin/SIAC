@@ -366,6 +366,8 @@ class SolvedAtmosphere:
     cost_final: float
     n_iterations: int
     converged: bool
+    qa: xr.Dataset | None = None
+    level_history: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -387,6 +389,7 @@ class CorrectionResult:
     cloud_mask: xr.DataArray
     surface_prior: xr.Dataset | None = None
     surface_prior_unc: xr.Dataset | None = None
+    solver_qa: xr.Dataset | None = None
     monthly_composites: dict[str, MonthlyCompositeOutput] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     diagnostics: CorrectionDiagnostics = field(default_factory=CorrectionDiagnostics)

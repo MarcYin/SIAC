@@ -264,6 +264,8 @@ def resolve_solver(config: Any) -> SolverFn:
             cost_final=float(result.final_cost),
             n_iterations=result.n_iterations,
             converged=result.success,
+            qa=getattr(result, "qa", None),
+            level_history=tuple(getattr(result, "level_history", ())),
         )
 
     return _default_solver
@@ -421,6 +423,10 @@ def resolve_corrector(_config: Any) -> CorrectorFn:
             aot=atmo.aot,
             tcwv=atmo.tcwv,
             cloud_mask=corrected.cloud_mask,
+            surface_prior=corrected.surface_prior,
+            surface_prior_unc=corrected.surface_prior_unc,
+            solver_qa=corrected.solver_qa if corrected.solver_qa is not None else solved.qa,
+            monthly_composites=corrected.monthly_composites,
             metadata=corrected.metadata,
             diagnostics=corrected.diagnostics,
         )
