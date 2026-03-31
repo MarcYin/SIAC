@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -514,6 +515,94 @@ def test_query_surface_prior_from_monthly_database_filters_high_knn_feature_dist
     )
 
     np.testing.assert_array_equal(prior.mask.values[:, 0], np.array([True, False]))
+
+
+def test_query_surface_prior_from_monthly_database_caches_distance_metrics(tmp_path) -> None:  # noqa: ANN001
+    sensor_config = _sensor_config()
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((2, 1), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((2, 1), 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((2, 1), 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((2, 1), 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((2, 1)),
+        cloud_mask=xr.DataArray(np.zeros((2, 1), dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 1.0, 2.0),
+    )
+    database = _database()
+
+    class _DiagnosticDatabase:
+        query_band_names = database.query_band_names
+        visible_band_names = database.visible_band_names
+        median_summary = database.median_summary
+
+        def predict_visible_with_diagnostics(self, corrected_reflectance, *, k_neighbors=3):  # noqa: ANN001
+            del corrected_reflectance, k_neighbors
+            coords = {"band": ["B02", "B03"], "y": [0, 1], "x": [0]}
+            predicted = xr.DataArray(
+                np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_unc = xr.DataArray(
+                np.full((2, 2, 1), 0.01, dtype=np.float32),
+                dims=["band", "y", "x"],
+                coords=coords,
+            )
+            predicted_quality = xr.DataArray(
+                np.full((2, 1), 0.02, dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            predicted_source_fit = xr.DataArray(
+                np.array([[0.01], [0.03]], dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            predicted_distance = xr.DataArray(
+                np.array([[0.01], [0.09]], dtype=np.float32),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0]},
+            )
+            return SimpleNamespace(
+                predicted=predicted,
+                uncertainty=predicted_unc,
+                quality=predicted_quality,
+                source_fit_rmse=predicted_source_fit,
+                knn_feature_distance=predicted_distance,
+            )
+
+    query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_DiagnosticDatabase(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        diagnostic_cache_dir=tmp_path,
+    )
+
+    diagnostics_dir = tmp_path / "diagnostics"
+    data_paths = sorted(diagnostics_dir.glob("swir_refine_distances_*.npz"))
+    metadata_paths = sorted(diagnostics_dir.glob("swir_refine_distances_*.json"))
+    assert len(data_paths) == 1
+    assert len(metadata_paths) == 1
+
+    with np.load(data_paths[0]) as payload:
+        assert set(payload.files) == {"source_fit_rmse", "knn_feature_distance"}
+        np.testing.assert_allclose(payload["source_fit_rmse"][:, 0], np.array([0.01, 0.03], dtype=np.float32))
+        np.testing.assert_allclose(payload["knn_feature_distance"][:, 0], np.array([0.01, 0.09], dtype=np.float32))
+
+    metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
+    assert metadata["query_band_names"] == ["B08", "B11", "B12"]
+    assert metadata["visible_band_names"] == ["B02", "B03"]
 
 
 def test_weekly_sample_dates_use_weekly_spacing() -> None:

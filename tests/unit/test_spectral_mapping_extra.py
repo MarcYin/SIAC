@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -380,6 +381,81 @@ def test_map_returns_source_fit_rmse() -> None:
     assert float(mapped.values[0, 0, 0]) == pytest.approx(0.5)
     assert float(mapped_unc.values[0, 0, 0]) > 0.1
     assert float(source_fit.values[0, 0]) == pytest.approx(0.1)
+
+
+def test_map_caches_distance_metrics_to_disk(tmp_path: Path) -> None:
+    mapper = object.__new__(SpectralMapper)
+    mapper.source_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
+    mapper.target_bands = (SensorBand("T01", 500.0, 50.0, 10.0, 0),)
+    mapper.k_neighbors = 1
+    mapper._identity = False
+    mapper._target_band_names = ["T01"]
+    mapper._mapping_config = SimpleNamespace(
+        min_valid_bands=1,
+        neighbor_estimator="distance_weighted_mean",
+        knn_backend="numpy",
+        knn_eps=0.0,
+    )
+    mapper._runtime = SimpleNamespace(
+        source_sensor_id="src",
+        target_sensor_id="target",
+        prepared_root=tmp_path / "runtime" / "prepared",
+    )
+    mapper._target_internal_to_output_index = {"T01": 0}
+    mapper._source_retrieval_indices_by_segment = {
+        "vnir": np.array([0], dtype=np.int32),
+        "swir": np.array([], dtype=np.int32),
+    }
+    mapper._target_schema_by_band_id = {"T01": SimpleNamespace(band_id="T01", segment="vnir")}
+
+    retrieval_ok = SimpleNamespace(
+        success=True,
+        reconstructed=np.array([0.4, 0.6], dtype=np.float64),
+        neighbor_ids=("n1",),
+        neighbor_weights=np.array([1.0], dtype=np.float64),
+        query_valid_mask=np.array([True], dtype=np.bool_),
+        source_fit_rmse=0.1,
+    )
+    retrieval_empty = SimpleNamespace(
+        success=False,
+        reconstructed=None,
+        neighbor_ids=(),
+        neighbor_weights=np.array([], dtype=np.float64),
+        query_valid_mask=np.array([], dtype=np.bool_),
+        source_fit_rmse=0.0,
+    )
+
+    mapper._package_mapper = SimpleNamespace(
+        _candidate_rows=lambda _candidate_rows: np.array([0], dtype=np.int64),
+        _retrieve_segment_batch=lambda *, segment, **_kwargs: ((retrieval_ok,) if segment == "vnir" else (retrieval_empty,)),
+        _row_index_by_id={"n1": 0},
+        _load_hyperspectral=lambda _segment: np.array([[0.4, 0.6]], dtype=np.float64),
+        _band_response=lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float64),
+    )
+
+    source = xr.DataArray(
+        np.array([[[0.25]]], dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["B02"], "y": [0], "x": [0]},
+    )
+
+    mapper.map(source)
+
+    diagnostics_dir = tmp_path / "runtime" / "diagnostics"
+    data_paths = sorted(diagnostics_dir.glob("spectral_mapping_distances_*.npz"))
+    metadata_paths = sorted(diagnostics_dir.glob("spectral_mapping_distances_*.json"))
+    assert len(data_paths) == 1
+    assert len(metadata_paths) == 1
+
+    with np.load(data_paths[0]) as payload:
+        assert set(payload.files) == {"source_fit_rmse", "vnir_source_fit_rmse", "swir_source_fit_rmse"}
+        assert float(payload["source_fit_rmse"][0, 0]) == pytest.approx(0.1)
+        assert float(payload["vnir_source_fit_rmse"][0, 0]) == pytest.approx(0.1)
+        assert np.isnan(payload["swir_source_fit_rmse"][0, 0])
+
+    metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
+    assert metadata["source_sensor_id"] == "src"
+    assert metadata["target_sensor_id"] == "target"
 
 
 def test_wrapper_and_input_split_helpers_cover_error_and_delegation_paths(monkeypatch: pytest.MonkeyPatch) -> None:

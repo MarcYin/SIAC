@@ -980,8 +980,11 @@ class SpectralMapper:
     def _cache_distance_metrics(self, metrics: dict[str, xr.DataArray]) -> None:
         if self._identity or self._runtime is None:
             return
+        prepared_root = getattr(self._runtime, "prepared_root", None)
+        if prepared_root is None:
+            return
         _write_distance_metric_diagnostics(
-            self._runtime.prepared_root.parent,
+            Path(prepared_root).parent,
             prefix="spectral_mapping_distances",
             metrics={
                 name: np.asarray(metric.values, dtype=np.float32)

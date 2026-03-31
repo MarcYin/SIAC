@@ -7,11 +7,11 @@ import collections.abc
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
+from numpy import typing as npt
 
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.correction.atmospheric import AtmosphericCorrector
@@ -49,8 +49,11 @@ from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+BoolArray: TypeAlias = npt.NDArray[np.bool_]
 
 
 _HISTORY_YEARS = 5
@@ -478,15 +481,18 @@ def query_surface_prior_from_monthly_database(
     )
 
     cloud_mask = corrected_query_mask
-    uncertainty_ok = np.ones(target_shape, dtype=bool)
+    uncertainty_ok: BoolArray = np.ones(target_shape, dtype=bool)
     if max_prediction_uncertainty is not None:
-        uncertainty_ok = np.all(predicted_unc.values <= float(max_prediction_uncertainty), axis=0)
-    quality_ok = np.ones(target_shape, dtype=bool)
+        uncertainty_ok = cast(
+            "BoolArray",
+            np.all(predicted_unc.values <= float(max_prediction_uncertainty), axis=0),
+        )
+    quality_ok: BoolArray = np.ones(target_shape, dtype=bool)
     if max_composite_quality is not None:
-        quality_ok = predicted_quality.values <= float(max_composite_quality)
-    distance_ok = np.ones(target_shape, dtype=bool)
+        quality_ok = cast("BoolArray", predicted_quality.values <= float(max_composite_quality))
+    distance_ok: BoolArray = np.ones(target_shape, dtype=bool)
     if max_knn_feature_distance is not None:
-        distance_ok = predicted_distance.values <= float(max_knn_feature_distance)
+        distance_ok = cast("BoolArray", predicted_distance.values <= float(max_knn_feature_distance))
     valid = (
         np.all(np.isfinite(predicted_visible.values), axis=0)
         & np.all(np.isfinite(predicted_unc.values), axis=0)

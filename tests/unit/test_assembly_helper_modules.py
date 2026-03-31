@@ -797,7 +797,7 @@ def test_surface_monthly_runtime_and_query_helpers(
                 min_valid_bands=1,
                 siac_library_root=None,
                 rsrf_root=None,
-                cache_dir=None,
+                cache_dir="/tmp/spectral-mapping-cache",
             )
         ),
         brdf=SimpleNamespace(temporal_window=16),
@@ -830,6 +830,7 @@ def test_surface_monthly_runtime_and_query_helpers(
     assert captured["database"]["geometry"] == "geometry"
     assert captured["query"]["database"] == "db"
     assert captured["query"]["k_neighbors"] == 7
+    assert captured["query"]["diagnostic_cache_dir"] == "/tmp/spectral-mapping-cache"
     assert result == "prior"
     assert request["obs_time"] == mock_observation_bundle.metadata["observation_time"]
     assert surface_mod._mark_surface_prior_metadata(provider_fn, requires_atmo_prior=True) is provider_fn
@@ -844,7 +845,7 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
     provider = SimpleNamespace(
         source_bands=list(mock_observation_bundle.sensor_config.bands),
         resolution_m=500.0,
-        get_monthly_composites=lambda observation, resolution: (
+        get_monthly_composites=lambda _observation, resolution: (
             captured.__setitem__("provider_resolution", resolution)
             or SimpleNamespace(source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=())
         ),
@@ -900,7 +901,7 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
     provider = SimpleNamespace(
         source_bands=list(mock_observation_bundle.sensor_config.bands),
         resolution_m=500.0,
-        get_monthly_composites=lambda observation, resolution: (
+        get_monthly_composites=lambda _observation, resolution: (
             captured.__setitem__("provider_resolution", resolution)
             or SimpleNamespace(source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=())
         ),
