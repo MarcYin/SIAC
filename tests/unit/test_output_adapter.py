@@ -214,7 +214,7 @@ def test_write_raster_products_emits_solver_qa_masks(
     monkeypatch.setattr(
         output_module,
         "write_dataset",
-        lambda dataset, output_dir, **kwargs: {name: output_dir / f"{name}.tif" for name in dataset.data_vars},
+        lambda dataset, output_dir, **_kwargs: {name: output_dir / f"{name}.tif" for name in dataset.data_vars},
     )
 
     def _fake_write_cog(data: xr.DataArray, path: Path, **kwargs: object) -> Path:

@@ -14,10 +14,11 @@ from contextlib import nullcontext, suppress
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
+from numpy import typing as npt
 
 from siac.algorithms.solver import build_solver_valid_mask
 from siac.observability import (
@@ -54,6 +55,8 @@ if TYPE_CHECKING:
     from siac.domain.sensors import SensorConfig
 
 logger = logging.getLogger(__name__)
+
+Float32Array: TypeAlias = npt.NDArray[np.float32]
 
 PreprocessorFn = Callable[[Path, Any], ObservationBundle]
 AtmoPriorFn = Callable[
@@ -197,11 +200,11 @@ def _should_capture_aot_scatter(config: Any) -> bool:
     return bool(getattr(defaults, "include_auxiliary", True))
 
 
-def _sample_scatter_values(values: np.ndarray, *, max_points: int) -> np.ndarray:
+def _sample_scatter_values(values: np.ndarray, *, max_points: int) -> Float32Array:
     if values.size <= max_points:
-        return values.astype(np.float32, copy=False)
+        return cast("Float32Array", values.astype(np.float32, copy=False))
     indices = np.linspace(0, values.size - 1, max_points, dtype=np.int64)
-    return values[indices].astype(np.float32, copy=False)
+    return cast("Float32Array", values[indices].astype(np.float32, copy=False))
 
 
 def _select_band_slice(

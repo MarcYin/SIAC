@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
+from numpy import typing as npt
 from scipy import optimize
 
 from siac._rust_compat import (
@@ -41,6 +42,10 @@ if TYPE_CHECKING:
     from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
+
+BoolArray: TypeAlias = npt.NDArray[np.bool_]
+Float32Array: TypeAlias = npt.NDArray[np.float32]
+Float64Array: TypeAlias = npt.NDArray[np.float64]
 
 
 def build_solver_valid_mask(
@@ -418,12 +423,12 @@ class MultiGridSolver:
         self,
         mask: np.ndarray,
         target_shape: tuple[int, int],
-    ) -> np.ndarray:
+    ) -> BoolArray:
         resampled = self._resample_mask_to_grid(
             xr.DataArray(np.asarray(mask, dtype=bool), dims=["y", "x"]),
             target_shape,
         )
-        return np.asarray(resampled.values, dtype=bool)
+        return cast("BoolArray", np.asarray(resampled.values, dtype=bool))
 
     def _mask_to_data_array(
         self,
@@ -491,15 +496,18 @@ class MultiGridSolver:
         }
 
     @staticmethod
-    def _compute_band_weights(bands: list[SensorBand], power: float) -> np.ndarray:
+    def _compute_band_weights(bands: list[SensorBand], power: float) -> Float32Array:
         """Compute normalized spectral weights used in observation cost."""
         wavelengths = np.array([b.center_wavelength for b in bands], dtype=np.float32)
         wl_um = np.maximum(wavelengths / 1000.0, 1e-6)
         weights = wl_um ** power
         total = float(np.sum(weights))
         if total <= 0:
-            return np.full(len(bands), 1.0 / max(len(bands), 1), dtype=np.float32)
-        return (weights / total).astype(np.float32)
+            return cast(
+                "Float32Array",
+                np.full(len(bands), 1.0 / max(len(bands), 1), dtype=np.float32),
+            )
+        return cast("Float32Array", (weights / total).astype(np.float32))
 
     def _solve_level_grid_search(
         self,
@@ -580,9 +588,9 @@ class MultiGridSolver:
             boa_unc = boa_unc[:n_bands]
         boa_unc = np.ascontiguousarray(boa_unc, dtype=np.float32)
 
-        xap_stack = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
-        xbp_stack = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
-        xcp_stack = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
+        xap_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
+        xbp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
+        xcp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
 
         def _candidate_coeff_provider(
             aot_val: float, tcwv_val: float
@@ -710,8 +718,8 @@ class MultiGridSolver:
     def _get_shape(self, arr: xr.DataArray) -> tuple[int, int]:
         """Get (ny, nx) shape from DataArray."""
         if "y" in arr.dims and "x" in arr.dims:
-            return (arr.sizes["y"], arr.sizes["x"])
-        return arr.shape
+            return (int(arr.sizes["y"]), int(arr.sizes["x"]))
+        return (int(arr.shape[0]), int(arr.shape[1]))
 
     def _create_mask(
         self,
@@ -748,15 +756,21 @@ class MultiGridSolver:
 
     def _resample_field(
         self, field: np.ndarray, target_shape: tuple[int, int]
-    ) -> np.ndarray:
+    ) -> Float64Array:
         """Resample 2D field to target shape."""
         if field.shape == target_shape:
-            return field
+            return cast("Float64Array", np.asarray(field, dtype=np.float64))
 
         data = np.ascontiguousarray(field, dtype=np.float64)
         if target_shape[0] < field.shape[0]:
-            return np.asarray(remap_to_coarse_grid(data, target_shape[0], target_shape[1]))
-        return np.asarray(interpolate_to_fine_grid(data, target_shape[0], target_shape[1]))
+            return cast(
+                "Float64Array",
+                np.asarray(remap_to_coarse_grid(data, target_shape[0], target_shape[1])),
+            )
+        return cast(
+            "Float64Array",
+            np.asarray(interpolate_to_fine_grid(data, target_shape[0], target_shape[1])),
+        )
 
     def _resample_to_grid(
         self, data: xr.DataArray, shape: tuple[int, int]
@@ -783,7 +797,7 @@ class MultiGridSolver:
         if shape[0] <= mask.shape[0] and shape[1] <= mask.shape[1]:
             # Match the center-based coarse-grid assignment used for numeric
             # field remapping so coarse validity covers the same source pixels.
-            result = np.ones(shape, dtype=bool)
+            result: BoolArray = np.ones(shape, dtype=bool)
             src = np.asarray(mask.values, dtype=bool)
             for iy in range(src.shape[0]):
                 dst_y = min(((2 * iy + 1) * shape[0]) // (2 * src.shape[0]), shape[0] - 1)

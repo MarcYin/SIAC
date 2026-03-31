@@ -18,13 +18,6 @@ from typing import Any
 
 import numpy as np
 import xarray as xr
-
-from siac.adapters.rt import build_rt_model
-from siac.app.planning import build_execution_plan
-from siac.app.requests import SceneProcessRequest
-from siac.config import SIACConfig
-from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
-from siac.workflows.pipeline import _aerosol_resolution, _call_grid_assembler, _select_band_slice
 from tools.compare_rt_backends import (
     LegacySplitEmulator,
     _geometry_on_template,
@@ -33,6 +26,13 @@ from tools.compare_rt_backends import (
     _surface_prior_from_reference,
     _with_elevation,
 )
+
+from siac.adapters.rt import build_rt_model
+from siac.app.planning import build_execution_plan
+from siac.app.requests import SceneProcessRequest
+from siac.config import SIACConfig
+from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
+from siac.workflows.pipeline import _aerosol_resolution, _call_grid_assembler, _select_band_slice
 
 LOGGER = logging.getLogger("pixel_aot_curve")
 DEFAULT_AOT_VALUES = "0.001,0.05,0.1,0.2,0.4,0.8,1.2,1.6,2.0"
@@ -330,7 +330,7 @@ def _figure_basename(label: str) -> str:
     return safe or "pixel"
 
 
-def _curve_value_bounds(pixel_result: dict[str, Any], band_result: dict[str, Any]) -> tuple[float, float]:
+def _curve_value_bounds(_pixel_result: dict[str, Any], band_result: dict[str, Any]) -> tuple[float, float]:
     values: list[float] = []
     values.extend(point["corrected_boa"] for point in band_result["lut"]["points"] if np.isfinite(point["corrected_boa"]))
     emulator = band_result.get("emulator", {})
@@ -344,10 +344,7 @@ def _curve_value_bounds(pixel_result: dict[str, Any], band_result: dict[str, Any
         return 0.0, 1.0
     ymin = float(min(values))
     ymax = float(max(values))
-    if np.isclose(ymin, ymax):
-        pad = 0.05 * max(1.0, abs(ymin))
-    else:
-        pad = 0.1 * (ymax - ymin)
+    pad = 0.05 * max(1.0, abs(ymin)) if np.isclose(ymin, ymax) else 0.1 * (ymax - ymin)
     return ymin - pad, ymax + pad
 
 
@@ -499,7 +496,7 @@ def _draw_band_panel_pil(
         _draw_dash_line(draw, (xx, chart_top), (xx, chart_bottom), color="#4d4d4d", width=2, dash=12, gap=4)
         draw.text((min(xx + 4, chart_right - 70), chart_top + 4), "Solved AOT", fill="#4d4d4d", font=small_font)
 
-    if 0.001 >= min(all_aot) and 0.001 <= max(all_aot):
+    if min(all_aot) <= 0.001 <= max(all_aot):
         xx = xmap(0.001)
         _draw_dash_line(draw, (xx, chart_top), (xx, chart_bottom), color="#8c8c8c", width=1, dash=4, gap=4)
 

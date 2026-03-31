@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
+from numpy import typing as npt
 from scipy.ndimage import maximum_filter, zoom
 
 from siac.runtime.models import copy_spatial_metadata_like
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
     from siac.runtime import CorrectionResult
 
 logger = logging.getLogger(__name__)
+
+Float32Array: TypeAlias = npt.NDArray[np.float32]
 
 
 def _shares_grid(field: xr.DataArray, template: xr.DataArray) -> bool:
@@ -97,7 +100,7 @@ def _cloud_mask_on_template_grid(mask: xr.DataArray, template: xr.DataArray) -> 
         out = zoom(dilated, (h_out / dilated.shape[0], w_out / dilated.shape[1]), order=0)
         out = out[:h_out, :w_out]
         if out.shape != (h_out, w_out):
-            padded = np.ones((h_out, w_out), dtype=np.float32)
+            padded: Float32Array = np.ones((h_out, w_out), dtype=np.float32)
             padded[: out.shape[0], : out.shape[1]] = out
             out = padded
 
