@@ -232,6 +232,53 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
     assert captured["kwargs"]["aerosol_resolution_m"] == 120.0
 
 
+def test_call_grid_assembler_falls_back_when_filter_kwarg_is_unsupported(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_rt_model,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _OpaqueAssembler:
+        @property
+        def __signature__(self):  # noqa: ANN204
+            raise ValueError("signature unavailable")
+
+        def __call__(self, obs, atmo, surface, rt_model, *, aerosol_resolution_m):  # noqa: ANN001
+            calls.append(
+                {
+                    "obs": obs,
+                    "atmo": atmo,
+                    "surface": surface,
+                    "rt_model": rt_model,
+                    "aerosol_resolution_m": aerosol_resolution_m,
+                }
+            )
+            return "solver-inputs"
+
+    out = pipeline._call_grid_assembler(
+        _OpaqueAssembler(),
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        mock_rt_model,
+        aerosol_resolution_m=120.0,
+        sharp_transition_filter=SimpleNamespace(enabled=True),
+    )
+
+    assert out == "solver-inputs"
+    assert calls == [
+        {
+            "obs": mock_observation_bundle,
+            "atmo": mock_atmospheric_state,
+            "surface": mock_surface_prior,
+            "rt_model": mock_rt_model,
+            "aerosol_resolution_m": 120.0,
+        }
+    ]
+
+
 def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
     mock_observation_bundle,
     mock_atmospheric_state,

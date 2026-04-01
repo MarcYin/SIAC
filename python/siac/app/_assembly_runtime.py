@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -240,6 +242,11 @@ def resolve_solver(config: Any) -> SolverFn:
             tcwv_bounds=tuple(config.solver.tcwv_bounds),
         )
         mg_solver = MultiGridSolver(solver_config)
+        solve_kwargs: dict[str, Any] = {}
+        with suppress(TypeError, ValueError):
+            signature = inspect.signature(mg_solver.solve)
+            if "sharp_transition_mask" in signature.parameters:
+                solve_kwargs["sharp_transition_mask"] = inputs.sharp_transition_mask
         result = mg_solver.solve(
             inputs.toa,
             inputs.surface_prior,
@@ -248,6 +255,7 @@ def resolve_solver(config: Any) -> SolverFn:
             inputs.rt_model,
             inputs.cloud_mask,
             inputs.bands,
+            **solve_kwargs,
         )
         solved_atmo = inputs.atmo_prior.with_updated_aot_tcwv(
             aot=result.aot,

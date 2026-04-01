@@ -65,7 +65,7 @@ AtmoPriorFn = Callable[
 ]
 SurfacePriorFn = Callable[[ObservationBundle, AtmosphericState | None, Any, float], SurfacePrior]
 GridAssemblerFn = Callable[
-    [ObservationBundle, AtmosphericState, SurfacePrior, Any, float, float],
+    [ObservationBundle, AtmosphericState, SurfacePrior, Any, float, float, Any | None],
     SolverInputBundle,
 ]
 SolverFn = Callable[[SolverInputBundle, Any], SolvedAtmosphere]
@@ -235,6 +235,7 @@ def _build_aot_scatter_diagnostics(
         solver_inputs.cloud_mask,
         solver_inputs.toa,
         solver_inputs.surface_prior,
+        sharp_transition_mask=solver_inputs.sharp_transition_mask,
     ).values.astype(bool)
     diagnostics: list[AOTScatterBandDiagnostics] = []
 
@@ -489,27 +490,49 @@ def _call_grid_assembler(
     rt_model: Any,
     *,
     aerosol_resolution_m: float,
+    sharp_transition_filter: Any | None = None,
 ) -> SolverInputBundle:
     grid_assembler_fn = cast("Callable[..., SolverInputBundle]", grid_assembler)
+
+    def _call_with_optional_filter(
+        *args: Any,
+        supports_filter: bool,
+        **kwargs: Any,
+    ) -> SolverInputBundle:
+        if supports_filter and sharp_transition_filter is not None:
+            kwargs["sharp_transition_filter"] = sharp_transition_filter
+        try:
+            return grid_assembler_fn(*args, **kwargs)
+        except TypeError:
+            if not supports_filter or "sharp_transition_filter" not in kwargs:
+                raise
+            kwargs.pop("sharp_transition_filter", None)
+            return grid_assembler_fn(*args, **kwargs)
+
     try:
         signature = inspect.signature(grid_assembler_fn)
     except (TypeError, ValueError):
-        return grid_assembler_fn(
+        return _call_with_optional_filter(
             obs,
             atmo,
             surface,
             rt_model,
             aerosol_resolution_m=aerosol_resolution_m,
+            supports_filter=True,
         )
 
     params = tuple(signature.parameters.values())
     if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params) or "aerosol_resolution_m" in signature.parameters:
-        return grid_assembler_fn(
+        return _call_with_optional_filter(
             obs,
             atmo,
             surface,
             rt_model,
             aerosol_resolution_m=aerosol_resolution_m,
+            supports_filter=(
+                "sharp_transition_filter" in signature.parameters
+                or any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params)
+            ),
         )
     if any(param.kind is inspect.Parameter.VAR_POSITIONAL for param in params):
         return grid_assembler_fn(obs, atmo, surface, rt_model, _DEFAULT_AUX_RESOLUTION_M, aerosol_resolution_m)
@@ -631,6 +654,7 @@ def _run_tail(
     validate_atmospheric_state(atmo)
     validate_surface_prior(surface)
     aerosol_resolution = _aerosol_resolution(config)
+    solver_config = getattr(config, "solver", None)
 
     t0 = time.monotonic()
     logger.info("M4: Assembling solver grids...")
@@ -642,6 +666,7 @@ def _run_tail(
             surface,
             rt_model,
             aerosol_resolution_m=aerosol_resolution,
+            sharp_transition_filter=getattr(solver_config, "sharp_transition_filter", None),
         )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)

@@ -314,6 +314,65 @@ class SolverBoundsConfig(SIACBaseModel):
         return value
 
 
+class SharpTransitionFilterConfig(SIACBaseModel):
+    enabled: bool = False
+    window_pixels_native: int = Field(default=7, ge=3)
+    residual_z_threshold: float = Field(default=4.0, gt=0.0)
+    gradient_z_threshold: float = Field(default=2.0, gt=0.0)
+    dilation_pixels: int = Field(default=1, ge=0)
+    solver_cell_fraction_threshold: float = Field(default=0.03, ge=0.0, le=1.0)
+    cloud_buffer_pixels: int = Field(default=2, ge=0)
+    context_window_pixels_native: int = Field(
+        default=31,
+        ge=3,
+        validation_alias=AliasChoices("context_window_pixels_native", "solver_local_window_cells"),
+    )
+    coherence_window_pixels_native: int = Field(default=9, ge=3)
+    road_std_z_threshold_native: float = Field(
+        default=2.0,
+        gt=0.0,
+        validation_alias=AliasChoices("road_std_z_threshold_native", "solver_road_std_z_threshold"),
+    )
+    road_coherence_threshold_native: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "road_coherence_threshold_native",
+            "solver_road_coherence_threshold",
+        ),
+    )
+    road_std_floor_native: float = Field(
+        default=0.02,
+        gt=0.0,
+        validation_alias=AliasChoices("road_std_floor_native", "solver_road_std_floor"),
+    )
+    point_range_z_threshold_native: float = Field(
+        default=3.0,
+        gt=0.0,
+        validation_alias=AliasChoices(
+            "point_range_z_threshold_native",
+            "solver_point_range_z_threshold",
+        ),
+    )
+    point_outlier_fraction_max_native: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "point_outlier_fraction_max_native",
+            "solver_point_outlier_fraction_max",
+        ),
+    )
+    point_range_floor_native: float = Field(
+        default=0.08,
+        gt=0.0,
+        validation_alias=AliasChoices("point_range_floor_native", "solver_point_range_floor"),
+    )
+    outlier_sigma_native: float = Field(default=2.5, gt=0.0)
+    outlier_floor_native: float = Field(default=0.01, gt=0.0)
+
+
 class SolverAlgorithmConfig(SIACBaseModel):
     aot_gamma: float = Field(default=10.0, ge=0.0)
     tcwv_gamma: float = Field(default=5.0, ge=0.0)
@@ -325,6 +384,9 @@ class SolverAlgorithmConfig(SIACBaseModel):
     use_multigrid: bool = True
     min_grid_size: int = Field(default=4, ge=2)
     bounds: SolverBoundsConfig = Field(default_factory=SolverBoundsConfig)
+    sharp_transition_filter: SharpTransitionFilterConfig = Field(
+        default_factory=SharpTransitionFilterConfig
+    )
 
     @property
     def aot_bounds(self) -> tuple[float, float]:

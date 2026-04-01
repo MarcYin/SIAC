@@ -12,6 +12,7 @@ from rasterio.enums import Resampling as RasterioResampling
 import siac.algorithms.grid.assembler as assembler_mod
 from siac.algorithms.grid.assembler import assemble_grids
 from siac.catalog import SENTINEL2A_CONFIG
+from siac.config.schema import SharpTransitionFilterConfig
 from siac.domain import SensorBand, SensorConfig
 from siac.runtime import (
     AtmosphericState,
@@ -244,6 +245,132 @@ class TestAssembleGrids:
         # 64 px @ 10m -> ~1.3 px @ 500m -> at least (1, 1)
         assert sib.toa.shape[1] <= 64
         assert sib.toa.shape[2] <= 64
+
+    @pytest.mark.parametrize(
+        ("feature_kind", "expected_cells"),
+        [
+            ("bright_point", [(0, 0)]),
+            ("dark_point", [(0, 0)]),
+            ("road", [(0, 0), (1, 0), (2, 0), (3, 0)]),
+        ],
+    )
+    def test_sharp_transition_filter_excludes_solver_cells_for_native_targets(
+        self,
+        feature_kind,
+        expected_cells,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        shape = (64, 64)
+        toa = {
+            name: xr.DataArray(
+                np.full(shape, 0.18, dtype=np.float32),
+                dims=["y", "x"],
+            )
+            for name in large_obs_bundle.toa.data_vars
+        }
+        if feature_kind == "bright_point":
+            toa["B01"].values[8, 8] = 0.95
+            toa["B02"].values[8, 8] = 0.95
+        elif feature_kind == "dark_point":
+            toa["B01"].values[8, 8] = 0.005
+            toa["B02"].values[8, 8] = 0.005
+        elif feature_kind == "road":
+            toa["B01"].values[:, 8] = 0.95
+            toa["B02"].values[:, 8] = 0.95
+        else:
+            raise AssertionError(f"Unhandled feature kind {feature_kind}")
+
+        obs = dataclasses.replace(
+            large_obs_bundle,
+            toa=xr.Dataset(toa),
+            cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        sib = assemble_grids(
+            obs,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=160.0,
+            sharp_transition_filter=SharpTransitionFilterConfig(
+                enabled=True,
+                window_pixels_native=5,
+                context_window_pixels_native=15,
+                road_std_z_threshold_native=2.0,
+                road_std_floor_native=0.01,
+                dilation_pixels=0,
+                solver_cell_fraction_threshold=0.0,
+            ),
+        )
+
+        exclusion_mask = sib.sharp_transition_mask
+        assert exclusion_mask is not None
+        assert exclusion_mask.shape == sib.cloud_mask.shape
+        for y_idx, x_idx in expected_cells:
+            assert bool(exclusion_mask.values[y_idx, x_idx])
+
+    @pytest.mark.parametrize(
+        ("feature_kind", "expected_cells"),
+        [
+            ("native_road", [(0, 0), (1, 0), (2, 0), (3, 0)]),
+            ("native_point", [(0, 0)]),
+        ],
+    )
+    def test_sharp_transition_filter_native_local_metrics_cover_realistic_subgrid_features(
+        self,
+        feature_kind,
+        expected_cells,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        shape = (64, 64)
+        toa = {
+            name: xr.DataArray(
+                np.full(shape, 0.18, dtype=np.float32),
+                dims=["y", "x"],
+            )
+            for name in large_obs_bundle.toa.data_vars
+        }
+        if feature_kind == "native_road":
+            toa["B01"].values[:, 8:12] = 0.30
+            toa["B02"].values[:, 8:12] = 0.30
+        elif feature_kind == "native_point":
+            toa["B01"].values[8, 8] = 0.40
+            toa["B02"].values[8, 8] = 0.40
+        else:
+            raise AssertionError(f"Unhandled feature kind {feature_kind}")
+
+        obs = dataclasses.replace(
+            large_obs_bundle,
+            toa=xr.Dataset(toa),
+            cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        sib = assemble_grids(
+            obs,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=160.0,
+            sharp_transition_filter=SharpTransitionFilterConfig(
+                enabled=True,
+                window_pixels_native=5,
+                context_window_pixels_native=15,
+                dilation_pixels=0,
+                solver_cell_fraction_threshold=0.0,
+            ),
+        )
+
+        exclusion_mask = sib.sharp_transition_mask
+        assert exclusion_mask is not None
+        assert exclusion_mask.shape == sib.cloud_mask.shape
+        for y_idx, x_idx in expected_cells:
+            assert bool(exclusion_mask.values[y_idx, x_idx])
 
     def test_toa_downsampling_uses_gdal_average_when_georeferenced(
         self,

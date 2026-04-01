@@ -123,6 +123,16 @@ class TestValidateSolverInputBundle:
         assert sib.aux_resolution_m > 0
         assert sib.aerosol_resolution_m > 0
 
+    def test_validate_sib_rejects_mismatched_sharp_transition_mask(
+        self,
+        mock_solver_input_bundle,
+    ):
+        sib = mock_solver_input_bundle
+        bad_mask = xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"])
+        bad_sib = dataclasses.replace(sib, sharp_transition_mask=bad_mask)
+        with pytest.raises(ValidationError, match="sharp_transition_mask shape"):
+            validate_solver_input_bundle(bad_sib)
+
 
 # ── _validate_solved_atmosphere ───────────────────────────────────────
 

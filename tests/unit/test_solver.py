@@ -19,8 +19,12 @@ from siac.algorithms.solver.cost import (
     apply_smoothness_filter,
     compute_laplacian_eigenvalues,
 )
-from siac.algorithms.solver.multigrid import MultiGridConfig, MultiGridSolver
-from siac.runtime import AtmosphericState
+from siac.algorithms.solver.multigrid import (
+    MultiGridConfig,
+    MultiGridSolver,
+    build_solver_valid_mask,
+)
+from siac.runtime import AtmosphericState, SurfacePrior
 
 
 def _quadratic_refine_python_reference(
@@ -257,6 +261,58 @@ class TestMultiGridConfig:
 
         assert config.aot_bounds[0] == 0.01
         assert config.tcwv_bounds[1] == 5.0
+
+
+class TestSharpTransitionObservationExclusion:
+    def test_build_solver_valid_mask_honors_sharp_transition_mask(self) -> None:
+        cloud_mask = xr.DataArray(
+            np.array([[False, False], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
+        toa = xr.DataArray(
+            np.full((1, 2, 2), 0.2, dtype=np.float32),
+            dims=["band", "y", "x"],
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones((2, 2), dtype=bool), dims=["y", "x"]),
+        )
+        exclusion_mask = xr.DataArray(
+            np.array([[False, True], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
+
+        valid = build_solver_valid_mask(
+            cloud_mask,
+            toa,
+            surface_prior,
+            sharp_transition_mask=exclusion_mask,
+        )
+
+        expected = np.array([[True, False], [True, True]], dtype=bool)
+        np.testing.assert_array_equal(valid.values, expected)
+
+    def test_build_solver_qa_dataset_exposes_sharp_transition_layer(self) -> None:
+        solver = MultiGridSolver()
+        template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])
+
+        qa = solver._build_solver_qa_dataset(
+            template=template,
+            valid_mask=np.array([[True, True], [False, True]], dtype=bool),
+            aot=np.full((2, 2), 0.2, dtype=np.float32),
+            tcwv=np.full((2, 2), 2.0, dtype=np.float32),
+            invalid_mask=np.array([[False, False], [False, True]], dtype=bool),
+            zero_obs_mask=np.zeros((2, 2), dtype=bool),
+            sharp_transition_mask=np.array([[False, True], [True, False]], dtype=bool),
+        )
+
+        assert "sharp_transition_excluded" in qa.data_vars
+        np.testing.assert_array_equal(
+            qa["sharp_transition_excluded"].values,
+            np.array([[False, True], [True, False]], dtype=bool),
+        )
 
 
 class TestMultiGridSolver:

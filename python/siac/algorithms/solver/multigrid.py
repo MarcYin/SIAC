@@ -52,6 +52,8 @@ def build_solver_valid_mask(
     cloud_mask: xr.DataArray,
     toa: xr.DataArray,
     surface_prior: SurfacePrior,
+    *,
+    sharp_transition_mask: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Build the same valid-pixel mask used by the aerosol solver."""
     valid = ~cloud_mask.values.astype(bool)
@@ -66,6 +68,8 @@ def build_solver_valid_mask(
         if surface_mask.ndim == 3:
             surface_mask = np.all(surface_mask, axis=0)
         valid = valid & surface_mask.astype(bool)
+    if sharp_transition_mask is not None:
+        valid = valid & ~sharp_transition_mask.values.astype(bool)
 
     return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
 
@@ -151,6 +155,7 @@ class MultiGridSolver:
         rt_model: Any,  # RTModelBackend protocol
         cloud_mask: xr.DataArray,
         bands: list[SensorBand],
+        sharp_transition_mask: xr.DataArray | None = None,
     ) -> SolverResult:
         """
         Solve for atmospheric parameters (AOT, TCWV).
@@ -177,7 +182,12 @@ class MultiGridSolver:
         logger.info(f"Starting multi-grid solver for {full_shape} image")
 
         # Create valid pixel mask (exclude clouds and invalid data)
-        mask = self._create_mask(cloud_mask, toa, surface_prior)
+        mask = self._create_mask(
+            cloud_mask,
+            toa,
+            surface_prior,
+            sharp_transition_mask=sharp_transition_mask,
+        )
         n_valid = int(np.count_nonzero(mask.values))
         logger.info(f"Valid pixels: {n_valid} ({100*n_valid/mask.size:.1f}%)")
 
@@ -369,6 +379,9 @@ class MultiGridSolver:
             tcwv=tcwv,
             invalid_mask=final_invalid_mask,
             zero_obs_mask=final_zero_obs_mask,
+            sharp_transition_mask=sharp_transition_mask.values.astype(bool)
+            if sharp_transition_mask is not None
+            else None,
         )
         if level_history:
             level_history[-1].update(self._summarize_solver_qa(qa))
@@ -452,10 +465,16 @@ class MultiGridSolver:
         tcwv: np.ndarray,
         invalid_mask: np.ndarray | None,
         zero_obs_mask: np.ndarray | None,
+        sharp_transition_mask: np.ndarray | None,
     ) -> xr.Dataset:
         valid = np.asarray(valid_mask, dtype=bool)
         invalid = np.zeros_like(valid, dtype=bool) if invalid_mask is None else np.asarray(invalid_mask, dtype=bool) & valid
         zero_obs = np.zeros_like(valid, dtype=bool) if zero_obs_mask is None else np.asarray(zero_obs_mask, dtype=bool) & valid
+        sharp_transition = (
+            np.zeros_like(valid, dtype=bool)
+            if sharp_transition_mask is None
+            else np.asarray(sharp_transition_mask, dtype=bool)
+        )
         aot_lower, aot_upper = self._boundary_hit_masks(
             np.asarray(aot, dtype=np.float32),
             self.config.aot_bounds,
@@ -467,12 +486,13 @@ class MultiGridSolver:
             valid,
         )
         parameter_boundary = aot_lower | aot_upper | tcwv_lower | tcwv_upper
-        low_quality = invalid | parameter_boundary
+        low_quality = invalid | parameter_boundary | sharp_transition
 
         return xr.Dataset(
             {
                 "invalid_retrieval": self._mask_to_data_array(invalid, template),
                 "zero_obs_support": self._mask_to_data_array(zero_obs, template),
+                "sharp_transition_excluded": self._mask_to_data_array(sharp_transition, template),
                 "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
                 "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
                 "tcwv_lower_boundary": self._mask_to_data_array(tcwv_lower, template),
@@ -487,6 +507,9 @@ class MultiGridSolver:
         return {
             "qa_final_invalid_pixels": float(np.count_nonzero(np.asarray(qa["invalid_retrieval"].values, dtype=bool))),
             "qa_final_zero_obs_pixels": float(np.count_nonzero(np.asarray(qa["zero_obs_support"].values, dtype=bool))),
+            "qa_final_sharp_transition_pixels": float(
+                np.count_nonzero(np.asarray(qa["sharp_transition_excluded"].values, dtype=bool))
+            ),
             "qa_final_aot_lower_boundary_pixels": float(np.count_nonzero(np.asarray(qa["aot_lower_boundary"].values, dtype=bool))),
             "qa_final_aot_upper_boundary_pixels": float(np.count_nonzero(np.asarray(qa["aot_upper_boundary"].values, dtype=bool))),
             "qa_final_tcwv_lower_boundary_pixels": float(np.count_nonzero(np.asarray(qa["tcwv_lower_boundary"].values, dtype=bool))),
@@ -726,9 +749,16 @@ class MultiGridSolver:
         cloud_mask: xr.DataArray,
         toa: xr.DataArray,
         surface_prior: SurfacePrior,
+        *,
+        sharp_transition_mask: xr.DataArray | None = None,
     ) -> xr.DataArray:
         """Create combined valid pixel mask."""
-        return build_solver_valid_mask(cloud_mask, toa, surface_prior)
+        return build_solver_valid_mask(
+            cloud_mask,
+            toa,
+            surface_prior,
+            sharp_transition_mask=sharp_transition_mask,
+        )
 
     def _compute_grid_levels(
         self, full_shape: tuple[int, int]

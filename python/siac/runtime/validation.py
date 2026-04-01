@@ -108,6 +108,20 @@ def validate_solver_input_bundle(sib: SolverInputBundle) -> None:
         raise ValidationError("aux_resolution_m must be positive")
     if sib.aerosol_resolution_m <= 0:
         raise ValidationError("aerosol_resolution_m must be positive")
+    if sib.sharp_transition_mask is not None:
+        expected_shape = sib.cloud_mask.shape
+        actual_shape = sib.sharp_transition_mask.shape
+        if actual_shape != expected_shape:
+            raise ValidationError(
+                "sharp_transition_mask shape "
+                f"{actual_shape} must match cloud_mask shape {expected_shape}"
+            )
+        if tuple(sib.sharp_transition_mask.dims) != tuple(sib.cloud_mask.dims):
+            raise ValidationError(
+                "sharp_transition_mask dims "
+                f"{tuple(sib.sharp_transition_mask.dims)} must match "
+                f"cloud_mask dims {tuple(sib.cloud_mask.dims)}"
+            )
 
 
 def _validate_mask_dataset_shape(name: str, dataset: xr.Dataset, template: xr.DataArray) -> None:
