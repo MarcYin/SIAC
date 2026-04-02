@@ -8,14 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-import numpy as np
-
 from siac.adapters.output import ConfiguredOutputWriter
 from siac.adapters.rt import build_rt_model
 from siac.adapters.satellite import detect_sensor, get_preprocessor
 from siac.algorithms.correction import AtmosphericCorrector, CorrectionResult
 from siac.algorithms.solver import MultiGridConfig, MultiGridSolver
 from siac.domain.aoi import AOI
+from siac.geo.resample import (
+    resample_field_for_correction as _resample_field_for_correction,
+)
+from siac.geo.resample import (
+    resample_field_to_template as _resample_field_to_template,  # noqa: F401
+)
+from siac.geo.resample import (
+    shares_template_grid as _shares_template_grid,  # noqa: F401
+)
 from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
@@ -27,6 +34,7 @@ from siac.runtime import (
 if TYPE_CHECKING:
     import xarray as xr
 
+    from siac.domain.protocols import RTModelBackend
     from siac.domain.sensors import SensorConfig
     from siac.workflows.pipeline import CorrectorFn, GridAssemblerFn, PreprocessorFn, SolverFn
 
@@ -240,6 +248,7 @@ def resolve_solver(config: Any) -> SolverFn:
             tcwv_gamma=config.solver.tcwv_gamma,
             aot_bounds=tuple(config.solver.aot_bounds),
             tcwv_bounds=tuple(config.solver.tcwv_bounds),
+            band_weight_power=getattr(config.solver, "alpha", -1.6),
         )
         mg_solver = MultiGridSolver(solver_config)
         solve_kwargs: dict[str, Any] = {}
@@ -279,126 +288,6 @@ def resolve_solver(config: Any) -> SolverFn:
     return _default_solver
 
 
-def _shares_template_grid(field: Any, template: Any) -> bool:
-    """Return True when a field already matches the template's spatial grid."""
-    if tuple(getattr(field, "shape", ())) != tuple(getattr(template, "shape", ())):
-        return False
-
-    field_dims = tuple(getattr(field, "dims", ()))
-    template_dims = tuple(getattr(template, "dims", ()))
-    if field_dims != template_dims:
-        return False
-
-    field_coords = getattr(field, "coords", {})
-    template_coords = getattr(template, "coords", {})
-    for axis in template_dims:
-        field_has_coord = axis in field_coords
-        template_has_coord = axis in template_coords
-        if field_has_coord != template_has_coord:
-            return False
-        if not field_has_coord:
-            continue
-        field_values = np.asarray(field.coords[axis].values)
-        template_values = np.asarray(template.coords[axis].values)
-        if not np.array_equal(field_values, template_values, equal_nan=True):
-            return False
-    return True
-
-
-def _resample_field_to_template(field: Any, template: Any) -> Any:
-    if _shares_template_grid(field, template):
-        return field
-    if (
-        len(field.dims) == 2
-        and field.dims == template.dims
-        and all(dim in field.coords for dim in field.dims)
-        and all(dim in template.coords for dim in template.dims)
-    ):
-        try:
-            return field.interp(
-                coords={dim: template.coords[dim] for dim in template.dims},
-                method="linear",
-            )
-        except Exception:
-            pass
-
-    src = np.asarray(field.values, dtype=np.float32)
-    if src.ndim != 2 or len(template.dims) != 2:
-        return field
-
-    from scipy import ndimage
-
-    h_out = int(template.sizes[template.dims[0]])
-    w_out = int(template.sizes[template.dims[1]])
-    if src.shape[0] == 0 or src.shape[1] == 0:
-        out: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
-    else:
-        out = ndimage.zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=1)
-        out = out[:h_out, :w_out]
-        if out.shape != (h_out, w_out):
-            padded: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
-            padded[: out.shape[0], : out.shape[1]] = out
-            out = padded
-
-    return field.__class__(
-        out,
-        dims=template.dims,
-        coords={d: template.coords[d] for d in template.dims if d in template.coords},
-    )
-
-
-def _fill_nonfinite_like_template(
-    field: Any,
-    source: Any,
-    template: Any,
-    *,
-    fallback_value: float = 0.0,
-) -> Any:
-    values = np.asarray(field.values, dtype=np.float32)
-    if np.all(np.isfinite(values)):
-        return field
-
-    filled = values.copy()
-    if (
-        len(source.dims) == 2
-        and source.dims == template.dims
-        and all(dim in source.coords for dim in source.dims)
-        and all(dim in template.coords for dim in template.dims)
-    ):
-        try:
-            nearest = source.interp(
-                coords={dim: template.coords[dim] for dim in template.dims},
-                method="nearest",
-            )
-            nearest_values = np.asarray(nearest.values, dtype=np.float32)
-            filled = np.where(np.isfinite(filled), filled, nearest_values)
-        except Exception:
-            pass
-
-    if not np.all(np.isfinite(filled)):
-        source_values = np.asarray(source.values, dtype=np.float32)
-        finite_source = source_values[np.isfinite(source_values)]
-        fill_value = float(finite_source.mean()) if finite_source.size else float(fallback_value)
-        filled = np.where(np.isfinite(filled), filled, np.float32(fill_value))
-
-    return field.copy(data=filled)
-
-
-def _resample_field_to_template_for_correction(
-    field: Any,
-    template: Any,
-    *,
-    fallback_value: float = 0.0,
-) -> Any:
-    """Resample atmosphere fields to the correction grid and guarantee finiteness."""
-    return _fill_nonfinite_like_template(
-        _resample_field_to_template(field, template),
-        field,
-        template,
-        fallback_value=fallback_value,
-    )
-
-
 def resolve_corrector(_config: Any) -> CorrectorFn:
     def _default_corrector(
         obs: ObservationBundle,
@@ -408,19 +297,19 @@ def resolve_corrector(_config: Any) -> CorrectorFn:
         corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
         atmo = solved.atmo_state
         matched_atmo = AtmosphericState(
-            aot=_resample_field_to_template_for_correction(atmo.aot, atmo.aot),
-            tcwv=_resample_field_to_template_for_correction(atmo.tcwv, atmo.aot),
-            tco3=_resample_field_to_template_for_correction(atmo.tco3, atmo.aot),
-            aot_unc=_resample_field_to_template_for_correction(atmo.aot_unc, atmo.aot),
-            tcwv_unc=_resample_field_to_template_for_correction(atmo.tcwv_unc, atmo.aot),
-            tco3_unc=_resample_field_to_template_for_correction(atmo.tco3_unc, atmo.aot),
-            elevation=_resample_field_to_template_for_correction(atmo.elevation, atmo.aot),
+            aot=_resample_field_for_correction(atmo.aot, atmo.aot),
+            tcwv=_resample_field_for_correction(atmo.tcwv, atmo.aot),
+            tco3=_resample_field_for_correction(atmo.tco3, atmo.aot),
+            aot_unc=_resample_field_for_correction(atmo.aot_unc, atmo.aot),
+            tcwv_unc=_resample_field_for_correction(atmo.tcwv_unc, atmo.aot),
+            tco3_unc=_resample_field_for_correction(atmo.tco3_unc, atmo.aot),
+            elevation=_resample_field_for_correction(atmo.elevation, atmo.aot),
         )
         coeff_geometry = GeometryAngles(
-            sza=_resample_field_to_template_for_correction(obs.geometry.sza, atmo.aot),
-            saa=_resample_field_to_template_for_correction(obs.geometry.saa, atmo.aot),
-            vza=_resample_field_to_template_for_correction(obs.geometry.vza, atmo.aot),
-            vaa=_resample_field_to_template_for_correction(obs.geometry.vaa, atmo.aot),
+            sza=_resample_field_for_correction(obs.geometry.sza, atmo.aot),
+            saa=_resample_field_for_correction(obs.geometry.saa, atmo.aot),
+            vza=_resample_field_for_correction(obs.geometry.vza, atmo.aot),
+            vaa=_resample_field_for_correction(obs.geometry.vaa, atmo.aot),
         )
         corrected = corrector_obj.correct(obs.toa, coeff_geometry, matched_atmo, obs.cloud_mask)
         if not isinstance(corrected, CorrectionResult):
@@ -447,14 +336,12 @@ def resolve_rt_model_for_pipeline(
     auth: Any = None,
     *,
     sensor_config: SensorConfig | None = None,
-) -> Any:
-    return build_rt_model(config, auth=auth, sensor_config=sensor_config)
+) -> RTModelBackend:
+    return build_rt_model(config, auth=auth, sensor_config=sensor_config)  # type: ignore[no-any-return]
 
 
 __all__ = [
     "PreprocessorRuntime",
-    "_resample_field_to_template",
-    "_shares_template_grid",
     "build_preprocessor_runtime",
     "resolve_corrector",
     "resolve_grid_assembler",

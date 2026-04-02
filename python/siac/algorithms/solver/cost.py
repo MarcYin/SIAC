@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
@@ -50,8 +50,8 @@ class CostFunctionConfig:
     tcwv_min: float = 0.0
     tcwv_max: float = 8.0
 
-    # Band weighting power (alpha = -2 weights shorter wavelengths more)
-    band_weight_power: float = -2.0
+    # Band weighting power (negative values weight shorter wavelengths more for AOT)
+    band_weight_power: float = -1.6
 
     # Minimum uncertainty floor
     min_boa_unc: float = 0.001
@@ -73,7 +73,7 @@ class CostFunction:
         surface_prior: SurfacePrior,
         geometry: GeometryAngles,
         atmo_prior: AtmosphericState,
-        rt_model: Any,  # RTModelBackend protocol
+        rt_model: RTModelBackend,
         bands: list[SensorBand],
         mask: xr.DataArray,
         config: CostFunctionConfig | None = None,
@@ -112,6 +112,19 @@ class CostFunction:
 
         # Setup prior arrays
         self._setup_priors()
+
+        # Pre-allocate mutable DataArrays for the optimizer inner loop to
+        # avoid reconstructing xarray objects on every L-BFGS-B iteration.
+        self._aot_da = xr.DataArray(
+            self.atmo_prior.aot.values.copy(),
+            dims=self.atmo_prior.aot.dims,
+            coords=self.atmo_prior.aot.coords,
+        )
+        self._tcwv_da = xr.DataArray(
+            self.atmo_prior.tcwv.values.copy(),
+            dims=self.atmo_prior.tcwv.dims,
+            coords=self.atmo_prior.tcwv.coords,
+        )
 
         # Setup band weights
         self._setup_band_weights()
@@ -261,10 +274,12 @@ class CostFunction:
         dj_aot = np.zeros(self.shape)
         dj_tcwv = np.zeros(self.shape)
 
-        # Create temporary atmospheric state with current parameters
+        # Update pre-allocated DataArrays in-place to avoid xarray overhead
+        self._aot_da.values[:] = aot
+        self._tcwv_da.values[:] = tcwv
         atmo_state = self.atmo_prior.with_updated_aot_tcwv(
-            aot=xr.DataArray(aot, dims=self.atmo_prior.aot.dims),
-            tcwv=xr.DataArray(tcwv, dims=self.atmo_prior.tcwv.dims),
+            aot=self._aot_da,
+            tcwv=self._tcwv_da,
         )
 
         # Compute RT coefficients for all bands (batch if supported)
@@ -486,18 +501,13 @@ def create_sparse_laplacian(nx: int, ny: int) -> sparse.csc_matrix:
     off_diag_ny = -1 * np.ones(n)
 
     # Boundary adjustments (Neumann: reduce diagonal at edges)
-    for i in range(n):
-        row = i // ny
-        col = i % ny
-
-        if row == 0:
-            main_diag[i] -= 1
-        if row == nx - 1:
-            main_diag[i] -= 1
-        if col == 0:
-            main_diag[i] -= 1
-        if col == ny - 1:
-            main_diag[i] -= 1
+    indices = np.arange(n)
+    rows = indices // ny
+    cols = indices % ny
+    main_diag[rows == 0] -= 1.0
+    main_diag[rows == nx - 1] -= 1.0
+    main_diag[cols == 0] -= 1.0
+    main_diag[cols == ny - 1] -= 1.0
 
     # Build sparse matrix
     laplacian = sparse.diags(

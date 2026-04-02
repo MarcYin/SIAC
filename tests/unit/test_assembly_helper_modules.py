@@ -406,7 +406,8 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
         xr.DataArray(np.empty((0, 0), dtype=np.float32), dims=["y", "x"]),
         template,
     )
-    assert np.isnan(empty.values).all()
+    # Empty source is gap-filled to 0.0 (fallback when no finite source values exist)
+    assert np.all(empty.values == 0.0)
 
     three_d = xr.DataArray(np.ones((1, 2, 2), dtype=np.float32), dims=["band", "y", "x"])
     assert runtime_mod._resample_field_to_template(three_d, template) is three_d
@@ -646,8 +647,9 @@ def test_resample_field_to_template_falls_back_after_interp_error_and_pads_zoom(
 
     assert out.shape == (3, 3)
     np.testing.assert_allclose(out.values[0, :2], np.array([5.0, 6.0], dtype=np.float32))
-    assert np.isnan(out.values[0, 2])
-    assert np.isnan(out.values[1:, :]).all()
+    # NaN regions are gap-filled with source mean (1.0 + 2.0) / 2 = 1.5
+    assert np.isfinite(out.values[0, 2])
+    assert np.isfinite(out.values[1:, :]).all()
 
 
 def test_surface_helper_selection_and_mapping_runtime(

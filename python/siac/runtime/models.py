@@ -100,7 +100,8 @@ class GeometryAngles:
 
     @property
     def raa(self) -> xr.DataArray:
-        return _as_data_array(self.vaa - self.saa)
+        """Relative azimuth angle in radians, wrapped to [0, 2*pi)."""
+        return _as_data_array(np.abs(self.vaa - self.saa) % (2.0 * np.pi))
 
     @property
     def cos_sza(self) -> xr.DataArray:
@@ -226,7 +227,9 @@ class RTCoefficients:
 
     def apply_correction(self, toa: xr.DataArray) -> xr.DataArray:
         y = _as_data_array(self.xap * toa - self.xbp)
-        return _as_data_array(y / (1.0 + self.xcp * y))
+        denom = _as_data_array(1.0 + self.xcp * y)
+        stable = _as_data_array(np.isfinite(denom) & (np.abs(denom) > 1.0e-10))
+        return _as_data_array((y / denom).where(stable))
 
     def simulate_toa(self, boa: xr.DataArray) -> xr.DataArray:
         """Forward-simulate dimensionless TOA reflectance from BOA reflectance."""

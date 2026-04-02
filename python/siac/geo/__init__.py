@@ -34,8 +34,24 @@ from siac.geo.reprojection import (
     transform_bounds,
     transform_points,
 )
+from siac.geo.resample import (
+    axis_resolution,
+    fill_nonfinite_like_template,
+    resample_coefficients_to_template,
+    resample_field_for_correction,
+    resample_field_to_template,
+    resample_mask_to_template,
+    shares_template_grid,
+)
 
 __all__ = [
+    "axis_resolution",
+    "fill_nonfinite_like_template",
+    "resample_coefficients_to_template",
+    "resample_field_for_correction",
+    "resample_field_to_template",
+    "resample_mask_to_template",
+    "shares_template_grid",
     "align_grids",
     "bounds_area",
     "bounds_contains",

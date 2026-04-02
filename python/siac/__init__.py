@@ -13,6 +13,7 @@ Example usage:
     >>> result = siac.process("/path/to/S2_SAFE/")
 """
 
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -22,44 +23,24 @@ except PackageNotFoundError:
     __version__ = "2.0.0-dev"
 
 
-# Lazy imports for main API
+# Lazy imports for main API: maps name -> (module_path, attribute_name)
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "SIAC": ("siac.api", "SIAC"),
+    "SIACConfig": ("siac.config", "SIACConfig"),
+    "PreparedMonthlyCompositeBuildResult": ("siac.api", "PreparedMonthlyCompositeBuildResult"),
+    "process_sentinel2": ("siac.api", "process_sentinel2"),
+    "prepare_monthly_composites": ("siac.api", "prepare_monthly_composites"),
+    "process_landsat8": ("siac.api", "process_landsat8"),
+    "resolve_s2_input": ("siac.api", "resolve_s2_input"),
+    "siac_process_s2": ("siac.api", "siac_process_s2"),
+    "search_sentinel2": ("siac.api", "search_sentinel2"),
+}
+
+
 def __getattr__(name: str) -> Any:
-    if name == "SIAC":
-        from siac.api import SIAC
-
-        return SIAC
-    if name == "SIACConfig":
-        from siac.config import SIACConfig
-
-        return SIACConfig
-    if name == "PreparedMonthlyCompositeBuildResult":
-        from siac.api import PreparedMonthlyCompositeBuildResult
-
-        return PreparedMonthlyCompositeBuildResult
-    if name == "process_sentinel2":
-        from siac.api import process_sentinel2
-
-        return process_sentinel2
-    if name == "prepare_monthly_composites":
-        from siac.api import prepare_monthly_composites
-
-        return prepare_monthly_composites
-    if name == "process_landsat8":
-        from siac.api import process_landsat8
-
-        return process_landsat8
-    if name == "resolve_s2_input":
-        from siac.api import resolve_s2_input
-
-        return resolve_s2_input
-    if name == "siac_process_s2":
-        from siac.api import siac_process_s2
-
-        return siac_process_s2
-    if name == "search_sentinel2":
-        from siac.api import search_sentinel2
-
-        return search_sentinel2
+    if name in _LAZY_IMPORTS:
+        module_path, attr_name = _LAZY_IMPORTS[name]
+        return getattr(import_module(module_path), attr_name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

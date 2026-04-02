@@ -36,10 +36,10 @@ class TestGeometryAngles:
         np.testing.assert_allclose(geom.sza.values, 0.5)
 
     def test_raa_property(self, sample_angles):
-        """RAA should be computed from vaa - saa."""
+        """RAA should be |vaa - saa| wrapped to [0, 2*pi)."""
         geom = GeometryAngles(**sample_angles)
 
-        expected_raa = 1.5 - 2.5  # vaa - saa
+        expected_raa = np.abs(1.5 - 2.5) % (2.0 * np.pi)  # |vaa - saa| mod 2pi
         np.testing.assert_allclose(geom.raa.values, expected_raa)
 
     def test_cos_properties(self, sample_angles):
