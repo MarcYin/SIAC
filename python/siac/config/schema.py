@@ -452,7 +452,7 @@ class _ConfigShortcutsMixin:
     properties that navigate into those sub-structures.
     """
 
-    algorithms: AlgorithmsConfig  # type: ignore[assignment]
+    algorithms: AlgorithmsConfig
     runtime: RuntimeConfig
     output: OutputConfig
     paths: PathsConfig | ResolvedPathsConfig
@@ -643,7 +643,7 @@ class ResolvedConfig(_ConfigShortcutsMixin, SIACBaseModel):
     paths: ResolvedPathsConfig
     auth: ResolvedAuthConfig
     providers: ResolvedProvidersConfig
-    algorithms: ResolvedAlgorithmsConfig  # type: ignore[assignment]
+    algorithms: ResolvedAlgorithmsConfig
     runtime: RuntimeConfig
     output: OutputConfig
 
