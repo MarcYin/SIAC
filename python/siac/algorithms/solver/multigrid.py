@@ -100,6 +100,9 @@ class MultiGridConfig:
     aot_gamma: float = 10.0
     tcwv_gamma: float = 5.0
 
+    # Band weighting power (negative values weight shorter wavelengths more)
+    band_weight_power: float = -1.6
+
     # Convergence threshold for early stopping
     rel_tol: float = 1e-4
 
@@ -152,7 +155,7 @@ class MultiGridSolver:
         surface_prior: SurfacePrior,
         geometry: GeometryAngles,
         atmo_prior: AtmosphericState,
-        rt_model: Any,  # RTModelBackend protocol
+        rt_model: RTModelBackend,
         cloud_mask: xr.DataArray,
         bands: list[SensorBand],
         sharp_transition_mask: xr.DataArray | None = None,
@@ -253,6 +256,7 @@ class MultiGridSolver:
                 aot_max=self.config.aot_bounds[1],
                 tcwv_min=self.config.tcwv_bounds[0],
                 tcwv_max=self.config.tcwv_bounds[1],
+                band_weight_power=self.config.band_weight_power,
             )
 
             # Resample data to current grid
@@ -405,7 +409,7 @@ class MultiGridSolver:
         return result
 
     @staticmethod
-    def _rt_model_supports_jacobian(rt_model: Any) -> bool:
+    def _rt_model_supports_jacobian(rt_model: RTModelBackend) -> bool:
         """Return whether backend can provide per-pixel RT Jacobians."""
         fn = getattr(rt_model, "supports_jacobian", None)
         if callable(fn):
@@ -539,7 +543,7 @@ class MultiGridSolver:
         surface_prior: SurfacePrior,
         geometry: GeometryAngles,
         atmo_prior: AtmosphericState,
-        rt_model: Any,
+        rt_model: RTModelBackend,
         mask: xr.DataArray,
         bands: list[SensorBand],
         cost_config: CostFunctionConfig,
@@ -980,7 +984,7 @@ def solve_atmospheric_parameters(
     surface_prior: SurfacePrior,
     geometry: GeometryAngles,
     atmo_prior: AtmosphericState,
-    rt_model: Any,
+    rt_model: RTModelBackend,
     cloud_mask: xr.DataArray,
     bands: list[SensorBand],
     config: MultiGridConfig | None = None,

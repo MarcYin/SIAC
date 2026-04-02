@@ -13,7 +13,6 @@ from siac.app.assembly import (
     _build_kernel_surface_prior,
     _build_monthly_surface_prior,
     _build_whittaker_surface_prior,
-    _resample_field_to_template,
     resolve_atmo_provider,
     resolve_corrector,
     resolve_grid_assembler,
@@ -23,6 +22,7 @@ from siac.app.assembly import (
     resolve_solver,
     resolve_surface_prior_provider,
 )
+from siac.geo.resample import resample_field_to_template as _resample_field_to_template
 from siac.observability import ExecutionObserver, bind_execution_observer
 
 

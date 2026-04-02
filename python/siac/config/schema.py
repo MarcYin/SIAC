@@ -8,7 +8,7 @@ resolution, and snapshotting live in sibling modules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -168,13 +168,6 @@ class AtmoProviderConfig(SIACBaseModel):
     def provider(self) -> AtmoProviderKind:
         return self.kind
 
-    @provider.setter
-    def provider(self, value: str) -> None:
-        allowed = {"cams", "merra2", "mcd19", "vnp19", "era5", "user"}
-        if value not in allowed:
-            raise ValueError(f"Invalid atmo provider {value!r}; expected one of {sorted(allowed)!r}.")
-        self.kind = cast("AtmoProviderKind", value)
-
 
 class BRDFProviderConfig(SIACBaseModel):
     kind: BRDFProviderKind = Field(
@@ -202,13 +195,6 @@ class BRDFProviderConfig(SIACBaseModel):
     @property
     def provider(self) -> BRDFProviderKind:
         return self.kind
-
-    @provider.setter
-    def provider(self, value: str) -> None:
-        allowed = {"mcd43", "vnp43", "mcd19", "gee", "zarr", "user"}
-        if value not in allowed:
-            raise ValueError(f"Invalid brdf provider {value!r}; expected one of {sorted(allowed)!r}.")
-        self.kind = cast("BRDFProviderKind", value)
 
 
 class S2ProviderConfig(SIACBaseModel):
@@ -242,15 +228,6 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
     @property
     def provider(self) -> MonthlyCompositeProviderKind:
         return self.kind
-
-    @provider.setter
-    def provider(self, value: str) -> None:
-        allowed = {"generated_brdf", "user_callable", "prepared_store"}
-        if value not in allowed:
-            raise ValueError(
-                f"Invalid monthly composite provider {value!r}; expected one of {sorted(allowed)!r}."
-            )
-        self.kind = cast("MonthlyCompositeProviderKind", value)
 
 
 class ProvidersConfig(SIACBaseModel):
@@ -467,29 +444,18 @@ class OutputConfig(SIACBaseModel):
     defaults: OutputDefaultsConfig = Field(default_factory=OutputDefaultsConfig)
 
 
-class SystemConfig(SIACBaseModel):
-    paths: PathsConfig = Field(default_factory=PathsConfig)
-    auth: AuthConfig = Field(default_factory=AuthConfig)
-    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
-    algorithms: AlgorithmsConfig = Field(default_factory=AlgorithmsConfig)
-    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
-    output: OutputConfig = Field(default_factory=OutputConfig)
+class _ConfigShortcutsMixin:
+    """Shared shortcut properties for both SystemConfig and ResolvedConfig.
 
-    @property
-    def atmo_prior(self) -> AtmoProviderConfig:
-        return self.providers.atmo
+    Both config classes have identical ``algorithms``, ``runtime``, ``output``,
+    and ``paths`` sub-structures. This mixin deduplicates the accessor
+    properties that navigate into those sub-structures.
+    """
 
-    @property
-    def brdf(self) -> BRDFProviderConfig:
-        return self.providers.brdf
-
-    @property
-    def surface_prior(self) -> SurfacePriorAlgorithmConfig:
-        return self.algorithms.surface_prior
-
-    @property
-    def rt_model(self) -> RTAlgorithmConfig:
-        return self.algorithms.rt
+    algorithms: AlgorithmsConfig  # type: ignore[assignment]
+    runtime: RuntimeConfig
+    output: OutputConfig
+    paths: PathsConfig | ResolvedPathsConfig
 
     @property
     def solver(self) -> SolverAlgorithmConfig:
@@ -498,14 +464,6 @@ class SystemConfig(SIACBaseModel):
     @property
     def cloud_mask(self) -> CloudMaskAlgorithmConfig:
         return self.algorithms.cloud_mask
-
-    @property
-    def s2_data(self) -> S2ProviderConfig:
-        return self.providers.s2
-
-    @property
-    def monthly_composites(self) -> MonthlyCompositeProviderConfig:
-        return self.providers.monthly_composites
 
     @property
     def execution(self) -> ExecutionRuntimeConfig:
@@ -532,6 +490,39 @@ class SystemConfig(SIACBaseModel):
         return self.runtime.chunk_size
 
 
+class SystemConfig(_ConfigShortcutsMixin, SIACBaseModel):
+    paths: PathsConfig = Field(default_factory=PathsConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    algorithms: AlgorithmsConfig = Field(default_factory=AlgorithmsConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)
+
+    @property
+    def atmo_prior(self) -> AtmoProviderConfig:
+        return self.providers.atmo
+
+    @property
+    def brdf(self) -> BRDFProviderConfig:
+        return self.providers.brdf
+
+    @property
+    def surface_prior(self) -> SurfacePriorAlgorithmConfig:
+        return self.algorithms.surface_prior
+
+    @property
+    def rt_model(self) -> RTAlgorithmConfig:
+        return self.algorithms.rt
+
+    @property
+    def s2_data(self) -> S2ProviderConfig:
+        return self.providers.s2
+
+    @property
+    def monthly_composites(self) -> MonthlyCompositeProviderConfig:
+        return self.providers.monthly_composites
+
+
 class RunRequest(SIACBaseModel):
     input_path: Path | None = None
     output_path: Path | None = None
@@ -550,8 +541,7 @@ class RunRequest(SIACBaseModel):
         return _coerce_path_or_url(value)
 
 
-class ResolvedCachePathsConfig(CachePathsConfig):
-    pass
+ResolvedCachePathsConfig = CachePathsConfig
 
 
 class ResolvedPathsConfig(SIACBaseModel):
@@ -608,8 +598,7 @@ class ResolvedS2ProviderConfig(S2ProviderConfig):
     cache_dir: Path | None = None
 
 
-class ResolvedMonthlyCompositeProviderConfig(MonthlyCompositeProviderConfig):
-    pass
+ResolvedMonthlyCompositeProviderConfig = MonthlyCompositeProviderConfig
 
 
 class ResolvedProvidersConfig(SIACBaseModel):
@@ -649,7 +638,7 @@ class ResolvedRunConfig(SIACBaseModel):
     s2_query: str | Path | None = None
 
 
-class ResolvedConfig(SIACBaseModel):
+class ResolvedConfig(_ConfigShortcutsMixin, SIACBaseModel):
     run: ResolvedRunConfig
     paths: ResolvedPathsConfig
     auth: ResolvedAuthConfig
@@ -689,35 +678,3 @@ class ResolvedConfig(SIACBaseModel):
     @property
     def rt_model(self) -> ResolvedRTAlgorithmConfig:
         return self.algorithms.rt
-
-    @property
-    def solver(self) -> SolverAlgorithmConfig:
-        return self.algorithms.solver
-
-    @property
-    def cloud_mask(self) -> CloudMaskAlgorithmConfig:
-        return self.algorithms.cloud_mask
-
-    @property
-    def execution(self) -> ExecutionRuntimeConfig:
-        return self.runtime.execution
-
-    @property
-    def global_dem(self) -> str | Path | None:
-        return self.paths.dem
-
-    @property
-    def global_water(self) -> str | Path | None:
-        return self.paths.water_mask
-
-    @property
-    def log_level(self) -> LogLevel:
-        return self.runtime.log_level
-
-    @property
-    def n_jobs(self) -> int:
-        return self.runtime.n_jobs
-
-    @property
-    def chunk_size(self) -> int:
-        return self.runtime.chunk_size

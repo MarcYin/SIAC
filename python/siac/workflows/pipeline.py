@@ -4,7 +4,6 @@ Pipeline orchestration for SIAC atmospheric correction.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -287,90 +286,23 @@ def _build_aot_scatter_diagnostics(
     return tuple(diagnostics)
 
 
-def _shares_template_grid(field: Any, template: Any) -> bool:
-    if tuple(field.shape) != tuple(template.shape) or field.dims != template.dims:
-        return False
-    for axis in template.dims:
-        template_has_coord = axis in template.coords
-        field_has_coord = axis in field.coords
-        if template_has_coord != field_has_coord:
-            return False
-        if not template_has_coord:
-            continue
-        if not np.array_equal(
-            np.asarray(template.coords[axis].values),
-            np.asarray(field.coords[axis].values),
-            equal_nan=True,
-        ):
-            return False
-    return True
-
-
-def _resample_field_to_template(field: Any, template: Any) -> Any:
-    if _shares_template_grid(field, template):
-        return field
-    field_dims = tuple(getattr(field, "dims", ()))
-    template_dims = tuple(getattr(template, "dims", ()))
-    field_coords = getattr(field, "coords", {})
-    template_coords = getattr(template, "coords", {})
-    if (
-        len(field_dims) == 2
-        and field_dims == template_dims
-        and all(dim in field_coords for dim in field_dims)
-        and all(dim in template_coords for dim in template_dims)
-    ):
-        try:
-            return field.interp(
-                coords={dim: template.coords[dim] for dim in template_dims},
-                method="linear",
-            )
-        except Exception:
-            logger.debug(
-                "Interpolation failed for field %s; falling back to scipy zoom.",
-                getattr(field, "name", "?"),
-                exc_info=True,
-            )
-
-    src = np.asarray(field.values, dtype=np.float32)
-    if src.ndim != 2 or len(template_dims) != 2:
-        return field
-
-    from scipy import ndimage
-
-    h_out = int(template.sizes[template_dims[0]])
-    w_out = int(template.sizes[template_dims[1]])
-    if src.shape[0] == 0 or src.shape[1] == 0:
-        out: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
-    else:
-        out = ndimage.zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=1)
-        out = out[:h_out, :w_out]
-        if out.shape != (h_out, w_out):
-            padded: np.ndarray[Any, Any] = np.full((h_out, w_out), np.nan, dtype=np.float32)
-            padded[: out.shape[0], : out.shape[1]] = out
-            out = padded
-
-    return field.__class__(
-        out,
-        dims=template.dims,
-        coords={d: template.coords[d] for d in template.dims if d in template.coords},
-    )
-
-
 def _geometry_for_atmo_grid(
     geometry: GeometryAngles,
     atmo: AtmosphericState,
 ) -> GeometryAngles:
+    from siac.geo.resample import resample_field_to_template, shares_template_grid
+
     template = atmo.aot
     if all(
-        _shares_template_grid(field, template)
+        shares_template_grid(field, template)
         for field in (geometry.sza, geometry.saa, geometry.vza, geometry.vaa)
     ):
         return geometry
     return GeometryAngles(
-        sza=_resample_field_to_template(geometry.sza, template),
-        saa=_resample_field_to_template(geometry.saa, template),
-        vza=_resample_field_to_template(geometry.vza, template),
-        vaa=_resample_field_to_template(geometry.vaa, template),
+        sza=resample_field_to_template(geometry.sza, template),
+        saa=resample_field_to_template(geometry.saa, template),
+        vza=resample_field_to_template(geometry.vza, template),
+        vaa=resample_field_to_template(geometry.vaa, template),
     )
 
 
@@ -492,61 +424,31 @@ def _call_grid_assembler(
     aerosol_resolution_m: float,
     sharp_transition_filter: Any | None = None,
 ) -> SolverInputBundle:
-    grid_assembler_fn = cast("Callable[..., SolverInputBundle]", grid_assembler)
+    """Call the grid assembler with a standardised interface.
 
-    def _call_with_optional_filter(
-        *args: Any,
-        supports_filter: bool,
-        **kwargs: Any,
-    ) -> SolverInputBundle:
-        if supports_filter and sharp_transition_filter is not None:
-            kwargs["sharp_transition_filter"] = sharp_transition_filter
-        try:
-            return grid_assembler_fn(*args, **kwargs)
-        except TypeError:
-            if not supports_filter or "sharp_transition_filter" not in kwargs:
-                raise
-            kwargs.pop("sharp_transition_filter", None)
-            return grid_assembler_fn(*args, **kwargs)
+    The assembler is expected to accept the signature::
 
+        (obs, atmo, surface, rt_model, *, aerosol_resolution_m, sharp_transition_filter=None)
+
+    For backwards compatibility with assemblers that do not accept the
+    ``sharp_transition_filter`` keyword, a single fallback attempt is made
+    without it.
+    """
     try:
-        signature = inspect.signature(grid_assembler_fn)
-    except (TypeError, ValueError):
-        return _call_with_optional_filter(
-            obs,
-            atmo,
-            surface,
-            rt_model,
+        return grid_assembler(
+            obs, atmo, surface, rt_model,
             aerosol_resolution_m=aerosol_resolution_m,
-            supports_filter=True,
+            sharp_transition_filter=sharp_transition_filter,
         )
-
-    params = tuple(signature.parameters.values())
-    if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params) or "aerosol_resolution_m" in signature.parameters:
-        return _call_with_optional_filter(
-            obs,
-            atmo,
-            surface,
-            rt_model,
+    except TypeError:
+        logger.debug(
+            "Grid assembler rejected sharp_transition_filter keyword; retrying without it",
+            exc_info=True,
+        )
+        return grid_assembler(
+            obs, atmo, surface, rt_model,
             aerosol_resolution_m=aerosol_resolution_m,
-            supports_filter=(
-                "sharp_transition_filter" in signature.parameters
-                or any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params)
-            ),
         )
-    if any(param.kind is inspect.Parameter.VAR_POSITIONAL for param in params):
-        return grid_assembler_fn(obs, atmo, surface, rt_model, _DEFAULT_AUX_RESOLUTION_M, aerosol_resolution_m)
-
-    positional_params = [
-        param
-        for param in params
-        if param.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
-    ]
-    if len(positional_params) >= 6:
-        return grid_assembler_fn(obs, atmo, surface, rt_model, _DEFAULT_AUX_RESOLUTION_M, aerosol_resolution_m)
-    if len(positional_params) >= 5:
-        return grid_assembler_fn(obs, atmo, surface, rt_model, aerosol_resolution_m)
-    return grid_assembler_fn(obs, atmo, surface, rt_model)
 
 
 def _call_with_retries(

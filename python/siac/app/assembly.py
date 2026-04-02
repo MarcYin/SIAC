@@ -27,7 +27,6 @@ from siac.app._assembly_providers import (
 )
 from siac.app._assembly_runtime import (
     PreprocessorRuntime,
-    _resample_field_to_template,
     build_preprocessor_runtime,
     resolve_corrector,
     resolve_grid_assembler,
@@ -323,12 +322,6 @@ def resolve_s2_backend(config: Any, *, auth: CredentialManager | None = None) ->
 
 __all__ = [
     "PreprocessorRuntime",
-    "_build_kernel_surface_prior",
-    "_build_monthly_surface_prior",
-    "_build_whittaker_surface_prior",
-    "_query_monthly_surface_prior",
-    "_prepare_monthly_surface_prior_runtime",
-    "_resample_field_to_template",
     "build_preprocessor_runtime",
     "resolve_atmo_provider",
     "resolve_brdf_provider",

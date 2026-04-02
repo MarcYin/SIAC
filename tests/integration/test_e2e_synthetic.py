@@ -140,7 +140,7 @@ class TestE2ESynthetic:
             _ = (observation, atmo_state, rt_model, resolution)
             return surface
 
-        def grid_assembler(o, a, s, rt, aux_res=500.0, aero_res=1000.0):
+        def grid_assembler(o, a, s, rt, **_kwargs):
             return assemble_grids(o, a, s, rt)
 
         def solver(inputs, config):
