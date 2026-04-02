@@ -78,9 +78,9 @@ This is why `process_s2(...)` exists separately from `process_scene(...)`.
 | M1 preprocessing | native sensor resolution | `ObservationBundle` | Captures TOA bands, geometry, cloud mask, and sensor metadata. |
 | M2 atmospheric prior | solver resolution | `AtmosphericState` | Prior data are aligned to the retrieval grid, not necessarily the output grid. |
 | M3 surface prior | mixed; provider dependent | `SurfacePrior` | Surface priors may depend on spectral mapping, BRDF routes, and optional atmospheric priors. |
-| M4 grid assembly | solver grid | `SolverInputBundle` | Normalizes observation and prior data into the solver's working space. |
+| M4 grid assembly | solver grid | `SolverInputBundle` | Normalizes observation and prior data into the solver's working space. Resampling is handled by the canonical functions in `geo.resample`. |
 | M5 solver | solver grid | `SolvedAtmosphere` | Produces solved atmospheric variables and uncertainty estimates. |
-| M6 correction | output grid | `CorrectionResult` | Uses solved atmosphere to compute BOA outputs and auxiliary layers. |
+| M6 correction | output grid | `CorrectionResult` | Uses solved atmosphere to compute BOA outputs and auxiliary layers. Atmospheric fields are resampled to the correction grid via `resample_field_for_correction` from `geo.resample`. |
 
 ## Persistence Flow
 

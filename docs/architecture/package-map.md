@@ -32,7 +32,7 @@ flowchart TD
 | `runtime` | Xarray-backed payload types and validators | Config loading, remote access | Provides the typed contracts passed between workflow stages. |
 | `domain` | Pure types and protocols such as AOI and sensor definitions | Xarray runtime payloads, auth, config, I/O | Prefer this layer for reusable concepts with minimal side effects. |
 | `storage` | Raster/product writers, STAC helpers, readers | Retrieval logic and request parsing | Output and artifact persistence lives here. |
-| `geo` | Geometry helpers and reprojection utilities | Product search or config resolution | Shared geospatial utilities used by multiple layers. |
+| `geo` | Geometry helpers, reprojection utilities, and canonical grid-resampling functions (`resample.py`) | Product search or config resolution | `geo.resample` provides `resample_field_to_template`, `resample_mask_to_template`, `resample_coefficients_to_template`, and gap-fill helpers used by `algorithms.grid`, `algorithms.correction`, and `workflows.pipeline`. |
 | `catalog` | Bundled sensor catalog and static lookup data | Runtime mutation and remote fetching | Static data only. |
 | `src/siac_rs` | Native implementations for kernels, PSF, emulator, optimization, Whittaker smoothing | High-level orchestration and public API | Optional acceleration boundary behind Python interfaces. |
 

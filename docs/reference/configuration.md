@@ -154,17 +154,17 @@ Supported backends:
 
 Main fields:
 
-- `aot_gamma`
-- `tcwv_gamma`
-- `alpha`
-- `max_iterations`
-- `gtol`
-- `ftol`
-- `aerosol_resolution`
-- `use_multigrid`
-- `min_grid_size`
-- `bounds.aot`
-- `bounds.tcwv`
+- `aot_gamma` — regularization strength for AOT prior term (default `0.05`)
+- `tcwv_gamma` — regularization strength for TCWV prior term (default `0.05`)
+- `alpha` — band weight power exponent for the observation cost (default `-1.6`). Controls wavelength-dependent weighting: bands are weighted proportionally to $\lambda^{\alpha}$, so negative values give more weight to shorter (aerosol-sensitive) wavelengths. Propagated internally as `MultiGridConfig.band_weight_power` and `CostFunctionConfig.band_weight_power`.
+- `max_iterations` — maximum L-BFGS-B iterations per grid level
+- `gtol` — gradient tolerance for L-BFGS-B convergence
+- `ftol` — function tolerance for L-BFGS-B convergence
+- `aerosol_resolution` — target spatial resolution (metres) for the aerosol retrieval grid
+- `use_multigrid` — enable the coarse-to-fine multi-grid solver strategy (default `true`)
+- `min_grid_size` — minimum grid dimension (pixels) for multi-grid levels
+- `bounds.aot` — `[min, max]` bounds for AOT during optimization
+- `bounds.tcwv` — `[min, max]` bounds for TCWV during optimization
 
 ### `algorithms.cloud_mask`
 

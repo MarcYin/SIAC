@@ -23,6 +23,7 @@ Reference paper:
 | spectral mapping | `python/siac/algorithms/surface/spectral_mapping.py` |
 | spatial mapping / ePSF | `python/siac/algorithms/surface/swir_refine.py`, `src/siac_rs/src/psf.rs` |
 | radiative transfer approximation | `python/siac/adapters/rt.py`, `python/siac/algorithms/rt/`, `src/siac_rs/src/emulator.rs` |
+| grid resampling between stages | `python/siac/geo/resample.py` |
 | implementation details | `python/siac/app/`, `python/siac/workflows/`, `python/siac/runtime/` |
 | uncertainty handling | `python/siac/runtime/models.py`, solver/correction paths |
 
