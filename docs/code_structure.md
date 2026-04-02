@@ -81,7 +81,10 @@ siac/
 │   ├── scene.py                 # Generic scene execution and output dispatch
 │   └── sentinel2.py             # Sentinel-2 processing workflow only
 │
-├── geo/                         # Geometry and reprojection utilities
+├── geo/                         # Geometry, reprojection, and resampling utilities
+│   ├── __init__.py
+│   └── resample.py              # Canonical grid-resampling functions used across pipeline stages
+│
 └── storage/                     # Raster/product read-write helpers
 ```
 
@@ -97,6 +100,9 @@ siac/
 - `adapters/` owns external-system integration concerns.
 - `algorithms/` owns retrieval math, surface priors, correction, cloud masking,
   RT backends, and grid prep.
+- `geo/` owns shared geospatial utilities including the canonical resampling
+  functions (`resample.py`) used by the grid assembler, solver, and corrector
+  to move fields between spatial grids.
 - `app/` resolves configuration into concrete runtime components.
 - `app/` also owns request coercion for Sentinel-2 search/resolve paths.
 - `workflows/` executes end-to-end processing plans.

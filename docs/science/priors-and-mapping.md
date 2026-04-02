@@ -77,6 +77,29 @@ Main implementation area:
 
 - `python/siac/algorithms/cloud/mask.py`
 
+## Grid resampling between stages
+
+Moving data between spatial grids (native sensor resolution → solver grid →
+correction grid) is a recurring concern across the pipeline. All resampling is
+handled by the canonical functions in `python/siac/geo/resample.py`:
+
+- `resample_field_to_template` — bilinear interpolation for continuous fields
+  (atmospheric state, geometry angles), with coordinate-based interpolation
+  when possible and `scipy.ndimage.zoom` as fallback. NaN gap-fill is applied
+  by default.
+- `resample_mask_to_template` — conservative resampling for boolean masks
+  (cloud, shadow), applying a maximum-filter dilation before interpolation to
+  avoid losing masked pixels when downsampling.
+- `resample_coefficients_to_template` — resamples all fields of an
+  `RTCoefficients` bundle, handling both 2-D and 3-D (with `param` dimension)
+  arrays.
+- `resample_field_for_correction` — combines resampling with a finiteness
+  guarantee (nearest-neighbour fill then source-mean fallback) for the
+  correction stage.
+
+These functions are used by the grid assembler (M4), the solver (M5), and the
+atmospheric corrector (M6).
+
 ## M1-M6 stage mapping
 
 | Stage | Prior or mapping role |

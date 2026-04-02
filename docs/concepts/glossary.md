@@ -54,3 +54,23 @@
 
 **CorrectionResult**
 : The final typed result containing BOA outputs, auxiliary fields, and diagnostics.
+
+## Solver and algorithm terms
+
+**Multi-grid solver**
+: The default solver strategy in SIAC. Retrieval starts on a coarse grid and progressively refines to the target aerosol resolution. Each level is solved with L-BFGS-B optimization. See `algorithms.solver.multigrid`.
+
+**DCT regularization**
+: Discrete Cosine Transform–based smoothness penalty applied to the atmospheric state during retrieval. Encourages spatially smooth AOT and TCWV fields while preserving large-scale gradients. See the smoothness term in `algorithms.solver.cost`.
+
+**Band weight power (alpha)**
+: Exponent controlling wavelength-dependent weighting in the observation cost. Configured as `algorithms.solver.alpha` (default `-1.6`). Higher absolute values give more weight to shorter wavelengths. Propagated through `MultiGridConfig.band_weight_power`.
+
+**RAA**
+: Relative Azimuth Angle, computed as `|VAA − SAA| mod 2π`. Used by RT models and BRDF kernels to parameterize the scattering geometry.
+
+**RTModelBackend**
+: The structural protocol (`domain.protocols.RTModelBackend`) that all radiative transfer backends must satisfy. Declares `simulate_toa`, `compute_coefficients`, and `supported_parameters`. Backends include the emulator, LUT, and Py6S adapters.
+
+**SolverInputBundle**
+: The typed payload consumed by the solver, containing resampled TOA, geometry, cloud mask, priors, RT model, and band metadata assembled onto the solver grid.

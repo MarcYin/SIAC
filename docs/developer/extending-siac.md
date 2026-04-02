@@ -56,6 +56,32 @@ Use the existing registries as the standard pattern:
 If the new feature is configurable, also extend the schema in
 `python/siac/config/schema.py` so it can be selected through `SIACConfig`.
 
+## RTModelBackend Protocol
+
+Radiative transfer backends must satisfy the `RTModelBackend` structural
+protocol defined in `python/siac/domain/protocols.py`. The protocol declares:
+
+- `simulate_toa(geometry, atmo_state, surface, band)` — forward model
+- `compute_coefficients(geometry, atmo_state, bands)` — linearized RT coefficients
+- `supported_parameters` — parameter names the backend can vary
+
+Existing backends (`emulator`, `lut`, `py6s`) all implement this protocol.
+When adding a new RT backend, ensure it satisfies `RTModelBackend` and passes
+an `isinstance` check at solver and corrector initialization.
+
+## Resampling Utilities
+
+All grid resampling between pipeline stages uses the canonical functions in
+`python/siac/geo/resample.py`:
+
+- `resample_field_to_template(field, template)` — bilinear resampling with NaN gap-fill
+- `resample_mask_to_template(mask, template)` — conservative boolean mask resampling with dilation
+- `resample_coefficients_to_template(coeffs, template)` — resamples all `RTCoefficients` fields
+- `resample_field_for_correction(field, template)` — resample + guarantee finiteness for correction stage
+
+If you add a new pipeline stage that operates on a different spatial grid,
+use these functions rather than implementing ad-hoc resampling.
+
 ## Runtime Contract Expectations
 
 New components must fit the payload contracts already used by the workflow:

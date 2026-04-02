@@ -59,6 +59,29 @@ In the current repository this logic appears across:
 - `python/siac/algorithms/solver/multigrid.py`
 - `python/siac/algorithms/correction/atmospheric.py`
 
+### Cost function detail
+
+The cost function in `algorithms/solver/cost.py` combines the three terms into a single scalar minimized by L-BFGS-B:
+
+$$J = J_\text{obs} + J_\text{prior} + J_\text{smooth}$$
+
+**Observation term** — For each solver band, the forward model predicts TOA reflectance from the current atmospheric state and surface prior via `RTModelBackend.simulate_toa`. The residual is weighted by band-dependent weights proportional to $\lambda^{\alpha}$ where $\alpha$ is the `band_weight_power` parameter (default −1.6, configured as `algorithms.solver.alpha`). This gives shorter wavelengths — more sensitive to aerosol — higher influence.
+
+**Prior term** — Penalizes departure of AOT and TCWV from their prior values, weighted by prior uncertainty. Regularization strengths `aot_gamma` and `tcwv_gamma` scale the prior cost.
+
+**Smoothness term** — A DCT-based (Discrete Cosine Transform) spatial regularization. Rather than constructing and inverting a full Laplacian matrix, the implementation builds a sparse Laplacian with boundary-aware diagonal, multiplies in DCT space, and penalizes high-frequency structure in the AOT and TCWV fields. This encourages smooth atmospheric fields without requiring expensive matrix operations.
+
+### Multi-grid solver strategy
+
+The default solver (`algorithms/solver/multigrid.py`) uses a coarse-to-fine multi-grid approach:
+
+1. Start at a coarse grid (e.g. 4× the target aerosol resolution).
+2. Solve for AOT and TCWV using L-BFGS-B at this resolution.
+3. Interpolate the solution to the next finer grid level.
+4. Repeat until the target `aerosol_resolution` is reached.
+
+Each level uses the previous level's solution as the initial guess, improving convergence speed and avoiding local minima. The `MultiGridConfig` controls bounds, regularization strengths, and the `band_weight_power`.
+
 ## Why coarse retrieval comes before full-resolution correction
 
 The paper emphasizes retrieving atmospheric parameters at a coarser resolution than the native scene bands. The same architectural idea is visible in the code:
