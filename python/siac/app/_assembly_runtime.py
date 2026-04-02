@@ -337,7 +337,7 @@ def resolve_rt_model_for_pipeline(
     *,
     sensor_config: SensorConfig | None = None,
 ) -> RTModelBackend:
-    return build_rt_model(config, auth=auth, sensor_config=sensor_config)
+    return build_rt_model(config, auth=auth, sensor_config=sensor_config)  # type: ignore[no-any-return]
 
 
 __all__ = [

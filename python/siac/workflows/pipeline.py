@@ -63,10 +63,7 @@ AtmoPriorFn = Callable[
     AtmosphericState,
 ]
 SurfacePriorFn = Callable[[ObservationBundle, AtmosphericState | None, Any, float], SurfacePrior]
-GridAssemblerFn = Callable[
-    [ObservationBundle, AtmosphericState, SurfacePrior, Any, float, float, Any | None],
-    SolverInputBundle,
-]
+GridAssemblerFn = Callable[..., SolverInputBundle]
 SolverFn = Callable[[SolverInputBundle, Any], SolvedAtmosphere]
 CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, Any], CorrectionResult]
 

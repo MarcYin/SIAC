@@ -253,7 +253,8 @@ def resample_coefficients_to_template(
                 [resample_field_to_template(field.sel(param=param, drop=True), template) for param in param_values],
                 dim="param",
             )
-            return stacked.assign_coords(param=param_values).transpose("param", *template.dims)
+            result: xr.DataArray = stacked.assign_coords(param=param_values).transpose("param", *template.dims)
+            return result
         return field
 
     return RTCoefficientsClass(
@@ -307,7 +308,8 @@ def fill_nonfinite_like_template(
         )
         filled = np.where(np.isfinite(filled), filled, np.float32(fill_value))
 
-    return field.copy(data=filled)
+    result: xr.DataArray = field.copy(data=filled)
+    return result
 
 
 def resample_field_for_correction(

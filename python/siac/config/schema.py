@@ -643,7 +643,7 @@ class ResolvedConfig(_ConfigShortcutsMixin, SIACBaseModel):
     paths: ResolvedPathsConfig
     auth: ResolvedAuthConfig
     providers: ResolvedProvidersConfig
-    algorithms: ResolvedAlgorithmsConfig
+    algorithms: ResolvedAlgorithmsConfig  # type: ignore[assignment]
     runtime: RuntimeConfig
     output: OutputConfig
 
