@@ -214,7 +214,7 @@ class TestRunPipeline:
             call_counts["m3"] += 1
             return mock_surface_prior
 
-        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+        def assemble(obs, at, sp, rt, **_kwargs):
             call_counts["m4"] += 1
             return mock_solver_input_bundle
 
@@ -262,7 +262,7 @@ class TestRunPipeline:
             order.append("m3")
             return mock_surface_prior
 
-        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+        def assemble(obs, at, sp, rt, **_kwargs):
             order.append("m4")
             return mock_solver_input_bundle
 
@@ -427,7 +427,7 @@ class TestConcurrency:
         def pp(path, aoi=None):
             return mock_observation_bundle
 
-        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+        def assemble(obs, at, sp, rt, **_kwargs):
             return mock_solver_input_bundle
 
         def solve(inputs, cfg):
@@ -470,7 +470,7 @@ class TestConcurrency:
         def pp(path, aoi=None):
             return mock_observation_bundle
 
-        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
+        def assemble(obs, at, sp, rt, **_kwargs):
             return mock_solver_input_bundle
 
         def solve(inputs, cfg):
@@ -532,8 +532,8 @@ class TestConcurrency:
             _ = (path, aoi)
             return mock_observation_bundle
 
-        def assemble(obs, at, sp, rt, aux_res=500.0, aero_res=1000.0):
-            _ = (obs, at, sp, rt, aux_res, aero_res)
+        def assemble(obs, at, sp, rt, **_kwargs):
+            _ = (obs, at, sp, rt)
             return mock_solver_input_bundle
 
         def solve(inputs, cfg):
