@@ -114,6 +114,12 @@ class MultiGridConfig:
     grid_search_aot_points: int = 11
     grid_search_tcwv_points: int = 11
 
+    # Group NxN solver-grid pixels when computing RT coefficients in the
+    # grid-search path.  A value > 1 computes coefficients on a coarser
+    # sub-grid and broadcasts to all pixels in each group, reducing the
+    # number of RT model calls by group_size².
+    quadratic_group_size: int = 1
+
 
 @dataclass
 class SolverResult:
@@ -622,6 +628,8 @@ class MultiGridSolver:
         xbp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
         xcp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
 
+        group_size = max(1, self.config.quadratic_group_size)
+
         def _candidate_coeff_provider(
             aot_val: float, tcwv_val: float
         ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -629,13 +637,32 @@ class MultiGridSolver:
             tcwv_field = xr.full_like(atmo_prior.tcwv, fill_value=float(tcwv_val), dtype=np.float32)
             atmo_state = atmo_prior.with_updated_aot_tcwv(aot=aot_field, tcwv=tcwv_field)
 
-            for ib, band in enumerate(bands):
-                coeffs = rt_model.compute_coefficients(
-                    geometry, atmo_state, band, compute_jacobian=False
-                )
-                xap_stack[ib] = np.asarray(coeffs.xap.values, dtype=np.float32)
-                xbp_stack[ib] = np.asarray(coeffs.xbp.values, dtype=np.float32)
-                xcp_stack[ib] = np.asarray(coeffs.xcp.values, dtype=np.float32)
+            if group_size <= 1:
+                for ib, band in enumerate(bands):
+                    coeffs = rt_model.compute_coefficients(
+                        geometry, atmo_state, band, compute_jacobian=False
+                    )
+                    xap_stack[ib] = np.asarray(coeffs.xap.values, dtype=np.float32)
+                    xbp_stack[ib] = np.asarray(coeffs.xbp.values, dtype=np.float32)
+                    xcp_stack[ib] = np.asarray(coeffs.xcp.values, dtype=np.float32)
+            else:
+                # Subsample geometry/atmo to a coarser grid, compute RT
+                # coefficients there, then broadcast back to full resolution.
+                sub_geometry = self._subsample_geometry(geometry, group_size)
+                sub_atmo = self._subsample_atmo_state(atmo_state, group_size)
+                for ib, band in enumerate(bands):
+                    coeffs = rt_model.compute_coefficients(
+                        sub_geometry, sub_atmo, band, compute_jacobian=False
+                    )
+                    xap_stack[ib] = self._broadcast_to_full(
+                        np.asarray(coeffs.xap.values, dtype=np.float32), shape, group_size,
+                    )
+                    xbp_stack[ib] = self._broadcast_to_full(
+                        np.asarray(coeffs.xbp.values, dtype=np.float32), shape, group_size,
+                    )
+                    xcp_stack[ib] = self._broadcast_to_full(
+                        np.asarray(coeffs.xcp.values, dtype=np.float32), shape, group_size,
+                    )
             return xap_stack, xbp_stack, xcp_stack
 
         costs_raw, obs_counts_raw = evaluate_grid_search_cost_cube_with_provider_qa(
@@ -836,6 +863,49 @@ class MultiGridSolver:
                 unique.append(s)
 
         return unique
+
+    # -----------------------------------------------------------------
+    # Grouping helpers for quadratic_group_size
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _subsample_da(da: xr.DataArray, step: int) -> xr.DataArray:
+        """Subsample a 2-D DataArray by picking every *step*-th pixel."""
+        return da[::step, ::step]
+
+    @staticmethod
+    def _subsample_geometry(geometry: GeometryAngles, step: int) -> GeometryAngles:
+        """Return a subsampled copy of the geometry angles."""
+        return GeometryAngles(
+            sza=geometry.sza[::step, ::step],
+            saa=geometry.saa[::step, ::step],
+            vza=geometry.vza[::step, ::step],
+            vaa=geometry.vaa[::step, ::step],
+        )
+
+    @staticmethod
+    def _subsample_atmo_state(state: AtmosphericState, step: int) -> AtmosphericState:
+        """Return a subsampled copy of the atmospheric state."""
+        return AtmosphericState(
+            aot=state.aot[::step, ::step],
+            tcwv=state.tcwv[::step, ::step],
+            tco3=state.tco3[::step, ::step],
+            aot_unc=state.aot_unc[::step, ::step],
+            tcwv_unc=state.tcwv_unc[::step, ::step],
+            tco3_unc=state.tco3_unc[::step, ::step],
+            elevation=state.elevation[::step, ::step],
+        )
+
+    @staticmethod
+    def _broadcast_to_full(
+        coarse: np.ndarray,
+        full_shape: tuple[int, int],
+        step: int,
+    ) -> np.ndarray:
+        """Broadcast a coarse-grid 2-D array back to *full_shape* via nearest-neighbour repeat."""
+        return np.repeat(
+            np.repeat(coarse, step, axis=0), step, axis=1,
+        )[:full_shape[0], :full_shape[1]]
 
     def _resample_field(
         self, field: np.ndarray, target_shape: tuple[int, int]
