@@ -135,6 +135,10 @@ class _PackageMapperProtocol(Protocol):
 class _PackageMapperMinimalProtocol(_PackageMapperProtocol, Protocol):
     def _candidate_rows(self, candidate_rows: object | None) -> object: ...
 
+    def _load_source_matrix(self, source_sensor: str, segment: str) -> np.ndarray: ...
+
+    def _load_hyperspectral(self, segment: str) -> np.ndarray: ...
+
     def _retrieve_segment_batch(
         self,
         *,
@@ -1057,15 +1061,17 @@ class SpectralMapper:
     ) -> tuple[_PackageResultProtocol | _MinimalMappingResult, ...]:
         if self._package_mapper is None or self._runtime is None:
             raise RuntimeError("spectral-library runtime was not initialized")
+        # Fast vectorized path: build cKDTree once, query all rows in
+        # parallel, do distance-weighted reconstruction as batch matmuls.
         if self._supports_minimal_batch_path():
             try:
                 logger.info(
-                    "Spectral mapping batch path: minimal package wrapper for %d unique row(s)",
+                    "Spectral mapping batch path: fast vectorized KNN for %d unique row(s)",
                     int(queries.shape[0]),
                 )
-                return self._map_reflectance_batch_minimal(queries, valid_masks)
-            except Exception as exc:  # pragma: no cover - compatibility fallback against external package changes
-                logger.warning("Spectral mapping minimal batch path failed; falling back to public API (%s)", exc)
+                return self._map_reflectance_batch_fast(queries, valid_masks)
+            except Exception as exc:  # pragma: no cover - compatibility fallback
+                logger.warning("Spectral mapping fast batch path failed; falling back to package API (%s)", exc)
         batch = self._package_mapper.map_reflectance_batch(
             source_sensor=self._runtime.source_sensor_id,
             reflectance_rows=queries,
@@ -1086,8 +1092,204 @@ class SpectralMapper:
         required = (
             "_candidate_rows",
             "_retrieve_segment_batch",
+            "_load_source_matrix",
+            "_load_hyperspectral",
         )
         return all(callable(getattr(self._package_mapper, name, None)) for name in required)
+
+    def _map_reflectance_batch_fast(
+        self,
+        queries: Float64Array,
+        valid_masks: BoolArray,
+    ) -> tuple[_MinimalMappingResult, ...]:
+        """Fully vectorized KNN + distance-weighted reconstruction.
+
+        Builds one ``cKDTree`` per segment (instead of per valid-band pattern),
+        queries all rows in parallel, and computes the distance-weighted
+        reconstruction as batch matrix multiplies.
+        """
+        from scipy.spatial import cKDTree
+
+        if self._package_mapper is None or self._runtime is None:
+            raise RuntimeError("spectral-library runtime was not initialized")
+
+        package_mapper = cast("_PackageMapperMinimalProtocol", self._package_mapper)
+        candidate_rows = np.asarray(package_mapper._candidate_rows(None), dtype=np.int64)  # noqa: SLF001
+        k = min(self.k_neighbors, int(candidate_rows.size))
+        n_queries = int(queries.shape[0])
+        estimator = self._mapping_config.neighbor_estimator
+
+        # Per-segment: build tree once → batch query → vectorized reconstruction.
+        segment_reconstructed: dict[str, Float64Array] = {}
+        segment_source_fit: dict[str, Float32Array] = {}
+
+        for segment in ("vnir", "swir"):
+            t0 = perf_counter()
+            segment_indices = self._source_retrieval_indices_by_segment[segment]
+            if segment_indices.size == 0:
+                segment_reconstructed[segment] = np.full((n_queries, 1), np.nan, dtype=np.float64)
+                segment_source_fit[segment] = np.full(n_queries, np.nan, dtype=np.float32)
+                continue
+            query_segment = np.asarray(queries[:, segment_indices], dtype=np.float64)
+            mask_segment = np.asarray(valid_masks[:, segment_indices], dtype=np.bool_)
+
+            # Load candidate source matrix and hyperspectral for this segment.
+            source_matrix = np.asarray(
+                package_mapper._load_source_matrix(self._runtime.source_sensor_id, segment),  # noqa: SLF001
+                dtype=np.float64,
+            )
+            candidate_matrix = source_matrix[candidate_rows]
+            hyperspectral = np.asarray(
+                package_mapper._load_hyperspectral(segment),  # noqa: SLF001
+                dtype=np.float64,
+            )
+
+            # Per-row validity: which bands are finite for each query.
+            row_valid = np.all(mask_segment, axis=1)
+            min_valid = self._mapping_config.min_valid_bands
+            enough_bands = mask_segment.sum(axis=1) >= min_valid
+
+            # Build cKDTree on full candidate matrix (all bands).
+            # For rows where some bands are NaN, we query on valid-band
+            # subsets only if all rows share the same pattern; otherwise
+            # we use the full-band tree and mask NaN columns to zero.
+            all_valid = np.all(row_valid)
+
+            reconstructed = np.full((n_queries, hyperspectral.shape[1]), np.nan, dtype=np.float64)
+            source_fit = np.full(n_queries, np.nan, dtype=np.float32)
+
+            if all_valid:
+                # Fast path: all queries have all bands valid → single tree.
+                tree = cKDTree(candidate_matrix)
+                distances, local_indices = tree.query(query_segment, k=k, workers=-1)
+                if distances.ndim == 1:
+                    distances = distances[:, np.newaxis]
+                    local_indices = local_indices[:, np.newaxis]
+                global_indices = candidate_rows[local_indices]
+
+                # Vectorized distance-weighted reconstruction.
+                valid_query_mask = enough_bands
+                if np.any(valid_query_mask):
+                    recon, fit = self._vectorized_dwm_reconstruction(
+                        hyperspectral, candidate_matrix, query_segment,
+                        global_indices, distances, valid_query_mask, estimator,
+                    )
+                    reconstructed[valid_query_mask] = recon
+                    source_fit[valid_query_mask] = fit
+            else:
+                # Group by valid-band pattern, build one tree per pattern.
+                patterns, inverse = np.unique(mask_segment, axis=0, return_inverse=True)
+                for pat_idx, pattern in enumerate(patterns):
+                    group_mask = (inverse == pat_idx) & enough_bands
+                    if not np.any(group_mask):
+                        continue
+                    group_indices = np.flatnonzero(group_mask)
+                    valid_cols = np.flatnonzero(pattern)
+                    cand_sub = candidate_matrix[:, valid_cols]
+                    query_sub = query_segment[group_indices][:, valid_cols]
+
+                    tree = cKDTree(cand_sub)
+                    distances, local_indices = tree.query(query_sub, k=k, workers=-1)
+                    if distances.ndim == 1:
+                        distances = distances[:, np.newaxis]
+                        local_indices = local_indices[:, np.newaxis]
+                    global_indices = candidate_rows[local_indices]
+
+                    recon, fit = self._vectorized_dwm_reconstruction(
+                        hyperspectral, candidate_matrix, query_segment[group_indices],
+                        global_indices, distances, np.ones(len(group_indices), dtype=bool), estimator,
+                    )
+                    reconstructed[group_indices] = recon
+                    source_fit[group_indices] = fit
+
+            segment_reconstructed[segment] = reconstructed
+            segment_source_fit[segment] = source_fit
+            logger.info(
+                "Spectral mapping segment %s KNN+reconstruction: %.1fs (%d queries, k=%d)",
+                segment, perf_counter() - t0, n_queries, k,
+            )
+
+        # Project reconstructed hyperspectral → target sensor bands.
+        all_band_ids: list[str] = []
+        all_target_columns: list[np.ndarray] = []
+        for segment in ("vnir", "swir"):
+            projection = self._segment_target_projection(segment)
+            if projection is None:
+                continue
+            segment_band_ids, _target_positions, response_matrix = projection
+            recon = segment_reconstructed[segment]
+            valid_rows = np.all(np.isfinite(recon), axis=1)
+            projected = np.full((n_queries, response_matrix.shape[1]), np.nan, dtype=np.float64)
+            if np.any(valid_rows):
+                projected[valid_rows] = recon[valid_rows] @ response_matrix
+            all_band_ids.extend(str(b) for b in segment_band_ids)
+            all_target_columns.append(projected)
+
+        target_matrix = np.concatenate(all_target_columns, axis=1) if all_target_columns else None
+        target_band_ids_tuple = tuple(all_band_ids)
+
+        # Build lightweight result objects (no per-row _prepare_segment_retrieval).
+        results: list[_MinimalMappingResult] = []
+        for i in range(n_queries):
+            target_ref = target_matrix[i] if target_matrix is not None and np.all(np.isfinite(target_matrix[i])) else None
+            results.append(_MinimalMappingResult(
+                target_reflectance=target_ref,
+                target_band_ids=target_band_ids_tuple,
+                prepared_segments={},
+            ))
+        return tuple(results)
+
+    @staticmethod
+    def _vectorized_dwm_reconstruction(
+        hyperspectral: Float64Array,
+        candidate_matrix: Float64Array,
+        query_values: Float64Array,
+        global_indices: np.ndarray,
+        distances: np.ndarray,
+        valid_mask: np.ndarray,
+        estimator: str,
+    ) -> tuple[Float64Array, Float32Array]:
+        """Vectorized distance-weighted-mean reconstruction for a batch of queries.
+
+        Returns (reconstructed_spectra, source_fit_rmse) arrays.
+        """
+        n = int(np.count_nonzero(valid_mask))
+        n_wl = hyperspectral.shape[1]
+        gi = global_indices[valid_mask]  # (n, k)
+        dist = distances[valid_mask]  # (n, k)
+        k = gi.shape[1]
+
+        # Compute weights.
+        if estimator == "mean":
+            weights = np.full((n, k), 1.0 / k, dtype=np.float64)
+        else:
+            # distance_weighted_mean (default).
+            exact = dist <= 1e-12
+            has_exact = np.any(exact, axis=1)
+            inv_dist = np.where(dist > 1e-12, 1.0 / dist, 0.0)
+            weights = np.where(
+                has_exact[:, np.newaxis],
+                exact.astype(np.float64),
+                inv_dist,
+            )
+            weight_sums = weights.sum(axis=1, keepdims=True)
+            weight_sums = np.where(weight_sums > 0, weight_sums, 1.0)
+            weights /= weight_sums  # (n, k)
+
+        # Gather neighbor hyperspectral: (n, k, n_wl)
+        neighbor_spectra = hyperspectral[gi.ravel()].reshape(n, k, n_wl)
+
+        # Weighted reconstruction: (n, k) · (n, k, n_wl) → (n, n_wl)
+        reconstructed = np.einsum("nk,nkw->nw", weights, neighbor_spectra)
+
+        # Source fit RMSE: reconstruct in source-band space.
+        n_src = candidate_matrix.shape[1]
+        neighbor_source = candidate_matrix[gi.ravel() % candidate_matrix.shape[0]].reshape(n, k, n_src)
+        source_pred = np.einsum("nk,nks->ns", weights, neighbor_source)
+        query_valid = query_values[valid_mask]
+        source_fit_rmse = np.sqrt(np.nanmean((source_pred - query_valid) ** 2, axis=1)).astype(np.float32)
+
+        return reconstructed, source_fit_rmse
 
     def _map_reflectance_batch_minimal(
         self,
