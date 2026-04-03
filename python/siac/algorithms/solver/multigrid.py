@@ -103,6 +103,9 @@ class MultiGridConfig:
     # Band weighting power (negative values weight shorter wavelengths more)
     band_weight_power: float = -1.6
 
+    # Pseudo-Huber transition threshold for smoothness regularization.
+    smoothness_delta: float = 0.02
+
     # Convergence threshold for early stopping
     rel_tol: float = 1e-4
 
@@ -219,12 +222,11 @@ class MultiGridSolver:
         )
         if use_grid_search:
             logger.info(
-                "RT backend does not provide Jacobians; using single-level "
-                "grid-search + quadratic-fit solver at full resolution."
+                "RT backend does not provide Jacobians; using "
+                "grid-search + quadratic-fit solver."
             )
-            grid_shapes = [full_shape]
-        else:
-            grid_shapes = self._compute_grid_levels(full_shape)
+
+        grid_shapes = self._compute_grid_levels(full_shape)
 
         logger.info(f"Grid levels: {grid_shapes}")
 
@@ -257,6 +259,7 @@ class MultiGridSolver:
                 tcwv_min=self.config.tcwv_bounds[0],
                 tcwv_max=self.config.tcwv_bounds[1],
                 band_weight_power=self.config.band_weight_power,
+                smoothness_delta=self.config.smoothness_delta,
             )
 
             # Resample data to current grid
@@ -691,11 +694,49 @@ class MultiGridSolver:
                 & np.isclose(aot_prior, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
             )
         )
+        # Apply edge-preserving spatial smoothing to the per-pixel grid-search
+        # result.  The grid search has no spatial regularization, so without
+        # this step the AOT/TCWV fields can be noisy pixel-to-pixel while
+        # genuine hotspots (fire plumes, urban emissions) should be preserved.
+        # QA-invalid pixels are NOT restored to priors — the smoothing
+        # propagates valid neighbour estimates into them, which is a better
+        # reconstruction than the (possibly stale) prior.
+        from siac.algorithms.solver.cost import apply_smoothness_filter
+
+        aot_best = apply_smoothness_filter(
+            aot_best,
+            gamma=cost_config.aot_gamma,
+            delta=cost_config.smoothness_delta,
+            n_iter=40,
+        ).astype(np.float32)
+        tcwv_best = apply_smoothness_filter(
+            tcwv_best,
+            gamma=cost_config.tcwv_gamma,
+            delta=cost_config.smoothness_delta,
+            n_iter=40,
+        ).astype(np.float32)
+
+        # Handle QA-invalid pixels.  If there are enough valid neighbours the
+        # smoothing has already propagated sensible values into them.  When ALL
+        # pixels are invalid (complete grid-search failure) the smoothed field
+        # is meaningless, so fall back to the prior.
         if np.any(invalid_mask):
-            aot_best = np.where(invalid_mask, aot_prior, aot_best).astype(np.float32, copy=False)
-            tcwv_best = np.where(invalid_mask, tcwv_prior, tcwv_best).astype(np.float32, copy=False)
-            aot_unc = np.where(invalid_mask, aot_prior_unc, aot_unc).astype(np.float32, copy=False)
-            tcwv_unc = np.where(invalid_mask, tcwv_prior_unc, tcwv_unc).astype(np.float32, copy=False)
+            all_invalid = np.all(invalid_mask | ~valid_mask)
+            if all_invalid:
+                aot_best = np.where(invalid_mask, aot_prior, aot_best).astype(np.float32, copy=False)
+                tcwv_best = np.where(invalid_mask, tcwv_prior, tcwv_best).astype(np.float32, copy=False)
+            # Inflate uncertainty at invalid pixels — their values come from
+            # spatial interpolation (or prior fallback), not direct retrieval.
+            aot_unc = np.where(
+                invalid_mask,
+                np.maximum(aot_prior_unc, np.float32(0.1)),
+                aot_unc,
+            ).astype(np.float32, copy=False)
+            tcwv_unc = np.where(
+                invalid_mask,
+                np.maximum(tcwv_prior_unc, np.float32(0.5)),
+                tcwv_unc,
+            ).astype(np.float32, copy=False)
 
         flat = costs.reshape(n_aot * n_tcwv, -1)
         safe_flat = np.where(np.isfinite(flat), flat, np.inf)
@@ -780,13 +821,21 @@ class MultiGridSolver:
 
         shapes = []
         for i in range(max_levels):
-            # Exponential spacing from min to full
+            # Exponential spacing from min to full, capped at input size
             scale = 2 ** (max_levels - 1 - i)
-            shape_y = max(min_size, ny // scale)
-            shape_x = max(min_size, nx // scale)
+            shape_y = min(ny, max(min_size, ny // scale))
+            shape_x = min(nx, max(min_size, nx // scale))
             shapes.append((shape_y, shape_x))
 
-        return shapes
+        # Deduplicate while preserving order (small inputs may collapse levels)
+        seen: set[tuple[int, int]] = set()
+        unique: list[tuple[int, int]] = []
+        for s in shapes:
+            if s not in seen:
+                seen.add(s)
+                unique.append(s)
+
+        return unique
 
     def _resample_field(
         self, field: np.ndarray, target_shape: tuple[int, int]
@@ -941,6 +990,32 @@ class MultiGridSolver:
 
         return aot_solved, tcwv_solved, result
 
+    @staticmethod
+    def _local_huber_weight(field: np.ndarray, delta: float) -> np.ndarray:
+        """Compute mean local Pseudo-Huber weight w = 1/√(1+(∇f/δ)²).
+
+        Returns a per-pixel value in [0, 1].  Near 1 in smooth regions (full
+        smoothing applied, lower uncertainty), near 0 at sharp edges (less
+        smoothing, higher uncertainty).
+        """
+        delta2 = delta * delta
+        dy = np.diff(field, axis=0)
+        dx = np.diff(field, axis=1)
+        wy = 1.0 / np.sqrt(1.0 + (dy * dy) / delta2)
+        wx = 1.0 / np.sqrt(1.0 + (dx * dx) / delta2)
+        # Average the four neighbour weights at each interior pixel.
+        w = np.ones_like(field)
+        count = np.ones_like(field)
+        w[:-1, :] += wy
+        count[:-1, :] += 1
+        w[1:, :] += wy
+        count[1:, :] += 1
+        w[:, :-1] += wx
+        count[:, :-1] += 1
+        w[:, 1:] += wx
+        count[:, 1:] += 1
+        return w / count
+
     def _estimate_uncertainties(
         self,
         aot: np.ndarray,
@@ -952,21 +1027,31 @@ class MultiGridSolver:
         Estimate posterior uncertainties using prior and smoothness info.
 
         A simplified uncertainty estimate based on the prior uncertainty
-        scaled by the smoothness regularization.
+        scaled by the effective local smoothing weight.  Smooth regions
+        (low gradients) have higher effective smoothing and therefore lower
+        uncertainty; sharp features (hotspots) have less smoothing and
+        higher uncertainty.
         """
-        # Prior uncertainties
-
-        # Scale by smoothness gamma (higher gamma = more smoothing = higher unc)
+        delta = cost_func.config.smoothness_delta
         gamma_aot = cost_func.config.aot_gamma
         gamma_tcwv = cost_func.config.tcwv_gamma
 
-        # Compute adjustment factor from DCT (Gamma filter mean)
-        lambda_vals = cost_func.lambda_smooth
-        gamma_filter_aot = 1.0 / (1.0 + gamma_aot ** 2 * lambda_vals)
-        gamma_filter_tcwv = 1.0 / (1.0 + gamma_tcwv ** 2 * lambda_vals)
+        # Local Pseudo-Huber weight: 1 in smooth regions, →0 at edges.
+        w_aot = self._local_huber_weight(aot, delta)
+        w_tcwv = self._local_huber_weight(tcwv, delta)
 
-        adj_aot = 1.0 / np.sqrt(gamma_filter_aot.mean())
-        adj_tcwv = 1.0 / np.sqrt(gamma_filter_tcwv.mean())
+        # Effective filter strength per pixel: 1/(1 + γ² * w).
+        # Where w≈1 (smooth), filter is strong → low unc adjustment.
+        # Where w≈0 (edge), filter is weak → high unc adjustment.
+        eff_aot = 1.0 / (1.0 + gamma_aot ** 2 * w_aot)
+        eff_tcwv = 1.0 / (1.0 + gamma_tcwv ** 2 * w_tcwv)
+
+        adj_aot = 1.0 / np.sqrt(np.clip(eff_aot, 1e-6, None))
+        adj_tcwv = 1.0 / np.sqrt(np.clip(eff_tcwv, 1e-6, None))
+
+        # Normalize so that the mean adjustment in smooth regions is ~1.
+        adj_aot = adj_aot / np.maximum(adj_aot.mean(), 1e-6)
+        adj_tcwv = adj_tcwv / np.maximum(adj_tcwv.mean(), 1e-6)
 
         # Posterior uncertainty
         aot_unc = np.maximum(aot * 0.5, 0.02) * adj_aot

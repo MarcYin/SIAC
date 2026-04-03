@@ -1,20 +1,35 @@
-"""Configured output writing for SIAC correction products."""
+"""Configured output writing for SIAC correction products.
+
+Produces satellite-standard L2A output with naming convention::
+
+    {satellite}_L2A_{YYYYMMDDTHHMMSS}[_{tile}]_{product}[_{band}].ext
+
+and a STAC Item JSON with eo:bands, view angles, and projection metadata.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import xarray as xr
-from numpy import typing as npt
-from scipy.ndimage import maximum_filter, zoom
 
-from siac.runtime.models import copy_spatial_metadata_like
-from siac.storage.product_writers import write_aot_scatter_plot, write_dataset, write_rgb_quicklook
+from siac.geo.resample import resample_mask_to_template
+from siac.storage.product_writers import (
+    write_aot_scatter_plot,
+    write_cloud_mask_preview,
+    write_dataset,
+    write_false_colour_preview,
+    write_field_preview,
+    write_rgb_quicklook,
+)
 from siac.storage.raster_writers import write_cog, write_raster, write_zarr
+from siac.storage.stac import build_stac_item_from_result
 from siac.storage.writers import write_netcdf
 
 if TYPE_CHECKING:
@@ -23,106 +38,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-Float32Array: TypeAlias = npt.NDArray[np.float32]
 
-
-def _shares_grid(field: xr.DataArray, template: xr.DataArray) -> bool:
-    if tuple(field.shape) != tuple(template.shape):
-        return False
-    if tuple(field.dims) != tuple(template.dims):
-        return False
-    for dim in template.dims:
-        if dim not in field.coords or dim not in template.coords:
-            return False
-        if not np.array_equal(np.asarray(field.coords[dim].values), np.asarray(template.coords[dim].values), equal_nan=True):
-            return False
-    return True
-
-
-def _axis_resolution(values: np.ndarray) -> float | None:
-    if values.size <= 1:
-        return None
-    diffs = np.abs(np.diff(np.asarray(values, dtype=np.float64)))
-    finite = diffs[np.isfinite(diffs) & (diffs > 0.0)]
-    if finite.size == 0:
-        return None
-    return float(np.median(finite))
-
-
-def _cloud_mask_on_template_grid(mask: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
-    if _shares_grid(mask, template):
-        return mask.astype(np.uint8)
-
-    if (
-        len(mask.dims) == 2
-        and mask.dims == template.dims
-        and all(dim in mask.coords for dim in mask.dims)
-        and all(dim in template.coords for dim in template.dims)
-    ):
-        factor_y = 1
-        factor_x = 1
-        src_y_res = _axis_resolution(np.asarray(mask.coords[mask.dims[0]].values))
-        src_x_res = _axis_resolution(np.asarray(mask.coords[mask.dims[1]].values))
-        dst_y_res = _axis_resolution(np.asarray(template.coords[template.dims[0]].values))
-        dst_x_res = _axis_resolution(np.asarray(template.coords[template.dims[1]].values))
-        if src_y_res is not None and dst_y_res is not None and dst_y_res > src_y_res:
-            factor_y = max(1, int(np.ceil(dst_y_res / src_y_res)))
-        if src_x_res is not None and dst_x_res is not None and dst_x_res > src_x_res:
-            factor_x = max(1, int(np.ceil(dst_x_res / src_x_res)))
-
-        source = np.asarray(mask.values, dtype=np.float32)
-        if factor_y > 1 or factor_x > 1:
-            source = maximum_filter(source, size=(factor_y, factor_x), mode="nearest")
-        remapped = xr.DataArray(
-            source,
-            dims=mask.dims,
-            coords={dim: mask.coords[dim] for dim in mask.dims},
-            attrs=mask.attrs,
-        )
-        try:
-            interpolated = remapped.interp(
-                coords={dim: template.coords[dim] for dim in template.dims},
-                method="nearest",
-            )
-            out = np.asarray(interpolated.values, dtype=np.float32)
-            out = np.where(np.isfinite(out), out, 1.0)
-        except Exception:
-            out = np.asarray(mask.values, dtype=np.float32)
-    else:
-        out = np.asarray(mask.values, dtype=np.float32)
-
-    h_out = int(template.sizes[template.dims[0]])
-    w_out = int(template.sizes[template.dims[1]])
-    if out.shape != (h_out, w_out):
-        factor_y = max(1, out.shape[0] // h_out)
-        factor_x = max(1, out.shape[1] // w_out)
-        dilated = maximum_filter(out, size=(factor_y, factor_x), mode="nearest")
-        out = zoom(dilated, (h_out / dilated.shape[0], w_out / dilated.shape[1]), order=0)
-        out = out[:h_out, :w_out]
-        if out.shape != (h_out, w_out):
-            padded: Float32Array = np.ones((h_out, w_out), dtype=np.float32)
-            padded[: out.shape[0], : out.shape[1]] = out
-            out = padded
-
-    resampled = xr.DataArray(
-        (out > 0.5).astype(np.uint8),
-        dims=template.dims,
-        coords={dim: template.coords[dim] for dim in template.dims if dim in template.coords},
-        attrs=mask.attrs,
-    )
-    return copy_spatial_metadata_like(resampled, template)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _auxiliary_dataset(result: CorrectionResult) -> xr.Dataset:
     aux_template = result.aot
+    resampled_mask = resample_mask_to_template(result.cloud_mask, aux_template)
     aux_vars: dict[str, xr.DataArray] = {
         "aot": aux_template.astype(np.float32),
         "tcwv": result.tcwv.astype(np.float32),
-        "cloud_mask": _cloud_mask_on_template_grid(result.cloud_mask, aux_template),
+        "cloud_mask": resampled_mask.astype(np.uint8),
     }
     if result.solver_qa is not None:
         for name, field in sorted(result.solver_qa.data_vars.items()):
-            aux_vars[name] = _cloud_mask_on_template_grid(field.astype(bool), aux_template)
+            aux_vars[name] = resample_mask_to_template(field.astype(bool), aux_template).astype(np.uint8)
     return xr.Dataset(aux_vars)
 
 
@@ -149,19 +81,66 @@ def _cast_dataset(
     return dataset.astype(dtype)
 
 
-def _cast_monthly_composite_reflectance(
-    dataset: xr.Dataset,
-    *,
-    dtype: str,
-    scale: float,
-    nodata: float,
-) -> xr.Dataset:
-    return _cast_dataset(dataset, dtype=dtype, scale=scale, nodata=nodata)
+
+# ---------------------------------------------------------------------------
+# Scene prefix derivation
+# ---------------------------------------------------------------------------
+
+def _derive_scene_prefix(metadata: dict[str, Any]) -> str:
+    """Build ``S2A_L2A_20240115T103045_T32UQD`` style prefix from metadata."""
+    satellite = metadata.get("satellite", "")
+    observation_time = metadata.get("observation_time")
+    tile_id = metadata.get("tile_id")
+
+    # Satellite token (e.g. "S2A", "S2B", "L8")
+    sat_token = str(satellite).upper() if satellite else "SAT"
+
+    # Timestamp token
+    if isinstance(observation_time, datetime):
+        ts_token = observation_time.strftime("%Y%m%dT%H%M%S")
+    else:
+        ts_token = "00000000T000000"
+
+    parts = [sat_token, "L2A", ts_token]
+    if tile_id:
+        tile_str = str(tile_id)
+        if not tile_str.startswith("T"):
+            tile_str = f"T{tile_str}"
+        parts.append(tile_str)
+    return "_".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# ConfiguredOutputWriter
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ConfiguredOutputWriter:
-    """Write correction products using the resolved output configuration."""
+    """Write correction products with satellite-standard naming and STAC metadata.
+
+    Output layout (raster/cog format)::
+
+        output_dir/
+        ├── S2A_L2A_20240115T103045_T32UQD_BOA_B02.tif
+        ├── S2A_L2A_20240115T103045_T32UQD_BOA_B03.tif
+        ├── ...
+        ├── S2A_L2A_20240115T103045_T32UQD_BOA_UNC_B02.tif   (if include_uncertainty)
+        ├── S2A_L2A_20240115T103045_T32UQD_SURF_B02.tif      (surface prior)
+        ├── S2A_L2A_20240115T103045_T32UQD_SURF_UNC_B02.tif
+        ├── S2A_L2A_20240115T103045_T32UQD_AOT.tif
+        ├── S2A_L2A_20240115T103045_T32UQD_TCWV.tif
+        ├── S2A_L2A_20240115T103045_T32UQD_CLOUD.tif
+        ├── S2A_L2A_20240115T103045_T32UQD_QA_{flag}.tif
+        ├── S2A_L2A_20240115T103045_T32UQD_RGB.tif
+        ├── S2A_L2A_20240115T103045_T32UQD.json               (STAC Item)
+        └── preview/
+            ├── false_colour.png        (NIR-R-G composite)
+            ├── aot.png                 (colour-mapped AOT field)
+            ├── tcwv.png                (colour-mapped TCWV field)
+            ├── cloud_mask.png          (RGB + cloud mask overlay)
+            └── aot_scatter_B02.png     (solver scatter plots)
+    """
 
     defaults: OutputDefaultsConfig
 
@@ -173,107 +152,74 @@ class ConfiguredOutputWriter:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
 
+        prefix = _derive_scene_prefix(result.metadata)
+
         if self.defaults.format in {"geotiff", "cog"}:
             as_cog = self.defaults.format == "cog"
-            return self._write_raster_products(result, destination, as_cog=as_cog)
-        if self.defaults.format == "netcdf":
-            return self._write_netcdf_products(result, destination)
-        if self.defaults.format == "zarr":
-            return self._write_zarr_products(result, destination)
-        raise ValueError(f"Unsupported output format: {self.defaults.format!r}")
+            artifacts = self._write_raster_products(result, destination, prefix, as_cog=as_cog)
+        elif self.defaults.format == "netcdf":
+            artifacts = self._write_netcdf_products(result, destination, prefix)
+        elif self.defaults.format == "zarr":
+            artifacts = self._write_zarr_products(result, destination, prefix)
+        else:
+            raise ValueError(f"Unsupported output format: {self.defaults.format!r}")
+
+        # Write STAC item
+        stac_path = destination / f"{prefix}.json"
+        stac_item = build_stac_item_from_result(result, output_dir=destination, artifacts=artifacts)
+        stac_path.write_text(json.dumps(stac_item, indent=2), encoding="utf-8")
+        artifacts["stac_item"] = stac_path
+
+        return artifacts
+
+    # -----------------------------------------------------------------
+    # Raster (GeoTIFF / COG)
+    # -----------------------------------------------------------------
 
     def _write_raster_products(
         self,
         result: CorrectionResult,
         output_dir: Path,
+        prefix: str,
         *,
         as_cog: bool,
     ) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
-        raster_dir = output_dir / "boa"
-        prepared_boa = _cast_dataset(
-            result.boa,
-            dtype=self.defaults.boa_dtype,
-            scale=self.defaults.boa_scale,
-            nodata=self.defaults.boa_nodata,
-        )
+        write_fn = write_cog if as_cog else write_raster
         nodata = int(self.defaults.boa_nodata) if self.defaults.boa_dtype == "uint16" else None
-        boa_paths = write_dataset(
-            prepared_boa,
-            raster_dir,
-            compression=self.defaults.compression,
-            dtype=self.defaults.boa_dtype,
-            as_cog=as_cog,
-            nodata=nodata,
-        )
-        artifacts.update({f"boa.{name}": path for name, path in boa_paths.items()})
 
+        def _write_bands(
+            dataset: xr.Dataset, product_tag: str, artifact_prefix: str,
+        ) -> None:
+            prepared = _cast_dataset(
+                dataset,
+                dtype=self.defaults.boa_dtype,
+                scale=self.defaults.boa_scale,
+                nodata=self.defaults.boa_nodata,
+            )
+            for band_name in prepared.data_vars:
+                path = output_dir / f"{prefix}_{product_tag}_{band_name}.tif"
+                write_fn(prepared[band_name], path, compression=self.defaults.compression, nodata=nodata)
+                artifacts[f"{artifact_prefix}.{band_name}"] = path
+
+        _write_bands(result.boa, "BOA", "boa")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
-            unc_dir = output_dir / "boa_unc"
-            prepared_unc = _cast_dataset(
-                result.boa_unc,
-                dtype=self.defaults.boa_dtype,
-                scale=self.defaults.boa_scale,
-                nodata=self.defaults.boa_nodata,
-            )
-            unc_paths = write_dataset(
-                prepared_unc,
-                unc_dir,
-                compression=self.defaults.compression,
-                dtype=self.defaults.boa_dtype,
-                as_cog=as_cog,
-                nodata=nodata,
-            )
-            artifacts.update({f"boa_unc.{name}": path for name, path in unc_paths.items()})
-
+            _write_bands(result.boa_unc, "BOA_UNC", "boa_unc")
         if result.surface_prior is not None:
-            prior_dir = output_dir / "surface_prior"
-            prepared_prior = _cast_dataset(
-                result.surface_prior,
-                dtype=self.defaults.boa_dtype,
-                scale=self.defaults.boa_scale,
-                nodata=self.defaults.boa_nodata,
-            )
-            prior_paths = write_dataset(
-                prepared_prior,
-                prior_dir,
-                compression=self.defaults.compression,
-                dtype=self.defaults.boa_dtype,
-                as_cog=as_cog,
-                nodata=nodata,
-            )
-            artifacts.update({f"surface_prior.{name}": path for name, path in prior_paths.items()})
-
+            _write_bands(result.surface_prior, "SURF", "surface_prior")
         if self.defaults.include_uncertainty and result.surface_prior_unc is not None:
-            prior_unc_dir = output_dir / "surface_prior_unc"
-            prepared_prior_unc = _cast_dataset(
-                result.surface_prior_unc,
-                dtype=self.defaults.boa_dtype,
-                scale=self.defaults.boa_scale,
-                nodata=self.defaults.boa_nodata,
-            )
-            prior_unc_paths = write_dataset(
-                prepared_prior_unc,
-                prior_unc_dir,
-                compression=self.defaults.compression,
-                dtype=self.defaults.boa_dtype,
-                as_cog=as_cog,
-                nodata=nodata,
-            )
-            artifacts.update({f"surface_prior_unc.{name}": path for name, path in prior_unc_paths.items()})
+            _write_bands(result.surface_prior_unc, "SURF_UNC", "surface_prior_unc")
 
+        # --- Monthly composites ---
         if result.monthly_composites:
-            write_fn = write_cog if as_cog else write_raster
-            monthly_root = output_dir / "monthly_composites"
-            monthly_root.mkdir(parents=True, exist_ok=True)
             for label, composite in sorted(result.monthly_composites.items()):
-                composite_dir = monthly_root / label
-                prepared_reflectance = _cast_monthly_composite_reflectance(
+                prepared_reflectance = _cast_dataset(
                     composite.reflectance,
                     dtype=self.defaults.boa_dtype,
                     scale=self.defaults.boa_scale,
                     nodata=self.defaults.boa_nodata,
                 )
+                composite_dir = output_dir / "monthly_composites" / label
                 composite_paths = write_dataset(
                     prepared_reflectance,
                     composite_dir,
@@ -295,16 +241,18 @@ class ConfiguredOutputWriter:
                     nodata=-1,
                 )
 
+        # --- Auxiliary (AOT, TCWV, cloud mask, QA) ---
         if self.defaults.include_auxiliary:
-            write_fn = write_cog if as_cog else write_raster
-            aux_dir = output_dir / "auxiliary"
-            aux_dir.mkdir(parents=True, exist_ok=True)
             aux_ds = _auxiliary_dataset(result)
-            artifacts["auxiliary.aot"] = write_fn(aux_ds["aot"], aux_dir / "aot.tif")
-            artifacts["auxiliary.tcwv"] = write_fn(aux_ds["tcwv"], aux_dir / "tcwv.tif")
+            artifacts["auxiliary.aot"] = write_fn(
+                aux_ds["aot"], output_dir / f"{prefix}_AOT.tif",
+            )
+            artifacts["auxiliary.tcwv"] = write_fn(
+                aux_ds["tcwv"], output_dir / f"{prefix}_TCWV.tif",
+            )
             artifacts["auxiliary.cloud_mask"] = write_fn(
                 aux_ds["cloud_mask"],
-                aux_dir / "cloud_mask.tif",
+                output_dir / f"{prefix}_CLOUD.tif",
                 compression="lzw",
                 dtype="uint8",
                 nodata=255,
@@ -314,22 +262,31 @@ class ConfiguredOutputWriter:
                     continue
                 artifacts[f"auxiliary.qa.{name}"] = write_fn(
                     field,
-                    aux_dir / f"qa_{name}.tif",
+                    output_dir / f"{prefix}_QA_{name}.tif",
                     compression="lzw",
                     dtype="uint8",
                     nodata=255,
                 )
 
-        quicklook = self._write_rgb_if_available(result, output_dir)
+        # --- RGB quicklook ---
+        quicklook = self._write_rgb_if_available(result, output_dir, prefix)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
-        artifacts.update(self._write_scatter_diagnostics_if_available(result, output_dir))
+
+        # --- Preview PNGs ---
+        artifacts.update(self._write_previews(result, output_dir))
+
         return artifacts
+
+    # -----------------------------------------------------------------
+    # NetCDF
+    # -----------------------------------------------------------------
 
     def _write_netcdf_products(
         self,
         result: CorrectionResult,
         output_dir: Path,
+        prefix: str,
     ) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
         prepared_boa = _cast_dataset(
@@ -338,15 +295,15 @@ class ConfiguredOutputWriter:
             scale=self.defaults.boa_scale,
             nodata=self.defaults.boa_nodata,
         )
-        artifacts["boa"] = write_netcdf(prepared_boa, output_dir / "boa.nc")
+        artifacts["boa"] = write_netcdf(prepared_boa, output_dir / f"{prefix}_BOA.nc")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
-            artifacts["boa_unc"] = write_netcdf(result.boa_unc.astype(np.float32), output_dir / "boa_unc.nc")
+            artifacts["boa_unc"] = write_netcdf(result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.nc")
         if result.surface_prior is not None:
-            artifacts["surface_prior"] = write_netcdf(result.surface_prior.astype(np.float32), output_dir / "surface_prior.nc")
+            artifacts["surface_prior"] = write_netcdf(result.surface_prior.astype(np.float32), output_dir / f"{prefix}_SURF.nc")
         if self.defaults.include_uncertainty and result.surface_prior_unc is not None:
             artifacts["surface_prior_unc"] = write_netcdf(
                 result.surface_prior_unc.astype(np.float32),
-                output_dir / "surface_prior_unc.nc",
+                output_dir / f"{prefix}_SURF_UNC.nc",
             )
         if result.monthly_composites:
             monthly_root = output_dir / "monthly_composites"
@@ -361,17 +318,22 @@ class ConfiguredOutputWriter:
                 )
         if self.defaults.include_auxiliary:
             aux_ds = _auxiliary_dataset(result)
-            artifacts["auxiliary"] = write_netcdf(aux_ds, output_dir / "auxiliary.nc")
-        quicklook = self._write_rgb_if_available(result, output_dir)
+            artifacts["auxiliary"] = write_netcdf(aux_ds, output_dir / f"{prefix}_AUX.nc")
+        quicklook = self._write_rgb_if_available(result, output_dir, prefix)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
-        artifacts.update(self._write_scatter_diagnostics_if_available(result, output_dir))
+        artifacts.update(self._write_previews(result, output_dir))
         return artifacts
+
+    # -----------------------------------------------------------------
+    # Zarr
+    # -----------------------------------------------------------------
 
     def _write_zarr_products(
         self,
         result: CorrectionResult,
         output_dir: Path,
+        prefix: str,
     ) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
         prepared_boa = _cast_dataset(
@@ -380,15 +342,15 @@ class ConfiguredOutputWriter:
             scale=self.defaults.boa_scale,
             nodata=self.defaults.boa_nodata,
         )
-        artifacts["boa"] = write_zarr(prepared_boa, output_dir / "boa.zarr")
+        artifacts["boa"] = write_zarr(prepared_boa, output_dir / f"{prefix}_BOA.zarr")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
-            artifacts["boa_unc"] = write_zarr(result.boa_unc.astype(np.float32), output_dir / "boa_unc.zarr")
+            artifacts["boa_unc"] = write_zarr(result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.zarr")
         if result.surface_prior is not None:
-            artifacts["surface_prior"] = write_zarr(result.surface_prior.astype(np.float32), output_dir / "surface_prior.zarr")
+            artifacts["surface_prior"] = write_zarr(result.surface_prior.astype(np.float32), output_dir / f"{prefix}_SURF.zarr")
         if self.defaults.include_uncertainty and result.surface_prior_unc is not None:
             artifacts["surface_prior_unc"] = write_zarr(
                 result.surface_prior_unc.astype(np.float32),
-                output_dir / "surface_prior_unc.zarr",
+                output_dir / f"{prefix}_SURF_UNC.zarr",
             )
         if result.monthly_composites:
             monthly_root = output_dir / "monthly_composites"
@@ -403,43 +365,106 @@ class ConfiguredOutputWriter:
                 )
         if self.defaults.include_auxiliary:
             aux_ds = _auxiliary_dataset(result)
-            artifacts["auxiliary"] = write_zarr(aux_ds, output_dir / "auxiliary.zarr")
-        quicklook = self._write_rgb_if_available(result, output_dir)
+            artifacts["auxiliary"] = write_zarr(aux_ds, output_dir / f"{prefix}_AUX.zarr")
+        quicklook = self._write_rgb_if_available(result, output_dir, prefix)
         if quicklook is not None:
             artifacts["quicklook.rgb"] = quicklook
-        artifacts.update(self._write_scatter_diagnostics_if_available(result, output_dir))
+        artifacts.update(self._write_previews(result, output_dir))
         return artifacts
+
+    # -----------------------------------------------------------------
+    # Shared helpers
+    # -----------------------------------------------------------------
 
     def _write_rgb_if_available(
         self,
         result: CorrectionResult,
         output_dir: Path,
+        prefix: str,
     ) -> Path | None:
         if not self.defaults.include_rgb:
             return None
         if not {"B04", "B03", "B02"} <= set(result.boa.data_vars):
             return None
-        return cast("Path", write_rgb_quicklook(result.boa, output_dir / "quicklook.tif"))
+        return cast("Path", write_rgb_quicklook(result.boa, output_dir / f"{prefix}_RGB.tif"))
 
-    def _write_scatter_diagnostics_if_available(
+    def _write_previews(
         self,
         result: CorrectionResult,
         output_dir: Path,
     ) -> dict[str, Path]:
-        if not self.defaults.include_auxiliary:
-            return {}
-        plots = tuple(getattr(result.diagnostics, "aot_scatter_plots", ()))
-        if not plots:
+        """Write all preview PNGs: false colour, AOT/TCWV maps, cloud overlay, scatter."""
+        if not self.defaults.include_rgb:
             return {}
 
-        diagnostics_dir = output_dir / "diagnostics"
+        preview_dir = output_dir / "preview"
         artifacts: dict[str, Path] = {}
-        for plot in plots:
-            path = diagnostics_dir / f"aot_scatter_{plot.band_name}.png"
-            artifacts[f"diagnostics.scatter.{plot.band_name}"] = cast(
-                "Path",
-                write_aot_scatter_plot(plot, path),
+
+        # False-colour composite (NIR-Red-Green)
+        try:
+            fc_path = write_false_colour_preview(
+                result.boa,
+                preview_dir / "false_colour.png",
             )
+            if fc_path is not None:
+                artifacts["preview.false_colour"] = fc_path
+        except Exception:
+            logger.debug("Skipped false-colour preview.", exc_info=True)
+
+        # AOT colour map
+        try:
+            aot_path = write_field_preview(
+                result.aot,
+                preview_dir / "aot.png",
+                vmin=0.0,
+                vmax=1.0,
+                palette="magma",
+                title="AOT 550 nm",
+                cloud_mask=result.cloud_mask,
+            )
+            artifacts["preview.aot"] = aot_path
+        except Exception:
+            logger.debug("Skipped AOT preview.", exc_info=True)
+
+        # TCWV colour map
+        try:
+            tcwv_path = write_field_preview(
+                result.tcwv,
+                preview_dir / "tcwv.png",
+                vmin=0.0,
+                palette="viridis",
+                title="TCWV (cm)",
+                unit="cm",
+                cloud_mask=result.cloud_mask,
+            )
+            artifacts["preview.tcwv"] = tcwv_path
+        except Exception:
+            logger.debug("Skipped TCWV preview.", exc_info=True)
+
+        # Cloud mask overlay on true-colour
+        try:
+            cloud_path = write_cloud_mask_preview(
+                result.boa,
+                result.cloud_mask,
+                preview_dir / "cloud_mask.png",
+            )
+            if cloud_path is not None:
+                artifacts["preview.cloud_mask"] = cloud_path
+        except Exception:
+            logger.debug("Skipped cloud mask preview.", exc_info=True)
+
+        # Scatter diagnostics
+        plots = tuple(getattr(result.diagnostics, "aot_scatter_plots", ()))
+        for plot in plots:
+            try:
+                path = preview_dir / f"aot_scatter_{plot.band_name}.png"
+                artifacts[f"preview.scatter.{plot.band_name}"] = cast(
+                    "Path",
+                    write_aot_scatter_plot(plot, path),
+                )
+            except Exception:
+                logger.debug("Skipped scatter plot for %s.", plot.band_name, exc_info=True)
+
         return artifacts
 
 

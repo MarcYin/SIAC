@@ -643,6 +643,233 @@ def write_aot_scatter_plot(
 
 
 # =============================================================================
+# Preview PNG Writers
+# =============================================================================
+
+
+def _field_to_uint8(
+    data: np.ndarray,
+    vmin: float,
+    vmax: float,
+    *,
+    mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Scale a 2-D float field to 0-255 uint8, masking NaN/invalid to 0."""
+    arr = np.asarray(data, dtype=np.float64)
+    span = max(vmax - vmin, 1.0e-9)
+    scaled = np.clip((arr - vmin) / span, 0.0, 1.0) * 255.0
+    scaled = np.where(np.isfinite(scaled), scaled, 0.0)
+    if mask is not None:
+        scaled = np.where(mask, 0.0, scaled)
+    return scaled.astype(np.uint8)
+
+
+def _apply_colourmap(
+    data: np.ndarray,
+    vmin: float,
+    vmax: float,
+    *,
+    palette: str = "viridis",
+    mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Map a 2-D float field to an (H, W, 3) uint8 RGB array via a colourmap.
+
+    Supported palettes: ``viridis`` (blue-green-yellow), ``magma`` (black-magenta-yellow),
+    ``coolwarm`` (blue-white-red).
+    """
+    idx = _field_to_uint8(data, vmin, vmax, mask=mask)
+
+    # Build 256-entry lookup tables (no matplotlib dependency).
+    lut = _LUT_CACHE.get(palette)
+    if lut is None:
+        lut = _build_lut(palette)
+        _LUT_CACHE[palette] = lut
+
+    rgb = lut[idx]
+    # Mask → dark grey
+    if mask is not None:
+        rgb[mask] = 40
+    return rgb
+
+
+_LUT_CACHE: dict[str, np.ndarray] = {}
+
+
+def _build_lut(palette: str) -> np.ndarray:
+    """Build a 256 x 3 uint8 lookup table for *palette*."""
+    t = np.linspace(0.0, 1.0, 256)
+    if palette == "viridis":
+        # Simplified viridis:  dark-blue → teal → green → yellow
+        r = np.clip(np.where(t < 0.5, 0.26 + 0.1 * t, -0.4 + 2.4 * t), 0, 1)
+        g = np.clip(np.where(t < 0.3, 0.0 + 1.5 * t, 0.35 + 0.25 * t + 0.5 * t ** 2), 0, 1)
+        b = np.clip(np.where(t < 0.6, 0.33 + 0.6 * t, 1.5 - 1.5 * t), 0, 1)
+    elif palette == "magma":
+        r = np.clip(t ** 0.6, 0, 1)
+        g = np.clip(0.15 * t + 0.5 * t ** 3, 0, 1)
+        b = np.clip(0.3 + 0.5 * t - 0.7 * t ** 2 + 0.5 * t ** 3, 0, 1)
+    elif palette == "coolwarm":
+        r = np.clip(np.where(t < 0.5, 0.2 + 1.6 * t, 1.0), 0, 1)
+        g = np.clip(np.where(t < 0.5, 0.2 + 1.6 * t, 1.0 - 1.6 * (t - 0.5)), 0, 1)
+        b = np.clip(np.where(t < 0.5, 1.0, 1.0 - 1.6 * (t - 0.5)), 0, 1)
+    else:
+        # Grey fallback
+        r = g = b = t
+    lut = np.stack([r, g, b], axis=-1)
+    return (lut * 255).astype(np.uint8)
+
+
+def write_false_colour_preview(
+    boa: xr.Dataset,
+    output_path: str | Path,
+    *,
+    red_band: str = "B08",
+    green_band: str = "B04",
+    blue_band: str = "B03",
+    scale: tuple[float, float] = (0.0, 0.4),
+) -> Path | None:
+    """Write a false-colour composite PNG (default: NIR-Red-Green)."""
+    from PIL import Image
+
+    output_path = Path(output_path)
+    bands_available = set(boa.data_vars)
+    if not {red_band, green_band, blue_band} <= bands_available:
+        # Try B8A if B08 not available
+        if red_band == "B08" and "B8A" in bands_available:
+            red_band = "B8A"
+        else:
+            return None
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    r = _field_to_uint8(boa[red_band].values, scale[0], scale[1])
+    g = _field_to_uint8(boa[green_band].values, scale[0], scale[1])
+    b = _field_to_uint8(boa[blue_band].values, scale[0], scale[1])
+    rgb = np.stack([r, g, b], axis=-1)
+
+    Image.fromarray(rgb, "RGB").save(output_path, format="PNG")
+    logger.info("Wrote false-colour preview to %s", output_path)
+    return output_path
+
+
+def write_field_preview(
+    field: xr.DataArray,
+    output_path: str | Path,
+    *,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    palette: str = "viridis",
+    title: str = "",
+    unit: str = "",
+    cloud_mask: xr.DataArray | None = None,
+) -> Path:
+    """Write a colour-mapped 2-D field preview PNG with an embedded colour bar."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    values = np.asarray(field.values, dtype=np.float64)
+    mask = None
+    if cloud_mask is not None:
+        mask_vals = np.asarray(cloud_mask.values, dtype=bool)
+        if mask_vals.shape == values.shape:
+            mask = mask_vals
+
+    finite = values[np.isfinite(values)]
+    if mask is not None:
+        finite = values[np.isfinite(values) & ~mask]
+    if finite.size == 0:
+        finite = np.array([0.0, 1.0])
+
+    if vmin is None:
+        vmin = float(np.percentile(finite, 2))
+    if vmax is None:
+        vmax = float(np.percentile(finite, 98))
+    if vmin == vmax:
+        vmax = vmin + 1.0
+
+    rgb = _apply_colourmap(values, vmin, vmax, palette=palette, mask=mask)
+
+    # Add colour bar strip (30px) and label area (30px) at the bottom
+    h, w = rgb.shape[:2]
+    bar_h, label_h = 20, 30
+    canvas = np.full((h + bar_h + label_h, w, 3), 255, dtype=np.uint8)
+    canvas[:h, :, :] = rgb
+
+    # Colour bar gradient
+    bar_t = np.linspace(0.0, 1.0, w)
+    bar_idx = (bar_t * 255).astype(np.uint8)
+    lut = _LUT_CACHE.get(palette) or _build_lut(palette)
+    bar_row = lut[bar_idx]  # (w, 3)
+    for row in range(h, h + bar_h):
+        canvas[row, :, :] = bar_row
+
+    image = Image.fromarray(canvas, "RGB")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default()
+
+    # Title at top
+    if title:
+        draw.text((4, 2), title, fill=(255, 255, 255), font=font)
+
+    # Min / max labels under colour bar
+    label_y = h + bar_h + 4
+    draw.text((4, label_y), f"{vmin:.3f}", fill=(40, 40, 40), font=font)
+    max_label = f"{vmax:.3f}"
+    if unit:
+        max_label = f"{vmax:.3f} {unit}"
+    draw.text((max(0, w - 8 * len(max_label) - 4), label_y), max_label, fill=(40, 40, 40), font=font)
+
+    image.save(output_path, format="PNG")
+    logger.info("Wrote field preview to %s", output_path)
+    return output_path
+
+
+def write_cloud_mask_preview(
+    boa: xr.Dataset,
+    cloud_mask: xr.DataArray,
+    output_path: str | Path,
+    *,
+    red_band: str = "B04",
+    green_band: str = "B03",
+    blue_band: str = "B02",
+    scale: tuple[float, float] = (0.0, 0.3),
+    cloud_colour: tuple[int, int, int] = (255, 40, 40),
+    cloud_alpha: float = 0.55,
+) -> Path | None:
+    """Write an RGB image with the cloud mask overlaid in a semi-transparent colour."""
+    from PIL import Image
+
+    output_path = Path(output_path)
+    if not {red_band, green_band, blue_band} <= set(boa.data_vars):
+        return None
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    r = _field_to_uint8(boa[red_band].values, scale[0], scale[1])
+    g = _field_to_uint8(boa[green_band].values, scale[0], scale[1])
+    b = _field_to_uint8(boa[blue_band].values, scale[0], scale[1])
+
+    mask = np.asarray(cloud_mask.values, dtype=bool)
+    # Resize mask to match BOA if needed
+    if mask.shape != r.shape:
+        from scipy.ndimage import zoom as _zoom
+
+        zoom_y = r.shape[0] / max(mask.shape[0], 1)
+        zoom_x = r.shape[1] / max(mask.shape[1], 1)
+        mask = _zoom(mask.astype(np.float32), (zoom_y, zoom_x), order=0) > 0.5
+
+    # Blend cloud colour into masked pixels
+    a = cloud_alpha
+    r = np.where(mask, (a * cloud_colour[0] + (1 - a) * r).astype(np.uint8), r)
+    g = np.where(mask, (a * cloud_colour[1] + (1 - a) * g).astype(np.uint8), g)
+    b = np.where(mask, (a * cloud_colour[2] + (1 - a) * b).astype(np.uint8), b)
+
+    rgb = np.stack([r, g, b], axis=-1)
+    Image.fromarray(rgb, "RGB").save(output_path, format="PNG")
+    logger.info("Wrote cloud mask preview to %s", output_path)
+    return output_path
+
+
+# =============================================================================
 # Helper Functions
 # =============================================================================
 

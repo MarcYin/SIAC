@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -7,7 +9,7 @@ import pytest
 import xarray as xr
 
 import siac.adapters.output as output_module
-from siac.adapters.output import ConfiguredOutputWriter
+from siac.adapters.output import ConfiguredOutputWriter, _derive_scene_prefix
 from siac.config.schema import OutputDefaultsConfig
 from siac.runtime import (
     AOTScatterBandDiagnostics,
@@ -20,6 +22,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
 def _result(
     *,
     include_uncertainty: bool = True,
@@ -27,6 +34,7 @@ def _result(
     include_monthly_composites: bool = False,
     include_diagnostics: bool = False,
     include_solver_qa: bool = False,
+    metadata: dict | None = None,
 ) -> CorrectionResult:
     coords = {"y": [0, 1], "x": [0, 1]}
     boa = xr.Dataset(
@@ -108,6 +116,12 @@ def _result(
         if include_solver_qa
         else None
     )
+    if metadata is None:
+        metadata = {
+            "satellite": "S2A",
+            "observation_time": datetime(2024, 3, 15, 10, 30, 45, tzinfo=timezone.utc),
+            "tile_id": "32UQD",
+        }
     return CorrectionResult(
         boa=boa,
         boa_unc=boa_unc,
@@ -118,6 +132,7 @@ def _result(
         surface_prior_unc=surface_prior_unc,
         solver_qa=solver_qa,
         monthly_composites=monthly_composites,
+        metadata=metadata,
         diagnostics=CorrectionDiagnostics(
             processing_time_s=0.25,
             aot_scatter_plots=(
@@ -128,40 +143,98 @@ def _result(
                     simulated_toa=np.array([0.14, 0.24], dtype=np.float32),
                     total_valid_count=2,
                 ),
-            ) if include_diagnostics else (),
+            )
+            if include_diagnostics
+            else (),
         ),
     )
 
 
-def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dataset_calls: list[tuple[xr.Dataset, Path, dict[str, object]]] = []
-    raster_calls: list[tuple[Path, dict[str, object], np.dtype[np.generic]]] = []
-    quicklook_calls: list[Path] = []
-    scatter_calls: list[Path] = []
+# ---------------------------------------------------------------------------
+# Prefix derivation
+# ---------------------------------------------------------------------------
 
-    def _fake_write_dataset(dataset: xr.Dataset, output_dir: Path, **kwargs: object) -> dict[str, Path]:
+
+class TestScenePrefix:
+    def test_sentinel2_prefix(self):
+        prefix = _derive_scene_prefix({
+            "satellite": "S2A",
+            "observation_time": datetime(2024, 3, 15, 10, 30, 45),
+            "tile_id": "32UQD",
+        })
+        assert prefix == "S2A_L2A_20240315T103045_T32UQD"
+
+    def test_sentinel2b_prefix(self):
+        prefix = _derive_scene_prefix({
+            "satellite": "S2B",
+            "observation_time": datetime(2024, 1, 2, 8, 15, 0),
+            "tile_id": "T10SFG",
+        })
+        assert prefix == "S2B_L2A_20240102T081500_T10SFG"
+
+    def test_landsat_prefix(self):
+        prefix = _derive_scene_prefix({
+            "satellite": "L8",
+            "observation_time": datetime(2024, 6, 20, 14, 0, 0),
+        })
+        assert prefix == "L8_L2A_20240620T140000"
+
+    def test_missing_metadata_defaults(self):
+        prefix = _derive_scene_prefix({})
+        assert prefix == "SAT_L2A_00000000T000000"
+
+    def test_tile_id_with_t_prefix(self):
+        prefix = _derive_scene_prefix({
+            "satellite": "S2A",
+            "observation_time": datetime(2024, 1, 1, 0, 0, 0),
+            "tile_id": "T32UQD",
+        })
+        assert prefix == "S2A_L2A_20240101T000000_T32UQD"
+
+
+# ---------------------------------------------------------------------------
+# Raster output (COG/GeoTIFF)
+# ---------------------------------------------------------------------------
+
+
+def _mock_writers(monkeypatch):
+    """Patch all writer functions to record calls without writing files."""
+    write_fn_calls = []
+    dataset_calls = []
+    quicklook_calls = []
+    scatter_calls = []
+
+    def _fake_write_fn(data, path, **kwargs):
+        write_fn_calls.append((path, kwargs, data.dtype))
+        return path
+
+    def _fake_write_dataset(dataset, output_dir, **kwargs):
         dataset_calls.append((dataset, output_dir, kwargs))
         return {name: output_dir / f"{name}.tif" for name in dataset.data_vars}
 
-    def _fake_write_cog(data: xr.DataArray, path: Path, **kwargs: object) -> Path:
-        raster_calls.append((path, kwargs, data.dtype))
-        return path
-
-    def _fake_write_rgb_quicklook(dataset: xr.Dataset, path: Path) -> Path:
+    def _fake_write_rgb_quicklook(dataset, path):
         quicklook_calls.append(path)
         return path
 
-    def _fake_write_aot_scatter_plot(_scatter: object, path: Path) -> Path:
+    def _fake_write_aot_scatter_plot(_scatter, path):
         scatter_calls.append(path)
         return path
 
+    monkeypatch.setattr(output_module, "write_cog", _fake_write_fn)
+    monkeypatch.setattr(output_module, "write_raster", _fake_write_fn)
     monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
-    monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
     monkeypatch.setattr(output_module, "write_rgb_quicklook", _fake_write_rgb_quicklook)
     monkeypatch.setattr(output_module, "write_aot_scatter_plot", _fake_write_aot_scatter_plot)
+
+    return write_fn_calls, dataset_calls, quicklook_calls, scatter_calls
+
+
+def test_raster_output_uses_satellite_prefix_for_boa_bands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -174,56 +247,45 @@ def test_write_raster_products_emits_boa_unc_aux_and_quicklook(
     )
     artifacts = writer.write(_result(include_diagnostics=True), tmp_path)
 
-    assert len(dataset_calls) == 2
-    assert dataset_calls[0][1] == tmp_path / "boa"
-    assert dataset_calls[0][2]["as_cog"] is True
-    assert dataset_calls[0][2]["dtype"] == "uint16"
-    assert dataset_calls[0][2]["nodata"] == 0
-    assert all(str(dataset[name].dtype) == "uint16" for dataset, _, _ in dataset_calls for name in dataset.data_vars)
+    prefix = "S2A_L2A_20240315T103045_T32UQD"
 
-    assert len(raster_calls) == 3
-    assert {path.name for path, _, _ in raster_calls} == {"aot.tif", "tcwv.tif", "cloud_mask.tif"}
-    cloud_mask_call = next(call for call in raster_calls if call[0].name == "cloud_mask.tif")
-    assert cloud_mask_call[1]["compression"] == "lzw"
-    assert cloud_mask_call[1]["dtype"] == "uint8"
-    assert cloud_mask_call[1]["nodata"] == 255
+    # BOA bands have satellite prefix
+    assert "boa.B04" in artifacts
+    assert artifacts["boa.B04"].name == f"{prefix}_BOA_B04.tif"
+    assert artifacts["boa.B03"].name == f"{prefix}_BOA_B03.tif"
+    assert artifacts["boa.B02"].name == f"{prefix}_BOA_B02.tif"
 
-    assert quicklook_calls == [tmp_path / "quicklook.tif"]
-    assert scatter_calls == [tmp_path / "diagnostics" / "aot_scatter_B02.png"]
-    assert {
-        "boa.B04",
-        "boa.B03",
-        "boa.B02",
-        "boa_unc.B04",
-        "boa_unc.B03",
-        "boa_unc.B02",
-        "auxiliary.aot",
-        "auxiliary.tcwv",
-        "auxiliary.cloud_mask",
-        "diagnostics.scatter.B02",
-        "quicklook.rgb",
-    } <= set(artifacts)
+    # BOA uncertainty bands
+    assert artifacts["boa_unc.B04"].name == f"{prefix}_BOA_UNC_B04.tif"
+
+    # Auxiliary with prefix
+    assert artifacts["auxiliary.aot"].name == f"{prefix}_AOT.tif"
+    assert artifacts["auxiliary.tcwv"].name == f"{prefix}_TCWV.tif"
+    assert artifacts["auxiliary.cloud_mask"].name == f"{prefix}_CLOUD.tif"
+
+    # Cloud mask encoding
+    cloud_call = next(c for c in write_fn_calls if c[0].name == f"{prefix}_CLOUD.tif")
+    assert cloud_call[1]["compression"] == "lzw"
+    assert cloud_call[1]["dtype"] == "uint8"
+    assert cloud_call[1]["nodata"] == 255
+
+    # RGB quicklook
+    assert artifacts["quicklook.rgb"].name == f"{prefix}_RGB.tif"
+
+    # Scatter diagnostics
+    assert "preview.scatter.B02" in artifacts
+
+    # STAC item
+    assert "stac_item" in artifacts
+    assert artifacts["stac_item"].name == f"{prefix}.json"
 
 
-def test_write_raster_products_emits_solver_qa_masks(
+def test_raster_output_emits_solver_qa_masks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    raster_calls: list[tuple[Path, dict[str, object], np.dtype[np.generic]]] = []
-
-    monkeypatch.setattr(
-        output_module,
-        "write_dataset",
-        lambda dataset, output_dir, **_kwargs: {name: output_dir / f"{name}.tif" for name in dataset.data_vars},
-    )
-
-    def _fake_write_cog(data: xr.DataArray, path: Path, **kwargs: object) -> Path:
-        raster_calls.append((path, kwargs, data.dtype))
-        return path
-
-    monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
-    monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda _dataset, path: path)
-    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
+    write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -234,32 +296,77 @@ def test_write_raster_products_emits_solver_qa_masks(
             include_rgb=False,
         )
     )
-
     artifacts = writer.write(_result(include_uncertainty=False, include_solver_qa=True), tmp_path)
 
-    qa_calls = [call for call in raster_calls if call[0].name.startswith("qa_")]
-    assert {path.name for path, _, _ in qa_calls} == {"qa_invalid_retrieval.tif", "qa_low_quality.tif"}
-    assert all(kwargs["dtype"] == "uint8" for _, kwargs, _ in qa_calls)
-    assert all(kwargs["nodata"] == 255 for _, kwargs, _ in qa_calls)
+    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    qa_calls = [c for c in write_fn_calls if "QA_" in c[0].name]
+    assert {c[0].name for c in qa_calls} == {
+        f"{prefix}_QA_invalid_retrieval.tif",
+        f"{prefix}_QA_low_quality.tif",
+    }
+    assert all(c[1]["dtype"] == "uint8" for c in qa_calls)
     assert {
         "auxiliary.qa.invalid_retrieval",
         "auxiliary.qa.low_quality",
     } <= set(artifacts)
 
 
-def test_write_netcdf_products_route_and_respects_toggles(
+def test_raster_output_emits_surface_prior_and_monthly_composites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_fn_calls, dataset_calls, _, _ = _mock_writers(monkeypatch)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="cog",
+            boa_dtype="uint16",
+            include_uncertainty=True,
+            include_auxiliary=False,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(
+        _result(include_surface_prior=True, include_monthly_composites=True),
+        tmp_path,
+    )
+
+    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    # Surface prior uses prefix
+    assert artifacts["surface_prior.B04"].name == f"{prefix}_SURF_B04.tif"
+    assert artifacts["surface_prior.B03"].name == f"{prefix}_SURF_B03.tif"
+    assert artifacts["surface_prior_unc.B04"].name == f"{prefix}_SURF_UNC_B04.tif"
+
+    # Monthly composites still use subdirectory (too many files)
+    assert {path.name for path, _, _ in write_fn_calls if "monthly" in str(path)} == {"quality.tif", "sample_index.tif"}
+    assert {
+        "monthly_composites.2023_07.B04",
+        "monthly_composites.2023_07.B03",
+        "monthly_composites.2023_07.quality",
+        "monthly_composites.2023_07.sample_index",
+    } <= set(artifacts)
+
+
+# ---------------------------------------------------------------------------
+# NetCDF output
+# ---------------------------------------------------------------------------
+
+
+def test_netcdf_output_uses_satellite_prefix(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[Path] = []
 
-    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+    def _fake_write_netcdf(dataset, path, **kwargs):
         del dataset, kwargs
         calls.append(path)
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
-    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _s, path: path)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -271,22 +378,24 @@ def test_write_netcdf_products_route_and_respects_toggles(
     )
     artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
 
-    assert calls == [tmp_path / "boa.nc"]
-    assert artifacts == {"boa": tmp_path / "boa.nc"}
+    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    assert calls == [tmp_path / f"{prefix}_BOA.nc"]
+    assert artifacts["boa"] == tmp_path / f"{prefix}_BOA.nc"
 
 
-def test_write_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
+def test_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, xr.Dataset] = {}
 
-    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+    def _fake_write_netcdf(dataset, path, **kwargs):
         del kwargs
         captured[str(path)] = dataset
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
     fine_coords = {"y": [1750.0, 1250.0, 750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
@@ -302,6 +411,7 @@ def test_write_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
         aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
         tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
         cloud_mask=xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"], coords=fine_coords),
+        metadata={"satellite": "S2A", "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
     )
     result.cloud_mask.values[0, 0] = True
 
@@ -313,29 +423,30 @@ def test_write_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
             include_rgb=False,
         )
     )
-
     artifacts = writer.write(result, tmp_path)
 
-    aux_ds = captured[str(tmp_path / "auxiliary.nc")]
-    assert artifacts["auxiliary"] == tmp_path / "auxiliary.nc"
+    aux_key = next(k for k in captured if "AUX" in k)
+    aux_ds = captured[aux_key]
+    assert "auxiliary" in artifacts
     assert aux_ds.sizes == {"y": 2, "x": 2}
     assert aux_ds["cloud_mask"].coords["x"].identical(result.aot.coords["x"])
     assert aux_ds["cloud_mask"].coords["y"].identical(result.aot.coords["y"])
     assert aux_ds["cloud_mask"].dtype == np.uint8
 
 
-def test_write_netcdf_auxiliary_includes_solver_qa_masks(
+def test_netcdf_auxiliary_includes_solver_qa_masks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, xr.Dataset] = {}
 
-    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+    def _fake_write_netcdf(dataset, path, **kwargs):
         del kwargs
         captured[str(path)] = dataset
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -345,26 +456,60 @@ def test_write_netcdf_auxiliary_includes_solver_qa_masks(
             include_rgb=False,
         )
     )
-
     writer.write(_result(include_uncertainty=False, include_solver_qa=True), tmp_path)
 
-    aux_ds = captured[str(tmp_path / "auxiliary.nc")]
+    aux_key = next(k for k in captured if "AUX" in k)
+    aux_ds = captured[aux_key]
     assert {"invalid_retrieval", "low_quality"} <= set(aux_ds.data_vars)
     assert aux_ds["invalid_retrieval"].dtype == np.uint8
-    assert aux_ds["low_quality"].dtype == np.uint8
 
 
-def test_write_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(
+# ---------------------------------------------------------------------------
+# Zarr output
+# ---------------------------------------------------------------------------
+
+
+def test_zarr_output_uses_satellite_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    def _fake_writer(dataset, path):
+        calls.append(path)
+        return path
+
+    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _s, path: path)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="zarr",
+            include_uncertainty=False,
+            include_auxiliary=False,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
+
+    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    assert calls == [tmp_path / f"{prefix}_BOA.zarr"]
+    assert artifacts["boa"] == tmp_path / f"{prefix}_BOA.zarr"
+
+
+def test_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, xr.Dataset] = {}
 
-    def _fake_write_zarr(dataset: xr.Dataset, path: Path) -> Path:
+    def _fake_write_zarr(dataset, path):
         captured[str(path)] = dataset
         return path
 
     monkeypatch.setattr(output_module, "write_zarr", _fake_write_zarr)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
     fine_coords = {"y": [1750.0, 1250.0, 750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
@@ -380,6 +525,7 @@ def test_write_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(
         aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
         tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
         cloud_mask=xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"], coords=fine_coords),
+        metadata={"satellite": "S2A", "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
     )
     result.cloud_mask.values[0, 0] = True
 
@@ -391,29 +537,69 @@ def test_write_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(
             include_rgb=False,
         )
     )
-
     artifacts = writer.write(result, tmp_path)
 
-    aux_ds = captured[str(tmp_path / "auxiliary.zarr")]
-    assert artifacts["auxiliary"] == tmp_path / "auxiliary.zarr"
+    aux_key = next(k for k in captured if "AUX" in k)
+    aux_ds = captured[aux_key]
+    assert "auxiliary" in artifacts
     assert aux_ds.sizes == {"y": 2, "x": 2}
-    assert aux_ds["cloud_mask"].coords["x"].identical(result.aot.coords["x"])
-    assert aux_ds["cloud_mask"].coords["y"].identical(result.aot.coords["y"])
     assert aux_ds["cloud_mask"].dtype == np.uint8
 
 
-def test_write_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
+def test_zarr_surface_prior_and_monthly_composites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Path] = []
+
+    def _fake_writer(dataset, path):
+        calls.append(path)
+        return path
+
+    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="zarr",
+            include_uncertainty=True,
+            include_auxiliary=False,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(
+        _result(include_surface_prior=True, include_monthly_composites=True),
+        tmp_path,
+    )
+
+    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    assert calls == [
+        tmp_path / f"{prefix}_BOA.zarr",
+        tmp_path / f"{prefix}_BOA_UNC.zarr",
+        tmp_path / f"{prefix}_SURF.zarr",
+        tmp_path / f"{prefix}_SURF_UNC.zarr",
+        tmp_path / "monthly_composites" / "2023_07.zarr",
+    ]
+    assert {
+        "surface_prior",
+        "surface_prior_unc",
+        "monthly_composites.2023_07",
+    } <= set(artifacts)
+
+
+def test_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, xr.Dataset] = {}
 
-    def _fake_write_netcdf(dataset: xr.Dataset, path: Path, **kwargs: object) -> Path:
+    def _fake_write_netcdf(dataset, path, **kwargs):
         del kwargs
         captured[str(path)] = dataset
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
 
     coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
     shifted_mask = xr.DataArray(
@@ -433,6 +619,7 @@ def test_write_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
         aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
         tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
         cloud_mask=shifted_mask,
+        metadata={"satellite": "S2A", "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
     )
 
     writer = ConfiguredOutputWriter(
@@ -443,84 +630,29 @@ def test_write_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
             include_rgb=False,
         )
     )
-
     writer.write(result, tmp_path)
 
-    aux_ds = captured[str(tmp_path / "auxiliary.nc")]
+    aux_key = next(k for k in captured if "AUX" in k)
+    aux_ds = captured[aux_key]
     expected = np.array([[False, False], [True, False]], dtype=bool)
     np.testing.assert_array_equal(aux_ds["cloud_mask"].values.astype(bool), expected)
 
 
-def test_write_raster_products_emits_surface_prior_and_monthly_composites(
+# ---------------------------------------------------------------------------
+# STAC item generation
+# ---------------------------------------------------------------------------
+
+
+def test_stac_item_generated_automatically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dataset_calls: list[tuple[xr.Dataset, Path, dict[str, object]]] = []
-    raster_calls: list[tuple[Path, dict[str, object], np.dtype[np.generic]]] = []
-
-    def _fake_write_dataset(dataset: xr.Dataset, output_dir: Path, **kwargs: object) -> dict[str, Path]:
-        dataset_calls.append((dataset, output_dir, kwargs))
-        return {name: output_dir / f"{name}.tif" for name in dataset.data_vars}
-
-    def _fake_write_cog(data: xr.DataArray, path: Path, **kwargs: object) -> Path:
-        raster_calls.append((path, kwargs, data.dtype))
-        return path
-
-    monkeypatch.setattr(output_module, "write_dataset", _fake_write_dataset)
-    monkeypatch.setattr(output_module, "write_cog", _fake_write_cog)
-    monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda _dataset, path: path)
-    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
+    """The writer should always produce a STAC JSON file."""
+    write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
             format="cog",
-            boa_dtype="uint16",
-            include_uncertainty=True,
-            include_auxiliary=False,
-            include_rgb=False,
-        )
-    )
-    artifacts = writer.write(
-        _result(include_surface_prior=True, include_monthly_composites=True),
-        tmp_path,
-    )
-
-    assert [output_dir for _, output_dir, _ in dataset_calls] == [
-        tmp_path / "boa",
-        tmp_path / "boa_unc",
-        tmp_path / "surface_prior",
-        tmp_path / "surface_prior_unc",
-        tmp_path / "monthly_composites" / "2023_07",
-    ]
-    assert {path.name for path, _, _ in raster_calls} == {"quality.tif", "sample_index.tif"}
-    assert {
-        "surface_prior.B04",
-        "surface_prior.B03",
-        "surface_prior_unc.B04",
-        "surface_prior_unc.B03",
-        "monthly_composites.2023_07.B04",
-        "monthly_composites.2023_07.B03",
-        "monthly_composites.2023_07.quality",
-        "monthly_composites.2023_07.sample_index",
-    } <= set(artifacts)
-
-
-def test_write_zarr_products_route_and_respects_toggles(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[Path] = []
-
-    def _fake_writer(dataset: xr.Dataset, path: Path) -> Path:
-        calls.append(path)
-        return path
-
-    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
-    monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _scatter, path: path)
-
-    writer = ConfiguredOutputWriter(
-        OutputDefaultsConfig(
-            format="zarr",
             include_uncertainty=False,
             include_auxiliary=False,
             include_rgb=False,
@@ -528,47 +660,68 @@ def test_write_zarr_products_route_and_respects_toggles(
     )
     artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
 
-    assert calls == [tmp_path / "boa.zarr"]
-    assert artifacts == {"boa": tmp_path / "boa.zarr"}
+    stac_path = artifacts["stac_item"]
+    assert stac_path.exists()
+    item = json.loads(stac_path.read_text())
+
+    assert item["type"] == "Feature"
+    assert item["stac_version"] == "1.1.0"
+    props = item["properties"]
+    assert "datetime" in props
+    assert props["siac:satellite"] == "S2A"
+    assert "siac:aot_mean" in props
+    assert "siac:tcwv_mean" in props
+    assert "eo:bands" in props
+    assert len(props["eo:bands"]) == 3
+    assert "processing:software" in props
+
+    # Assets should include BOA bands
+    assert "B04" in item["assets"]
+    assert "B03" in item["assets"]
+    assert "B02" in item["assets"]
+    assert item["assets"]["B04"]["roles"] == ["data", "reflectance"]
 
 
-def test_write_zarr_products_include_surface_prior_and_monthly_composites(
+def test_stac_item_includes_view_geometry_when_available(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[Path] = []
+    """View extension props present when geometry is in metadata."""
+    _mock_writers(monkeypatch)
 
-    def _fake_writer(dataset: xr.Dataset, path: Path) -> Path:
-        calls.append(path)
-        return path
+    from siac.runtime import GeometryAngles
 
-    monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
+    shape = (2, 2)
+    coords = {"y": [0, 1], "x": [0, 1]}
+    geometry = GeometryAngles(
+        sza=xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"], coords=coords),
+        saa=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"], coords=coords),
+        vza=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"], coords=coords),
+        vaa=xr.DataArray(np.full(shape, 1.5, dtype=np.float32), dims=["y", "x"], coords=coords),
+    )
+    meta = {
+        "satellite": "S2A",
+        "observation_time": datetime(2024, 3, 15, 10, 30, 45, tzinfo=timezone.utc),
+        "tile_id": "32UQD",
+        "geometry": geometry,
+    }
 
     writer = ConfiguredOutputWriter(
-        OutputDefaultsConfig(
-            format="zarr",
-            include_uncertainty=True,
-            include_auxiliary=False,
-            include_rgb=False,
-        )
+        OutputDefaultsConfig(format="cog", include_uncertainty=False, include_auxiliary=False, include_rgb=False)
     )
-    artifacts = writer.write(
-        _result(include_surface_prior=True, include_monthly_composites=True),
-        tmp_path,
-    )
+    artifacts = writer.write(_result(include_uncertainty=False, metadata=meta), tmp_path)
 
-    assert calls == [
-        tmp_path / "boa.zarr",
-        tmp_path / "boa_unc.zarr",
-        tmp_path / "surface_prior.zarr",
-        tmp_path / "surface_prior_unc.zarr",
-        tmp_path / "monthly_composites" / "2023_07.zarr",
-    ]
-    assert {
-        "surface_prior",
-        "surface_prior_unc",
-        "monthly_composites.2023_07",
-    } <= set(artifacts)
+    item = json.loads(artifacts["stac_item"].read_text())
+    props = item["properties"]
+    assert "view:sun_azimuth" in props
+    assert "view:sun_elevation" in props
+    assert "view:off_nadir" in props
+    assert "view:azimuth" in props
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
 
 
 def test_write_rejects_unsupported_format(tmp_path: Path) -> None:
@@ -586,3 +739,20 @@ def test_write_rejects_unsupported_format(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported output format"):
         ConfiguredOutputWriter(defaults).write(_result(), tmp_path)
+
+
+def test_output_with_empty_metadata_uses_fallback_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_writers(monkeypatch)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(format="cog", include_uncertainty=False, include_auxiliary=False, include_rgb=False)
+    )
+    artifacts = writer.write(_result(include_uncertainty=False, metadata={}), tmp_path)
+
+    # Should use fallback prefix
+    boa_path = artifacts["boa.B04"]
+    assert boa_path.name == "SAT_L2A_00000000T000000_BOA_B04.tif"

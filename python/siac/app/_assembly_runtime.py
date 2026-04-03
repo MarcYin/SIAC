@@ -249,6 +249,7 @@ def resolve_solver(config: Any) -> SolverFn:
             aot_bounds=tuple(config.solver.aot_bounds),
             tcwv_bounds=tuple(config.solver.tcwv_bounds),
             band_weight_power=getattr(config.solver, "alpha", -1.6),
+            smoothness_delta=getattr(config.solver, "smoothness_delta", 0.02),
         )
         mg_solver = MultiGridSolver(solver_config)
         solve_kwargs: dict[str, Any] = {}

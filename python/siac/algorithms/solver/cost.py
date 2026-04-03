@@ -10,7 +10,12 @@ The total cost function is:
 where:
     J_obs = Σ_bands Σ_pixels w_band * (boa_model - boa_prior)² / σ²_boa
     J_prior = (aot - aot_prior)²/σ²_aot + (tcwv - tcwv_prior)²/σ²_tcwv
-    J_smooth = γ_aot * ||∇aot||² + γ_tcwv * ||∇tcwv||²
+    J_smooth = γ_aot * Σ φ_δ(∇aot) + γ_tcwv * Σ φ_δ(∇tcwv)
+
+The smoothness term uses a Pseudo-Huber penalty on first-order finite
+differences: φ_δ(a) = δ²(√(1 + (a/δ)²) − 1).  This behaves quadratically
+for small gradients (noise suppression) and linearly for large gradients
+(hotspot preservation).  The parameter δ controls the transition threshold.
 
 The gradient dJ/d(aot, tcwv) is computed analytically using the chain rule
 through the RT model Jacobians.
@@ -25,7 +30,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 from scipy import sparse
-from scipy.fftpack import dct, idct
 
 from siac.domain.protocols import RTModelBackend
 
@@ -52,6 +56,12 @@ class CostFunctionConfig:
 
     # Band weighting power (negative values weight shorter wavelengths more for AOT)
     band_weight_power: float = -1.6
+
+    # Pseudo-Huber transition threshold for smoothness.
+    # Gradients below delta are penalized quadratically (noise suppression);
+    # gradients above delta are penalized linearly (hotspot preservation).
+    # Units match the field: AOT per grid cell for aot, g/cm² per cell for tcwv.
+    smoothness_delta: float = 0.02
 
     # Minimum uncertainty floor
     min_boa_unc: float = 0.001
@@ -175,28 +185,7 @@ class CostFunction:
         self.band_weights = weights / weights.sum()
 
     def _setup_smoothness(self) -> None:
-        """Setup smoothness regularization operators."""
-        ny, nx = self.shape
-
-        # DCT-based smoothness using eigenvalue decomposition
-        # This is more efficient than sparse matrix representation for large grids
-        self._setup_dct_smoothness(nx, ny)
-
-    def _setup_dct_smoothness(self, nx: int, ny: int) -> None:
-        """Setup DCT-based smoothness operator."""
-        # Create frequency grids for DCT
-        c, r = np.mgrid[:ny, :nx]
-
-        # Laplacian eigenvalues in DCT domain
-        omega_x = np.pi * (c / ny)
-        omega_y = np.pi * (r / nx)
-
-        # Eigenvalues of discrete Laplacian
-        self.lambda_smooth = 2 - 2 * np.cos(omega_x) + 2 - 2 * np.cos(omega_y)
-
-        # Precompute filter for smoothness cost
-        # Smoothness cost = gamma^2 * sum(lambda * |dct(x)|^2)
-        # Gradient = 2 * gamma^2 * idct(lambda * dct(x))
+        """Setup smoothness regularization (no precomputation needed)."""
 
     def __call__(self, p: np.ndarray) -> tuple[float, np.ndarray]:
         """
@@ -365,40 +354,77 @@ class CostFunction:
 
         return j_prior, dj_aot, dj_tcwv
 
+    # ------------------------------------------------------------------
+    # Pseudo-Huber smoothness on finite differences
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pseudo_huber_cost_grad(
+        field: np.ndarray,
+        gamma: float,
+        delta: float,
+    ) -> tuple[float, np.ndarray]:
+        """Compute Pseudo-Huber smoothness cost and gradient for a 2-D field.
+
+        The cost is  γ² Σ φ_δ(dx) + φ_δ(dy)
+        where φ_δ(a) = δ²(√(1 + (a/δ)²) − 1)  (Pseudo-Huber loss).
+
+        For |a| << δ this is ≈ a²/2  (quadratic, noise suppression).
+        For |a| >> δ this is ≈ δ|a|  (linear, hotspot preservation).
+
+        The gradient is computed via the adjoint (negative divergence) of the
+        element-wise derivative  φ'(a) = a / √(1 + (a/δ)²).
+        """
+        # Forward finite differences with Neumann (zero-gradient) boundaries.
+        dy = np.diff(field, axis=0)  # shape (ny-1, nx)
+        dx = np.diff(field, axis=1)  # shape (ny, nx-1)
+
+        delta2 = delta * delta
+
+        # Pseudo-Huber: φ(a) = δ²(√(1 + (a/δ)²) − 1)
+        r_dy = np.sqrt(1.0 + (dy * dy) / delta2)
+        r_dx = np.sqrt(1.0 + (dx * dx) / delta2)
+
+        cost = gamma * gamma * delta2 * (np.sum(r_dy - 1.0) + np.sum(r_dx - 1.0))
+
+        # φ'(a) = a / √(1 + (a/δ)²)
+        dphi_dy = dy / r_dy  # shape (ny-1, nx)
+        dphi_dx = dx / r_dx  # shape (ny, nx-1)
+
+        # Adjoint of forward-difference → gradient w.r.t. field.
+        # ∂/∂f[i] Σ φ(f[i+1]-f[i]) = -φ'(f[i+1]-f[i]) + φ'(f[i]-f[i-1])
+        grad = np.zeros_like(field)
+        grad[:-1, :] -= dphi_dy   # -φ'(dy[i]) at source i
+        grad[1:, :] += dphi_dy    # +φ'(dy[i]) at target i+1
+        grad[:, :-1] -= dphi_dx   # -φ'(dx[j]) at source j
+        grad[:, 1:] += dphi_dx    # +φ'(dx[j]) at target j+1
+
+        grad *= gamma * gamma
+
+        return cost, grad
+
     def _smoothness_cost(
         self, aot: np.ndarray, tcwv: np.ndarray
     ) -> tuple[float, np.ndarray, np.ndarray]:
         """
-        Compute smoothness regularization cost term.
+        Compute smoothness regularization cost term using Pseudo-Huber penalty.
 
-        J_smooth = γ_aot * ||∇aot||² + γ_tcwv * ||∇tcwv||²
-
-        Uses DCT-based implementation for efficiency.
+        Uses first-order finite differences with a Pseudo-Huber loss that
+        transitions from quadratic (smooth regions) to linear (sharp features).
 
         Returns:
             Tuple of (cost, d_cost/d_aot, d_cost/d_tcwv)
         """
-        gamma_aot = self.config.aot_gamma
-        gamma_tcwv = self.config.tcwv_gamma
+        delta = self.config.smoothness_delta
 
-        # AOT smoothness using DCT
-        aot_dct = dct(dct(aot, axis=0, norm="ortho"), axis=1, norm="ortho")
-        j_aot = 0.5 * gamma_aot ** 2 * np.sum(self.lambda_smooth * aot_dct ** 2)
+        j_aot, dj_aot = self._pseudo_huber_cost_grad(
+            aot, self.config.aot_gamma, delta,
+        )
+        j_tcwv, dj_tcwv = self._pseudo_huber_cost_grad(
+            tcwv, self.config.tcwv_gamma, delta,
+        )
 
-        # Gradient in DCT domain then transform back
-        dj_aot_dct = gamma_aot ** 2 * self.lambda_smooth * aot_dct
-        dj_aot = idct(idct(dj_aot_dct, axis=1, norm="ortho"), axis=0, norm="ortho")
-
-        # TCWV smoothness using DCT
-        tcwv_dct = dct(dct(tcwv, axis=0, norm="ortho"), axis=1, norm="ortho")
-        j_tcwv = 0.5 * gamma_tcwv ** 2 * np.sum(self.lambda_smooth * tcwv_dct ** 2)
-
-        dj_tcwv_dct = gamma_tcwv ** 2 * self.lambda_smooth * tcwv_dct
-        dj_tcwv = idct(idct(dj_tcwv_dct, axis=1, norm="ortho"), axis=0, norm="ortho")
-
-        j_smooth = j_aot + j_tcwv
-
-        return j_smooth, dj_aot, dj_tcwv
+        return j_aot + j_tcwv, dj_aot, dj_tcwv
 
     def observation_cost_only(
         self, aot: np.ndarray, tcwv: np.ndarray
@@ -445,34 +471,64 @@ def compute_laplacian_eigenvalues(nx: int, ny: int) -> np.ndarray:
 
 
 def apply_smoothness_filter(
-    x: np.ndarray, gamma: float, lambda_vals: np.ndarray
+    x: np.ndarray,
+    gamma: float,
+    _lambda_vals: np.ndarray | None = None,
+    *,
+    delta: float = 0.02,
+    n_iter: int = 20,
 ) -> np.ndarray:
     """
-    Apply Tikhonov smoothness regularization via DCT.
+    Apply edge-preserving smoothness filter via iterated Pseudo-Huber diffusion.
 
-    Solves: (I + γ² Δ) x_smooth = x
+    Iteratively solves a weighted-Laplacian system where the weights are
+    derived from the Pseudo-Huber penalty, approximating the proximal
+    operator of the Pseudo-Huber smoothness term.
 
-    In DCT domain: X_smooth = X / (1 + γ² Λ)
+    For small gradients (|∇x| << delta) this behaves like Tikhonov smoothing.
+    For large gradients (|∇x| >> delta) the smoothing is reduced, preserving
+    sharp features such as aerosol hotspots.
 
     Args:
-        x: Input array
-        gamma: Regularization strength
-        lambda_vals: Laplacian eigenvalues
+        x: Input 2-D array.
+        gamma: Regularization strength.
+        lambda_vals: Unused (kept for backward compatibility).
+        delta: Pseudo-Huber transition threshold.
+        n_iter: Number of diffusion iterations.
 
     Returns:
-        Smoothed array
+        Smoothed array.
     """
-    # Forward DCT
-    x_dct = dct(dct(x, axis=0, norm="ortho"), axis=1, norm="ortho")
+    z = x.astype(np.float64).copy()
+    gamma2 = gamma * gamma
+    delta2 = delta * delta
 
-    # Apply filter in DCT domain
-    filter_vals = 1.0 / (1.0 + gamma ** 2 * lambda_vals)
-    x_dct_smooth = x_dct * filter_vals
+    # Stable step size: the data-fidelity Hessian contributes 1 per pixel,
+    # and the smoothness Hessian contributes at most γ² * 4 (4-connected).
+    # For stability we need τ * (1 + γ² * 4) < 1.
+    tau = 1.0 / (1.0 + 4.0 * gamma2)
 
-    # Inverse DCT
-    x_smooth = idct(idct(x_dct_smooth, axis=1, norm="ortho"), axis=0, norm="ortho")
+    for _ in range(n_iter):
+        # Forward differences
+        dy = np.diff(z, axis=0)
+        dx = np.diff(z, axis=1)
 
-    return x_smooth
+        # Pseudo-Huber weight: w(a) = 1 / √(1 + (a/δ)²)
+        # This down-weights large gradients (edges).
+        wy = 1.0 / np.sqrt(1.0 + (dy * dy) / delta2)
+        wx = 1.0 / np.sqrt(1.0 + (dx * dx) / delta2)
+
+        # Smoothness gradient (adjoint of weighted forward-difference)
+        sg = np.zeros_like(z)
+        sg[:-1, :] -= wy * dy
+        sg[1:, :] += wy * dy
+        sg[:, :-1] -= wx * dx
+        sg[:, 1:] += wx * dx
+
+        # Gradient descent step: z ← z − τ * ((z − x) + γ² * sg)
+        z -= tau * ((z - x) + gamma2 * sg)
+
+    return z
 
 
 def create_sparse_laplacian(nx: int, ny: int) -> sparse.csc_matrix:

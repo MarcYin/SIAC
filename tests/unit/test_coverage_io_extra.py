@@ -304,7 +304,7 @@ class TestWritersExtra:
             input_href=tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
         )
 
-        assert item["stac_version"] == "1.0.0"
+        assert item["stac_version"] == "1.1.0"
         assert item["id"] == tmp_path.name
         assert item["properties"]["platform"] == "sentinel-2c"
         assert item["properties"]["constellation"] == "sentinel-2"
