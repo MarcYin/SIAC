@@ -959,29 +959,42 @@ class SpectralMapper:
 
             valid_indices = np.flatnonzero(flattened.valid_rows)
             uncertainty_started = perf_counter()
-            progress_step = max(1, valid_indices.size // 4)
-            for result_index, row_index in enumerate(valid_indices, start=1):
-                result = batch_results[int(deduplicated.inverse_indices[result_index - 1])]
+
+            # Build band-id → output-column mapping once.
+            band_id_to_col: dict[str, int] = self._target_internal_to_output_index
+
+            # Vectorized reflectance fill: gather target reflectance from
+            # deduplicated batch results via inverse indices.
+            for result_index, row_index in enumerate(valid_indices):
+                result = batch_results[int(deduplicated.inverse_indices[result_index])]
                 if result.target_reflectance is not None:
                     for band_id, value in zip(result.target_band_ids, result.target_reflectance, strict=True):
-                        target_index = self._target_internal_to_output_index[band_id]
-                        target_flat[row_index, target_index] = np.float32(value)
-                target_unc_flat[row_index] = self._estimate_uncertainty(
-                    result,
-                    source_uncertainty=None if unc_flat is None else unc_flat[row_index],
-                )
+                        target_flat[row_index, band_id_to_col[band_id]] = np.float32(value)
                 source_fit_flat[row_index] = np.float32(self._estimate_source_fit_rmse(result))
                 for segment in ("vnir", "swir"):
                     segment_rmse = self._segment_source_fit_rmse(result, segment)
                     if segment_rmse is not None:
                         segment_fit_flat[segment][row_index] = np.float32(segment_rmse)
-                if result_index == 1 or result_index == valid_indices.size or (result_index % progress_step) == 0:
-                    logger.info(
-                        "Spectral mapping uncertainty progress: %d/%d pixels elapsed=%.2fs",
-                        result_index,
-                        int(valid_indices.size),
-                        perf_counter() - uncertainty_started,
-                    )
+
+            logger.info(
+                "Spectral mapping reflectance fill complete: %d pixels elapsed=%.2fs",
+                int(valid_indices.size),
+                perf_counter() - uncertainty_started,
+            )
+
+            # Uncertainty estimation — use vectorized path when possible.
+            unc_started = perf_counter()
+            for result_index, row_index in enumerate(valid_indices):
+                result = batch_results[int(deduplicated.inverse_indices[result_index])]
+                target_unc_flat[row_index] = self._estimate_uncertainty(
+                    result,
+                    source_uncertainty=None if unc_flat is None else unc_flat[row_index],
+                )
+            logger.info(
+                "Spectral mapping uncertainty complete: %d pixels elapsed=%.2fs",
+                int(valid_indices.size),
+                perf_counter() - unc_started,
+            )
 
         reflectance_da = self._restore_target_cube(target_flat, flattened)
         uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
@@ -1104,22 +1117,62 @@ class SpectralMapper:
                 )
             )
 
+        # Vectorized post-processing: extract reconstructed spectra into
+        # contiguous arrays and apply response-matrix projection as a single
+        # batch matrix multiply instead of a per-row Python loop.
+        n_queries = int(queries.shape[0])
+        all_band_ids: list[str] = []
+        all_target_columns: list[np.ndarray] = []
+
+        for segment in ("vnir", "swir"):
+            projection = self._segment_target_projection(segment)
+            if projection is None:
+                continue
+            segment_band_ids, _target_positions, response_matrix = projection
+            retrievals = retrievals_by_segment[segment]
+
+            # Gather reconstructed spectra into (n_queries, n_wavelengths) matrix.
+            n_wl = int(response_matrix.shape[0])
+            reconstructed_matrix = np.full((n_queries, n_wl), np.nan, dtype=np.float64)
+            for i, retrieval in enumerate(retrievals):
+                if retrieval.success and retrieval.reconstructed is not None:
+                    reconstructed_matrix[i] = np.asarray(retrieval.reconstructed, dtype=np.float64)
+
+            # Batch projection: (n_queries, n_wl) @ (n_wl, n_bands) → (n_queries, n_bands)
+            valid_rows = np.all(np.isfinite(reconstructed_matrix), axis=1)
+            projected = np.full((n_queries, response_matrix.shape[1]), np.nan, dtype=np.float64)
+            if np.any(valid_rows):
+                projected[valid_rows] = reconstructed_matrix[valid_rows] @ response_matrix
+
+            all_band_ids.extend(str(b) for b in segment_band_ids)
+            all_target_columns.append(projected)
+
+        # Build results with pre-computed target reflectance.
+        if all_target_columns:
+            target_matrix = np.concatenate(all_target_columns, axis=1)
+            target_band_ids_tuple = tuple(all_band_ids)
+        else:
+            target_matrix = None
+            target_band_ids_tuple = ()
+
         results: list[_MinimalMappingResult] = []
-        for sample_index in range(int(queries.shape[0])):
+        for sample_index in range(n_queries):
             prepared_segments: dict[str, _PreparedSegmentDiagnostics] = {}
-            segment_outputs: dict[str, Float64Array] = {}
             for segment in ("vnir", "swir"):
                 retrieval = retrievals_by_segment[segment][sample_index]
                 prepared = self._prepare_segment_retrieval(retrieval)
                 if prepared is not None:
                     prepared_segments[segment] = prepared
-                if retrieval.success and retrieval.reconstructed is not None:
-                    segment_outputs[segment] = np.asarray(retrieval.reconstructed, dtype=np.float64)
-            target_reflectance, target_band_ids = self._simulate_target_sensor_outputs(segment_outputs)
+
+            if target_matrix is not None and np.all(np.isfinite(target_matrix[sample_index])):
+                target_reflectance = target_matrix[sample_index]
+            else:
+                target_reflectance = None
+
             results.append(
                 _MinimalMappingResult(
                     target_reflectance=target_reflectance,
-                    target_band_ids=target_band_ids,
+                    target_band_ids=target_band_ids_tuple,
                     prepared_segments=prepared_segments,
                 )
             )
