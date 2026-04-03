@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# xarray .interp() is precise but extremely slow for large arrays (minutes
+# for 10980×10980).  Use scipy.ndimage.zoom instead when pixel count exceeds
+# this threshold.
+_INTERP_PIXEL_LIMIT = 1_000_000  # ~1000×1000
+
 
 # ---------------------------------------------------------------------------
 # Grid comparison
@@ -102,7 +107,8 @@ def resample_field_to_template(
         return copy_spatial_metadata_like(field, template) if copy_metadata else field
 
     resampled: xr.DataArray | None = None
-    if _can_coord_interp(field, template):
+    src_pixels = field.sizes[field.dims[0]] * field.sizes[field.dims[1]] if field.ndim == 2 else 0
+    if _can_coord_interp(field, template) and src_pixels <= _INTERP_PIXEL_LIMIT:
         try:
             interpolated = field.interp(
                 coords={dim: template.coords[dim] for dim in template.dims},
@@ -161,7 +167,8 @@ def resample_mask_to_template(mask: xr.DataArray, template: xr.DataArray) -> xr.
     if shares_template_grid(mask, template):
         return copy_spatial_metadata_like(mask.astype(bool), template)
 
-    if _can_coord_interp(mask, template):
+    src_pixels = mask.sizes[mask.dims[0]] * mask.sizes[mask.dims[1]] if mask.ndim == 2 else 0
+    if _can_coord_interp(mask, template) and src_pixels <= _INTERP_PIXEL_LIMIT:
         source = np.asarray(mask.values, dtype=np.float32)
         factor_y = 1
         factor_x = 1
@@ -284,7 +291,8 @@ def fill_nonfinite_like_template(
         return field
 
     filled = values.copy()
-    if _can_coord_interp(source, template):
+    src_pixels = source.sizes[source.dims[0]] * source.sizes[source.dims[1]] if source.ndim == 2 else 0
+    if _can_coord_interp(source, template) and src_pixels <= _INTERP_PIXEL_LIMIT:
         try:
             nearest = source.interp(
                 coords={dim: template.coords[dim] for dim in template.dims},
