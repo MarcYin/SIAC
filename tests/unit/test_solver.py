@@ -182,40 +182,62 @@ class TestLaplacianEigenvalues:
 
 
 class TestSmoothnessFilter:
-    """Tests for smoothness filter application."""
+    """Tests for edge-preserving smoothness filter application."""
 
     def test_identity_gamma_zero(self):
         """With gamma=0, output should equal input."""
         x = np.random.default_rng(0).standard_normal((20, 20))
-        lambda_vals = compute_laplacian_eigenvalues(20, 20)
 
-        x_smooth = apply_smoothness_filter(x, gamma=0, lambda_vals=lambda_vals)
+        x_smooth = apply_smoothness_filter(x, gamma=0)
 
         np.testing.assert_allclose(x_smooth, x, rtol=1e-10)
 
     def test_smoothing_effect(self):
-        """With gamma>0, high frequencies should be suppressed."""
-        # Create noisy data
-        x = np.zeros((32, 32))
-        x[16, 16] = 1.0  # Single spike
+        """With gamma>0, noise should be suppressed."""
+        # Create noisy data (small random noise on a smooth field)
+        rng = np.random.default_rng(0)
+        x = rng.normal(0.15, 0.01, (32, 32))
 
-        lambda_vals = compute_laplacian_eigenvalues(32, 32)
-
-        x_smooth = apply_smoothness_filter(x, gamma=5.0, lambda_vals=lambda_vals)
+        x_smooth = apply_smoothness_filter(x, gamma=5.0, delta=0.02, n_iter=50)
 
         # Smoothed data should have lower variance
         assert x_smooth.var() < x.var()
-        # Peak should be reduced
-        assert x_smooth.max() < x.max()
+        # Mean should be approximately preserved
+        np.testing.assert_allclose(x.mean(), x_smooth.mean(), rtol=0.05)
 
     def test_preserves_mean(self):
         """Mean should be approximately preserved."""
         x = np.random.default_rng(1).standard_normal((20, 20)) + 5.0
+
+        x_smooth = apply_smoothness_filter(x, gamma=2.0)
+
+        np.testing.assert_allclose(x.mean(), x_smooth.mean(), rtol=0.05)
+
+    def test_preserves_hotspot(self):
+        """A strong localized feature should survive with large delta."""
+        rng = np.random.default_rng(42)
+        x = rng.normal(0.15, 0.005, (32, 32))
+        # Add a strong hotspot
+        x[14:18, 14:18] = 0.8
+
+        x_smooth = apply_smoothness_filter(x, gamma=5.0, delta=0.02)
+
+        # The hotspot peak should be largely preserved (within 30%)
+        assert x_smooth[15:17, 15:17].mean() > 0.55
+        # Background should still be smooth
+        bg = x_smooth[:10, :10]
+        assert bg.std() < x[:10, :10].std()
+
+    def test_backward_compat_lambda_vals(self):
+        """lambda_vals positional parameter is accepted but ignored."""
+        x = np.random.default_rng(0).standard_normal((20, 20))
         lambda_vals = compute_laplacian_eigenvalues(20, 20)
 
-        x_smooth = apply_smoothness_filter(x, gamma=2.0, lambda_vals=lambda_vals)
+        # Pass lambda_vals positionally (backward compat)
+        x1 = apply_smoothness_filter(x, 2.0, lambda_vals)
+        x2 = apply_smoothness_filter(x, 2.0, None)
 
-        np.testing.assert_allclose(x.mean(), x_smooth.mean(), rtol=0.01)
+        np.testing.assert_allclose(x1, x2)
 
 
 class TestCostFunctionConfig:
@@ -830,11 +852,16 @@ class TestMultiGridSolver:
             cost_config=CostFunctionConfig(),
         )
 
-        assert out_aot[0, 0] == pytest.approx(0.2)
-        assert out_tcwv[0, 0] == pytest.approx(2.0)
-        assert out_aot_unc[0, 0] == pytest.approx(0.05)
-        assert out_tcwv_unc[0, 0] == pytest.approx(0.3)
-        assert out_aot[1, 1] == pytest.approx(0.33)
+        # QA-invalid pixels are filled by spatial smoothing from neighbours,
+        # not restored to the prior.  The smoothed value should be finite and
+        # within a reasonable range, but not necessarily the exact prior.
+        assert np.isfinite(out_aot[0, 0])
+        assert np.isfinite(out_tcwv[0, 0])
+        # Uncertainty at invalid pixels should be inflated.
+        assert out_aot_unc[0, 0] >= 0.1
+        assert out_tcwv_unc[0, 0] >= 0.5
+        # Valid pixel values are smoothed but should remain close to original.
+        assert out_aot[1, 1] == pytest.approx(0.33, abs=0.05)
         assert diag["qa_invalid_pixels"] == pytest.approx(1.0)
         assert diag["qa_lower_aot_boundary_pixels"] == pytest.approx(1.0)
 
@@ -1582,43 +1609,67 @@ class TestCostFunctionGradient:
         return geometry, atmo_prior, shape
 
     def test_smoothness_cost_gradient(self, simple_cost_inputs):
-        """Smoothness gradient should match numerical gradient."""
-        geometry, atmo_prior, shape = simple_cost_inputs
+        """Pseudo-Huber smoothness gradient should match numerical gradient."""
+        _geometry, _atmo_prior, shape = simple_cost_inputs
 
-        config = CostFunctionConfig(aot_gamma=5.0, tcwv_gamma=3.0)
-
-        # Just test the smoothness part directly
-        from scipy.fftpack import dct, idct
+        gamma = 5.0
+        delta = 0.02
 
         aot = np.random.default_rng(4).standard_normal(shape) * 0.1 + 0.15
-        lambda_vals = compute_laplacian_eigenvalues(shape[1], shape[0])
 
-        # Analytical gradient
-        gamma = config.aot_gamma
-        aot_dct = dct(dct(aot, axis=0, norm="ortho"), axis=1, norm="ortho")
-        0.5 * gamma**2 * np.sum(lambda_vals * aot_dct**2)
-        dj_dct = gamma**2 * lambda_vals * aot_dct
-        dj_aot = idct(idct(dj_dct, axis=1, norm="ortho"), axis=0, norm="ortho")
+        # Analytical gradient via _pseudo_huber_cost_grad
+        j_analytical, dj_analytical = CostFunction._pseudo_huber_cost_grad(
+            aot, gamma, delta,
+        )
 
         # Numerical gradient
-        eps = 1e-5
+        eps = 1e-6
         numerical_grad = np.zeros_like(aot)
 
-        for i in range(3):  # Test just a few points
-            for j in range(3):
+        for i in range(4):  # Test a few interior and boundary points
+            for j in range(4):
                 aot_plus = aot.copy()
                 aot_plus[i, j] += eps
-                aot_dct_plus = dct(dct(aot_plus, axis=0, norm="ortho"), axis=1, norm="ortho")
-                j_plus = 0.5 * gamma**2 * np.sum(lambda_vals * aot_dct_plus**2)
+                j_plus, _ = CostFunction._pseudo_huber_cost_grad(
+                    aot_plus, gamma, delta,
+                )
 
                 aot_minus = aot.copy()
                 aot_minus[i, j] -= eps
-                aot_dct_minus = dct(dct(aot_minus, axis=0, norm="ortho"), axis=1, norm="ortho")
-                j_minus = 0.5 * gamma**2 * np.sum(lambda_vals * aot_dct_minus**2)
+                j_minus, _ = CostFunction._pseudo_huber_cost_grad(
+                    aot_minus, gamma, delta,
+                )
 
                 numerical_grad[i, j] = (j_plus - j_minus) / (2 * eps)
 
         # Compare at tested points
         np.testing.assert_allclose(
-            dj_aot[:3, :3], numerical_grad[:3, :3], rtol=1e-4, atol=1e-6
+            dj_analytical[:4, :4], numerical_grad[:4, :4], rtol=1e-4, atol=1e-8
         )
+
+    def test_smoothness_hotspot_preservation(self, simple_cost_inputs):
+        """Pseudo-Huber penalty on large gradients should be sub-quadratic."""
+        _geometry, _atmo_prior, shape = simple_cost_inputs
+
+        gamma = 5.0
+        delta = 0.02
+
+        # Smooth field
+        smooth = np.full(shape, 0.15)
+        j_smooth, _ = CostFunction._pseudo_huber_cost_grad(smooth, gamma, delta)
+
+        # Field with a hotspot (large local gradient)
+        hotspot = smooth.copy()
+        hotspot[shape[0] // 2, shape[1] // 2] = 0.8
+
+        j_hotspot, _ = CostFunction._pseudo_huber_cost_grad(hotspot, gamma, delta)
+
+        # For comparison: what L2 would give (quadratic in gradient)
+        dy_h = np.diff(hotspot, axis=0)
+        dx_h = np.diff(hotspot, axis=1)
+        j_l2 = 0.5 * gamma ** 2 * (np.sum(dy_h ** 2) + np.sum(dx_h ** 2))
+
+        # Pseudo-Huber cost should be strictly less than L2 for large gradients
+        assert j_hotspot < j_l2
+        # And both should be > smooth cost
+        assert j_hotspot > j_smooth

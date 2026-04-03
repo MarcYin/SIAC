@@ -621,7 +621,14 @@ def _run_tail(
                 tuple(getattr(surface, "monthly_composites", ())),
                 template=surface_template,
             ),
-            metadata=corrected.metadata,
+            metadata={
+                **obs.metadata,
+                **corrected.metadata,
+                "sensor_config": obs.sensor_config,
+                "geometry": obs.geometry,
+                "crs": obs.crs,
+                "bounds": obs.bounds,
+            },
             diagnostics=diagnostics,
         )
     validate_correction_result(result)

@@ -354,6 +354,7 @@ class SolverAlgorithmConfig(SIACBaseModel):
     aot_gamma: float = Field(default=10.0, ge=0.0)
     tcwv_gamma: float = Field(default=5.0, ge=0.0)
     alpha: float = -1.6
+    smoothness_delta: float = Field(default=0.02, gt=0.0)
     max_iterations: int = Field(default=300, ge=1)
     gtol: float = Field(default=1e-2, gt=0.0)
     ftol: float = Field(default=1e-7, gt=0.0)
