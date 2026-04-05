@@ -161,6 +161,8 @@ Main fields:
 - `gtol` — gradient tolerance for L-BFGS-B convergence
 - `ftol` — function tolerance for L-BFGS-B convergence
 - `aerosol_resolution` — target spatial resolution (metres) for the aerosol retrieval grid
+- `quadratic_group_size` — group `NxN` solver-grid pixels when computing RT coefficients in the no-Jacobian grid-search path; reduces RT calls but still solves per pixel
+- `quadratic_block_size` — solve one shared AOT/TCWV pair for each `NxN` block in the no-Jacobian grid-search path, then broadcast the block solution back to full resolution
 - `use_multigrid` — enable the coarse-to-fine multi-grid solver strategy (default `true`)
 - `min_grid_size` — minimum grid dimension (pixels) for multi-grid levels
 - `bounds.aot` — `[min, max]` bounds for AOT during optimization

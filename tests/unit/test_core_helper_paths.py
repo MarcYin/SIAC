@@ -231,6 +231,11 @@ def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pyt
         TwoLayerNN=_FakeKernel,
         PSFConvolver=_FakeKernel,
         apply_laplacian=lambda *args, **kwargs: ("lap", args, kwargs),
+        evaluate_block_grid_search_cost_cube_with_provider_qa=lambda *args, **kwargs: (
+            "block_cube_qa",
+            args,
+            kwargs,
+        ),
         evaluate_grid_search_candidate_cost=lambda *args, **kwargs: ("cand", args, kwargs),
         evaluate_grid_search_cost_cube_with_provider=lambda *args, **kwargs: ("cube", args, kwargs),
         evaluate_grid_search_cost_cube_with_provider_qa=lambda *args, **kwargs: ("cube_qa", args, kwargs),
@@ -255,6 +260,11 @@ def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pyt
     assert psf.extra == "value"
 
     assert rust_compat.apply_laplacian(1) == ("lap", (1,), {})
+    assert rust_compat.evaluate_block_grid_search_cost_cube_with_provider_qa(2) == (
+        "block_cube_qa",
+        (2,),
+        {},
+    )
     assert rust_compat.evaluate_grid_search_candidate_cost(2) == ("cand", (2,), {})
     assert rust_compat.evaluate_grid_search_cost_cube_with_provider(3) == ("cube", (3,), {})
     assert rust_compat.evaluate_grid_search_cost_cube_with_provider_qa(3) == ("cube_qa", (3,), {})

@@ -43,6 +43,10 @@ fn _rust(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
+        optimization::evaluate_block_grid_search_cost_cube_with_provider_qa,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         optimization::quadratic_refine_grid_search,
         m
     )?)?;

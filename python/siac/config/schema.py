@@ -360,6 +360,7 @@ class SolverAlgorithmConfig(SIACBaseModel):
     ftol: float = Field(default=1e-7, gt=0.0)
     aerosol_resolution: float = Field(default=120.0, gt=0.0)
     quadratic_group_size: int = Field(default=1, ge=1)
+    quadratic_block_size: int = Field(default=1, ge=1)
     use_multigrid: bool = True
     min_grid_size: int = Field(default=4, ge=2)
     bounds: SolverBoundsConfig = Field(default_factory=SolverBoundsConfig)
