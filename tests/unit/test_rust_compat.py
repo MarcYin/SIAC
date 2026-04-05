@@ -105,6 +105,9 @@ def test_proxy_classes_and_functions_delegate_to_native_impl(monkeypatch: pytest
             "TwoLayerNN": _FakeNN,
             "PSFConvolver": _FakePSF,
             "apply_laplacian": staticmethod(lambda *args, **kwargs: ("lap", args, kwargs)),
+            "evaluate_block_grid_search_cost_cube_with_provider_qa": staticmethod(
+                lambda *args, **kwargs: ("block_cube_qa", args, kwargs)
+            ),
             "evaluate_grid_search_candidate_cost": staticmethod(
                 lambda *args, **kwargs: ("candidate", args, kwargs)
             ),
@@ -137,6 +140,11 @@ def test_proxy_classes_and_functions_delegate_to_native_impl(monkeypatch: pytest
     assert psf.convolve("x") == ("convolve", ("x",), {})
     assert psf.kind == "psf"
     assert rust_compat.apply_laplacian(1) == ("lap", (1,), {})
+    assert rust_compat.evaluate_block_grid_search_cost_cube_with_provider_qa(2) == (
+        "block_cube_qa",
+        (2,),
+        {},
+    )
     assert rust_compat.evaluate_grid_search_candidate_cost(2) == ("candidate", (2,), {})
     assert rust_compat.evaluate_grid_search_cost_cube_with_provider(3) == ("cube", (3,), {})
     assert rust_compat.evaluate_grid_search_cost_cube_with_provider_qa(3) == ("cube_qa", (3,), {})

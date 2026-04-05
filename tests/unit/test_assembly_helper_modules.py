@@ -301,6 +301,7 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
             tcwv_gamma=2.0,
             aot_bounds=(0.0, 1.0),
             tcwv_bounds=(0.0, 5.0),
+            quadratic_block_size=5,
         )
     )
     toa = mock_observation_bundle.toa["B02"]
@@ -329,6 +330,7 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
     assert solved.n_iterations == 4
     assert solved.converged is True
     assert captured["solver_config"]["aot_gamma"] == 1.0
+    assert captured["solver_config"]["quadratic_block_size"] == 5
     assert captured["solve_args"][0] is toa
     assert rt_model == ("rt", config, "auth", mock_observation_bundle.sensor_config)
 

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import siac._rust as native_rust
 from siac._rust import (
     evaluate_grid_search_candidate_cost,
     evaluate_grid_search_cost_cube_with_provider,
@@ -13,6 +14,7 @@ from siac._rust import (
     quadratic_refine_grid_search,
     quadratic_refine_grid_search_qa,
 )
+from siac._rust_compat import evaluate_block_grid_search_cost_cube_with_provider_qa
 from siac.algorithms.solver.cost import (
     CostFunction,
     CostFunctionConfig,
@@ -25,6 +27,11 @@ from siac.algorithms.solver.multigrid import (
     build_solver_valid_mask,
 )
 from siac.runtime import AtmosphericState, SurfacePrior
+
+
+HAS_NATIVE_BLOCK_COST_CUBE = hasattr(
+    native_rust, "evaluate_block_grid_search_cost_cube_with_provider_qa"
+)
 
 
 def _quadratic_refine_python_reference(
@@ -145,6 +152,44 @@ def _candidate_cost_python_reference(
         + np.square(tcwv_val - tcwv_prior) / np.maximum(np.square(tcwv_prior_unc), 1e-12)
     )
     out += np.where(valid_mask, prior, 0.0).astype(np.float32)
+    return out
+
+
+def _sum_blocks_reference(values: np.ndarray, block_size: int) -> np.ndarray:
+    """Aggregate the last two dimensions by summing over non-overlapping blocks."""
+    if block_size <= 1:
+        return np.asarray(values)
+
+    source = np.asarray(values)
+    by = (source.shape[-2] + block_size - 1) // block_size
+    bx = (source.shape[-1] + block_size - 1) // block_size
+    out = np.zeros((*source.shape[:-2], by, bx), dtype=source.dtype)
+    for iy in range(by):
+        y0 = iy * block_size
+        y1 = min(y0 + block_size, source.shape[-2])
+        for ix in range(bx):
+            x0 = ix * block_size
+            x1 = min(x0 + block_size, source.shape[-1])
+            out[..., iy, ix] = np.sum(source[..., y0:y1, x0:x1], axis=(-2, -1))
+    return out
+
+
+def _any_blocks_reference(mask: np.ndarray, block_size: int) -> np.ndarray:
+    """Aggregate a boolean mask by non-overlapping any-valid blocks."""
+    if block_size <= 1:
+        return np.asarray(mask, dtype=bool)
+
+    source = np.asarray(mask, dtype=bool)
+    by = (source.shape[0] + block_size - 1) // block_size
+    bx = (source.shape[1] + block_size - 1) // block_size
+    out = np.zeros((by, bx), dtype=bool)
+    for iy in range(by):
+        y0 = iy * block_size
+        y1 = min(y0 + block_size, source.shape[0])
+        for ix in range(bx):
+            x0 = ix * block_size
+            x1 = min(x0 + block_size, source.shape[1])
+            out[iy, ix] = bool(np.any(source[y0:y1, x0:x1]))
     return out
 
 
@@ -564,6 +609,112 @@ class TestMultiGridSolver:
         assert (result.aot_unc.values > 0).all()
         assert (result.tcwv_unc.values > 0).all()
 
+    def test_solve_skips_coarse_levels_for_grid_search_backend(self):
+        """Grid-search backend should solve once at full resolution, not per multigrid level."""
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (64, 64)
+        config = MultiGridConfig(
+            n_levels=4,
+            min_grid_size=8,
+            grid_search_aot_points=5,
+            grid_search_tcwv_points=5,
+        )
+        solver = MultiGridSolver(config)
+
+        toa = xr.DataArray(
+            np.stack(
+                [
+                    np.full(shape, 0.25, dtype=np.float32),
+                    np.full(shape, 0.28, dtype=np.float32),
+                ]
+            ),
+            dims=["band", "y", "x"],
+        )
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(
+                np.stack([np.full(shape, 0.2), np.full(shape, 0.22)]),
+                dims=["band", "y", "x"],
+            ),
+            boa_unc=xr.DataArray(
+                np.stack([np.full(shape, 0.02), np.full(shape, 0.02)]),
+                dims=["band", "y", "x"],
+            ),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (band, compute_jacobian)
+                factor = 1.0 / np.maximum(
+                    0.2 + atmo_state.aot.values + 0.1 * atmo_state.tcwv.values,
+                    1e-6,
+                )
+                xap = xr.DataArray(factor, dims=geometry.sza.dims, coords=geometry.sza.coords)
+                xbp = xr.zeros_like(xap)
+                xcp = xr.zeros_like(xap)
+                return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp)
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        bands = [
+            SensorBand("B02", 490.0, 65.0, 10.0, 0),
+            SensorBand("B03", 560.0, 35.0, 10.0, 1),
+        ]
+
+        result = solver.solve(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            cloud_mask=cloud_mask,
+            bands=bands,
+        )
+
+        assert result.success
+        assert solver._compute_grid_levels(shape) == [(8, 8), (16, 16), (32, 32), (64, 64)]
+        assert len(result.level_history) == 1
+        assert result.n_iterations == config.grid_search_aot_points * config.grid_search_tcwv_points
+        assert tuple(result.level_history[0]["shape"]) == shape
+        assert result.level_history[0]["method"] == "grid_search"
+
     def test_solver_marks_supported_lower_bound_solution_as_low_quality(self):
         """Supported boundary solutions should be flagged as low-quality, not invalid."""
         from siac.domain import SensorBand
@@ -753,6 +904,257 @@ class TestMultiGridSolver:
         np.testing.assert_allclose(out_tcwv, 1.23)
         np.testing.assert_allclose(out_aot_unc, 0.07)
         np.testing.assert_allclose(out_tcwv_unc, 0.21)
+
+    @pytest.mark.skipif(
+        not HAS_NATIVE_BLOCK_COST_CUBE,
+        reason="native extension does not export block cost cube helper in this environment",
+    )
+    def test_rust_block_cost_cube_aggregates_pixel_costs(self):
+        """Rust block cost cube should sum per-pixel candidate costs into NxN blocks."""
+        aot_axis = np.array([0.2, 0.5, 0.8], dtype=np.float32)
+        tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        shape = (4, 5)
+        block_size = 3
+        valid_mask = np.array(
+            [
+                [True, True, False, True, True],
+                [True, True, True, True, False],
+                [False, True, True, True, True],
+                [True, False, True, True, True],
+            ],
+            dtype=bool,
+        )
+
+        toa = np.full((1, *shape), 0.25, dtype=np.float32)
+        boa_prior = np.full((1, *shape), 0.2, dtype=np.float32)
+        boa_unc = np.full((1, *shape), 0.02, dtype=np.float32)
+        band_weights = np.array([1.0], dtype=np.float32)
+        aot_prior = np.full(shape, 0.2, dtype=np.float32)
+        tcwv_prior = np.full(shape, 2.0, dtype=np.float32)
+        aot_prior_unc = np.full(shape, 0.05, dtype=np.float32)
+        tcwv_prior_unc = np.full(shape, 0.3, dtype=np.float32)
+
+        def _provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            xap = np.ones((1, *shape), dtype=np.float32)
+            zeros = np.zeros((1, *shape), dtype=np.float32)
+            return xap, zeros, zeros
+
+        full_costs, full_counts = evaluate_grid_search_cost_cube_with_provider_qa(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            toa,
+            boa_prior,
+            boa_unc,
+            band_weights,
+            valid_mask,
+            aot_prior,
+            tcwv_prior,
+            aot_prior_unc,
+            tcwv_prior_unc,
+        )
+        block_costs, block_counts, block_valid = evaluate_block_grid_search_cost_cube_with_provider_qa(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            toa,
+            boa_prior,
+            boa_unc,
+            band_weights,
+            valid_mask,
+            aot_prior,
+            tcwv_prior,
+            aot_prior_unc,
+            tcwv_prior_unc,
+            block_size,
+        )
+
+        full_costs = np.asarray(full_costs, dtype=np.float32)
+        full_counts = np.asarray(full_counts, dtype=np.uint16)
+        block_costs = np.asarray(block_costs, dtype=np.float32)
+        block_counts = np.asarray(block_counts, dtype=np.uint16)
+        block_valid = np.asarray(block_valid, dtype=bool)
+
+        assert block_costs.shape == (aot_axis.size, tcwv_axis.size, 2, 2)
+        assert block_counts.shape == block_costs.shape
+
+        for by in range(block_costs.shape[2]):
+            y0 = by * block_size
+            y1 = min(y0 + block_size, shape[0])
+            for bx in range(block_costs.shape[3]):
+                x0 = bx * block_size
+                x1 = min(x0 + block_size, shape[1])
+                expected_cost = np.sum(full_costs[:, :, y0:y1, x0:x1], axis=(2, 3))
+                expected_count = np.sum(full_counts[:, :, y0:y1, x0:x1], axis=(2, 3))
+                np.testing.assert_allclose(
+                    block_costs[:, :, by, bx],
+                    expected_cost,
+                    rtol=1.0e-5,
+                    atol=1.0e-4,
+                )
+                np.testing.assert_array_equal(block_counts[:, :, by, bx], expected_count)
+        np.testing.assert_array_equal(block_valid, _any_blocks_reference(valid_mask, block_size))
+
+    def test_grid_search_block_solver_broadcasts_shared_block_solution(self, monkeypatch):
+        """Block solver should return one shared solution per NxN block and broadcast it back."""
+        from siac.algorithms.solver import multigrid as mg_mod
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (5, 4)
+        solver = MultiGridSolver(
+            MultiGridConfig(
+                grid_search_aot_points=3,
+                grid_search_tcwv_points=3,
+                aot_bounds=(0.2, 0.8),
+                tcwv_bounds=(1.0, 3.0),
+                quadratic_block_size=3,
+            )
+        )
+
+        toa = xr.DataArray(
+            np.stack([np.full(shape, 0.25, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+        )
+        mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (geometry, atmo_state, band, compute_jacobian)
+                factor = np.full(shape, 0.9, dtype=np.float32)
+                xap = xr.DataArray(factor, dims=["y", "x"])
+                return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        def _fail_pixel_eval(*_args, **_kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("Per-pixel evaluator should not be used when quadratic_block_size > 1")
+
+        def _fake_block_eval(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            _toa,
+            _boa_prior,
+            _boa_unc,
+            _band_weights,
+            _valid_mask,
+            _aot_prior,
+            _tcwv_prior,
+            _aot_prior_unc,
+            _tcwv_prior_unc,
+            block_size,
+        ):  # noqa: ANN001
+            assert block_size == 3
+            costs = np.full((aot_axis.shape[0], tcwv_axis.shape[0], 2, 2), 50.0, dtype=np.float32)
+            obs_counts = np.ones_like(costs, dtype=np.uint16)
+            minima = {
+                (0, 0): (1, 1),
+                (0, 1): (2, 1),
+                (1, 0): (1, 2),
+                (1, 1): (2, 2),
+            }
+            for (by, bx), (ia, it) in minima.items():
+                for da in (-1, 0, 1):
+                    for dt in (-1, 0, 1):
+                        ia_idx = ia + da
+                        it_idx = it + dt
+                        if 0 <= ia_idx < aot_axis.shape[0] and 0 <= it_idx < tcwv_axis.shape[0]:
+                            costs[ia_idx, it_idx, by, bx] = float(da * da + dt * dt)
+            block_valid = np.ones((2, 2), dtype=bool)
+            return costs, obs_counts, block_valid
+
+        monkeypatch.setattr(mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fail_pixel_eval)
+        monkeypatch.setattr(mg_mod, "evaluate_block_grid_search_cost_cube_with_provider_qa", _fake_block_eval)
+
+        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc, level_diag = solver._solve_level_grid_search(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            mask=mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            cost_config=CostFunctionConfig(aot_gamma=0.0, tcwv_gamma=0.0),
+        )
+
+        aot_axis = np.linspace(
+            solver.config.aot_bounds[0],
+            solver.config.aot_bounds[1],
+            solver.config.grid_search_aot_points,
+            dtype=np.float32,
+        )
+        tcwv_axis = np.linspace(
+            solver.config.tcwv_bounds[0],
+            solver.config.tcwv_bounds[1],
+            solver.config.grid_search_tcwv_points,
+            dtype=np.float32,
+        )
+
+        expected_aot = np.array(
+            [
+                [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
+                [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
+                [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
+                [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
+                [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
+            ],
+            dtype=np.float32,
+        )
+        expected_tcwv = np.array(
+            [
+                [tcwv_axis[1], tcwv_axis[1], tcwv_axis[1], tcwv_axis[1]],
+                [tcwv_axis[1], tcwv_axis[1], tcwv_axis[1], tcwv_axis[1]],
+                [tcwv_axis[1], tcwv_axis[1], tcwv_axis[1], tcwv_axis[1]],
+                [tcwv_axis[2], tcwv_axis[2], tcwv_axis[2], tcwv_axis[2]],
+                [tcwv_axis[2], tcwv_axis[2], tcwv_axis[2], tcwv_axis[2]],
+            ],
+            dtype=np.float32,
+        )
+
+        np.testing.assert_allclose(out_aot, expected_aot)
+        np.testing.assert_allclose(out_tcwv, expected_tcwv)
+        np.testing.assert_allclose(out_aot_unc[:3, :3], out_aot_unc[0, 0])
+        np.testing.assert_allclose(out_tcwv_unc[:3, :3], out_tcwv_unc[0, 0])
+        assert level_diag["valid_pixels"] == pytest.approx(float(np.prod(shape)))
 
     def test_grid_search_uses_invalid_qa_to_restore_priors(self, monkeypatch):
         """Invalid QA pixels should fall back to the atmospheric prior."""

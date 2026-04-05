@@ -251,6 +251,7 @@ def resolve_solver(config: Any) -> SolverFn:
             band_weight_power=getattr(config.solver, "alpha", -1.6),
             smoothness_delta=getattr(config.solver, "smoothness_delta", 0.02),
             quadratic_group_size=getattr(config.solver, "quadratic_group_size", 1),
+            quadratic_block_size=getattr(config.solver, "quadratic_block_size", 1),
         )
         mg_solver = MultiGridSolver(solver_config)
         solve_kwargs: dict[str, Any] = {}

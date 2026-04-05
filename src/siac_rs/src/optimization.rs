@@ -429,6 +429,231 @@ pub fn evaluate_grid_search_cost_cube_with_provider_qa<'py>(
     Ok((costs.into_pyarray(py), obs_counts.into_pyarray(py)))
 }
 
+#[pyfunction]
+pub fn evaluate_block_grid_search_cost_cube_with_provider_qa<'py>(
+    py: Python<'py>,
+    coeff_provider: PyObject,
+    aot_axis: PyReadonlyArray1<f32>,
+    tcwv_axis: PyReadonlyArray1<f32>,
+    toa: PyReadonlyArray3<f32>,
+    boa_prior: PyReadonlyArray3<f32>,
+    boa_unc: PyReadonlyArray3<f32>,
+    band_weights: PyReadonlyArray1<f32>,
+    valid_mask: PyReadonlyArray2<bool>,
+    aot_prior: PyReadonlyArray2<f32>,
+    tcwv_prior: PyReadonlyArray2<f32>,
+    aot_prior_unc: PyReadonlyArray2<f32>,
+    tcwv_prior_unc: PyReadonlyArray2<f32>,
+    block_size: usize,
+) -> PyResult<(&'py PyArray4<f32>, &'py PyArray4<u16>, &'py PyArray2<bool>)> {
+    if block_size == 0 {
+        return Err(PyValueError::new_err("block_size must be positive"));
+    }
+
+    let aot_axis = aot_axis.as_array();
+    let tcwv_axis = tcwv_axis.as_array();
+    let toa = toa.as_array();
+    let boa_prior = boa_prior.as_array();
+    let boa_unc = boa_unc.as_array();
+    let band_weights = band_weights.as_array();
+    let valid = valid_mask.as_array();
+    let aot_prior = aot_prior.as_array();
+    let tcwv_prior = tcwv_prior.as_array();
+    let aot_prior_unc = aot_prior_unc.as_array();
+    let tcwv_prior_unc = tcwv_prior_unc.as_array();
+
+    if aot_axis.is_empty() || tcwv_axis.is_empty() {
+        return Err(PyValueError::new_err(
+            "aot_axis and tcwv_axis must be non-empty",
+        ));
+    }
+
+    let toa_shape = toa.shape();
+    if toa_shape.len() != 3 {
+        return Err(PyValueError::new_err("toa must be 3D (band, y, x)"));
+    }
+    let (n_band, ny, nx) = (toa_shape[0], toa_shape[1], toa_shape[2]);
+
+    for (name, arr) in [
+        ("boa_prior", boa_prior.shape()),
+        ("boa_unc", boa_unc.shape()),
+    ] {
+        if arr != [n_band, ny, nx] {
+            return Err(PyValueError::new_err(format!(
+                "{name} must have shape (band, y, x) matching toa"
+            )));
+        }
+    }
+    if band_weights.len() != n_band {
+        return Err(PyValueError::new_err(
+            "band_weights length must match toa.shape[0]",
+        ));
+    }
+    if valid.shape() != [ny, nx]
+        || aot_prior.shape() != [ny, nx]
+        || tcwv_prior.shape() != [ny, nx]
+        || aot_prior_unc.shape() != [ny, nx]
+        || tcwv_prior_unc.shape() != [ny, nx]
+    {
+        return Err(PyValueError::new_err(
+            "2D inputs must all match shape (y, x)",
+        ));
+    }
+
+    let block_rows = (ny + block_size - 1) / block_size;
+    let block_cols = (nx + block_size - 1) / block_size;
+    let mut costs =
+        Array4::<f32>::zeros((aot_axis.len(), tcwv_axis.len(), block_rows, block_cols));
+    let mut obs_counts =
+        Array4::<u16>::zeros((aot_axis.len(), tcwv_axis.len(), block_rows, block_cols));
+    let mut block_valid = Array2::<bool>::from_elem((block_rows, block_cols), false);
+    for iy in 0..ny {
+        for ix in 0..nx {
+            if valid[[iy, ix]] {
+                block_valid[[iy / block_size, ix / block_size]] = true;
+            }
+        }
+    }
+
+    for (ia, aot_val) in aot_axis.iter().enumerate() {
+        for (it, tcwv_val) in tcwv_axis.iter().enumerate() {
+            let returned = coeff_provider.call1(py, (*aot_val, *tcwv_val))?;
+            let (xap_obj, xbp_obj, xcp_obj): (&PyArray3<f32>, &PyArray3<f32>, &PyArray3<f32>) =
+                returned.extract(py)?;
+
+            let xap_ro = xap_obj.readonly();
+            let xbp_ro = xbp_obj.readonly();
+            let xcp_ro = xcp_obj.readonly();
+            let xap = xap_ro.as_array();
+            let xbp = xbp_ro.as_array();
+            let xcp = xcp_ro.as_array();
+
+            for (name, arr) in [
+                ("xap", xap.shape()),
+                ("xbp", xbp.shape()),
+                ("xcp", xcp.shape()),
+            ] {
+                if arr != [n_band, ny, nx] {
+                    return Err(PyValueError::new_err(format!(
+                        "coeff_provider returned {name} with invalid shape; expected (band, y, x) matching toa"
+                    )));
+                }
+            }
+
+            let aot_val_f64 = *aot_val as f64;
+            let tcwv_val_f64 = *tcwv_val as f64;
+
+            let row_results: Vec<(Vec<f32>, Vec<u16>)> = (0..ny)
+                .into_par_iter()
+                .map(|iy| {
+                    let mut row_costs = vec![0.0f32; nx];
+                    let mut row_counts = vec![0u16; nx];
+                    for ix in 0..nx {
+                        if !valid[[iy, ix]] {
+                            continue;
+                        }
+
+                        let mut pixel_cost = 0.0_f64;
+                        let mut pixel_obs_count = 0u16;
+
+                        for ib in 0..n_band {
+                            let band_w = band_weights[ib] as f64;
+                            let unc = boa_unc[[ib, iy, ix]] as f64;
+                            if !unc.is_finite() || unc <= 0.0 {
+                                continue;
+                            }
+
+                            let toa_v = toa[[ib, iy, ix]] as f64;
+                            let xap_v = xap[[ib, iy, ix]] as f64;
+                            let xbp_v = xbp[[ib, iy, ix]] as f64;
+                            let xcp_v = xcp[[ib, iy, ix]] as f64;
+                            let prior_v = boa_prior[[ib, iy, ix]] as f64;
+                            if !toa_v.is_finite()
+                                || !xap_v.is_finite()
+                                || !xbp_v.is_finite()
+                                || !xcp_v.is_finite()
+                                || !prior_v.is_finite()
+                            {
+                                continue;
+                            }
+
+                            let y = xap_v * toa_v - xbp_v;
+                            let denom = 1.0 + xcp_v * y;
+                            if !denom.is_finite() || denom.abs() < 1e-12 {
+                                continue;
+                            }
+
+                            let boa_model = y / denom;
+                            let diff = boa_model - prior_v;
+                            if !diff.is_finite() {
+                                continue;
+                            }
+
+                            let w = band_w / (unc * unc).max(1e-12);
+                            if !w.is_finite() || w <= 0.0 {
+                                continue;
+                            }
+                            let add = 0.5 * w * diff * diff;
+                            if add.is_finite() {
+                                pixel_cost += add;
+                                pixel_obs_count = pixel_obs_count.saturating_add(1);
+                            }
+                        }
+
+                        let aot_p = aot_prior[[iy, ix]] as f64;
+                        let tcwv_p = tcwv_prior[[iy, ix]] as f64;
+                        let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
+                        let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
+                        if aot_p.is_finite()
+                            && tcwv_p.is_finite()
+                            && aot_u.is_finite()
+                            && tcwv_u.is_finite()
+                        {
+                            let prior = 0.5
+                                * (((aot_val_f64 - aot_p) * (aot_val_f64 - aot_p))
+                                    / (aot_u * aot_u).max(1e-12)
+                                    + ((tcwv_val_f64 - tcwv_p) * (tcwv_val_f64 - tcwv_p))
+                                        / (tcwv_u * tcwv_u).max(1e-12));
+                            if prior.is_finite() {
+                                pixel_cost += prior;
+                            }
+                        }
+
+                        row_costs[ix] = pixel_cost as f32;
+                        row_counts[ix] = pixel_obs_count;
+                    }
+                    (row_costs, row_counts)
+                })
+                .collect();
+
+            for (iy, (row_costs, row_counts)) in row_results.into_iter().enumerate() {
+                let by = iy / block_size;
+                for (ix, val) in row_costs.into_iter().enumerate() {
+                    if !valid[[iy, ix]] {
+                        continue;
+                    }
+                    let bx = ix / block_size;
+                    costs[[ia, it, by, bx]] += val;
+                }
+                for (ix, count) in row_counts.into_iter().enumerate() {
+                    if !valid[[iy, ix]] || count == 0 {
+                        continue;
+                    }
+                    let bx = ix / block_size;
+                    obs_counts[[ia, it, by, bx]] =
+                        obs_counts[[ia, it, by, bx]].saturating_add(count);
+                }
+            }
+        }
+    }
+
+    Ok((
+        costs.into_pyarray(py),
+        obs_counts.into_pyarray(py),
+        block_valid.into_pyarray(py),
+    ))
+}
+
 fn compute_grid_search_cost_cube<'py>(
     py: Python<'py>,
     coeff_provider: PyObject,
