@@ -475,21 +475,36 @@ def test_segmentize_curve_raises_when_support_is_outside_segment() -> None:
         )
 
 
-def test_estimate_uncertainty_falls_back_to_floor_for_mapped_bands() -> None:
+def test_uncertainty_is_at_least_floor_for_mapped_bands() -> None:
+    """With zero source_fit_rmse and no input uncertainty, uncertainty equals the floor."""
     mapper = object.__new__(SpectralMapper)
+    mapper.source_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
     mapper.target_bands = (SensorBand("B02", 490.0, 65.0, 10.0, 0),)
-    mapper._package_mapper = SimpleNamespace()
-    mapper._runtime = SimpleNamespace(target_sensor_id="target")
+    mapper.k_neighbors = 1
+    mapper._identity = False
+    mapper._target_band_names = ["B02"]
+    mapper._mapping_config = SimpleNamespace(
+        min_valid_bands=1,
+        neighbor_estimator="distance_weighted_mean",
+        knn_backend="numpy",
+        knn_eps=0.0,
+    )
+    mapper._runtime = SimpleNamespace(source_sensor_id="src", target_sensor_id="target")
     mapper._target_internal_to_output_index = {"B02": 0}
-    mapper._target_schema_by_band_id = {"B02": SimpleNamespace(band_id="B02", segment="vnir")}
-    mapper._source_retrieval_indices_by_segment = {"vnir": np.array([0], dtype=np.int32), "swir": np.array([], dtype=np.int32)}
-
-    result = SimpleNamespace(
-        target_reflectance=[0.2],
-        target_band_ids=["B02"],
-        diagnostics={},
+    mapper._package_mapper = SimpleNamespace(
+        map_reflectance_batch_arrays_ndarray=lambda **_kwargs: SimpleNamespace(
+            reflectance=np.array([[0.2]], dtype=np.float64),
+            source_fit_rmse=np.array([0.0], dtype=np.float32),
+            output_columns=("B02",),
+        ),
     )
 
-    output = mapper._estimate_uncertainty(result, source_uncertainty=None)
+    source = xr.DataArray(
+        np.array([[[0.2]]], dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["B02"], "y": [0], "x": [0]},
+    )
 
-    np.testing.assert_allclose(output, np.array([0.005], dtype=np.float32))
+    _mapped, mapped_unc, _source_fit = mapper.map(source)
+
+    np.testing.assert_allclose(mapped_unc.values, np.array([[[0.005]]], dtype=np.float32))

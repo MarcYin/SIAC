@@ -384,7 +384,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/03/f6340fba248940f5d3555f7f0da2490f20eca180d0e3a11ac2536ff7e4b1/rsrf-0.0.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ec/a2/18bccf2ebec80bbcf0c0ed0a509bb5485aab10e7cb248419f320d656db9f/spectral_library-0.3.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -745,7 +745,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/03/f6340fba248940f5d3555f7f0da2490f20eca180d0e3a11ac2536ff7e4b1/rsrf-0.0.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/92/4bdf1830bf8ac1133cd6a041941950b26d45e2b922bbaead570ca331ec93/spectral_library-0.3.0.tar.gz
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -1106,7 +1106,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/03/f6340fba248940f5d3555f7f0da2490f20eca180d0e3a11ac2536ff7e4b1/rsrf-0.0.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/57/5e/a897cb58e3dda0c4380bf51e012b7ff5e9eb709ca4a4f4db1330d9a212e0/spectral_library-0.3.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
   py6s:
     channels:
@@ -1494,7 +1494,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/71/d4/d9440ff5da6547ac2587f93a9af7e779be0aed78e1f0734dede94e440f6b/pysolar-0.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/03/f6340fba248940f5d3555f7f0da2490f20eca180d0e3a11ac2536ff7e4b1/rsrf-0.0.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ec/a2/18bccf2ebec80bbcf0c0ed0a509bb5485aab10e7cb248419f320d656db9f/spectral_library-0.3.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -1857,7 +1857,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/71/d4/d9440ff5da6547ac2587f93a9af7e779be0aed78e1f0734dede94e440f6b/pysolar-0.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/03/f6340fba248940f5d3555f7f0da2490f20eca180d0e3a11ac2536ff7e4b1/rsrf-0.0.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/92/4bdf1830bf8ac1133cd6a041941950b26d45e2b922bbaead570ca331ec93/spectral_library-0.3.0.tar.gz
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -2220,7 +2220,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/71/d4/d9440ff5da6547ac2587f93a9af7e779be0aed78e1f0734dede94e440f6b/pysolar-0.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/03/f6340fba248940f5d3555f7f0da2490f20eca180d0e3a11ac2536ff7e4b1/rsrf-0.0.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/57/5e/a897cb58e3dda0c4380bf51e012b7ff5e9eb709ca4a4f4db1330d9a212e0/spectral_library-0.3.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -12437,10 +12437,10 @@ packages:
   - pkg:pypi/soupsieve?source=hash-mapping
   size: 38187
   timestamp: 1769034509657
-- pypi: https://files.pythonhosted.org/packages/50/fb/5eba8026aee278a36de4458cbb43fc805dac73bc3f4982a333157e28e323/spectral_library-0.2.0-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/15/92/4bdf1830bf8ac1133cd6a041941950b26d45e2b922bbaead570ca331ec93/spectral_library-0.3.0.tar.gz
   name: spectral-library
-  version: 0.2.0
-  sha256: adc0c0944781bf7f51d6d61c9eaef62f7afd1a3e9a315516a795db9aca69a0c4
+  version: 0.3.0
+  sha256: 4fd44961876725a69c9e8709e58beab5a4cef3de4efd7fda828f0a3a2604bbec
   requires_dist:
   - duckdb>=1.1.0
   - numpy>=1.24.0
@@ -12452,6 +12452,7 @@ packages:
   - faiss-cpu>=1.8.0 ; extra == 'knn-faiss'
   - pynndescent>=0.5.13 ; extra == 'knn-pynndescent'
   - scann>=1.4.2 ; platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'knn-scann'
+  - zarr>=2.18.0,<3 ; extra == 'zarr'
   - scipy>=1.11.0 ; extra == 'knn-all'
   - faiss-cpu>=1.8.0 ; extra == 'knn-all'
   - pynndescent>=0.5.13 ; extra == 'knn-all'
@@ -12471,7 +12472,87 @@ packages:
   - pymdown-extensions>=10.14 ; extra == 'dev'
   - rdata>=0.11.0 ; extra == 'dev'
   - scipy>=1.11.0 ; extra == 'dev'
+  - setuptools-rust>=1.12.0 ; extra == 'dev'
   - whitsmooth-rust>=0.1.3 ; extra == 'dev'
+  - zarr>=2.18.0,<3 ; extra == 'dev'
+  requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/57/5e/a897cb58e3dda0c4380bf51e012b7ff5e9eb709ca4a4f4db1330d9a212e0/spectral_library-0.3.0-cp312-cp312-macosx_11_0_arm64.whl
+  name: spectral-library
+  version: 0.3.0
+  sha256: 81b7b455a13e27c0b44f701b4de68c059732aea8cb6a6923b2b8293a2b3b335e
+  requires_dist:
+  - duckdb>=1.1.0
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+  - mkdocs>=1.6 ; extra == 'docs'
+  - mkdocs-material>=9.5 ; extra == 'docs'
+  - pymdown-extensions>=10.14 ; extra == 'docs'
+  - scipy>=1.11.0 ; extra == 'knn'
+  - faiss-cpu>=1.8.0 ; extra == 'knn-faiss'
+  - pynndescent>=0.5.13 ; extra == 'knn-pynndescent'
+  - scann>=1.4.2 ; platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'knn-scann'
+  - zarr>=2.18.0,<3 ; extra == 'zarr'
+  - scipy>=1.11.0 ; extra == 'knn-all'
+  - faiss-cpu>=1.8.0 ; extra == 'knn-all'
+  - pynndescent>=0.5.13 ; extra == 'knn-all'
+  - scann>=1.4.2 ; platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'knn-all'
+  - matplotlib>=3.8.0 ; extra == 'internal-build'
+  - netcdf4>=1.7.0 ; extra == 'internal-build'
+  - openpyxl>=3.1.0 ; extra == 'internal-build'
+  - rdata>=0.11.0 ; extra == 'internal-build'
+  - whitsmooth-rust>=0.1.3 ; extra == 'accel'
+  - build>=1.2.2 ; extra == 'dev'
+  - coverage>=7.6.0 ; extra == 'dev'
+  - mkdocs>=1.6 ; extra == 'dev'
+  - mkdocs-material>=9.5 ; extra == 'dev'
+  - matplotlib>=3.8.0 ; extra == 'dev'
+  - netcdf4>=1.7.0 ; extra == 'dev'
+  - openpyxl>=3.1.0 ; extra == 'dev'
+  - pymdown-extensions>=10.14 ; extra == 'dev'
+  - rdata>=0.11.0 ; extra == 'dev'
+  - scipy>=1.11.0 ; extra == 'dev'
+  - setuptools-rust>=1.12.0 ; extra == 'dev'
+  - whitsmooth-rust>=0.1.3 ; extra == 'dev'
+  - zarr>=2.18.0,<3 ; extra == 'dev'
+  requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/ec/a2/18bccf2ebec80bbcf0c0ed0a509bb5485aab10e7cb248419f320d656db9f/spectral_library-0.3.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  name: spectral-library
+  version: 0.3.0
+  sha256: 6f1037b3b960a256b3504c4024df42335a5aa2d02e60447943a77db765279078
+  requires_dist:
+  - duckdb>=1.1.0
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+  - mkdocs>=1.6 ; extra == 'docs'
+  - mkdocs-material>=9.5 ; extra == 'docs'
+  - pymdown-extensions>=10.14 ; extra == 'docs'
+  - scipy>=1.11.0 ; extra == 'knn'
+  - faiss-cpu>=1.8.0 ; extra == 'knn-faiss'
+  - pynndescent>=0.5.13 ; extra == 'knn-pynndescent'
+  - scann>=1.4.2 ; platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'knn-scann'
+  - zarr>=2.18.0,<3 ; extra == 'zarr'
+  - scipy>=1.11.0 ; extra == 'knn-all'
+  - faiss-cpu>=1.8.0 ; extra == 'knn-all'
+  - pynndescent>=0.5.13 ; extra == 'knn-all'
+  - scann>=1.4.2 ; platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'knn-all'
+  - matplotlib>=3.8.0 ; extra == 'internal-build'
+  - netcdf4>=1.7.0 ; extra == 'internal-build'
+  - openpyxl>=3.1.0 ; extra == 'internal-build'
+  - rdata>=0.11.0 ; extra == 'internal-build'
+  - whitsmooth-rust>=0.1.3 ; extra == 'accel'
+  - build>=1.2.2 ; extra == 'dev'
+  - coverage>=7.6.0 ; extra == 'dev'
+  - mkdocs>=1.6 ; extra == 'dev'
+  - mkdocs-material>=9.5 ; extra == 'dev'
+  - matplotlib>=3.8.0 ; extra == 'dev'
+  - netcdf4>=1.7.0 ; extra == 'dev'
+  - openpyxl>=3.1.0 ; extra == 'dev'
+  - pymdown-extensions>=10.14 ; extra == 'dev'
+  - rdata>=0.11.0 ; extra == 'dev'
+  - scipy>=1.11.0 ; extra == 'dev'
+  - setuptools-rust>=1.12.0 ; extra == 'dev'
+  - whitsmooth-rust>=0.1.3 ; extra == 'dev'
+  - zarr>=2.18.0,<3 ; extra == 'dev'
   requires_python: '>=3.9'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/sqlite-3.51.2-h04a0ce9_0.conda
   sha256: ccce47d8fe3a817eac5b95f34ca0fcb12423b0c7c5eee249ffb32ac8013e9692

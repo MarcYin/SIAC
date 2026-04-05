@@ -40,7 +40,7 @@ from siac.runtime.models import copy_spatial_metadata_like
 from siac.storage.writers import write_raster
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from siac.domain import SensorBand
 
@@ -51,7 +51,6 @@ logger = logging.getLogger(__name__)
 Float32Array: TypeAlias = npt.NDArray[np.float32]
 Float64Array: TypeAlias = npt.NDArray[np.float64]
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
-Int32Array: TypeAlias = npt.NDArray[np.int32]
 Int64Array: TypeAlias = npt.NDArray[np.int64]
 
 
@@ -73,106 +72,12 @@ class _RSRFModuleProtocol(Protocol):
     def realize_curve(self, response_definition: object) -> _RSRFCurveProtocol: ...
 
 
-class _PackageSchemaBandProtocol(Protocol):
-    band_id: str
-    segment: str
+class _BatchArrayResultProtocol(Protocol):
+    """Protocol matching ``spectral_library.BatchMappingArrayResult`` (v0.3.0+)."""
 
-
-class _PackageSensorSchemaProtocol(Protocol):
-    bands: Sequence[_PackageSchemaBandProtocol]
-
-
-class _PackageResultProtocol(Protocol):
-    target_reflectance: Sequence[float] | None
-    target_band_ids: Sequence[str]
-    diagnostics: Mapping[str, object]
-
-
-class _PackageBatchProtocol(Protocol):
-    results: Sequence[_PackageResultProtocol]
-
-
-class _PackageRetrievalProtocol(Protocol):
-    success: bool
-    reconstructed: object | None
-    neighbor_ids: Sequence[object]
-    neighbor_weights: object
-    query_valid_mask: object
-    source_fit_rmse: float
-
-
-class _PackageMapperProtocol(Protocol):
-    _row_index_by_id: Mapping[str, int]
-
-    def get_sensor_schema(self, sensor_id: str) -> _PackageSensorSchemaProtocol: ...
-
-    def map_reflectance_batch(
-        self,
-        *,
-        source_sensor: str,
-        reflectance_rows: Float64Array,
-        valid_mask_rows: BoolArray,
-        output_mode: str,
-        target_sensor: str,
-        k: int,
-        min_valid_bands: int,
-        neighbor_estimator: str,
-        knn_backend: str,
-        knn_eps: float,
-    ) -> _PackageBatchProtocol: ...
-
-    def _load_hyperspectral(self, segment: str) -> object: ...
-
-    def _band_response(
-        self,
-        sensor_id: str,
-        schema_band: _PackageSchemaBandProtocol,
-        *,
-        segment_only: bool = False,
-    ) -> object: ...
-
-
-class _PackageMapperMinimalProtocol(_PackageMapperProtocol, Protocol):
-    def _candidate_rows(self, candidate_rows: object | None) -> object: ...
-
-    def _load_source_matrix(self, source_sensor: str, segment: str) -> np.ndarray: ...
-
-    def _load_hyperspectral(self, segment: str) -> np.ndarray: ...
-
-    def _retrieve_segment_batch(
-        self,
-        *,
-        source_sensor: str,
-        segment: str,
-        query_values: Float64Array,
-        valid_mask: BoolArray,
-        k: int,
-        min_valid_bands: int,
-        neighbor_estimator: str,
-        knn_backend: str,
-        knn_eps: float,
-        candidate_row_indices: Int64Array,
-    ) -> Sequence[_PackageRetrievalProtocol]: ...
-
-
-class _PackageSpectralMapperFactory(Protocol):
-    def __call__(self, prepared_root: Path, *, verify_checksums: bool = False) -> _PackageMapperProtocol: ...
-
-
-class _PackagePrepareMappingLibrary(Protocol):
-    def __call__(
-        self,
-        *,
-        siac_root: Path,
-        srf_root: Path,
-        output_root: Path,
-        source_sensors: Sequence[str],
-    ) -> object: ...
-
-
-class _SpectralLibraryModuleProtocol(Protocol):
-    SpectralMapper: _PackageSpectralMapperFactory
-    prepare_mapping_library: _PackagePrepareMappingLibrary
+    reflectance: np.ndarray
+    source_fit_rmse: np.ndarray
+    output_columns: tuple[str, ...]
 
 
 class _LazyModuleProxy:
@@ -192,20 +97,17 @@ class _LazyModuleProxy:
 
 
 @lru_cache(maxsize=1)
-def _spectral_library_module() -> _SpectralLibraryModuleProtocol:
-    return cast(
-        "_SpectralLibraryModuleProtocol",
-        importlib.import_module("spectral_library"),
-    )
+def _spectral_library_module() -> object:
+    return importlib.import_module("spectral_library")
 
 
-def PackageSpectralMapper(*args: object, **kwargs: object) -> _PackageMapperProtocol:
-    factory = cast("Callable[..., object]", _spectral_library_module().SpectralMapper)
-    return cast("_PackageMapperProtocol", factory(*args, **kwargs))
+def PackageSpectralMapper(*args: object, **kwargs: object) -> object:
+    factory = cast("Callable[..., object]", _spectral_library_module().SpectralMapper)  # type: ignore[union-attr]
+    return factory(*args, **kwargs)
 
 
 def prepare_package_mapping_library(*args: object, **kwargs: object) -> object:
-    factory = cast("Callable[..., object]", _spectral_library_module().prepare_mapping_library)
+    factory = cast("Callable[..., object]", _spectral_library_module().prepare_mapping_library)  # type: ignore[union-attr]
     return factory(*args, **kwargs)
 
 
@@ -308,25 +210,10 @@ class _FlattenedSourceCube:
 
 
 @dataclass(frozen=True)
-class _PreparedSegmentDiagnostics:
-    neighbor_ids: tuple[str, ...]
-    neighbor_weights: Float64Array
-    query_valid_mask: BoolArray
-    source_fit_rmse: float
-
-
-@dataclass(frozen=True)
 class _DeduplicatedQueries:
     queries: Float64Array
     valid_masks: BoolArray
     inverse_indices: Int64Array
-
-
-@dataclass(frozen=True)
-class _MinimalMappingResult:
-    target_reflectance: Float64Array | None
-    target_band_ids: tuple[str, ...]
-    prepared_segments: dict[str, _PreparedSegmentDiagnostics]
 
 
 def needs_spectral_mapping(
@@ -834,7 +721,11 @@ def _prepare_runtime(
 
 
 class SpectralMapper:
-    """Package-backed mapper from one multispectral basis to another."""
+    """Package-backed mapper from one multispectral basis to another.
+
+    Uses ``spectral_library >= 0.3.0`` batch array API for efficient
+    KNN-based spectral reconstruction.
+    """
 
     def __init__(
         self,
@@ -857,13 +748,8 @@ class SpectralMapper:
         self._mapping_config = mapping_config.normalized()
         self._spectral_library = library
         self._runtime: _PreparedRuntime | None = None
-        self._package_mapper: _PackageMapperProtocol | None = None
+        self._package_mapper: object | None = None
         self._target_internal_to_output_index: dict[str, int] = {}
-        self._source_retrieval_indices_by_segment: dict[str, Int32Array] = {}
-        self._target_schema_by_band_id: dict[str, _PackageSchemaBandProtocol] = {}
-        self._segment_hyperspectral_cache: dict[str, Float64Array] = {}
-        self._target_projection_response_cache: dict[str, Float64Array | None] = {}
-        self._segment_target_projection_cache: dict[str, tuple[tuple[str, ...], Int32Array, Float64Array] | None] = {}
 
         if not self._identity:
             self._runtime = _prepare_runtime(
@@ -876,20 +762,6 @@ class SpectralMapper:
             self._target_internal_to_output_index = {
                 band.schema_band_id: band.original_index for band in self._runtime.target_bands
             }
-            runtime_target_schema = self._package_mapper.get_sensor_schema(self._runtime.target_sensor_id)
-            self._target_schema_by_band_id = {
-                band.band_id: band for band in runtime_target_schema.bands
-            }
-            runtime_source_schema = self._package_mapper.get_sensor_schema(self._runtime.source_sensor_id)
-            for segment in ("vnir", "swir"):
-                self._source_retrieval_indices_by_segment[segment] = np.array(
-                    [
-                        index
-                        for index, schema_band in enumerate(runtime_source_schema.bands)
-                        if schema_band.segment == segment or (segment == "swir" and schema_band.band_id == "nir")
-                    ],
-                    dtype=np.int32,
-                )
 
     def map(
         self,
@@ -923,21 +795,20 @@ class SpectralMapper:
 
         flattened = self._flatten_source_cube(source_data)
         unc_flat = self._flatten_optional_uncertainty(source_unc, flattened.transpose_dims)
-        target_flat = np.full((flattened.flat_values.shape[0], len(self.target_bands)), np.nan, dtype=np.float32)
+        n_pixels = flattened.flat_values.shape[0]
+        n_target = len(self.target_bands)
+        target_flat = np.full((n_pixels, n_target), np.nan, dtype=np.float32)
         target_unc_flat = np.full_like(target_flat, np.nan)
-        source_fit_flat = np.full(flattened.flat_values.shape[0], np.nan, dtype=np.float32)
-        segment_fit_flat = {
-            segment: np.full(flattened.flat_values.shape[0], np.nan, dtype=np.float32)
-            for segment in ("vnir", "swir")
-        }
+        source_fit_flat = np.full(n_pixels, np.nan, dtype=np.float32)
+
         if np.any(flattened.valid_rows):
             valid_count = int(np.count_nonzero(flattened.valid_rows))
             logger.info(
                 "Spectral mapping start: valid_queries=%d total_queries=%d source_bands=%d target_bands=%d k=%d",
                 valid_count,
-                int(flattened.flat_values.shape[0]),
+                n_pixels,
                 len(self.source_bands),
-                len(self.target_bands),
+                n_target,
                 self.k_neighbors,
             )
             batch_started = perf_counter()
@@ -951,10 +822,20 @@ class SpectralMapper:
                     valid_count,
                     unique_query_count,
                 )
-            batch_results = self._map_reflectance_batch(
-                deduplicated.queries,
-                deduplicated.valid_masks,
-            )
+
+            # spectral_library v0.3.0 batch array API — returns arrays directly.
+            batch_result = cast("_BatchArrayResultProtocol", self._package_mapper.map_reflectance_batch_arrays_ndarray(  # type: ignore[union-attr]
+                source_sensor=self._runtime.source_sensor_id,
+                reflectance_rows=deduplicated.queries,
+                valid_mask_rows=deduplicated.valid_masks,
+                output_mode="target_sensor",
+                target_sensor=self._runtime.target_sensor_id,
+                k=self.k_neighbors,
+                min_valid_bands=self._mapping_config.min_valid_bands,
+                neighbor_estimator=self._mapping_config.neighbor_estimator,
+                knn_backend=self._mapping_config.knn_backend,
+                knn_eps=self._mapping_config.knn_eps,
+            ))
             logger.info(
                 "Spectral mapping package batch complete: queried_rows=%d elapsed=%.2fs",
                 unique_query_count,
@@ -962,38 +843,49 @@ class SpectralMapper:
             )
 
             valid_indices = np.flatnonzero(flattened.valid_rows)
-            uncertainty_started = perf_counter()
 
-            # Build band-id → output-column mapping once.
-            band_id_to_col: dict[str, int] = self._target_internal_to_output_index
+            # Map batch result columns to target band positions.
+            band_id_to_col = self._target_internal_to_output_index
+            result_cols: list[int] = []
+            target_cols: list[int] = []
+            for j, col_id in enumerate(batch_result.output_columns):
+                target_j = band_id_to_col.get(col_id)
+                if target_j is not None:
+                    result_cols.append(j)
+                    target_cols.append(target_j)
+            result_col_arr = np.array(result_cols, dtype=np.intp)
+            target_col_arr = np.array(target_cols, dtype=np.intp)
 
-            # Vectorized reflectance fill: gather target reflectance from
-            # deduplicated batch results via inverse indices.
-            for result_index, row_index in enumerate(valid_indices):
-                result = batch_results[int(deduplicated.inverse_indices[result_index])]
-                if result.target_reflectance is not None:
-                    for band_id, value in zip(result.target_band_ids, result.target_reflectance, strict=True):
-                        target_flat[row_index, band_id_to_col[band_id]] = np.float32(value)
-                source_fit_flat[row_index] = np.float32(self._estimate_source_fit_rmse(result))
-                for segment in ("vnir", "swir"):
-                    segment_rmse = self._segment_source_fit_rmse(result, segment)
-                    if segment_rmse is not None:
-                        segment_fit_flat[segment][row_index] = np.float32(segment_rmse)
+            # Expand deduplicated results to per-pixel arrays.
+            dedup_indices = deduplicated.inverse_indices
+            reflectance = np.asarray(batch_result.reflectance, dtype=np.float32)
+            fit_rmse = np.asarray(batch_result.source_fit_rmse, dtype=np.float32)
 
+            fill_started = perf_counter()
+            target_flat[np.ix_(valid_indices, target_col_arr)] = reflectance[dedup_indices][:, result_col_arr]
+            source_fit_flat[valid_indices] = fit_rmse[dedup_indices]
             logger.info(
                 "Spectral mapping reflectance fill complete: %d pixels elapsed=%.2fs",
                 int(valid_indices.size),
-                perf_counter() - uncertainty_started,
+                perf_counter() - fill_started,
             )
 
-            # Uncertainty estimation — use vectorized path when possible.
+            # Vectorized uncertainty: sqrt(floor² + fit_rmse² + input_unc²).
             unc_started = perf_counter()
-            for result_index, row_index in enumerate(valid_indices):
-                result = batch_results[int(deduplicated.inverse_indices[result_index])]
-                target_unc_flat[row_index] = self._estimate_uncertainty(
-                    result,
-                    source_uncertainty=None if unc_flat is None else unc_flat[row_index],
-                )
+            per_pixel_fit = fit_rmse[dedup_indices].astype(np.float64)
+            input_unc = np.zeros(valid_count, dtype=np.float64)
+            if unc_flat is not None:
+                unc_sq = np.square(unc_flat[valid_indices].astype(np.float64))
+                input_unc = np.sqrt(np.nanmean(unc_sq, axis=1))
+            unc_per_pixel = np.sqrt(
+                _UNCERTAINTY_FLOOR**2 + per_pixel_fit**2 + input_unc**2
+            ).astype(np.float32)
+            mapped_mask = np.isfinite(target_flat[valid_indices])
+            target_unc_flat[valid_indices] = np.where(
+                mapped_mask,
+                unc_per_pixel[:, np.newaxis],
+                np.nan,
+            )
             logger.info(
                 "Spectral mapping uncertainty complete: %d pixels elapsed=%.2fs",
                 int(valid_indices.size),
@@ -1003,23 +895,9 @@ class SpectralMapper:
         reflectance_da = self._restore_target_cube(target_flat, flattened)
         uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
         source_fit_da = self._restore_spatial_field(source_fit_flat, flattened)
-        segment_fit_da = {
-            segment: self._restore_spatial_field(flat_values, flattened)
-            for segment, flat_values in segment_fit_flat.items()
-        }
         spatial_reference = cast("xr.DataArray", flattened.source_data.isel(band=0, drop=True))
         source_fit_da = copy_spatial_metadata_like(source_fit_da.astype(np.float32), spatial_reference)
-        segment_fit_da = {
-            segment: copy_spatial_metadata_like(metric.astype(np.float32), spatial_reference)
-            for segment, metric in segment_fit_da.items()
-        }
-        self._cache_distance_metrics(
-            {
-                "source_fit_rmse": source_fit_da,
-                "vnir_source_fit_rmse": segment_fit_da["vnir"],
-                "swir_source_fit_rmse": segment_fit_da["swir"],
-            }
-        )
+        self._cache_distance_metrics({"source_fit_rmse": source_fit_da})
         logger.info("Spectral mapping complete: output_shape=%s", tuple(reflectance_da.shape))
         return (
             copy_spatial_metadata_like(
@@ -1053,332 +931,6 @@ class SpectralMapper:
                 "knn_backend": self._mapping_config.knn_backend,
             },
         )
-
-    def _map_reflectance_batch(
-        self,
-        queries: Float64Array,
-        valid_masks: BoolArray,
-    ) -> tuple[_PackageResultProtocol | _MinimalMappingResult, ...]:
-        if self._package_mapper is None or self._runtime is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-        # Fast vectorized path: build cKDTree once, query all rows in
-        # parallel, do distance-weighted reconstruction as batch matmuls.
-        if self._supports_minimal_batch_path():
-            try:
-                logger.info(
-                    "Spectral mapping batch path: fast vectorized KNN for %d unique row(s)",
-                    int(queries.shape[0]),
-                )
-                return self._map_reflectance_batch_fast(queries, valid_masks)
-            except Exception as exc:  # pragma: no cover - compatibility fallback
-                logger.warning("Spectral mapping fast batch path failed; falling back to package API (%s)", exc)
-        batch = self._package_mapper.map_reflectance_batch(
-            source_sensor=self._runtime.source_sensor_id,
-            reflectance_rows=queries,
-            valid_mask_rows=valid_masks,
-            output_mode="target_sensor",
-            target_sensor=self._runtime.target_sensor_id,
-            k=self.k_neighbors,
-            min_valid_bands=self._mapping_config.min_valid_bands,
-            neighbor_estimator=self._mapping_config.neighbor_estimator,
-            knn_backend=self._mapping_config.knn_backend,
-            knn_eps=self._mapping_config.knn_eps,
-        )
-        return tuple(batch.results)
-
-    def _supports_minimal_batch_path(self) -> bool:
-        if self._package_mapper is None:
-            return False
-        required = (
-            "_candidate_rows",
-            "_retrieve_segment_batch",
-            "_load_source_matrix",
-            "_load_hyperspectral",
-        )
-        return all(callable(getattr(self._package_mapper, name, None)) for name in required)
-
-    def _map_reflectance_batch_fast(
-        self,
-        queries: Float64Array,
-        valid_masks: BoolArray,
-    ) -> tuple[_MinimalMappingResult, ...]:
-        """Fully vectorized KNN + distance-weighted reconstruction.
-
-        Builds one ``cKDTree`` per segment (instead of per valid-band pattern),
-        queries all rows in parallel, and computes the distance-weighted
-        reconstruction as batch matrix multiplies.
-        """
-        from scipy.spatial import cKDTree
-
-        if self._package_mapper is None or self._runtime is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-
-        package_mapper = cast("_PackageMapperMinimalProtocol", self._package_mapper)
-        candidate_rows = np.asarray(package_mapper._candidate_rows(None), dtype=np.int64)  # noqa: SLF001
-        k = min(self.k_neighbors, int(candidate_rows.size))
-        n_queries = int(queries.shape[0])
-        estimator = self._mapping_config.neighbor_estimator
-
-        # Per-segment: build tree once → batch query → vectorized reconstruction.
-        segment_reconstructed: dict[str, Float64Array] = {}
-        segment_source_fit: dict[str, Float32Array] = {}
-
-        for segment in ("vnir", "swir"):
-            t0 = perf_counter()
-            segment_indices = self._source_retrieval_indices_by_segment[segment]
-            if segment_indices.size == 0:
-                segment_reconstructed[segment] = np.full((n_queries, 1), np.nan, dtype=np.float64)
-                segment_source_fit[segment] = np.full(n_queries, np.nan, dtype=np.float32)
-                continue
-            query_segment = np.asarray(queries[:, segment_indices], dtype=np.float64)
-            mask_segment = np.asarray(valid_masks[:, segment_indices], dtype=np.bool_)
-
-            # Load candidate source matrix and hyperspectral for this segment.
-            source_matrix = np.asarray(
-                package_mapper._load_source_matrix(self._runtime.source_sensor_id, segment),  # noqa: SLF001
-                dtype=np.float64,
-            )
-            candidate_matrix = source_matrix[candidate_rows]
-            hyperspectral = np.asarray(
-                package_mapper._load_hyperspectral(segment),  # noqa: SLF001
-                dtype=np.float64,
-            )
-
-            # Per-row validity: which bands are finite for each query.
-            row_valid = np.all(mask_segment, axis=1)
-            min_valid = self._mapping_config.min_valid_bands
-            enough_bands = mask_segment.sum(axis=1) >= min_valid
-
-            # Build cKDTree on full candidate matrix (all bands).
-            # For rows where some bands are NaN, we query on valid-band
-            # subsets only if all rows share the same pattern; otherwise
-            # we use the full-band tree and mask NaN columns to zero.
-            all_valid = np.all(row_valid)
-
-            reconstructed = np.full((n_queries, hyperspectral.shape[1]), np.nan, dtype=np.float64)
-            source_fit = np.full(n_queries, np.nan, dtype=np.float32)
-
-            if all_valid:
-                # Fast path: all queries have all bands valid → single tree.
-                tree = cKDTree(candidate_matrix)
-                distances, local_indices = tree.query(query_segment, k=k, workers=-1)
-                if distances.ndim == 1:
-                    distances = distances[:, np.newaxis]
-                    local_indices = local_indices[:, np.newaxis]
-                global_indices = candidate_rows[local_indices]
-
-                # Vectorized distance-weighted reconstruction.
-                valid_query_mask = enough_bands
-                if np.any(valid_query_mask):
-                    recon, fit = self._vectorized_dwm_reconstruction(
-                        hyperspectral, candidate_matrix, query_segment,
-                        global_indices, distances, valid_query_mask, estimator,
-                    )
-                    reconstructed[valid_query_mask] = recon
-                    source_fit[valid_query_mask] = fit
-            else:
-                # Group by valid-band pattern, build one tree per pattern.
-                patterns, inverse = np.unique(mask_segment, axis=0, return_inverse=True)
-                for pat_idx, pattern in enumerate(patterns):
-                    group_mask = (inverse == pat_idx) & enough_bands
-                    if not np.any(group_mask):
-                        continue
-                    group_indices = np.flatnonzero(group_mask)
-                    valid_cols = np.flatnonzero(pattern)
-                    cand_sub = candidate_matrix[:, valid_cols]
-                    query_sub = query_segment[group_indices][:, valid_cols]
-
-                    tree = cKDTree(cand_sub)
-                    distances, local_indices = tree.query(query_sub, k=k, workers=-1)
-                    if distances.ndim == 1:
-                        distances = distances[:, np.newaxis]
-                        local_indices = local_indices[:, np.newaxis]
-                    global_indices = candidate_rows[local_indices]
-
-                    recon, fit = self._vectorized_dwm_reconstruction(
-                        hyperspectral, candidate_matrix, query_segment[group_indices],
-                        global_indices, distances, np.ones(len(group_indices), dtype=bool), estimator,
-                    )
-                    reconstructed[group_indices] = recon
-                    source_fit[group_indices] = fit
-
-            segment_reconstructed[segment] = reconstructed
-            segment_source_fit[segment] = source_fit
-            logger.info(
-                "Spectral mapping segment %s KNN+reconstruction: %.1fs (%d queries, k=%d)",
-                segment, perf_counter() - t0, n_queries, k,
-            )
-
-        # Project reconstructed hyperspectral → target sensor bands.
-        all_band_ids: list[str] = []
-        all_target_columns: list[np.ndarray] = []
-        for segment in ("vnir", "swir"):
-            projection = self._segment_target_projection(segment)
-            if projection is None:
-                continue
-            segment_band_ids, _target_positions, response_matrix = projection
-            recon = segment_reconstructed[segment]
-            valid_rows = np.all(np.isfinite(recon), axis=1)
-            projected = np.full((n_queries, response_matrix.shape[1]), np.nan, dtype=np.float64)
-            if np.any(valid_rows):
-                projected[valid_rows] = recon[valid_rows] @ response_matrix
-            all_band_ids.extend(str(b) for b in segment_band_ids)
-            all_target_columns.append(projected)
-
-        target_matrix = np.concatenate(all_target_columns, axis=1) if all_target_columns else None
-        target_band_ids_tuple = tuple(all_band_ids)
-
-        # Build lightweight result objects (no per-row _prepare_segment_retrieval).
-        results: list[_MinimalMappingResult] = []
-        for i in range(n_queries):
-            target_ref = target_matrix[i] if target_matrix is not None and np.all(np.isfinite(target_matrix[i])) else None
-            results.append(_MinimalMappingResult(
-                target_reflectance=target_ref,
-                target_band_ids=target_band_ids_tuple,
-                prepared_segments={},
-            ))
-        return tuple(results)
-
-    @staticmethod
-    def _vectorized_dwm_reconstruction(
-        hyperspectral: Float64Array,
-        candidate_matrix: Float64Array,
-        query_values: Float64Array,
-        global_indices: np.ndarray,
-        distances: np.ndarray,
-        valid_mask: np.ndarray,
-        estimator: str,
-    ) -> tuple[Float64Array, Float32Array]:
-        """Vectorized distance-weighted-mean reconstruction for a batch of queries.
-
-        Returns (reconstructed_spectra, source_fit_rmse) arrays.
-        """
-        n = int(np.count_nonzero(valid_mask))
-        n_wl = hyperspectral.shape[1]
-        gi = global_indices[valid_mask]  # (n, k)
-        dist = distances[valid_mask]  # (n, k)
-        k = gi.shape[1]
-
-        # Compute weights.
-        if estimator == "mean":
-            weights = np.full((n, k), 1.0 / k, dtype=np.float64)
-        else:
-            # distance_weighted_mean (default).
-            exact = dist <= 1e-12
-            has_exact = np.any(exact, axis=1)
-            inv_dist = np.where(dist > 1e-12, 1.0 / dist, 0.0)
-            weights = np.where(
-                has_exact[:, np.newaxis],
-                exact.astype(np.float64),
-                inv_dist,
-            )
-            weight_sums = weights.sum(axis=1, keepdims=True)
-            weight_sums = np.where(weight_sums > 0, weight_sums, 1.0)
-            weights /= weight_sums  # (n, k)
-
-        # Gather neighbor hyperspectral: (n, k, n_wl)
-        neighbor_spectra = hyperspectral[gi.ravel()].reshape(n, k, n_wl)
-
-        # Weighted reconstruction: (n, k) · (n, k, n_wl) → (n, n_wl)
-        reconstructed = np.einsum("nk,nkw->nw", weights, neighbor_spectra)
-
-        # Source fit RMSE: reconstruct in source-band space.
-        n_src = candidate_matrix.shape[1]
-        neighbor_source = candidate_matrix[gi.ravel() % candidate_matrix.shape[0]].reshape(n, k, n_src)
-        source_pred = np.einsum("nk,nks->ns", weights, neighbor_source)
-        query_valid = query_values[valid_mask]
-        source_fit_rmse = np.sqrt(np.nanmean((source_pred - query_valid) ** 2, axis=1)).astype(np.float32)
-
-        return reconstructed, source_fit_rmse
-
-    def _map_reflectance_batch_minimal(
-        self,
-        queries: Float64Array,
-        valid_masks: BoolArray,
-    ) -> tuple[_MinimalMappingResult, ...]:
-        if self._package_mapper is None or self._runtime is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-
-        package_mapper = cast("_PackageMapperMinimalProtocol", self._package_mapper)
-        candidate_rows = np.asarray(package_mapper._candidate_rows(None), dtype=np.int64)  # noqa: SLF001
-        retrievals_by_segment: dict[str, tuple[_PackageRetrievalProtocol, ...]] = {}
-        for segment in ("vnir", "swir"):
-            segment_indices = self._source_retrieval_indices_by_segment[segment]
-            retrievals_by_segment[segment] = tuple(
-                package_mapper._retrieve_segment_batch(  # noqa: SLF001
-                    source_sensor=self._runtime.source_sensor_id,
-                    segment=segment,
-                    query_values=np.asarray(queries[:, segment_indices], dtype=np.float64),
-                    valid_mask=np.asarray(valid_masks[:, segment_indices], dtype=np.bool_),
-                    k=self.k_neighbors,
-                    min_valid_bands=self._mapping_config.min_valid_bands,
-                    neighbor_estimator=self._mapping_config.neighbor_estimator,
-                    knn_backend=self._mapping_config.knn_backend,
-                    knn_eps=self._mapping_config.knn_eps,
-                    candidate_row_indices=candidate_rows,
-                )
-            )
-
-        # Vectorized post-processing: extract reconstructed spectra into
-        # contiguous arrays and apply response-matrix projection as a single
-        # batch matrix multiply instead of a per-row Python loop.
-        n_queries = int(queries.shape[0])
-        all_band_ids: list[str] = []
-        all_target_columns: list[np.ndarray] = []
-
-        for segment in ("vnir", "swir"):
-            projection = self._segment_target_projection(segment)
-            if projection is None:
-                continue
-            segment_band_ids, _target_positions, response_matrix = projection
-            retrievals = retrievals_by_segment[segment]
-
-            # Gather reconstructed spectra into (n_queries, n_wavelengths) matrix.
-            n_wl = int(response_matrix.shape[0])
-            reconstructed_matrix = np.full((n_queries, n_wl), np.nan, dtype=np.float64)
-            for i, retrieval in enumerate(retrievals):
-                if retrieval.success and retrieval.reconstructed is not None:
-                    reconstructed_matrix[i] = np.asarray(retrieval.reconstructed, dtype=np.float64)
-
-            # Batch projection: (n_queries, n_wl) @ (n_wl, n_bands) → (n_queries, n_bands)
-            valid_rows = np.all(np.isfinite(reconstructed_matrix), axis=1)
-            projected = np.full((n_queries, response_matrix.shape[1]), np.nan, dtype=np.float64)
-            if np.any(valid_rows):
-                projected[valid_rows] = reconstructed_matrix[valid_rows] @ response_matrix
-
-            all_band_ids.extend(str(b) for b in segment_band_ids)
-            all_target_columns.append(projected)
-
-        # Build results with pre-computed target reflectance.
-        if all_target_columns:
-            target_matrix = np.concatenate(all_target_columns, axis=1)
-            target_band_ids_tuple = tuple(all_band_ids)
-        else:
-            target_matrix = None
-            target_band_ids_tuple = ()
-
-        results: list[_MinimalMappingResult] = []
-        for sample_index in range(n_queries):
-            prepared_segments: dict[str, _PreparedSegmentDiagnostics] = {}
-            for segment in ("vnir", "swir"):
-                retrieval = retrievals_by_segment[segment][sample_index]
-                prepared = self._prepare_segment_retrieval(retrieval)
-                if prepared is not None:
-                    prepared_segments[segment] = prepared
-
-            if target_matrix is not None and np.all(np.isfinite(target_matrix[sample_index])):
-                target_reflectance = target_matrix[sample_index]
-            else:
-                target_reflectance = None
-
-            results.append(
-                _MinimalMappingResult(
-                    target_reflectance=target_reflectance,
-                    target_band_ids=target_band_ids_tuple,
-                    prepared_segments=prepared_segments,
-                )
-            )
-        return tuple(results)
 
     def _align_source_data(self, data: xr.DataArray) -> xr.DataArray:
         if "band" not in data.dims:
@@ -1435,29 +987,6 @@ class SpectralMapper:
             inverse_indices=np.asarray(inverse_indices, dtype=np.int64),
         )
 
-    def _segment_hyperspectral_cache_store(self) -> dict[str, Float64Array]:
-        cache = getattr(self, "_segment_hyperspectral_cache", None)
-        if cache is None:
-            cache = {}
-            self._segment_hyperspectral_cache = cache
-        return cast("dict[str, Float64Array]", cache)
-
-    def _target_projection_response_cache_store(self) -> dict[str, Float64Array | None]:
-        cache = getattr(self, "_target_projection_response_cache", None)
-        if cache is None:
-            cache = {}
-            self._target_projection_response_cache = cache
-        return cast("dict[str, Float64Array | None]", cache)
-
-    def _segment_target_projection_cache_store(
-        self,
-    ) -> dict[str, tuple[tuple[str, ...], Int32Array, Float64Array] | None]:
-        cache = getattr(self, "_segment_target_projection_cache", None)
-        if cache is None:
-            cache = {}
-            self._segment_target_projection_cache = cache
-        return cast("dict[str, tuple[tuple[str, ...], Int32Array, Float64Array] | None]", cache)
-
     def _restore_target_cube(
         self,
         flat_values: Float32Array,
@@ -1491,295 +1020,6 @@ class SpectralMapper:
             if dim in flattened.source_data.coords
         }
         return xr.DataArray(values, dims=flattened.spatial_dims, coords=coords)
-
-    @staticmethod
-    def _prepared_segment_from_result(
-        result: _PackageResultProtocol | _MinimalMappingResult,
-        segment: str,
-    ) -> _PreparedSegmentDiagnostics | None:
-        if isinstance(result, _MinimalMappingResult):
-            return result.prepared_segments.get(segment)
-        diagnostics = result.diagnostics.get("segments", {})
-        if not isinstance(diagnostics, dict):
-            diagnostics = {}
-        return SpectralMapper._prepare_segment_diagnostics(diagnostics.get(segment))
-
-    def _estimate_source_fit_rmse(
-        self,
-        result: _PackageResultProtocol | _MinimalMappingResult,
-    ) -> float:
-        segment_rmse: list[tuple[int, float]] = []
-        for segment in ("vnir", "swir"):
-            prepared = self._prepared_segment_from_result(result, segment)
-            if prepared is None:
-                continue
-            valid_count = int(np.count_nonzero(prepared.query_valid_mask))
-            if valid_count < 1:
-                continue
-            segment_rmse.append((valid_count, max(0.0, float(prepared.source_fit_rmse))))
-        if not segment_rmse:
-            return 0.0
-        weights = np.asarray([item[0] for item in segment_rmse], dtype=np.float64)
-        rmse = np.asarray([item[1] for item in segment_rmse], dtype=np.float64)
-        return float(np.sqrt(np.average(np.square(rmse, dtype=np.float64), weights=weights)))
-
-    def _segment_source_fit_rmse(
-        self,
-        result: _PackageResultProtocol | _MinimalMappingResult,
-        segment: str,
-    ) -> float | None:
-        prepared = self._prepared_segment_from_result(result, segment)
-        if prepared is None:
-            return None
-        if int(np.count_nonzero(prepared.query_valid_mask)) < 1:
-            return None
-        return max(0.0, float(prepared.source_fit_rmse))
-
-    def _estimate_uncertainty(
-        self,
-        result: _PackageResultProtocol | _MinimalMappingResult,
-        *,
-        source_uncertainty: Float32Array | None,
-    ) -> Float32Array:
-        if self._package_mapper is None or self._runtime is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-
-        output: Float32Array = np.full(len(self.target_bands), np.nan, dtype=np.float32)
-        target_values_by_band_id = self._target_values_by_band_id(result)
-        for segment in ("vnir", "swir"):
-            prepared = self._prepared_segment_from_result(result, segment)
-            if prepared is None:
-                continue
-            neighbor_spectra = self._load_neighbor_spectra(
-                prepared.neighbor_ids,
-                segment,
-            )
-            neighbor_weights = prepared.neighbor_weights
-            input_unc = self._segment_input_uncertainty(
-                segment,
-                prepared.query_valid_mask,
-                source_uncertainty,
-            )
-            segment_projection = self._segment_target_projection(segment)
-            if segment_projection is None:
-                continue
-            band_ids, target_positions, response_matrix = segment_projection
-            neighbor_target_matrix = np.asarray(neighbor_spectra @ response_matrix, dtype=np.float64)
-
-            for column_index, (band_id, target_index) in enumerate(zip(band_ids, target_positions, strict=True)):
-                neighbor_target = neighbor_target_matrix[:, column_index]
-                estimate = target_values_by_band_id.get(band_id)
-                if estimate is None:
-                    estimate = float(np.dot(neighbor_weights, neighbor_target))
-                spread = float(
-                    np.sqrt(np.dot(neighbor_weights, np.square(neighbor_target - estimate, dtype=np.float64)))
-                )
-                output[int(target_index)] = np.float32(
-                    np.sqrt(max(spread, _UNCERTAINTY_FLOOR) ** 2 + prepared.source_fit_rmse**2 + input_unc**2)
-                )
-
-        mapped_positions = [
-            self._target_internal_to_output_index[band_id]
-            for band_id in target_values_by_band_id
-            if band_id in self._target_internal_to_output_index
-        ]
-        for position in mapped_positions:
-            if not np.isfinite(output[position]):
-                output[position] = _UNCERTAINTY_FLOOR
-        return output
-
-    @staticmethod
-    def _target_values_by_band_id(result: _PackageResultProtocol | _MinimalMappingResult) -> dict[str, float]:
-        if result.target_reflectance is None:
-            return {}
-        return {
-            str(band_id): float(value)
-            for band_id, value in zip(result.target_band_ids, result.target_reflectance, strict=True)
-        }
-
-    @staticmethod
-    def _prepare_segment_diagnostics(segment_diag: object) -> _PreparedSegmentDiagnostics | None:
-        if not isinstance(segment_diag, dict) or segment_diag.get("status") != "ok":
-            return None
-        neighbor_ids = tuple(str(value) for value in segment_diag.get("neighbor_ids", ()))
-        if not neighbor_ids:
-            return None
-        neighbor_weights = np.asarray(segment_diag.get("neighbor_weights", ()), dtype=np.float64)
-        if neighbor_weights.size == 0:
-            return None
-        weight_sum = float(np.sum(neighbor_weights))
-        if weight_sum <= 0.0:
-            return None
-        normalized_weights = np.asarray(neighbor_weights / weight_sum, dtype=np.float64)
-        query_valid_mask = np.asarray(segment_diag.get("query_valid_mask", ()), dtype=np.bool_)
-        source_fit_rmse = float(segment_diag.get("source_fit_rmse") or 0.0)
-        return _PreparedSegmentDiagnostics(
-            neighbor_ids=neighbor_ids,
-            neighbor_weights=normalized_weights,
-            query_valid_mask=query_valid_mask,
-            source_fit_rmse=source_fit_rmse,
-        )
-
-    @staticmethod
-    def _prepare_segment_retrieval(retrieval: _PackageRetrievalProtocol) -> _PreparedSegmentDiagnostics | None:
-        if not retrieval.success:
-            return None
-        neighbor_ids = tuple(str(value) for value in retrieval.neighbor_ids)
-        if not neighbor_ids:
-            return None
-        neighbor_weights = np.asarray(retrieval.neighbor_weights, dtype=np.float64)
-        if neighbor_weights.size == 0:
-            return None
-        weight_sum = float(np.sum(neighbor_weights))
-        if weight_sum <= 0.0:
-            return None
-        normalized_weights = np.asarray(neighbor_weights / weight_sum, dtype=np.float64)
-        query_valid_mask = np.asarray(retrieval.query_valid_mask, dtype=np.bool_)
-        source_fit_rmse = float(retrieval.source_fit_rmse or 0.0)
-        return _PreparedSegmentDiagnostics(
-            neighbor_ids=neighbor_ids,
-            neighbor_weights=normalized_weights,
-            query_valid_mask=query_valid_mask,
-            source_fit_rmse=source_fit_rmse,
-        )
-
-    def _simulate_target_sensor_outputs(
-        self,
-        segment_outputs: dict[str, Float64Array],
-    ) -> tuple[Float64Array | None, tuple[str, ...]]:
-        band_ids: list[str] = []
-        values: list[float] = []
-        for segment in ("vnir", "swir"):
-            reconstructed = segment_outputs.get(segment)
-            if reconstructed is None:
-                continue
-            projection = self._segment_target_projection(segment)
-            if projection is None:
-                continue
-            segment_band_ids, _target_positions, response_matrix = projection
-            projected = np.asarray(reconstructed @ response_matrix, dtype=np.float64)
-            for band_id, value in zip(segment_band_ids, projected, strict=True):
-                band_ids.append(str(band_id))
-                values.append(float(value))
-        if not values:
-            return None, ()
-        return np.asarray(values, dtype=np.float64), tuple(band_ids)
-
-    def _load_neighbor_spectra(
-        self,
-        neighbor_ids: tuple[str, ...],
-        segment: str,
-    ) -> Float64Array:
-        if self._package_mapper is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-        row_indices: Int64Array = np.asarray(
-            [self._package_mapper._row_index_by_id[row_id] for row_id in neighbor_ids],  # noqa: SLF001
-            dtype=np.int64,
-        )
-        cache = self._segment_hyperspectral_cache_store()
-        neighbor_spectra = cache.get(segment)
-        if neighbor_spectra is None:
-            neighbor_spectra = np.asarray(
-                self._package_mapper._load_hyperspectral(segment),  # noqa: SLF001
-                dtype=np.float64,
-            )
-            cache[segment] = neighbor_spectra
-        return np.asarray(neighbor_spectra[row_indices], dtype=np.float64)
-
-    def _segment_input_uncertainty(
-        self,
-        segment: str,
-        query_valid_mask: BoolArray,
-        source_uncertainty: Float32Array | None,
-    ) -> float:
-        if source_uncertainty is None:
-            return 0.0
-        retrieval_indices = self._source_retrieval_indices_by_segment[segment]
-        if query_valid_mask.size == 0:
-            return 0.0
-        valid_indices = retrieval_indices[query_valid_mask]
-        if valid_indices.size == 0:
-            return 0.0
-        return float(
-            np.sqrt(np.mean(np.square(source_uncertainty[valid_indices], dtype=np.float64)))
-        )
-
-    def _neighbor_target_projection(
-        self,
-        neighbor_spectra: Float64Array,
-        target_schema_band: _PackageSchemaBandProtocol,
-    ) -> Float64Array | None:
-        if self._package_mapper is None or self._runtime is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-        response = self._target_projection_response(getattr(target_schema_band, "band_id", ""), target_schema_band)
-        if response is None:
-            return None
-        return np.asarray(neighbor_spectra @ response, dtype=np.float64)
-
-    def _target_projection_response(
-        self,
-        band_id: str,
-        target_schema_band: _PackageSchemaBandProtocol,
-    ) -> Float64Array | None:
-        if self._package_mapper is None or self._runtime is None:
-            raise RuntimeError("spectral-library runtime was not initialized")
-        if not band_id:
-            response = np.asarray(
-                self._package_mapper._band_response(  # noqa: SLF001
-                    self._runtime.target_sensor_id,
-                    target_schema_band,
-                    segment_only=True,
-                ),
-                dtype=np.float64,
-            )
-            denominator = float(np.sum(response))
-            return None if denominator <= 0.0 else np.asarray(response / denominator, dtype=np.float64)
-        cache = self._target_projection_response_cache_store()
-        if band_id in cache:
-            return cache[band_id]
-        response = np.asarray(
-            self._package_mapper._band_response(  # noqa: SLF001
-                self._runtime.target_sensor_id,
-                target_schema_band,
-                segment_only=True,
-            ),
-            dtype=np.float64,
-        )
-        denominator = float(np.sum(response))
-        normalized = None if denominator <= 0.0 else np.asarray(response / denominator, dtype=np.float64)
-        cache[band_id] = normalized
-        return normalized
-
-    def _segment_target_projection(
-        self,
-        segment: str,
-    ) -> tuple[tuple[str, ...], Int32Array, Float64Array] | None:
-        cache = self._segment_target_projection_cache_store()
-        if segment in cache:
-            return cache[segment]
-
-        entries: list[tuple[str, int, Float64Array]] = []
-        for band_id, target_schema_band in self._target_schema_by_band_id.items():
-            if target_schema_band.segment != segment:
-                continue
-            target_index = self._target_internal_to_output_index.get(band_id)
-            if target_index is None:
-                continue
-            response = self._target_projection_response(band_id, target_schema_band)
-            if response is None:
-                continue
-            entries.append((band_id, int(target_index), response))
-
-        if not entries:
-            cache[segment] = None
-            return None
-
-        band_ids = tuple(entry[0] for entry in entries)
-        target_positions = np.asarray([entry[1] for entry in entries], dtype=np.int32)
-        response_matrix = np.stack([entry[2] for entry in entries], axis=1).astype(np.float64, copy=False)
-        cached = (band_ids, target_positions, response_matrix)
-        cache[segment] = cached
-        return cached
 
 
 def map_multispectral_reflectance(
