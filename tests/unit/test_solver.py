@@ -564,6 +564,112 @@ class TestMultiGridSolver:
         assert (result.aot_unc.values > 0).all()
         assert (result.tcwv_unc.values > 0).all()
 
+    def test_solve_skips_coarse_levels_for_grid_search_backend(self):
+        """Grid-search backend should solve once at full resolution, not per multigrid level."""
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (64, 64)
+        config = MultiGridConfig(
+            n_levels=4,
+            min_grid_size=8,
+            grid_search_aot_points=5,
+            grid_search_tcwv_points=5,
+        )
+        solver = MultiGridSolver(config)
+
+        toa = xr.DataArray(
+            np.stack(
+                [
+                    np.full(shape, 0.25, dtype=np.float32),
+                    np.full(shape, 0.28, dtype=np.float32),
+                ]
+            ),
+            dims=["band", "y", "x"],
+        )
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(
+                np.stack([np.full(shape, 0.2), np.full(shape, 0.22)]),
+                dims=["band", "y", "x"],
+            ),
+            boa_unc=xr.DataArray(
+                np.stack([np.full(shape, 0.02), np.full(shape, 0.02)]),
+                dims=["band", "y", "x"],
+            ),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (band, compute_jacobian)
+                factor = 1.0 / np.maximum(
+                    0.2 + atmo_state.aot.values + 0.1 * atmo_state.tcwv.values,
+                    1e-6,
+                )
+                xap = xr.DataArray(factor, dims=geometry.sza.dims, coords=geometry.sza.coords)
+                xbp = xr.zeros_like(xap)
+                xcp = xr.zeros_like(xap)
+                return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp)
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        bands = [
+            SensorBand("B02", 490.0, 65.0, 10.0, 0),
+            SensorBand("B03", 560.0, 35.0, 10.0, 1),
+        ]
+
+        result = solver.solve(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            cloud_mask=cloud_mask,
+            bands=bands,
+        )
+
+        assert result.success
+        assert solver._compute_grid_levels(shape) == [(8, 8), (16, 16), (32, 32), (64, 64)]
+        assert len(result.level_history) == 1
+        assert result.n_iterations == config.grid_search_aot_points * config.grid_search_tcwv_points
+        assert tuple(result.level_history[0]["shape"]) == shape
+        assert result.level_history[0]["method"] == "grid_search"
+
     def test_solver_marks_supported_lower_bound_solution_as_low_quality(self):
         """Supported boundary solutions should be flagged as low-quality, not invalid."""
         from siac.domain import SensorBand

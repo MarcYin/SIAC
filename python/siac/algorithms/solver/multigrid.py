@@ -229,10 +229,11 @@ class MultiGridSolver:
         if use_grid_search:
             logger.info(
                 "RT backend does not provide Jacobians; using "
-                "grid-search + quadratic-fit solver."
+                "single-level grid-search + quadratic-fit solver."
             )
-
-        grid_shapes = self._compute_grid_levels(full_shape)
+            grid_shapes = [full_shape]
+        else:
+            grid_shapes = self._compute_grid_levels(full_shape)
 
         logger.info(f"Grid levels: {grid_shapes}")
 
@@ -252,7 +253,9 @@ class MultiGridSolver:
         final_invalid_mask: np.ndarray | None = None
         final_zero_obs_mask: np.ndarray | None = None
 
-        # Multi-grid solve from coarse to fine
+        # Multi-grid solve from coarse to fine. The non-Jacobian grid-search
+        # branch does not consume coarse solutions as initial guesses, so it
+        # only runs once on the finest grid.
         for level, shape in enumerate(grid_shapes):
             logger.info(f"Level {level}: {shape}")
 
