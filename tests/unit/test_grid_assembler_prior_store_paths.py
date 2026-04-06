@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
+from affine import Affine
 
 from siac.algorithms.grid import assembler as asm
 from siac.algorithms.surface import prior_store as ps
@@ -82,6 +83,7 @@ def test_assembler_nearest_and_padding_paths(monkeypatch: pytest.MonkeyPatch) ->
 
     nearest = asm._resample_da(da, (4, 4), method="nearest")
     assert nearest.shape == (4, 4)
+    assert nearest.dtype == np.float32
 
     monkeypatch.setattr(
         asm,
@@ -90,11 +92,147 @@ def test_assembler_nearest_and_padding_paths(monkeypatch: pytest.MonkeyPatch) ->
     )
     padded = asm._resample_da(da, (3, 3), method="bilinear")
     assert padded.shape == (3, 3)
+    assert padded.dtype == np.float32
 
     mask = xr.DataArray(np.array([[True]], dtype=bool), dims=["y", "x"])
     cloud = asm._resample_cloud_mask(mask, (3, 3))
     assert cloud.shape == (3, 3)
     assert bool(cloud.values[1, 1])
+
+
+def test_sharp_transition_proxy_uint8_scales_reflectance_and_fills_invalid_pixels() -> None:
+    values = np.array(
+        [
+            [[0.18, 0.30], [np.nan, 0.06]],
+            [[0.18, 0.30], [0.18, 0.06]],
+        ],
+        dtype=np.float32,
+    )
+    valid_mask = np.array(
+        [
+            [True, True],
+            [False, True],
+        ],
+        dtype=bool,
+    )
+
+    proxy = asm._sharp_transition_proxy_uint8(values, valid_mask)
+
+    expected = np.array(
+        [
+            [46, 76],
+            [46, 15],
+        ],
+        dtype=np.uint8,
+    )
+    np.testing.assert_array_equal(proxy, expected)
+
+
+def test_cloud_mask_center_mapping_preserves_exact_target_cells() -> None:
+    mask = xr.DataArray(np.zeros((5, 5), dtype=bool), dims=["y", "x"])
+    mask.values[0, 0] = True
+    mask.values[1, 3] = True
+    mask.values[4, 4] = True
+
+    cloud = asm._resample_cloud_mask(mask, (2, 3))
+
+    expected = np.array(
+        [
+            [True, False, True],
+            [False, False, True],
+        ],
+        dtype=bool,
+    )
+    np.testing.assert_array_equal(cloud.values, expected)
+
+
+def test_resample_da_same_shape_shifted_grid_still_resamples(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = xr.DataArray(
+        np.arange(4, dtype=np.float32).reshape(2, 2),
+        dims=["y", "x"],
+        coords={"x": [0.5, 1.5], "y": [1.5, 0.5]},
+    )
+    template = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32),
+        dims=["y", "x"],
+        coords={"x": [10.5, 11.5], "y": [21.5, 20.5]},
+    )
+    sentinel = xr.DataArray(
+        np.full((2, 2), 7.0, dtype=np.float32),
+        dims=["y", "x"],
+        coords=template.coords,
+    )
+    calls: list[str] = []
+
+    def _fake_resample_da_gdal(da, gdal_template, *, method):  # type: ignore[no-untyped-def]
+        calls.append(method)
+        assert da is source
+        assert gdal_template is template
+        return sentinel
+
+    monkeypatch.setattr(asm, "_resample_da_gdal", _fake_resample_da_gdal)
+
+    out = asm._resample_da(source, (2, 2), method="bilinear", template=template)
+
+    assert calls == ["bilinear"]
+    xr.testing.assert_identical(out, sentinel)
+
+
+def test_resample_da_gdal_requires_source_crs() -> None:
+    import rioxarray  # noqa: F401
+
+    transform = Affine(10.0, 0.0, 300000.0, 0.0, -10.0, 5500640.0)
+    coords = {
+        "x": 300000.0 + (np.arange(2, dtype=np.float64) + 0.5) * 10.0,
+        "y": 5500640.0 - (np.arange(2, dtype=np.float64) + 0.5) * 10.0,
+    }
+    source = xr.DataArray(
+        np.arange(4, dtype=np.float32).reshape(2, 2),
+        dims=["y", "x"],
+        coords=coords,
+    )
+    source = source.rio.set_spatial_dims(x_dim="x", y_dim="y")
+    source = source.rio.write_transform(transform)
+
+    template = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32),
+        dims=["y", "x"],
+        coords=coords,
+    )
+    template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
+    template = template.rio.write_crs("EPSG:32632")
+    template = template.rio.write_transform(transform)
+
+    assert asm._resample_da_gdal(source, template, method="nearest") is None
+
+
+def test_resample_da_gdal_skips_wrapped_longitude_coords() -> None:
+    import rioxarray  # noqa: F401
+
+    source = xr.DataArray(
+        np.arange(8, dtype=np.float32).reshape(2, 4),
+        dims=["latitude", "longitude"],
+        coords={
+            "latitude": [1.5, 0.5],
+            "longitude": [350.0, 355.0, 0.0, 5.0],
+        },
+    )
+    source = source.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
+    source = source.rio.write_crs("EPSG:4326")
+
+    template = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32),
+        dims=["y", "x"],
+        coords={
+            "x": [352.5, 357.5],
+            "y": [1.5, 0.5],
+        },
+    )
+    template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
+    template = template.rio.write_crs("EPSG:4326")
+    template = template.rio.write_transform(Affine(5.0, 0.0, 350.0, 0.0, -1.0, 2.0))
+
+    assert asm._resample_da_gdal(source, template, method="bilinear") is None
 
 
 def test_assemble_grids_fallback_band_selection_and_toa_fallback() -> None:

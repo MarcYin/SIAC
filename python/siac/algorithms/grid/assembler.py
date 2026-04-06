@@ -13,19 +13,17 @@ import logging
 from contextlib import suppress
 from typing import Any, TypeAlias, cast
 
+import cv2
 import numpy as np
 import xarray as xr
 from numpy import typing as npt
 from scipy.ndimage import (
     binary_dilation,
-    maximum_filter,
-    median_filter,
-    minimum_filter,
-    sobel,
     uniform_filter,
     zoom,
 )
 
+from siac.geo.resample import shares_template_grid
 from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
@@ -38,8 +36,6 @@ from siac.runtime.models import copy_spatial_metadata_like
 logger = logging.getLogger(__name__)
 
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
-Float32Array: TypeAlias = npt.NDArray[np.float32]
-Float64Array: TypeAlias = npt.NDArray[np.float64]
 
 
 # ── Internal resampling helpers ────────────────────────────────────────
@@ -61,6 +57,28 @@ def _ensure_template_transform(template: xr.DataArray) -> xr.DataArray:
     except Exception:
         return template
     return template.rio.write_transform(transform)
+
+
+def _spatial_dims(data: xr.DataArray) -> tuple[str, str] | None:
+    try:
+        return data.rio.x_dim, data.rio.y_dim
+    except Exception:
+        pass
+    if "x" in data.dims and "y" in data.dims:
+        return "x", "y"
+    if "longitude" in data.dims and "latitude" in data.dims:
+        return "longitude", "latitude"
+    return None
+
+
+def _is_monotonic_axis(coord: xr.DataArray) -> bool:
+    values = np.asarray(coord.values, dtype=np.float64)
+    if values.ndim != 1 or values.size < 2:
+        return True
+    diffs = np.diff(values)
+    if not np.all(np.isfinite(diffs)):
+        return False
+    return bool(np.all(diffs > 0.0) or np.all(diffs < 0.0))
 
 
 def _build_target_template(
@@ -116,14 +134,16 @@ def _resample_da(
             f"_resample_da expects 2D or banded 3D DataArray, got dims={da.dims}"
         )
 
-    src = da.values.astype(np.float64)
+    src = np.asarray(da.values, dtype=np.float32)
     h_out, w_out = target_shape
 
-    if src.shape == target_shape:
+    if template is not None and shares_template_grid(da, template):
+        return copy_spatial_metadata_like(da, template)
+    if template is None and src.shape == target_shape:
         return copy_spatial_metadata_like(da, template) if template is not None else da
 
     if method == "area":
-        gdal_average = _resample_da_gdal_average(da, template)
+        gdal_average = _resample_da_gdal(da, template, method="area")
         if gdal_average is not None:
             return gdal_average
         # Block-mean downsampling
@@ -135,10 +155,16 @@ def _resample_da(
         zoom_x = w_out / smoothed.shape[1]
         out = zoom(smoothed, (zoom_y, zoom_x), order=1)
     elif method == "nearest":
+        gdal_nearest = _resample_da_gdal(da, template, method="nearest")
+        if gdal_nearest is not None:
+            return gdal_nearest
         zoom_y = h_out / src.shape[0]
         zoom_x = w_out / src.shape[1]
         out = zoom(src, (zoom_y, zoom_x), order=0)
     else:  # bilinear
+        gdal_bilinear = _resample_da_gdal(da, template, method="bilinear")
+        if gdal_bilinear is not None:
+            return gdal_bilinear
         zoom_y = h_out / src.shape[0]
         zoom_x = w_out / src.shape[1]
         out = zoom(src, (zoom_y, zoom_x), order=1)
@@ -153,7 +179,7 @@ def _resample_da(
         out = padded
 
     out_da = xr.DataArray(
-        out.astype(np.float32),
+        np.asarray(out, dtype=np.float32),
         dims=tuple(template.dims) if template is not None else ("y", "x"),
         coords=_template_coords(template),
         attrs=da.attrs,
@@ -161,11 +187,13 @@ def _resample_da(
     return copy_spatial_metadata_like(out_da, template) if template is not None else out_da
 
 
-def _resample_da_gdal_average(
+def _resample_da_gdal(
     da: xr.DataArray,
     template: xr.DataArray | None,
+    *,
+    method: str,
 ) -> xr.DataArray | None:
-    """Use GDAL-backed average resampling when the source is georeferenced."""
+    """Use GDAL-backed resampling when the source is georeferenced."""
     if template is None:
         return None
 
@@ -173,26 +201,40 @@ def _resample_da_gdal_average(
         import rioxarray  # noqa: F401
         from rasterio.enums import Resampling as RasterioResampling
     except Exception:
-        logger.debug("rioxarray/rasterio not available; skipping GDAL average resampling.")
+        logger.debug("rioxarray/rasterio not available; skipping GDAL resampling.")
+        return None
+
+    resampling_lookup = {
+        "area": RasterioResampling.average,
+        "bilinear": RasterioResampling.bilinear,
+        "nearest": RasterioResampling.nearest,
+    }
+    resampling = resampling_lookup.get(method)
+    if resampling is None:
+        return None
+
+    source_dims = _spatial_dims(da)
+    target_dims = _spatial_dims(template)
+    if source_dims is None or target_dims is None:
+        logger.debug("Cannot determine spatial dims for GDAL resampling.")
+        return None
+    source_x_dim, source_y_dim = source_dims
+    target_x_dim, target_y_dim = target_dims
+
+    if source_x_dim not in da.dims or source_y_dim not in da.dims:
+        return None
+    if source_x_dim not in da.coords or source_y_dim not in da.coords:
+        return None
+    if target_x_dim not in template.dims or target_y_dim not in template.dims:
+        return None
+    if target_x_dim not in template.coords or target_y_dim not in template.coords:
+        return None
+    if not _is_monotonic_axis(da.coords[source_x_dim]) or not _is_monotonic_axis(da.coords[source_y_dim]):
+        logger.debug("Skipping GDAL resampling for non-monotonic source coordinates.")
         return None
 
     try:
-        x_dim = template.rio.x_dim
-        y_dim = template.rio.y_dim
-    except Exception:
-        if "x" in template.dims and "y" in template.dims:
-            x_dim, y_dim = "x", "y"
-        else:
-            logger.debug("Cannot determine spatial dims for GDAL resampling.")
-            return None
-
-    if x_dim not in da.dims or y_dim not in da.dims:
-        return None
-    if x_dim not in da.coords or y_dim not in da.coords:
-        return None
-
-    try:
-        source = da.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
+        source = da.rio.set_spatial_dims(x_dim=source_x_dim, y_dim=source_y_dim)
     except Exception:
         logger.debug("Failed to set spatial dims for GDAL resampling.", exc_info=True)
         return None
@@ -209,16 +251,14 @@ def _resample_da_gdal_average(
         logger.debug("Failed to read target CRS/transform.", exc_info=True)
         return None
 
-    if target_crs is None:
+    if target_crs is None or source_crs is None:
         return None
-    if source_crs is None:
-        source = source.rio.write_crs(target_crs)
 
     with suppress(Exception):
         source = source.rio.write_transform(source.rio.transform(recalc=True))
 
     try:
-        out = source.rio.reproject_match(target, resampling=RasterioResampling.average)
+        out = source.rio.reproject_match(target, resampling=resampling)
     except Exception:
         logger.debug("GDAL reproject_match failed; falling back to scipy.", exc_info=True)
         return None
@@ -238,7 +278,7 @@ def _resample_cloud_mask(
     If any source pixel within a target-pixel footprint is True (cloudy),
     the target pixel is True.
     """
-    src = mask.values.astype(np.float64)
+    src = np.asarray(mask.values, dtype=bool)
     h_out, w_out = target_shape
 
     if src.shape == target_shape:
@@ -247,30 +287,34 @@ def _resample_cloud_mask(
     if src.ndim == 2 and h_out <= src.shape[0] and w_out <= src.shape[1]:
         # Match the center-based coarse-grid assignment used by the Rust field
         # remapper so masks and resampled fields describe the same footprint.
-        out: Float64Array = np.zeros(target_shape, dtype=np.float64)
-        for iy in range(src.shape[0]):
-            dst_y = min(((2 * iy + 1) * h_out) // (2 * src.shape[0]), h_out - 1)
-            for ix in range(src.shape[1]):
-                if src[iy, ix] <= 0.5:
-                    continue
-                dst_x = min(((2 * ix + 1) * w_out) // (2 * src.shape[1]), w_out - 1)
-                out[dst_y, dst_x] = 1.0
+        out = np.zeros(target_shape, dtype=bool)
+        src_y, src_x = np.nonzero(src)
+        if src_y.size:
+            dst_y = np.minimum(((2 * src_y + 1) * h_out) // (2 * src.shape[0]), h_out - 1).astype(
+                np.intp,
+                copy=False,
+            )
+            dst_x = np.minimum(((2 * src_x + 1) * w_out) // (2 * src.shape[1]), w_out - 1).astype(
+                np.intp,
+                copy=False,
+            )
+            out[dst_y, dst_x] = True
     else:
         out = cast(
-            "Float64Array",
-            zoom(src, (h_out / src.shape[0], w_out / src.shape[1]), order=0),
+            "BoolArray",
+            zoom(src.astype(np.uint8, copy=False), (h_out / src.shape[0], w_out / src.shape[1]), order=0) > 0,
         )
         out = out[:h_out, :w_out]
 
     if out.shape != target_shape:
-        padded: np.ndarray[Any, Any] = np.ones(target_shape, dtype=np.float64)
+        padded: np.ndarray[Any, Any] = np.ones(target_shape, dtype=bool)
         h = min(out.shape[0], h_out)
         w = min(out.shape[1], w_out)
         padded[:h, :w] = out[:h, :w]
         out = padded
 
     out_mask = xr.DataArray(
-        out > 0.5,
+        out,
         dims=tuple(template.dims) if template is not None else ("y", "x"),
         coords=_template_coords(template),
         attrs=mask.attrs,
@@ -303,23 +347,25 @@ def _dilate_mask(mask: np.ndarray, iterations: int) -> BoolArray:
     return cast("BoolArray", binary_dilation(mask, iterations=iterations))
 
 
-def _robust_local_positive_z(
-    metric: np.ndarray,
-    valid_mask: np.ndarray,
-    window: int,
-) -> Float32Array:
-    if not np.any(valid_mask):
-        return cast("Float32Array", np.zeros_like(metric, dtype=np.float32))
+def _dilate_mask_ellipse(mask: np.ndarray, radius: int) -> BoolArray:
+    if radius <= 0 or not np.any(mask):
+        return cast("BoolArray", np.asarray(mask, dtype=bool))
+    size = (2 * int(radius)) + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    dilated = cv2.dilate(mask.astype(np.uint8, copy=False) * 255, kernel, iterations=1)
+    return cast("BoolArray", dilated.astype(bool, copy=False))
 
-    fill_value = float(np.median(metric[valid_mask]))
-    filled = np.where(valid_mask, metric, fill_value).astype(np.float32, copy=False)
-    local_background = median_filter(filled, size=window, mode="reflect")
-    local_scale = median_filter(np.abs(filled - local_background), size=window, mode="reflect")
-    z = (filled - local_background) / np.maximum(local_scale, 1.0e-3)
-    return cast(
-        "Float32Array",
-        np.where(valid_mask, z, 0.0).astype(np.float32, copy=False),
-    )
+
+def _sharp_transition_proxy_uint8(values: np.ndarray, valid_mask: np.ndarray) -> npt.NDArray[np.uint8]:
+    clipped = np.clip(
+        np.nan_to_num(values, nan=0.0, posinf=1.0, neginf=0.0),
+        0.0,
+        1.0,
+    ).astype(np.float32, copy=False)
+    proxy = clipped.mean(axis=0, dtype=np.float32)
+    fill_value = float(np.median(proxy[valid_mask])) if np.any(valid_mask) else 0.0
+    proxy = np.where(valid_mask, proxy, fill_value)
+    return np.clip(np.rint(proxy * 255.0), 0.0, 255.0).astype(np.uint8, copy=False)
 
 
 def _detect_sharp_transition_mask_native(
@@ -327,31 +373,24 @@ def _detect_sharp_transition_mask_native(
     cloud_mask: xr.DataArray,
     filter_config: Any,
 ) -> xr.DataArray:
-    band_count = toa_native.sizes.get("band", 1)
+    spatial_template = toa_native if toa_native.ndim == 2 else toa_native.isel(band=0, drop=True)
     if toa_native.ndim == 2:
         values = toa_native.values[np.newaxis, ...].astype(np.float32, copy=False)
     else:
         values = toa_native.values.astype(np.float32, copy=False)
 
-    window = _coerce_window_size(getattr(filter_config, "window_pixels_native", 7))
-    context_window = _coerce_window_size(
-        getattr(filter_config, "context_window_pixels_native", max(15, (2 * window) + 1))
+    blur_kernel = _coerce_window_size(
+        getattr(
+            filter_config,
+            "blur_kernel_pixels_native",
+            getattr(
+                filter_config,
+                "context_window_pixels_native",
+                getattr(filter_config, "window_pixels_native", 31),
+            ),
+        )
     )
-    coherence_window = _coerce_window_size(
-        getattr(filter_config, "coherence_window_pixels_native", window)
-    )
-    road_std_z_threshold = float(getattr(filter_config, "road_std_z_threshold_native", 4.0))
-    road_coherence_threshold = float(
-        getattr(filter_config, "road_coherence_threshold_native", 0.75)
-    )
-    road_std_floor = float(getattr(filter_config, "road_std_floor_native", 0.02))
-    point_range_z_threshold = float(getattr(filter_config, "point_range_z_threshold_native", 4.0))
-    point_outlier_fraction_max = float(
-        getattr(filter_config, "point_outlier_fraction_max_native", 0.12)
-    )
-    point_range_floor = float(getattr(filter_config, "point_range_floor_native", 0.08))
-    outlier_sigma = float(getattr(filter_config, "outlier_sigma_native", 2.5))
-    outlier_floor = float(getattr(filter_config, "outlier_floor_native", 0.01))
+    residual_threshold = int(getattr(filter_config, "residual_threshold_uint8", 12))
     dilation_pixels = int(getattr(filter_config, "dilation_pixels", 1))
     cloud_buffer_pixels = int(getattr(filter_config, "cloud_buffer_pixels", 0))
 
@@ -369,62 +408,23 @@ def _detect_sharp_transition_mask_native(
             dims=cloud_mask.dims,
             coords=cloud_mask.coords,
         )
-        return copy_spatial_metadata_like(empty, cloud_mask)
+        return copy_spatial_metadata_like(empty, spatial_template)
 
-    range_max = np.zeros(valid_mask.shape, dtype=np.float32)
-    std_max = np.zeros(valid_mask.shape, dtype=np.float32)
-    outlier_frac_max = np.zeros(valid_mask.shape, dtype=np.float32)
-    coherence_max = np.zeros(valid_mask.shape, dtype=np.float32)
-
-    for band_index in range(band_count):
-        band_values = values[band_index]
-
-        valid_band_values = band_values[valid_mask]
-        fill_value = float(np.median(valid_band_values)) if valid_band_values.size else 0.0
-        filled = np.where(valid_mask, band_values, fill_value)
-
-        local_max = maximum_filter(filled, size=window, mode="reflect")
-        local_min = minimum_filter(filled, size=window, mode="reflect")
-        local_range = local_max - local_min
-
-        local_mean = uniform_filter(filled, size=window, mode="reflect")
-        local_mean_sq = uniform_filter(np.square(filled, dtype=np.float32), size=window, mode="reflect")
-        local_std = np.sqrt(np.maximum(local_mean_sq - np.square(local_mean, dtype=np.float32), 0.0))
-
-        outlier_hits = np.abs(filled - local_mean) >= np.maximum(outlier_sigma * local_std, outlier_floor)
-        outlier_frac = uniform_filter(outlier_hits.astype(np.float32), size=window, mode="reflect")
-
-        grad_x = sobel(filled, axis=1, mode="reflect")
-        grad_y = sobel(filled, axis=0, mode="reflect")
-        jxx = uniform_filter(np.square(grad_x, dtype=np.float32), size=coherence_window, mode="reflect")
-        jyy = uniform_filter(np.square(grad_y, dtype=np.float32), size=coherence_window, mode="reflect")
-        jxy = uniform_filter((grad_x * grad_y).astype(np.float32, copy=False), size=coherence_window, mode="reflect")
-        coherence = np.sqrt(np.square(jxx - jyy) + 4.0 * np.square(jxy)) / np.maximum(jxx + jyy, 1.0e-6)
-
-        range_max = np.maximum(range_max, local_range.astype(np.float32, copy=False))
-        std_max = np.maximum(std_max, local_std.astype(np.float32, copy=False))
-        outlier_frac_max = np.maximum(outlier_frac_max, outlier_frac.astype(np.float32, copy=False))
-        coherence_max = np.maximum(coherence_max, coherence.astype(np.float32, copy=False))
-
-    range_z = _robust_local_positive_z(range_max, valid_mask, context_window)
-    std_z = _robust_local_positive_z(std_max, valid_mask, context_window)
-
-    road_mask = (
-        valid_mask
-        & (std_z >= road_std_z_threshold)
-        & (coherence_max >= road_coherence_threshold)
-        & (std_max >= road_std_floor)
+    proxy_uint8 = _sharp_transition_proxy_uint8(values, valid_mask)
+    background = cv2.blur(proxy_uint8, (blur_kernel, blur_kernel))
+    residual = cv2.absdiff(proxy_uint8, background)
+    # Thresholds are defined in uint8 residual space to keep the detector
+    # fast and reproducible across scenes.
+    _, thresholded = cv2.threshold(
+        residual,
+        residual_threshold,
+        255,
+        cv2.THRESH_BINARY,
     )
-    point_mask = (
-        valid_mask
-        & (range_z >= point_range_z_threshold)
-        & (outlier_frac_max <= point_outlier_fraction_max)
-        & (range_max >= point_range_floor)
-    )
-    detected = road_mask | point_mask
-    detected = _dilate_mask(detected, dilation_pixels) & clear_mask
+    detected = thresholded.astype(bool, copy=False) & valid_mask
+    detected = _dilate_mask_ellipse(detected, dilation_pixels) & clear_mask
     detected_da = xr.DataArray(detected, dims=cloud_mask.dims, coords=cloud_mask.coords)
-    return copy_spatial_metadata_like(detected_da, cloud_mask)
+    return copy_spatial_metadata_like(detected_da, spatial_template)
 
 
 def _aggregate_native_exclusion_mask(

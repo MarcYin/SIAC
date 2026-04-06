@@ -293,61 +293,59 @@ class SolverBoundsConfig(SIACBaseModel):
 
 class SharpTransitionFilterConfig(SIACBaseModel):
     enabled: bool = False
-    window_pixels_native: int = Field(default=7, ge=3)
-    residual_z_threshold: float = Field(default=4.0, gt=0.0)
-    gradient_z_threshold: float = Field(default=2.0, gt=0.0)
+    blur_kernel_pixels_native: int = Field(default=31, ge=3)
+    residual_threshold_uint8: int = Field(default=12, ge=0, le=255)
     dilation_pixels: int = Field(default=1, ge=0)
     solver_cell_fraction_threshold: float = Field(default=0.03, ge=0.0, le=1.0)
     cloud_buffer_pixels: int = Field(default=2, ge=0)
-    context_window_pixels_native: int = Field(
-        default=31,
-        ge=3,
-        validation_alias=AliasChoices("context_window_pixels_native", "solver_local_window_cells"),
-    )
-    coherence_window_pixels_native: int = Field(default=9, ge=3)
-    road_std_z_threshold_native: float = Field(
-        default=2.0,
-        gt=0.0,
-        validation_alias=AliasChoices("road_std_z_threshold_native", "solver_road_std_z_threshold"),
-    )
-    road_coherence_threshold_native: float = Field(
-        default=0.95,
-        ge=0.0,
-        le=1.0,
-        validation_alias=AliasChoices(
+
+    @field_validator("blur_kernel_pixels_native")
+    @classmethod
+    def normalize_blur_kernel(cls, value: int) -> int:
+        return value if value % 2 == 1 else value + 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if "blur_kernel_pixels_native" not in normalized:
+            for key in (
+                "context_window_pixels_native",
+                "window_pixels_native",
+                "solver_local_window_cells",
+            ):
+                if key in normalized:
+                    normalized["blur_kernel_pixels_native"] = normalized[key]
+                    break
+
+        legacy_keys = (
+            "window_pixels_native",
+            "context_window_pixels_native",
+            "solver_local_window_cells",
+            "residual_z_threshold",
+            "gradient_z_threshold",
+            "coherence_window_pixels_native",
+            "road_std_z_threshold_native",
+            "solver_road_std_z_threshold",
             "road_coherence_threshold_native",
             "solver_road_coherence_threshold",
-        ),
-    )
-    road_std_floor_native: float = Field(
-        default=0.02,
-        gt=0.0,
-        validation_alias=AliasChoices("road_std_floor_native", "solver_road_std_floor"),
-    )
-    point_range_z_threshold_native: float = Field(
-        default=3.0,
-        gt=0.0,
-        validation_alias=AliasChoices(
+            "road_std_floor_native",
+            "solver_road_std_floor",
             "point_range_z_threshold_native",
             "solver_point_range_z_threshold",
-        ),
-    )
-    point_outlier_fraction_max_native: float = Field(
-        default=0.20,
-        ge=0.0,
-        le=1.0,
-        validation_alias=AliasChoices(
             "point_outlier_fraction_max_native",
             "solver_point_outlier_fraction_max",
-        ),
-    )
-    point_range_floor_native: float = Field(
-        default=0.08,
-        gt=0.0,
-        validation_alias=AliasChoices("point_range_floor_native", "solver_point_range_floor"),
-    )
-    outlier_sigma_native: float = Field(default=2.5, gt=0.0)
-    outlier_floor_native: float = Field(default=0.01, gt=0.0)
+            "point_range_floor_native",
+            "solver_point_range_floor",
+            "outlier_sigma_native",
+            "outlier_floor_native",
+        )
+        for key in legacy_keys:
+            normalized.pop(key, None)
+        return normalized
 
 
 class SolverAlgorithmConfig(SIACBaseModel):
@@ -613,7 +611,6 @@ class ResolvedProvidersConfig(SIACBaseModel):
 
 class ResolvedSpectralMappingConfig(SpectralMappingAlgorithmConfig):
     siac_library_root: Path | None = None
-    rsrf_root: Path | None = None
     cache_dir: Path | None = None
 
 

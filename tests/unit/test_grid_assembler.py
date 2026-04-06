@@ -297,10 +297,8 @@ class TestAssembleGrids:
             aerosol_resolution_m=160.0,
             sharp_transition_filter=SharpTransitionFilterConfig(
                 enabled=True,
-                window_pixels_native=5,
-                context_window_pixels_native=15,
-                road_std_z_threshold_native=2.0,
-                road_std_floor_native=0.01,
+                blur_kernel_pixels_native=31,
+                residual_threshold_uint8=12,
                 dilation_pixels=0,
                 solver_cell_fraction_threshold=0.0,
             ),
@@ -359,8 +357,8 @@ class TestAssembleGrids:
             aerosol_resolution_m=160.0,
             sharp_transition_filter=SharpTransitionFilterConfig(
                 enabled=True,
-                window_pixels_native=5,
-                context_window_pixels_native=15,
+                blur_kernel_pixels_native=31,
+                residual_threshold_uint8=12,
                 dilation_pixels=0,
                 solver_cell_fraction_threshold=0.0,
             ),
@@ -371,6 +369,138 @@ class TestAssembleGrids:
         assert exclusion_mask.shape == sib.cloud_mask.shape
         for y_idx, x_idx in expected_cells:
             assert bool(exclusion_mask.values[y_idx, x_idx])
+
+    def test_sharp_transition_filter_preserves_homogeneous_solver_cells(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        shape = (64, 64)
+        toa = {
+            name: xr.DataArray(
+                np.full(shape, 0.18, dtype=np.float32),
+                dims=["y", "x"],
+            )
+            for name in large_obs_bundle.toa.data_vars
+        }
+        obs = dataclasses.replace(
+            large_obs_bundle,
+            toa=xr.Dataset(toa),
+            cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        sib = assemble_grids(
+            obs,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=160.0,
+            sharp_transition_filter=SharpTransitionFilterConfig(
+                enabled=True,
+                blur_kernel_pixels_native=31,
+                residual_threshold_uint8=12,
+                dilation_pixels=0,
+                solver_cell_fraction_threshold=0.0,
+            ),
+        )
+
+        exclusion_mask = sib.sharp_transition_mask
+        assert exclusion_mask is not None
+        assert not bool(exclusion_mask.values.any())
+
+    def test_sharp_transition_filter_marks_step_edge_boundary_cells(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        shape = (64, 64)
+        toa = {
+            name: xr.DataArray(
+                np.full(shape, 0.18, dtype=np.float32),
+                dims=["y", "x"],
+            )
+            for name in large_obs_bundle.toa.data_vars
+        }
+        for band in toa.values():
+            band.values[:, 32:] = 0.30
+
+        obs = dataclasses.replace(
+            large_obs_bundle,
+            toa=xr.Dataset(toa),
+            cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        sib = assemble_grids(
+            obs,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=160.0,
+            sharp_transition_filter=SharpTransitionFilterConfig(
+                enabled=True,
+                blur_kernel_pixels_native=31,
+                residual_threshold_uint8=12,
+                dilation_pixels=0,
+                solver_cell_fraction_threshold=0.0,
+            ),
+        )
+
+        exclusion_mask = sib.sharp_transition_mask
+        assert exclusion_mask is not None
+        assert bool(exclusion_mask.values[:, 1].all())
+        assert bool(exclusion_mask.values[:, 2].all())
+        assert not bool(exclusion_mask.values[:, 0].any())
+        assert not bool(exclusion_mask.values[:, 3].any())
+
+    def test_sharp_transition_filter_cloud_buffer_blocks_halo_detections(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        shape = (64, 64)
+        toa = {
+            name: xr.DataArray(
+                np.full(shape, 0.18, dtype=np.float32),
+                dims=["y", "x"],
+            )
+            for name in large_obs_bundle.toa.data_vars
+        }
+        for band in toa.values():
+            band.values[8, 8] = 0.95
+
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        cloud_mask.values[6:11, 6:11] = True
+        obs = dataclasses.replace(
+            large_obs_bundle,
+            toa=xr.Dataset(toa),
+            cloud_mask=cloud_mask,
+        )
+
+        sib = assemble_grids(
+            obs,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=160.0,
+            sharp_transition_filter=SharpTransitionFilterConfig(
+                enabled=True,
+                blur_kernel_pixels_native=31,
+                residual_threshold_uint8=12,
+                dilation_pixels=0,
+                cloud_buffer_pixels=2,
+                solver_cell_fraction_threshold=0.0,
+            ),
+        )
+
+        exclusion_mask = sib.sharp_transition_mask
+        assert exclusion_mask is not None
+        assert not bool(exclusion_mask.values.any())
 
     def test_toa_downsampling_uses_gdal_average_when_georeferenced(
         self,
@@ -418,6 +548,103 @@ class TestAssembleGrids:
 
         assert sib.toa.shape[1:] == (2, 2)
         assert calls == [RasterioResampling.average, RasterioResampling.average]
+
+    def test_georeferenced_bilinear_and_nearest_dispatch_use_gdal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from affine import Affine
+        from rioxarray.raster_array import RasterArray
+
+        x = 300000.0 + (np.arange(4, dtype=np.float64) + 0.5) * 10.0
+        y = 5500040.0 - (np.arange(4, dtype=np.float64) + 0.5) * 10.0
+        transform = Affine(10.0, 0.0, 300000.0, 0.0, -10.0, 5500040.0)
+
+        source = xr.DataArray(
+            np.arange(16, dtype=np.float32).reshape(4, 4),
+            dims=["y", "x"],
+            coords={"x": x, "y": y},
+        )
+        source = source.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        source = source.rio.write_crs("EPSG:32632")
+        source = source.rio.write_transform(transform)
+
+        template = xr.DataArray(
+            np.zeros((2, 2), dtype=np.float32),
+            dims=["y", "x"],
+            coords={
+                "x": 300000.0 + (np.arange(2, dtype=np.float64) + 0.5) * 20.0,
+                "y": 5500040.0 - (np.arange(2, dtype=np.float64) + 0.5) * 20.0,
+            },
+        )
+        template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        template = template.rio.write_crs("EPSG:32632")
+        template = template.rio.write_transform(Affine(20.0, 0.0, 300000.0, 0.0, -20.0, 5500040.0))
+
+        calls: list[RasterioResampling] = []
+        original_reproject_match = RasterArray.reproject_match
+
+        def _fake_reproject_match(self, target, *, resampling, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(resampling)
+            return original_reproject_match(self, target, resampling=resampling, **kwargs)
+
+        monkeypatch.setattr(RasterArray, "reproject_match", _fake_reproject_match)
+
+        bilinear = assembler_mod._resample_da(source, (2, 2), method="bilinear", template=template)
+        nearest = assembler_mod._resample_da(source, (2, 2), method="nearest", template=template)
+
+        assert bilinear.shape == (2, 2)
+        assert nearest.shape == (2, 2)
+        assert calls == [RasterioResampling.bilinear, RasterioResampling.nearest]
+
+    def test_geographic_source_dims_dispatch_use_gdal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from affine import Affine
+        from rioxarray.raster_array import RasterArray
+
+        source = xr.DataArray(
+            np.arange(16, dtype=np.float32).reshape(4, 4),
+            dims=["latitude", "longitude"],
+            coords={
+                "longitude": 8.0 + (np.arange(4, dtype=np.float64) + 0.5) * 0.1,
+                "latitude": 50.4 - (np.arange(4, dtype=np.float64) + 0.5) * 0.1,
+            },
+        )
+        source = source.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
+        source = source.rio.write_crs("EPSG:4326")
+        source = source.rio.write_transform(Affine(0.1, 0.0, 8.0, 0.0, -0.1, 50.4))
+
+        template = xr.DataArray(
+            np.zeros((2, 2), dtype=np.float32),
+            dims=["y", "x"],
+            coords={
+                "x": 8.0 + (np.arange(2, dtype=np.float64) + 0.5) * 0.2,
+                "y": 50.4 - (np.arange(2, dtype=np.float64) + 0.5) * 0.2,
+            },
+        )
+        template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        template = template.rio.write_crs("EPSG:4326")
+        template = template.rio.write_transform(Affine(0.2, 0.0, 8.0, 0.0, -0.2, 50.4))
+
+        calls: list[RasterioResampling] = []
+        original_reproject_match = RasterArray.reproject_match
+
+        def _fake_reproject_match(self, target, *, resampling, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(resampling)
+            return original_reproject_match(self, target, resampling=resampling, **kwargs)
+
+        monkeypatch.setattr(RasterArray, "reproject_match", _fake_reproject_match)
+
+        bilinear = assembler_mod._resample_da(source, (2, 2), method="bilinear", template=template)
+        nearest = assembler_mod._resample_da(source, (2, 2), method="nearest", template=template)
+
+        assert bilinear.dims == ("y", "x")
+        assert nearest.dims == ("y", "x")
+        assert calls == [RasterioResampling.bilinear, RasterioResampling.nearest]
 
     def test_aerosol_resolution_controls_grid_and_georeference(
         self,

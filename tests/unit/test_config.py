@@ -27,6 +27,7 @@ from siac.config import (
     load_system_config,
     overlay_env_secrets,
 )
+from siac.config.schema import SharpTransitionFilterConfig
 
 
 class TestSIACConfig:
@@ -303,6 +304,30 @@ class TestSolverConfig:
 
         with pytest.raises(ValueError):
             SolverConfig(bounds={"tcwv": (5.0, 5.0)})
+
+
+class TestSharpTransitionFilterConfig:
+    def test_legacy_fields_are_normalized_to_cv2_detector(self):
+        cfg = SharpTransitionFilterConfig(
+            enabled=True,
+            context_window_pixels_native=31,
+            road_std_z_threshold_native=2.0,
+            road_coherence_threshold_native=0.95,
+            point_range_z_threshold_native=3.0,
+            point_outlier_fraction_max_native=0.20,
+            outlier_sigma_native=2.5,
+            dilation_pixels=5,
+        )
+
+        assert cfg.blur_kernel_pixels_native == 31
+        assert cfg.residual_threshold_uint8 == 12
+        dumped = cfg.model_dump()
+        assert "context_window_pixels_native" not in dumped
+        assert "road_std_z_threshold_native" not in dumped
+
+    def test_even_blur_kernel_rounds_up_to_odd(self):
+        cfg = SharpTransitionFilterConfig(blur_kernel_pixels_native=30)
+        assert cfg.blur_kernel_pixels_native == 31
 
 
 class TestOutputConfig:
