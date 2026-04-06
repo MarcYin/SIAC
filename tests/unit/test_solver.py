@@ -28,7 +28,6 @@ from siac.algorithms.solver.multigrid import (
 )
 from siac.runtime import AtmosphericState, SurfacePrior
 
-
 HAS_NATIVE_BLOCK_COST_CUBE = hasattr(
     native_rust, "evaluate_block_grid_search_cost_cube_with_provider_qa"
 )

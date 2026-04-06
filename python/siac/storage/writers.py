@@ -20,11 +20,12 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
+from numpy import typing as npt
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from siac.runtime import AOTScatterBandDiagnostics
 
 CompressionSettings: TypeAlias = dict[str, str | int]
+UInt8Array: TypeAlias = npt.NDArray[np.uint8]
 
 # Compression settings for GTiff/GeoTIFF drivers.
 GTIFF_COMPRESSION_SETTINGS: dict[str, CompressionSettings] = {
@@ -653,7 +655,7 @@ def _field_to_uint8(
     vmax: float,
     *,
     mask: np.ndarray | None = None,
-) -> np.ndarray:
+) -> UInt8Array:
     """Scale a 2-D float field to 0-255 uint8, masking NaN/invalid to 0."""
     arr = np.asarray(data, dtype=np.float64)
     span = max(vmax - vmin, 1.0e-9)
@@ -661,7 +663,7 @@ def _field_to_uint8(
     scaled = np.where(np.isfinite(scaled), scaled, 0.0)
     if mask is not None:
         scaled = np.where(mask, 0.0, scaled)
-    return scaled.astype(np.uint8)
+    return cast("UInt8Array", np.asarray(scaled, dtype=np.uint8))
 
 
 def _apply_colourmap(
@@ -671,7 +673,7 @@ def _apply_colourmap(
     *,
     palette: str = "viridis",
     mask: np.ndarray | None = None,
-) -> np.ndarray:
+) -> UInt8Array:
     """Map a 2-D float field to an (H, W, 3) uint8 RGB array via a colourmap.
 
     Supported palettes: ``viridis`` (blue-green-yellow), ``magma`` (black-magenta-yellow),
@@ -685,17 +687,17 @@ def _apply_colourmap(
         lut = _build_lut(palette)
         _LUT_CACHE[palette] = lut
 
-    rgb = lut[idx]
+    rgb = np.asarray(lut[idx], dtype=np.uint8)
     # Mask → dark grey
     if mask is not None:
         rgb[mask] = 40
-    return rgb
+    return cast("UInt8Array", np.asarray(rgb, dtype=np.uint8))
 
 
-_LUT_CACHE: dict[str, np.ndarray] = {}
+_LUT_CACHE: dict[str, UInt8Array] = {}
 
 
-def _build_lut(palette: str) -> np.ndarray:
+def _build_lut(palette: str) -> UInt8Array:
     """Build a 256 x 3 uint8 lookup table for *palette*."""
     t = np.linspace(0.0, 1.0, 256)
     if palette == "viridis":
@@ -715,7 +717,7 @@ def _build_lut(palette: str) -> np.ndarray:
         # Grey fallback
         r = g = b = t
     lut = np.stack([r, g, b], axis=-1)
-    return (lut * 255).astype(np.uint8)
+    return cast("UInt8Array", np.asarray(lut * 255, dtype=np.uint8))
 
 
 def write_false_colour_preview(
