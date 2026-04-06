@@ -36,6 +36,7 @@ from siac.algorithms.surface.spectral_mapping import (
     SpectralMapper,
     SpectralMappingConfig,
     _write_distance_metric_diagnostics,
+    needs_spectral_mapping,
 )
 from siac.domain import SensorBand
 from siac.runtime import (
@@ -155,7 +156,7 @@ def build_monthly_surface_prior_database(
             spectral_library=spectral_library,
             k_neighbors=spectral_k_neighbors,
         )
-        if tuple(band.name for band in source_bands) != tuple(band.name for band in target_bands)
+        if needs_spectral_mapping(source_bands, target_bands)
         else None
     )
     composites = _normalize_monthly_composites_to_target_basis(

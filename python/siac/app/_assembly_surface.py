@@ -74,9 +74,6 @@ def _surface_spectral_mapping_runtime(
     siac_library_root = getattr(settings, "siac_library_root", None)
     if siac_library_root is None and paths is not None:
         siac_library_root = getattr(paths, "spectral_library_root", None)
-    rsrf_root = getattr(settings, "rsrf_root", None)
-    if rsrf_root is None and paths is not None:
-        rsrf_root = getattr(paths, "rsrf_root", None)
     cache_dir = getattr(settings, "cache_dir", None)
     if cache_dir is None and cache_paths is not None:
         cache_dir = getattr(cache_paths, "spectral_mapping", None)
@@ -100,7 +97,6 @@ def _surface_spectral_mapping_runtime(
     return (
         RuntimeSpectralMappingConfig(
             siac_library_root=siac_library_root,
-            rsrf_root=rsrf_root,
             cache_dir=cache_dir,
             neighbor_estimator=settings.neighbor_estimator,
             knn_backend=settings.knn_backend,

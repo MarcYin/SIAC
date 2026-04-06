@@ -121,7 +121,6 @@ def resolve_config(system: SystemConfig, request: RunRequest) -> ResolvedConfig:
             spectral_mapping=ResolvedSpectralMappingConfig(
                 **system.algorithms.surface_prior.spectral_mapping.model_dump(mode="python"),
                 siac_library_root=paths.spectral_library_root,
-                rsrf_root=paths.rsrf_root,
                 cache_dir=paths.caches.spectral_mapping,
             ),
         ),

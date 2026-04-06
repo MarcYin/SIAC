@@ -753,7 +753,6 @@ def test_surface_helper_selection_and_mapping_runtime(
     )
     assert neighbors == 4
     assert spectral_config.kwargs["siac_library_root"] == "/tmp/library"
-    assert spectral_config.kwargs["rsrf_root"] == "/tmp/rsrf"
     assert spectral_config.kwargs["cache_dir"] == "/tmp/cache"
 
 

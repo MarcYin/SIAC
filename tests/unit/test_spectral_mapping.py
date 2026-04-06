@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -23,6 +22,9 @@ from siac.algorithms.surface.spectral_mapping import (
 )
 from siac.domain import SensorBand
 from siac.runtime import BRDFKernelWeights, GeometryAngles
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -278,29 +280,11 @@ def test_spectral_mapper_handles_time_dimension() -> None:
     assert mapped_unc.rio.transform(recalc=True) == source.rio.transform(recalc=True)
 
 
-def test_mapping_uses_rsrf_resolution_when_requested(monkeypatch) -> None:
-    calls: list[tuple[str, str, str, str | None]] = []
-    monkeypatch.setenv("RSRF_ROOT", "/tmp/fake-rsrf")
-
-    class _FakeCurve:
-        def __init__(self) -> None:
-            self.wavelength_nm = np.array([480.0, 490.0, 500.0], dtype=np.float32)
-            self.response = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-
-    def _fake_load_response_definition(
-        sensor_unit_id: str,
-        band_id: str,
-        representation_variant: str,
-        *,
-        root=None,
-    ) -> _FakeCurve:
-        calls.append((sensor_unit_id, band_id, representation_variant, None if root is None else str(root)))
-        return _FakeCurve()
-
-    monkeypatch.setattr(
-        "siac.algorithms.surface.spectral_mapping.rsrf.load_response_definition",
-        _fake_load_response_definition,
-    )
+def test_mapping_passes_rsrf_backed_sensor_inputs_to_runtime_builder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("SIAC_SPECTRAL_MAPPING_CACHE_DIR", str(tmp_path / "cache"))
 
     source_band = SensorBand(
         "B02",
@@ -326,6 +310,37 @@ def test_mapping_uses_rsrf_resolution_when_requested(monkeypatch) -> None:
     source = xr.DataArray(np.array([[[0.2]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords)
     unc = xr.full_like(source, 0.01)
 
+    class _FakePreparedRuntime:
+        def __init__(self) -> None:
+            self.prepared_root = tmp_path / "cache" / "runtime"
+            self.source_sensor_ids = ("custom_source",)
+            self.target_sensor_ids = ("custom_target",)
+            self.target_band_ids = {"custom_target": ("B03",)}
+
+        def map_reflectance_batch_arrays_ndarray(self, **_kwargs):  # noqa: ANN003
+            return SimpleNamespace(
+                reflectance=np.array([[0.25]], dtype=np.float64),
+                source_fit_rmse=np.array([0.01], dtype=np.float32),
+                output_columns=("B03",),
+            )
+
+    def _fake_build_mapping_runtime(
+        *,
+        library,
+        source_sensors,
+        target_sensors,
+        cache_root,
+        verify_checksums,
+    ):  # noqa: ANN001
+        calls["library"] = library
+        calls["source_sensors"] = list(source_sensors)
+        calls["target_sensors"] = list(target_sensors)
+        calls["cache_root"] = cache_root
+        calls["verify_checksums"] = verify_checksums
+        return _FakePreparedRuntime()
+
+    monkeypatch.setattr(spectral_mapping_mod, "build_mapping_runtime", _fake_build_mapping_runtime)
+
     mapped, mapped_unc = map_multispectral_reflectance(
         source,
         source_bands=(source_band,),
@@ -336,10 +351,13 @@ def test_mapping_uses_rsrf_resolution_when_requested(monkeypatch) -> None:
 
     assert mapped.shape == (1, 1, 1)
     assert mapped_unc.shape == mapped.shape
-    assert calls == [
-        ("sentinel-2a_msi", "B02", "band_average", str(Path("/tmp/fake-rsrf").resolve())),
-        ("sentinel-2a_msi", "B03", "band_average", str(Path("/tmp/fake-rsrf").resolve())),
-    ]
+    assert calls["cache_root"] == tmp_path / "cache"
+    assert calls["verify_checksums"] is False
+    assert calls["source_sensors"][0].bands[0].rsrf_sensor_id == "sentinel-2a_msi"
+    assert calls["source_sensors"][0].bands[0].rsrf_band_id == "B02"
+    assert calls["source_sensors"][0].bands[0].rsrf_representation_variant == "band_average"
+    assert calls["target_sensors"][0].bands[0].rsrf_sensor_id == "sentinel-2a_msi"
+    assert calls["target_sensors"][0].bands[0].rsrf_band_id == "B03"
 
 
 def test_mapping_requires_explicit_spectral_library(monkeypatch) -> None:
@@ -414,46 +432,24 @@ def test_spectral_mapper_preserves_original_dim_order() -> None:
     assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
 
 
-def test_prepare_runtime_reuses_existing_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    prepare_calls = {"count": 0}
-    siac_root = tmp_path / "siac-library"
-    siac_root.mkdir()
-
-    def _fake_prepare(*, siac_root: Path, srf_root: Path, output_root: Path, source_sensors):  # noqa: ANN001
-        prepare_calls["count"] += 1
-        output_root.mkdir(parents=True, exist_ok=True)
-        (output_root / "manifest.json").write_text("{}", encoding="utf-8")
-        assert siac_root.exists()
-        assert srf_root.exists()
-        assert source_sensors
-
-    class _FakePackageMapper:
-        def __init__(self, prepared_root: Path, *, verify_checksums: bool = False) -> None:
-            assert verify_checksums is False
-            self._prepared_root = prepared_root
-            self._schemas = {}
-            for path in (prepared_root.parent / "srfs").glob("*.json"):
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                self._schemas[payload["sensor_id"]] = SimpleNamespace(
-                    bands=[SimpleNamespace(band_id=band["band_id"], segment=band["segment"]) for band in payload["bands"]]
-                )
-
-        def get_sensor_schema(self, sensor_id: str):
-            return self._schemas[sensor_id]
-
-    monkeypatch.setattr(spectral_mapping_mod, "prepare_package_mapping_library", _fake_prepare)
-    monkeypatch.setattr(spectral_mapping_mod, "PackageSpectralMapper", _FakePackageMapper)
-
-    config = spectral_mapping_mod.SpectralMappingConfig(
-        cache_dir=tmp_path,
-        siac_library_root=siac_root,
+def test_prepare_runtime_reuses_existing_cache_root(tmp_path: Path) -> None:
+    config = spectral_mapping_mod.SpectralMappingConfig(cache_dir=tmp_path)
+    runtime0 = spectral_mapping_mod._prepare_runtime(
+        _source_bands(),
+        _target_bands(),
+        library=_library(),
+        config=config,
     )
-    mapper0 = SpectralMapper(_source_bands(), _target_bands(), spectral_library=config, k_neighbors=1)
-    mapper1 = SpectralMapper(_source_bands(), _target_bands(), spectral_library=config, k_neighbors=1)
+    runtime1 = spectral_mapping_mod._prepare_runtime(
+        _source_bands(),
+        _target_bands(),
+        library=_library(),
+        config=config,
+    )
 
-    assert mapper0._runtime is not None
-    assert mapper1._runtime is not None
-    assert prepare_calls["count"] == 1
+    assert runtime0.prepared_root == runtime1.prepared_root
+    assert runtime0.target_sensor_id == runtime1.target_sensor_id
+    assert runtime0.target_band_ids == runtime1.target_band_ids
 
 
 def test_canonicalize_curve_sorts_and_deduplicates_samples() -> None:

@@ -980,6 +980,72 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
     assert np.isfinite(database.entries_visible).all()
 
 
+def test_build_monthly_surface_prior_database_maps_same_name_different_response_bands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    sensor_config = _sensor_config()
+    visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
+    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    target_bands = (*visible_bands, *query_bands)
+    source_bands = tuple(
+        SensorBand(
+            band.name,
+            band.center_wavelength,
+            band.bandwidth * 0.5,
+            band.resolution,
+            band.band_index,
+        )
+        for band in target_bands
+    )
+
+    class _FakeSpectralMapper:
+        def __init__(self, source_bands_arg, target_bands_arg, **kwargs):  # noqa: ANN001
+            captured["source_bands"] = tuple(source_bands_arg)
+            captured["target_bands"] = tuple(target_bands_arg)
+            captured["spectral_library"] = kwargs.get("spectral_library")
+            captured["k_neighbors"] = kwargs.get("k_neighbors")
+
+    def _fake_normalize(composites, **kwargs):  # noqa: ANN003
+        captured["spectral_mapper"] = kwargs["spectral_mapper"]
+        return tuple(composites)
+
+    def _fake_build_database(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        return SimpleNamespace(
+            entries_features=np.zeros((0, 0), dtype=np.float32),
+            visible_band_names=tuple(band.name for band in visible_bands),
+            query_band_names=tuple(band.name for band in query_bands),
+        )
+
+    monkeypatch.setattr(swir_refine_mod, "SpectralMapper", _FakeSpectralMapper)
+    monkeypatch.setattr(
+        swir_refine_mod,
+        "_normalize_monthly_composites_to_target_basis",
+        _fake_normalize,
+    )
+    monkeypatch.setattr(swir_refine_mod, "build_monthly_composite_database", _fake_build_database)
+
+    database = build_monthly_surface_prior_database(
+        monthly_composites=SimpleNamespace(source_bands=source_bands, composites=()),
+        geometry=_geometry((1, 1)),
+        visible_bands=visible_bands,
+        query_bands=query_bands,
+        spectral_library=_spectral_library(),
+        spectral_k_neighbors=7,
+    )
+
+    assert database.visible_band_names == ("B02", "B03")
+    assert database.query_band_names == ("B08", "B11", "B12")
+    assert captured["spectral_mapper"] is not None
+    assert tuple(band.name for band in captured["source_bands"]) == tuple(
+        band.name for band in target_bands
+    )
+    assert tuple(band.name for band in captured["target_bands"]) == tuple(
+        band.name for band in target_bands
+    )
+    assert captured["k_neighbors"] == 7
+
+
 def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_basis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
