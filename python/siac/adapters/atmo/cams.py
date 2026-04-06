@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from importlib import import_module
 from pathlib import Path
@@ -452,7 +452,34 @@ class CAMSProvider:
             var = var.sel(latitude=lat_slice)
             var = self._select_longitude_window(var, xmin=xmin, xmax=xmax)
 
-        return var
+        return self._ensure_geographic_metadata(var)
+
+    @staticmethod
+    def _ensure_geographic_metadata(var: xr.DataArray) -> xr.DataArray:
+        """Declare explicit WGS84 metadata for latitude/longitude CAMS fields."""
+        if "latitude" not in var.dims or "longitude" not in var.dims:
+            return var
+
+        try:
+            import rioxarray  # noqa: F401
+        except Exception:
+            return var
+
+        try:
+            out = var.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
+        except Exception:
+            return var
+
+        try:
+            source_crs = out.rio.crs
+        except Exception:
+            source_crs = None
+        if source_crs is None:
+            out = out.rio.write_crs("EPSG:4326")
+
+        with suppress(Exception):
+            out = out.rio.write_transform(out.rio.transform(recalc=True))
+        return out
 
     @staticmethod
     def _select_longitude_window(

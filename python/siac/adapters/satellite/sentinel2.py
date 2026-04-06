@@ -80,6 +80,8 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._satellite_id: str | None = None
+        self._sensor_config_cache: SensorConfig | None = None
+        self._sensor_config_cache_satellite_id: str | None = None
         self._granule_path: Path | None = None
         self._last_cloud_classes: xr.DataArray | None = None
         self._resolved_input_path: Path | None = None
@@ -106,10 +108,15 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
     @property
     def sensor_config(self) -> SensorConfig:
         """Return sensor configuration based on satellite platform."""
+        if (
+            self._sensor_config_cache is not None
+            and self._sensor_config_cache_satellite_id == self._satellite_id
+        ):
+            return self._sensor_config_cache
         if self._satellite_id is None:
             return SENTINEL2A_CONFIG
         try:
-            return load_sensor_config_with_rsrf(
+            sensor_config = load_sensor_config_with_rsrf(
                 "MSI",
                 self._satellite_id,
                 rsrf_root=self.config.get("rsrf_root"),
@@ -120,7 +127,10 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 self._satellite_id,
                 exc,
             )
-            return get_sensor_config("MSI", self._satellite_id)
+            sensor_config = get_sensor_config("MSI", self._satellite_id)
+        self._sensor_config_cache = sensor_config
+        self._sensor_config_cache_satellite_id = self._satellite_id
+        return sensor_config
 
     def load_toa(
         self,
@@ -515,6 +525,8 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if self._resolved_input_path != input_path:
             self._granule_path = None
             self._satellite_id = None
+            self._sensor_config_cache = None
+            self._sensor_config_cache_satellite_id = None
             self._reference_grid = None
             self._resolved_input_path = input_path
         if not input_path.exists():
