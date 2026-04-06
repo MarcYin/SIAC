@@ -56,7 +56,10 @@ def _canonicalize_curve(
     wavelengths_nm: Float32Array,
     response: Float32Array,
 ) -> tuple[Float32Array, Float32Array]:
-    return curve_utils.canonicalize_curve(wavelengths_nm, response)
+    return cast(
+        "tuple[Float32Array, Float32Array]",
+        curve_utils.canonicalize_curve(wavelengths_nm, response),
+    )
 
 
 def _segmentize_curve(
@@ -65,7 +68,10 @@ def _segmentize_curve(
     *,
     segment: str,
 ) -> tuple[Float32Array, Float32Array]:
-    return curve_utils.segmentize_curve(wavelengths_nm, response, segment=segment)
+    return cast(
+        "tuple[Float32Array, Float32Array]",
+        curve_utils.segmentize_curve(wavelengths_nm, response, segment=segment),
+    )
 
 
 class _BatchArrayResultProtocol(Protocol):
@@ -726,20 +732,17 @@ class SpectralMapper:
                 )
 
             # spectral_library batch array API returns arrays directly.
-            batch_result = cast(
-                "_BatchArrayResultProtocol",
-                self._package_mapper.map_reflectance_batch_arrays_ndarray(
-                    source_sensor=self._runtime.source_sensor_id,
-                    reflectance_rows=deduplicated.queries,
-                    valid_mask_rows=deduplicated.valid_masks,
-                    output_mode="target_sensor",
-                    target_sensor=self._runtime.target_sensor_id,
-                    k=self.k_neighbors,
-                    min_valid_bands=self._mapping_config.min_valid_bands,
-                    neighbor_estimator=self._mapping_config.neighbor_estimator,
-                    knn_backend=self._mapping_config.knn_backend,
-                    knn_eps=self._mapping_config.knn_eps,
-                ),
+            batch_result = self._package_mapper.map_reflectance_batch_arrays_ndarray(
+                source_sensor=self._runtime.source_sensor_id,
+                reflectance_rows=deduplicated.queries,
+                valid_mask_rows=deduplicated.valid_masks,
+                output_mode="target_sensor",
+                target_sensor=self._runtime.target_sensor_id,
+                k=self.k_neighbors,
+                min_valid_bands=self._mapping_config.min_valid_bands,
+                neighbor_estimator=self._mapping_config.neighbor_estimator,
+                knn_backend=self._mapping_config.knn_backend,
+                knn_eps=self._mapping_config.knn_eps,
                 )
             logger.info(
                 "Spectral mapping package batch complete: queried_rows=%d elapsed=%.2fs",
