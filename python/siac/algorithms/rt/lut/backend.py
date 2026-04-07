@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import numpy as np
 import xarray as xr
 
+from siac.adapters.rsrf import coerce_band_rsrf
 from siac.algorithms.rt.lut._spectral_math import (
     build_point_interpolation_coords,
     build_spectral_integration_weights,
@@ -1102,27 +1103,19 @@ class ZarrLUTBackend:
         if wl_axis.size == 0:
             return lut
 
-        if band.has_rsrf:
-            kernel = build_aligned_rsrf_kernel(
-                self._band_rsrf(band),
-                lut_wavelengths_nm=wl_axis,
-                lut_id=self.lut_path,
-                support_padding=1,
-            )
-            return lut.isel(wavelength=slice(kernel.start_index, kernel.end_index))
-
-        sigma = max(float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))), 1e-6)
-        half_window = max(3.0, sigma_factor * sigma)
-        wl_min = float(np.nanmin(wl_axis))
-        wl_max = float(np.nanmax(wl_axis))
-        lo = float(np.clip(float(band.center_wavelength) - half_window, wl_min, wl_max))
-        hi = float(np.clip(float(band.center_wavelength) + half_window, wl_min, wl_max))
-
-        subset = lut.sel(wavelength=slice(min(lo, hi), max(lo, hi)))
-        if subset.sizes.get("wavelength", 0) == 0:
-            nearest_idx = int(np.argmin(np.abs(wl_axis - float(band.center_wavelength))))
-            subset = lut.isel(wavelength=slice(nearest_idx, nearest_idx + 1))
-        return subset
+        del sigma_factor
+        rsrf_band = self._band_rsrf(band) if band.has_rsrf else coerce_band_rsrf(
+            band,
+            sensor_id="UNKNOWN",
+            satellite_id="UNKNOWN",
+        )
+        kernel = build_aligned_rsrf_kernel(
+            rsrf_band,
+            lut_wavelengths_nm=wl_axis,
+            lut_id=self.lut_path,
+            support_padding=1,
+        )
+        return lut.isel(wavelength=slice(kernel.start_index, kernel.end_index))
 
     def _spectral_integration_weights(self, band: SensorBand, lut: xr.Dataset | None = None) -> xr.DataArray:
         """Build wavelength weights for spectral convolution (bandpass * optional solar spectrum)."""

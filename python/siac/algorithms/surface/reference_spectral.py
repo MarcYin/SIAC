@@ -6,13 +6,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from siac.adapters.rsrf import band_convolution_weights, coerce_band_rsrf
+from siac.domain import SensorBand
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import xarray as xr
     from numpy.typing import NDArray
-
-    from siac.domain import SensorBand
 
 
 def _trapezoid(y: NDArray, x: NDArray) -> float:
@@ -39,11 +40,22 @@ def load_reference_rsrf(
     """Load tabulated relative spectral responses for a reference sensor."""
     if reference_sensor.upper() == "MODIS":
         result: dict[str, tuple[NDArray, NDArray]] = {}
-        for band_name, center_nm, fwhm_nm in _MODIS_LAND_BANDS:
-            sigma = fwhm_nm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-            wl = np.linspace(center_nm - 3.0 * fwhm_nm, center_nm + 3.0 * fwhm_nm, 101)
-            resp = np.exp(-0.5 * ((wl - center_nm) / sigma) ** 2)
-            result[band_name] = (wl, resp)
+        for band_index, (band_name, center_nm, fwhm_nm) in enumerate(_MODIS_LAND_BANDS):
+            realized = coerce_band_rsrf(
+                SensorBand(
+                    band_name,
+                    center_nm,
+                    fwhm_nm,
+                    500.0,
+                    band_index,
+                ),
+                sensor_id="MODIS",
+                satellite_id="MODIS",
+            )
+            result[band_name] = (
+                np.asarray(realized.wavelengths_nm, dtype=np.float32),
+                np.asarray(realized.response, dtype=np.float32),
+            )
         return result
 
     raise ValueError(f"Unknown reference sensor: {reference_sensor!r}. Available: 'MODIS'")
@@ -71,7 +83,7 @@ def _build_conversion_matrix(
 
     sensor_resp = np.zeros((n_sensor, len(common_wl)))
     for j, band in enumerate(sensor_bands):
-        sr = band.effective_response(common_wl)
+        sr = band_convolution_weights(band, np.asarray(common_wl, dtype=np.float32))
         norm = _trapezoid(sr, common_wl)
         sensor_resp[j] = sr / norm if norm > 0 else sr
 

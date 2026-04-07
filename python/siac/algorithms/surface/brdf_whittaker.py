@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
 
-    from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary, SpectralMappingConfig
+    from siac.algorithms.surface.spectral_mapping import SpectralMappingConfig
     from siac.domain import SensorBand
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         *,
         source_bands: Sequence[SensorBand] | None = None,
         target_bands: Sequence[SensorBand] | None = None,
-        spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
+        spectral_library: SpectralMappingConfig | None = None,
         spectral_k_neighbors: int = 5,
         **kwargs: Any,
     ) -> SurfacePrior:

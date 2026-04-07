@@ -32,7 +32,6 @@ from siac.algorithms.surface.brdf_monthly_database import (
     build_monthly_composite_database,
 )
 from siac.algorithms.surface.spectral_mapping import (
-    HyperspectralLibrary,
     SpectralMapper,
     SpectralMappingConfig,
     _write_distance_metric_diagnostics,
@@ -117,7 +116,7 @@ def build_monthly_surface_prior_database(
     geometry: GeometryAngles,
     visible_bands: collections.abc.Sequence[SensorBand],
     query_bands: collections.abc.Sequence[SensorBand],
-    spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
+    spectral_library: SpectralMappingConfig | None = None,
     spectral_k_neighbors: int = 5,
     max_source_fit_rmse: float | None = None,
 ) -> MonthlyCompositeDatabase:

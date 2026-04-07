@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from siac.adapters.rsrf import band_convolution_weights
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 
 if TYPE_CHECKING:
@@ -55,11 +56,6 @@ def build_spectral_integration_weights(
         raise ValueError("Spectral LUT must define a wavelength coordinate")
 
     wl_axis = np.asarray(source.coords["wavelength"].values, dtype=np.float32)
-    wavelength = xr.DataArray(
-        wl_axis,
-        dims=["wavelength"],
-        coords={"wavelength": wl_axis},
-    )
     if band.has_rsrf:
         solar_values = None
         for name in solar_irradiance_names:
@@ -92,14 +88,11 @@ def build_spectral_integration_weights(
             coords={"wavelength": wl_axis},
         )
 
-    sigma = max(
-        float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0))),
-        1e-6,
+    weights = xr.DataArray(
+        band_convolution_weights(band, wl_axis),
+        dims=["wavelength"],
+        coords={"wavelength": wl_axis},
     )
-    bandpass = np.exp(
-        -0.5 * np.square((wavelength - float(band.center_wavelength)) / sigma)
-    ).astype(np.float32)
-    weights: xr.DataArray = bandpass
 
     for name in solar_irradiance_names:
         if name not in source:
@@ -110,7 +103,7 @@ def build_spectral_integration_weights(
         extra_dims = [dim for dim in solar.dims if dim != "wavelength"]
         if extra_dims:
             solar = solar.mean(dim=extra_dims)
-        weights = bandpass * solar.astype(np.float32)
+        weights = weights * solar.astype(np.float32)
         break
 
     return weights
