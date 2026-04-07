@@ -69,14 +69,6 @@ def _surface_spectral_mapping_runtime(
     context: str = "surface priors",
 ) -> tuple[Any | None, int]:
     settings = config.surface_prior.spectral_mapping
-    paths = getattr(config, "paths", None)
-    cache_paths = getattr(paths, "caches", None)
-    siac_library_root = getattr(settings, "siac_library_root", None)
-    if siac_library_root is None and paths is not None:
-        siac_library_root = getattr(paths, "spectral_library_root", None)
-    cache_dir = getattr(settings, "cache_dir", None)
-    if cache_dir is None and cache_paths is not None:
-        cache_dir = getattr(cache_paths, "spectral_mapping", None)
 
     if source_bands is not None and target_bands is not None and not settings.enabled:
         from siac.algorithms.surface.spectral_mapping import needs_spectral_mapping
@@ -96,8 +88,6 @@ def _surface_spectral_mapping_runtime(
 
     return (
         RuntimeSpectralMappingConfig(
-            siac_library_root=siac_library_root,
-            cache_dir=cache_dir,
             neighbor_estimator=settings.neighbor_estimator,
             knn_backend=settings.knn_backend,
             knn_eps=settings.knn_eps,

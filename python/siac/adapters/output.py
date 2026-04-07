@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -72,13 +72,26 @@ def _cast_dataset(
     scale: float,
     nodata: float,
 ) -> xr.Dataset:
+    return xr.Dataset(
+        {
+            name: _cast_dataarray(dataset[name], dtype=dtype, scale=scale, nodata=nodata)
+            for name in dataset.data_vars
+        },
+        coords=dataset.coords,
+        attrs=dataset.attrs,
+    )
+
+
+def _cast_dataarray(
+    data: xr.DataArray,
+    *,
+    dtype: str,
+    scale: float,
+    nodata: float,
+) -> xr.DataArray:
     if dtype == "uint16":
-        return xr.Dataset(
-            {name: _uint16_encode(dataset[name], scale=scale, nodata=nodata) for name in dataset.data_vars},
-            coords=dataset.coords,
-            attrs=dataset.attrs,
-        )
-    return dataset.astype(dtype)
+        return _uint16_encode(data, scale=scale, nodata=nodata)
+    return data.astype(dtype)
 
 
 
@@ -164,12 +177,40 @@ class ConfiguredOutputWriter:
         else:
             raise ValueError(f"Unsupported output format: {self.defaults.format!r}")
 
-        # Write STAC item
-        stac_path = destination / f"{prefix}.json"
-        stac_item = build_stac_item_from_result(result, output_dir=destination, artifacts=artifacts)
+        return self._write_stac_item(result, destination, prefix, artifacts)
+
+    def open_correction_boa_stream(
+        self,
+        output_dir: str | Path,
+        *,
+        metadata: dict[str, Any],
+    ) -> _RasterCorrectionBoaStream | None:
+        """Open an inline BOA writer for the correction stage when supported."""
+        if self.defaults.format not in {"geotiff", "cog"}:
+            return None
+        if self.defaults.boa_dtype not in {"float32", "float64"}:
+            return None
+
+        destination = Path(output_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        return _RasterCorrectionBoaStream(
+            writer=self,
+            output_dir=destination,
+            prefix=_derive_scene_prefix(metadata),
+            as_cog=self.defaults.format == "cog",
+        )
+
+    def _write_stac_item(
+        self,
+        result: CorrectionResult,
+        output_dir: Path,
+        prefix: str,
+        artifacts: dict[str, Path],
+    ) -> dict[str, Path]:
+        stac_path = output_dir / f"{prefix}.json"
+        stac_item = build_stac_item_from_result(result, output_dir=output_dir, artifacts=artifacts)
         stac_path.write_text(json.dumps(stac_item, indent=2), encoding="utf-8")
         artifacts["stac_item"] = stac_path
-
         return artifacts
 
     # -----------------------------------------------------------------
@@ -183,26 +224,29 @@ class ConfiguredOutputWriter:
         prefix: str,
         *,
         as_cog: bool,
+        prewritten_artifacts: dict[str, Path] | None = None,
+        skip_boa: bool = False,
     ) -> dict[str, Path]:
-        artifacts: dict[str, Path] = {}
+        artifacts: dict[str, Path] = dict(prewritten_artifacts or {})
         write_fn = write_cog if as_cog else write_raster
         nodata = int(self.defaults.boa_nodata) if self.defaults.boa_dtype == "uint16" else None
 
         def _write_bands(
             dataset: xr.Dataset, product_tag: str, artifact_prefix: str,
         ) -> None:
-            prepared = _cast_dataset(
-                dataset,
-                dtype=self.defaults.boa_dtype,
-                scale=self.defaults.boa_scale,
-                nodata=self.defaults.boa_nodata,
-            )
-            for band_name in prepared.data_vars:
+            for band_name in dataset.data_vars:
+                prepared = _cast_dataarray(
+                    dataset[band_name],
+                    dtype=self.defaults.boa_dtype,
+                    scale=self.defaults.boa_scale,
+                    nodata=self.defaults.boa_nodata,
+                )
                 path = output_dir / f"{prefix}_{product_tag}_{band_name}.tif"
-                write_fn(prepared[band_name], path, compression=self.defaults.compression, nodata=nodata)
+                write_fn(prepared, path, compression=self.defaults.compression, nodata=nodata)
                 artifacts[f"{artifact_prefix}.{band_name}"] = path
 
-        _write_bands(result.boa, "BOA", "boa")
+        if not skip_boa:
+            _write_bands(result.boa, "BOA", "boa")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
             _write_bands(result.boa_unc, "BOA_UNC", "boa_unc")
         if result.surface_prior is not None:
@@ -277,6 +321,21 @@ class ConfiguredOutputWriter:
         artifacts.update(self._write_previews(result, output_dir))
 
         return artifacts
+
+    def _finish_correction_boa_stream(
+        self,
+        result: CorrectionResult,
+        stream: _RasterCorrectionBoaStream,
+    ) -> dict[str, Path]:
+        artifacts = self._write_raster_products(
+            result,
+            stream.output_dir,
+            stream.prefix,
+            as_cog=stream.as_cog,
+            prewritten_artifacts=stream.artifacts,
+            skip_boa=True,
+        )
+        return self._write_stac_item(result, stream.output_dir, stream.prefix, artifacts)
 
     # -----------------------------------------------------------------
     # NetCDF
@@ -466,6 +525,46 @@ class ConfiguredOutputWriter:
                 logger.debug("Skipped scatter plot for %s.", plot.band_name, exc_info=True)
 
         return artifacts
+
+
+@dataclass
+class _RasterCorrectionBoaStream:
+    """Write BOA COG/GeoTIFF bands during correction and finish the product later."""
+
+    writer: ConfiguredOutputWriter
+    output_dir: Path
+    prefix: str
+    as_cog: bool
+    artifacts: dict[str, Path] = field(default_factory=dict)
+
+    @property
+    def has_written(self) -> bool:
+        return bool(self.artifacts)
+
+    def write_boa_band(self, band_name: str, data: xr.DataArray) -> xr.DataArray:
+        write_fn = write_cog if self.as_cog else write_raster
+        nodata = int(self.writer.defaults.boa_nodata) if self.writer.defaults.boa_dtype == "uint16" else None
+        prepared = _cast_dataarray(
+            data,
+            dtype=self.writer.defaults.boa_dtype,
+            scale=self.writer.defaults.boa_scale,
+            nodata=self.writer.defaults.boa_nodata,
+        )
+        path = self.output_dir / f"{self.prefix}_BOA_{band_name}.tif"
+        write_fn(prepared, path, compression=self.writer.defaults.compression, nodata=nodata)
+        self.artifacts[f"boa.{band_name}"] = path
+
+        from siac.storage.readers import read_raster
+
+        reopened = read_raster(path, masked=True)
+        if self.writer.defaults.boa_dtype in {"float32", "float64"}:
+            reopened = reopened.astype(self.writer.defaults.boa_dtype)
+        reopened.name = band_name
+        reopened.attrs.update(data.attrs)
+        return reopened
+
+    def finish(self, result: CorrectionResult) -> dict[str, Path]:
+        return self.writer._finish_correction_boa_stream(result, self)
 
 
 __all__ = ["ConfiguredOutputWriter"]

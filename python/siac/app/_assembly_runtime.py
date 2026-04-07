@@ -250,8 +250,12 @@ def resolve_solver(config: Any) -> SolverFn:
             tcwv_bounds=tuple(config.solver.tcwv_bounds),
             band_weight_power=getattr(config.solver, "alpha", -1.6),
             smoothness_delta=getattr(config.solver, "smoothness_delta", 0.02),
-            quadratic_group_size=getattr(config.solver, "quadratic_group_size", 1),
             quadratic_block_size=getattr(config.solver, "quadratic_block_size", 1),
+            quadratic_block_min_valid_fraction=getattr(
+                config.solver,
+                "quadratic_block_min_valid_fraction",
+                0.5,
+            ),
         )
         mg_solver = MultiGridSolver(solver_config)
         solve_kwargs: dict[str, Any] = {}
@@ -296,25 +300,41 @@ def resolve_corrector(_config: Any) -> CorrectorFn:
         obs: ObservationBundle,
         solved: SolvedAtmosphere,
         rt_model: Any,
+        output_stream: Any | None = None,
     ) -> CorrectionResult:
         corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
         atmo = solved.atmo_state
         matched_atmo = AtmosphericState(
-            aot=_resample_field_for_correction(atmo.aot, atmo.aot),
-            tcwv=_resample_field_for_correction(atmo.tcwv, atmo.aot),
-            tco3=_resample_field_for_correction(atmo.tco3, atmo.aot),
-            aot_unc=_resample_field_for_correction(atmo.aot_unc, atmo.aot),
-            tcwv_unc=_resample_field_for_correction(atmo.tcwv_unc, atmo.aot),
-            tco3_unc=_resample_field_for_correction(atmo.tco3_unc, atmo.aot),
-            elevation=_resample_field_for_correction(atmo.elevation, atmo.aot),
+            aot=_resample_field_for_correction(atmo.aot, atmo.aot, field_name="aot"),
+            tcwv=_resample_field_for_correction(atmo.tcwv, atmo.aot, field_name="tcwv"),
+            tco3=_resample_field_for_correction(atmo.tco3, atmo.aot, field_name="tco3"),
+            aot_unc=_resample_field_for_correction(atmo.aot_unc, atmo.aot, field_name="aot_unc"),
+            tcwv_unc=_resample_field_for_correction(atmo.tcwv_unc, atmo.aot, field_name="tcwv_unc"),
+            tco3_unc=_resample_field_for_correction(atmo.tco3_unc, atmo.aot, field_name="tco3_unc"),
+            elevation=_resample_field_for_correction(atmo.elevation, atmo.aot, field_name="elevation"),
         )
         coeff_geometry = GeometryAngles(
-            sza=_resample_field_for_correction(obs.geometry.sza, atmo.aot),
-            saa=_resample_field_for_correction(obs.geometry.saa, atmo.aot),
-            vza=_resample_field_for_correction(obs.geometry.vza, atmo.aot),
-            vaa=_resample_field_for_correction(obs.geometry.vaa, atmo.aot),
+            sza=_resample_field_for_correction(obs.geometry.sza, atmo.aot, field_name="sza"),
+            saa=_resample_field_for_correction(obs.geometry.saa, atmo.aot, field_name="saa"),
+            vza=_resample_field_for_correction(obs.geometry.vza, atmo.aot, field_name="vza"),
+            vaa=_resample_field_for_correction(obs.geometry.vaa, atmo.aot, field_name="vaa"),
         )
-        corrected = corrector_obj.correct(obs.toa, coeff_geometry, matched_atmo, obs.cloud_mask)
+        correct_kwargs: dict[str, Any] = {}
+        if output_stream is not None:
+            with suppress(TypeError, ValueError):
+                signature = inspect.signature(corrector_obj.correct)
+                if "boa_band_writer" in signature.parameters or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in signature.parameters.values()
+                ):
+                    correct_kwargs["boa_band_writer"] = output_stream.write_boa_band
+        corrected = corrector_obj.correct(
+            obs.toa,
+            coeff_geometry,
+            matched_atmo,
+            obs.cloud_mask,
+            **correct_kwargs,
+        )
         if not isinstance(corrected, CorrectionResult):
             return corrected
         return CorrectionResult(

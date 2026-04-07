@@ -284,6 +284,7 @@ def fill_nonfinite_like_template(
     template: xr.DataArray,
     *,
     fallback_value: float = 0.0,
+    field_name: str | None = None,
 ) -> xr.DataArray:
     """Fill NaN values in *field* using nearest-neighbour from *source*, then a constant."""
     values = np.asarray(field.values, dtype=np.float32)
@@ -311,7 +312,7 @@ def fill_nonfinite_like_template(
         logger.warning(
             "Filling %d remaining NaN pixels in field %s with source mean %.4g",
             n_nan,
-            getattr(field, "name", "?"),
+            field_name or getattr(field, "name", "?"),
             fill_value,
         )
         filled = np.where(np.isfinite(filled), filled, np.float32(fill_value))
@@ -325,6 +326,7 @@ def resample_field_for_correction(
     template: xr.DataArray,
     *,
     fallback_value: float = 0.0,
+    field_name: str | None = None,
 ) -> xr.DataArray:
     """Resample an atmosphere field to the correction grid and guarantee finiteness."""
     return fill_nonfinite_like_template(
@@ -332,6 +334,7 @@ def resample_field_for_correction(
         field,
         template,
         fallback_value=fallback_value,
+        field_name=field_name,
     )
 
 

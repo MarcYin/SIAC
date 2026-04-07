@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Any
 
 from siac.app.planning import build_execution_plan
 from siac.observability import derive_execution_report_path
-from siac.workflows.pipeline import _resolve_execution_settings, run_pipeline
+from siac.workflows.pipeline import (
+    _OUTPUTS_WRITTEN_METADATA_KEY,
+    _resolve_execution_settings,
+    run_pipeline,
+)
 
 if TYPE_CHECKING:
     from siac.app.planning import ExecutionPlan
@@ -44,6 +48,8 @@ def execute_plan(
         corrector=plan.corrector,
         rt_model=plan.rt_model,
         execution=execution,
+        output_path=getattr(plan, "output_path", None),
+        output_writer=getattr(plan, "output_writer", None),
     )
 
 
@@ -94,7 +100,11 @@ def process_scene(
             execution_override = {"performance_report_path": default_report_path}
 
     result = execute_plan(plan, execution=execution_override)
-    if plan.output_path is not None and plan.output_writer is not None:
+    if (
+        plan.output_path is not None
+        and plan.output_writer is not None
+        and not getattr(result, "metadata", {}).get(_OUTPUTS_WRITTEN_METADATA_KEY, False)
+    ):
         write_output(result, plan.output_path, output_writer=plan.output_writer)
     return result
 

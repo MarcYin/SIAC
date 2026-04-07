@@ -5,6 +5,7 @@ Pipeline orchestration for SIAC atmospheric correction.
 from __future__ import annotations
 
 import logging
+import inspect
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -65,7 +66,8 @@ AtmoPriorFn = Callable[
 SurfacePriorFn = Callable[[ObservationBundle, AtmosphericState | None, Any, float], SurfacePrior]
 GridAssemblerFn = Callable[..., SolverInputBundle]
 SolverFn = Callable[[SolverInputBundle, Any], SolvedAtmosphere]
-CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, Any], CorrectionResult]
+CorrectorFn = Callable[..., CorrectionResult]
+_OUTPUTS_WRITTEN_METADATA_KEY = "_siac_outputs_written"
 
 # Module-level constants extracted from previously-hardcoded magic numbers.
 _MAX_SCATTER_POINTS_PER_BAND = 4096
@@ -539,6 +541,42 @@ def _prepare_observation(
     return obs, bounds, crs, obs_time, resolution
 
 
+def _open_correction_output_stream(
+    output_writer: Any | None,
+    output_path: Path | str | None,
+    *,
+    metadata: dict[str, Any],
+) -> Any | None:
+    if output_writer is None or output_path is None:
+        return None
+    opener = getattr(output_writer, "open_correction_boa_stream", None)
+    if not callable(opener):
+        return None
+    return opener(output_path, metadata=metadata)
+
+
+def _call_corrector(
+    corrector: CorrectorFn,
+    obs: ObservationBundle,
+    solved: SolvedAtmosphere,
+    rt_model: Any,
+    *,
+    output_stream: Any | None,
+) -> CorrectionResult:
+    if output_stream is None:
+        return corrector(obs, solved, rt_model)
+    try:
+        signature = inspect.signature(corrector)
+    except (TypeError, ValueError):
+        return corrector(obs, solved, rt_model)
+    if "output_stream" not in signature.parameters and not any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    ):
+        return corrector(obs, solved, rt_model)
+    return corrector(obs, solved, rt_model, output_stream=output_stream)
+
+
 def _run_tail(
     obs: ObservationBundle,
     atmo: AtmosphericState,
@@ -549,6 +587,8 @@ def _run_tail(
     solver: SolverFn,
     corrector: CorrectorFn,
     rt_model: Any,
+    output_path: Path | str | None = None,
+    output_writer: Any | None = None,
 ) -> CorrectionResult:
     validate_atmospheric_state(atmo)
     validate_surface_prior(surface)
@@ -590,7 +630,18 @@ def _run_tail(
     t0 = time.monotonic()
     logger.info("M6: Applying atmospheric correction...")
     with observe_stage("M6.correction"):
-        corrected = corrector(obs, solved, rt_model)
+        output_stream = _open_correction_output_stream(
+            output_writer,
+            output_path,
+            metadata=obs.metadata,
+        )
+        corrected = _call_corrector(
+            corrector,
+            obs,
+            solved,
+            rt_model,
+            output_stream=output_stream,
+        )
         diagnostics = corrected.diagnostics
         if _should_capture_aot_scatter(config):
             try:
@@ -631,7 +682,16 @@ def _run_tail(
             },
             diagnostics=diagnostics,
         )
-    validate_correction_result(result)
+        validate_correction_result(result)
+        if output_stream is not None and getattr(output_stream, "has_written", False):
+            output_stream.finish(result)
+            result = replace(
+                result,
+                metadata={
+                    **result.metadata,
+                    _OUTPUTS_WRITTEN_METADATA_KEY: True,
+                },
+            )
     logger.info("M6: Correction complete (%.2fs).", time.monotonic() - t0)
 
     if observer is not None:
@@ -829,6 +889,8 @@ def _run_pipeline_thread(
     corrector: CorrectorFn,
     rt_model: Any,
     settings: dict[str, Any],
+    output_path: Path | str | None = None,
+    output_writer: Any | None = None,
 ) -> CorrectionResult:
     obs, bounds, crs, obs_time, resolution = _prepare_observation(
         input_path,
@@ -859,6 +921,8 @@ def _run_pipeline_thread(
         solver=solver,
         corrector=corrector,
         rt_model=rt_model,
+        output_path=output_path,
+        output_writer=output_writer,
     )
 
 
@@ -875,6 +939,8 @@ def _run_pipeline_dask(
     corrector: CorrectorFn,
     rt_model: Any,
     settings: dict[str, Any],
+    output_path: Path | str | None = None,
+    output_writer: Any | None = None,
 ) -> CorrectionResult:
     try:
         from dask.distributed import (  # type: ignore[import-not-found]
@@ -948,6 +1014,8 @@ def _run_pipeline_dask(
         solver=solver,
         corrector=corrector,
         rt_model=rt_model,
+        output_path=output_path,
+        output_writer=output_writer,
     )
 
 
@@ -966,6 +1034,8 @@ def run_pipeline(
     max_workers: int | None = None,
     execution: Any | None = None,
     observer: ExecutionObserver | None = None,
+    output_path: Path | str | None = None,
+    output_writer: Any | None = None,
 ) -> CorrectionResult:
     """Orchestrate module execution with a selectable execution backend."""
     settings = _resolve_execution_settings(
@@ -1016,6 +1086,8 @@ def run_pipeline(
                     corrector=corrector,
                     rt_model=rt_model,
                     settings=settings,
+                    output_path=output_path,
+                    output_writer=output_writer,
                 )
             else:
                 result = _run_pipeline_thread(
@@ -1030,6 +1102,8 @@ def run_pipeline(
                     corrector=corrector,
                     rt_model=rt_model,
                     settings=settings,
+                    output_path=output_path,
+                    output_writer=output_writer,
                 )
     except Exception as exc:
         if observer is not None and managed_observer:

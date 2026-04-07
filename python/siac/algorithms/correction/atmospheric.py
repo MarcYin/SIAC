@@ -5,6 +5,9 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 import numpy as np
 import xarray as xr
 
@@ -39,7 +42,8 @@ class AtmosphericCorrector:
         self.sensor_config = sensor_config
 
     def correct(self, toa: xr.Dataset, geometry: GeometryAngles, atmo_state: AtmosphericState,
-                cloud_mask: xr.DataArray | None = None) -> CorrectionResult:
+                cloud_mask: xr.DataArray | None = None,
+                boa_band_writer: Callable[[str, xr.DataArray], xr.DataArray] | None = None) -> CorrectionResult:
         t0 = time.monotonic()
         boa_vars = {}
         invalid_boa_mask: xr.DataArray | None = None
@@ -61,7 +65,10 @@ class AtmosphericCorrector:
             coeffs = resample_coefficients_to_template(coeffs, band_data)
             boa = coeffs.apply_correction(band_data)
             band_valid = np.isfinite(boa) & (boa > -0.05) & (boa < 1.5)
-            boa_vars[band_name] = boa.where(band_valid)
+            masked_boa = boa.where(band_valid)
+            if boa_band_writer is not None:
+                masked_boa = boa_band_writer(band_name, masked_boa)
+            boa_vars[band_name] = masked_boa
             band_invalid = ~band_valid
             invalid_boa_mask = (
                 band_invalid
