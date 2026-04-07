@@ -115,16 +115,15 @@ class MultiGridConfig:
     grid_search_aot_points: int = 11
     grid_search_tcwv_points: int = 11
 
-    # Group NxN solver-grid pixels when computing RT coefficients in the
-    # grid-search path.  A value > 1 computes coefficients on a coarser
-    # sub-grid and broadcasts to all pixels in each group, reducing the
-    # number of RT model calls by group_size².
-    quadratic_group_size: int = 1
-
     # Solve one shared AOT/TCWV pair per NxN block in the no-Jacobian
     # grid-search path, then broadcast that block solution back to the
-    # full solver grid.
+    # full solver grid. The same block size also controls RT coefficient
+    # sampling in that path.
     quadratic_block_size: int = 1
+
+    # Minimum fraction of pixels in each quadratic block that must have valid
+    # observation and surface-prior support before the block is solved.
+    quadratic_block_min_valid_fraction: float = 0.5
 
 
 @dataclass
@@ -206,6 +205,7 @@ class MultiGridSolver:
             surface_prior,
             sharp_transition_mask=sharp_transition_mask,
         )
+        full_no_observation_mask = ~self._observation_presence_mask(toa)
         n_valid = int(np.count_nonzero(mask.values))
         logger.info(f"Valid pixels: {n_valid} ({100*n_valid/mask.size:.1f}%)")
 
@@ -215,11 +215,15 @@ class MultiGridSolver:
                 "returning atmospheric prior as solver output."
             )
             template = cloud_mask
+            aot_out = np.where(full_no_observation_mask, np.nan, atmo_prior.aot.values)
+            tcwv_out = np.where(full_no_observation_mask, np.nan, atmo_prior.tcwv.values)
+            aot_unc_out = np.where(full_no_observation_mask, np.nan, atmo_prior.aot_unc.values)
+            tcwv_unc_out = np.where(full_no_observation_mask, np.nan, atmo_prior.tcwv_unc.values)
             return SolverResult(
-                aot=xr.DataArray(atmo_prior.aot.values, dims=template.dims, coords=template.coords),
-                tcwv=xr.DataArray(atmo_prior.tcwv.values, dims=template.dims, coords=template.coords),
-                aot_unc=xr.DataArray(atmo_prior.aot_unc.values, dims=template.dims, coords=template.coords),
-                tcwv_unc=xr.DataArray(atmo_prior.tcwv_unc.values, dims=template.dims, coords=template.coords),
+                aot=xr.DataArray(aot_out, dims=template.dims, coords=template.coords),
+                tcwv=xr.DataArray(tcwv_out, dims=template.dims, coords=template.coords),
+                aot_unc=xr.DataArray(aot_unc_out, dims=template.dims, coords=template.coords),
+                tcwv_unc=xr.DataArray(tcwv_unc_out, dims=template.dims, coords=template.coords),
                 n_iterations=0,
                 final_cost=float("nan"),
                 success=False,
@@ -267,6 +271,7 @@ class MultiGridSolver:
         cost_func_last: CostFunction | None = None
         final_invalid_mask: np.ndarray | None = None
         final_zero_obs_mask: np.ndarray | None = None
+        final_insufficient_support_mask: np.ndarray | None = None
 
         # Multi-grid solve from coarse to fine. The non-Jacobian grid-search
         # branch does not consume coarse solutions as initial guesses, so it
@@ -318,6 +323,9 @@ class MultiGridSolver:
                 level_cost = float(level_diag["cost"])
                 valid_pixels = int(level_diag.get("valid_pixels", 0))
                 invalid_pixels = int(level_diag.get("qa_invalid_pixels", 0))
+                solve_invalid_pixels = int(
+                    level_diag.get("qa_solve_invalid_pixels", invalid_pixels)
+                )
                 final_invalid_mask = self._resample_boolean_mask(
                     np.asarray(level_diag["qa_invalid_mask"], dtype=bool),
                     full_shape,
@@ -326,18 +334,30 @@ class MultiGridSolver:
                     np.asarray(level_diag["qa_zero_obs_mask"], dtype=bool),
                     full_shape,
                 )
-                level_success = valid_pixels > 0 and invalid_pixels < valid_pixels
+                final_insufficient_support_mask = self._resample_boolean_mask(
+                    np.asarray(level_diag["qa_insufficient_support_mask"], dtype=bool),
+                    full_shape,
+                )
+                level_success = valid_pixels > 0 and solve_invalid_pixels < valid_pixels
                 level_message = (
                     "grid-search "
                     f"invalid={invalid_pixels} "
+                    f"solve_invalid={solve_invalid_pixels} "
                     f"zero_obs={int(level_diag.get('qa_zero_obs_pixels', 0))} "
+                    f"no_observation={int(level_diag.get('qa_no_observation_pixels', 0))} "
+                    f"insufficient_support={int(level_diag.get('qa_insufficient_support_pixels', 0))} "
                     f"boundary={int(level_diag.get('qa_boundary_pixels', 0))} "
                     f"lower_aot_boundary={int(level_diag.get('qa_lower_aot_boundary_pixels', 0))}"
                 )
                 level_diag = {
                     key: value
                     for key, value in level_diag.items()
-                    if key not in {"qa_invalid_mask", "qa_zero_obs_mask"}
+                    if key
+                    not in {
+                        "qa_invalid_mask",
+                        "qa_zero_obs_mask",
+                        "qa_insufficient_support_mask",
+                    }
                 }
             else:
                 # Create cost function
@@ -401,6 +421,17 @@ class MultiGridSolver:
                 aot, tcwv, atmo_prior, cost_func_last
             )
 
+        if np.any(full_no_observation_mask):
+            aot = np.where(full_no_observation_mask, np.nan, aot).astype(np.float32, copy=False)
+            tcwv = np.where(full_no_observation_mask, np.nan, tcwv).astype(np.float32, copy=False)
+            aot_unc = np.where(full_no_observation_mask, np.nan, aot_unc).astype(np.float32, copy=False)
+            tcwv_unc = np.where(full_no_observation_mask, np.nan, tcwv_unc).astype(np.float32, copy=False)
+            final_zero_obs_mask = (
+                full_no_observation_mask.copy()
+                if final_zero_obs_mask is None
+                else final_zero_obs_mask | full_no_observation_mask
+            )
+
         # Create result
         template = cloud_mask
         qa = self._build_solver_qa_dataset(
@@ -410,6 +441,8 @@ class MultiGridSolver:
             tcwv=tcwv,
             invalid_mask=final_invalid_mask,
             zero_obs_mask=final_zero_obs_mask,
+            insufficient_support_mask=final_insufficient_support_mask,
+            no_observation_mask=full_no_observation_mask,
             sharp_transition_mask=sharp_transition_mask.values.astype(bool)
             if sharp_transition_mask is not None
             else None,
@@ -430,10 +463,29 @@ class MultiGridSolver:
         )
 
         logger.info(
-            f"Solver complete: AOT={aot.mean():.3f}, TCWV={tcwv.mean():.2f}"
+            "Solver complete: AOT=%.3f, TCWV=%.2f",
+            self._finite_mean(aot),
+            self._finite_mean(tcwv),
         )
 
         return result
+
+    @staticmethod
+    def _observation_presence_mask(toa: xr.DataArray) -> BoolArray:
+        """Return pixels with at least one finite, physically valid TOA band."""
+        values = np.asarray(toa.values, dtype=np.float32)
+        if values.ndim == 2:
+            values = values[np.newaxis, ...]
+        band_valid = np.isfinite(values) & (values > 0.0) & (values < 1.0)
+        return cast("BoolArray", np.any(band_valid, axis=0))
+
+    @staticmethod
+    def _finite_mean(values: np.ndarray) -> float:
+        array = np.asarray(values, dtype=np.float32)
+        finite = np.isfinite(array)
+        if not np.any(finite):
+            return float("nan")
+        return float(np.mean(array[finite]))
 
     @staticmethod
     def _rt_model_supports_jacobian(rt_model: RTModelBackend) -> bool:
@@ -496,11 +548,23 @@ class MultiGridSolver:
         tcwv: np.ndarray,
         invalid_mask: np.ndarray | None,
         zero_obs_mask: np.ndarray | None,
+        insufficient_support_mask: np.ndarray | None,
+        no_observation_mask: np.ndarray | None,
         sharp_transition_mask: np.ndarray | None,
     ) -> xr.Dataset:
         valid = np.asarray(valid_mask, dtype=bool)
         invalid = np.zeros_like(valid, dtype=bool) if invalid_mask is None else np.asarray(invalid_mask, dtype=bool) & valid
-        zero_obs = np.zeros_like(valid, dtype=bool) if zero_obs_mask is None else np.asarray(zero_obs_mask, dtype=bool) & valid
+        zero_obs = np.zeros_like(valid, dtype=bool) if zero_obs_mask is None else np.asarray(zero_obs_mask, dtype=bool)
+        insufficient_support = (
+            np.zeros_like(valid, dtype=bool)
+            if insufficient_support_mask is None
+            else np.asarray(insufficient_support_mask, dtype=bool)
+        )
+        no_observation = (
+            np.zeros_like(valid, dtype=bool)
+            if no_observation_mask is None
+            else np.asarray(no_observation_mask, dtype=bool)
+        )
         sharp_transition = (
             np.zeros_like(valid, dtype=bool)
             if sharp_transition_mask is None
@@ -517,12 +581,14 @@ class MultiGridSolver:
             valid,
         )
         parameter_boundary = aot_lower | aot_upper | tcwv_lower | tcwv_upper
-        low_quality = invalid | parameter_boundary | sharp_transition
+        low_quality = invalid | zero_obs | insufficient_support | no_observation | parameter_boundary | sharp_transition
 
         return xr.Dataset(
             {
                 "invalid_retrieval": self._mask_to_data_array(invalid, template),
                 "zero_obs_support": self._mask_to_data_array(zero_obs, template),
+                "insufficient_observation_support": self._mask_to_data_array(insufficient_support, template),
+                "no_observation": self._mask_to_data_array(no_observation, template),
                 "sharp_transition_excluded": self._mask_to_data_array(sharp_transition, template),
                 "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
                 "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
@@ -538,6 +604,10 @@ class MultiGridSolver:
         return {
             "qa_final_invalid_pixels": float(np.count_nonzero(np.asarray(qa["invalid_retrieval"].values, dtype=bool))),
             "qa_final_zero_obs_pixels": float(np.count_nonzero(np.asarray(qa["zero_obs_support"].values, dtype=bool))),
+            "qa_final_insufficient_support_pixels": float(
+                np.count_nonzero(np.asarray(qa["insufficient_observation_support"].values, dtype=bool))
+            ),
+            "qa_final_no_observation_pixels": float(np.count_nonzero(np.asarray(qa["no_observation"].values, dtype=bool))),
             "qa_final_sharp_transition_pixels": float(
                 np.count_nonzero(np.asarray(qa["sharp_transition_excluded"].values, dtype=bool))
             ),
@@ -581,8 +651,9 @@ class MultiGridSolver:
         This path avoids Jacobian-based optimization. Depending on
         ``quadratic_block_size``, it either solves each pixel independently
         or solves one shared AOT/TCWV pair per NxN block and broadcasts the
-        block solution back to the full solver grid. Uncertainty is taken from
-        the fitted local Hessian on the active solve grid.
+        block solution back to the full solver grid. RT coefficients are sampled
+        on the same block grid. Uncertainty is taken from the fitted local
+        Hessian on the active solve grid.
         """
         shape = self._get_shape(mask)
         valid_mask = mask.values.astype(bool)
@@ -614,6 +685,9 @@ class MultiGridSolver:
                 f"TOA shape {toa_values.shape} incompatible with {n_bands} bands and grid {shape}"
             )
         toa_values = np.ascontiguousarray(toa_values, dtype=np.float32)
+        observation_band_mask = np.isfinite(toa_values) & (toa_values > 0.0) & (toa_values < 1.0)
+        observation_support_mask = np.all(observation_band_mask, axis=0)
+        no_observation_mask = ~np.any(observation_band_mask, axis=0)
 
         boa_prior = surface_prior.boa.values.astype(np.float32)
         if boa_prior.ndim == 2:
@@ -644,14 +718,23 @@ class MultiGridSolver:
         if boa_unc.shape[0] > n_bands:
             boa_unc = boa_unc[:n_bands]
         boa_unc = np.ascontiguousarray(boa_unc, dtype=np.float32)
+        prior_support_mask = (
+            np.all(np.isfinite(boa_prior), axis=0)
+            & np.all(np.isfinite(boa_unc), axis=0)
+            & np.isfinite(aot_prior)
+            & np.isfinite(tcwv_prior)
+            & np.isfinite(aot_prior_unc)
+            & np.isfinite(tcwv_prior_unc)
+        )
+        support_mask = observation_support_mask & prior_support_mask
+        solve_valid_mask = valid_mask & support_mask
 
         xap_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
         xbp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
         xcp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
-        from siac.algorithms.solver.cost import apply_smoothness_filter
 
-        group_size = max(1, self.config.quadratic_group_size)
         block_size = max(1, self.config.quadratic_block_size)
+        rt_sample_step = block_size
 
         def _candidate_coeff_provider(
             aot_val: float, tcwv_val: float
@@ -660,7 +743,7 @@ class MultiGridSolver:
             tcwv_field = xr.full_like(atmo_prior.tcwv, fill_value=float(tcwv_val), dtype=np.float32)
             atmo_state = atmo_prior.with_updated_aot_tcwv(aot=aot_field, tcwv=tcwv_field)
 
-            if group_size <= 1:
+            if rt_sample_step <= 1:
                 for ib, band in enumerate(bands):
                     coeffs = rt_model.compute_coefficients(
                         geometry, atmo_state, band, compute_jacobian=False
@@ -671,25 +754,35 @@ class MultiGridSolver:
             else:
                 # Subsample geometry/atmo to a coarser grid, compute RT
                 # coefficients there, then broadcast back to full resolution.
-                sub_geometry = self._subsample_geometry(geometry, group_size)
-                sub_atmo = self._subsample_atmo_state(atmo_state, group_size)
+                sub_geometry = self._subsample_geometry(geometry, rt_sample_step)
+                sub_atmo = self._subsample_atmo_state(atmo_state, rt_sample_step)
                 for ib, band in enumerate(bands):
                     coeffs = rt_model.compute_coefficients(
                         sub_geometry, sub_atmo, band, compute_jacobian=False
                     )
                     xap_stack[ib] = self._broadcast_to_full(
-                        np.asarray(coeffs.xap.values, dtype=np.float32), shape, group_size,
+                        np.asarray(coeffs.xap.values, dtype=np.float32), shape, rt_sample_step,
                     )
                     xbp_stack[ib] = self._broadcast_to_full(
-                        np.asarray(coeffs.xbp.values, dtype=np.float32), shape, group_size,
+                        np.asarray(coeffs.xbp.values, dtype=np.float32), shape, rt_sample_step,
                     )
                     xcp_stack[ib] = self._broadcast_to_full(
-                        np.asarray(coeffs.xcp.values, dtype=np.float32), shape, group_size,
+                        np.asarray(coeffs.xcp.values, dtype=np.float32), shape, rt_sample_step,
                     )
             return xap_stack, xbp_stack, xcp_stack
 
-        block_valid_mask = self._aggregate_mask_to_blocks(valid_mask, block_size)
-        block_valid_counts = self._aggregate_valid_counts(valid_mask, block_size)
+        block_valid_counts = self._aggregate_valid_counts(solve_valid_mask, block_size)
+        block_total_counts = self._aggregate_block_pixel_counts(shape, block_size)
+        min_valid_fraction = min(
+            max(float(self.config.quadratic_block_min_valid_fraction), 0.0),
+            1.0,
+        )
+        block_required_counts = np.maximum(
+            1,
+            np.ceil(block_total_counts.astype(np.float32) * np.float32(min_valid_fraction)).astype(np.int32),
+        )
+        block_support_mask = block_valid_counts >= block_required_counts
+        block_valid_mask = block_support_mask.copy()
 
         if block_size > 1:
             costs_raw, obs_counts_raw, block_valid_mask_raw = evaluate_block_grid_search_cost_cube_with_provider_qa(
@@ -700,14 +793,14 @@ class MultiGridSolver:
                 boa_prior,
                 boa_unc,
                 band_weights,
-                valid_mask.astype(bool, copy=False),
+                solve_valid_mask.astype(bool, copy=False),
                 aot_prior,
                 tcwv_prior,
                 aot_prior_unc,
                 tcwv_prior_unc,
                 block_size,
             )
-            block_valid_mask = np.asarray(block_valid_mask_raw, dtype=bool)
+            block_valid_mask = np.asarray(block_valid_mask_raw, dtype=bool) & block_support_mask
             refine_valid_mask = block_valid_mask.astype(bool, copy=False)
         else:
             costs_raw, obs_counts_raw = evaluate_grid_search_cost_cube_with_provider_qa(
@@ -718,15 +811,25 @@ class MultiGridSolver:
                 boa_prior,
                 boa_unc,
                 band_weights,
-                valid_mask.astype(bool, copy=False),
+                solve_valid_mask.astype(bool, copy=False),
                 aot_prior,
                 tcwv_prior,
                 aot_prior_unc,
                 tcwv_prior_unc,
             )
-            refine_valid_mask = valid_mask.astype(bool, copy=False)
+            refine_valid_mask = solve_valid_mask.astype(bool, copy=False)
         costs = np.asarray(costs_raw, dtype=np.float32)
         obs_counts = np.asarray(obs_counts_raw, dtype=np.uint16)
+        if block_size > 1:
+            costs = np.where(block_valid_mask[np.newaxis, np.newaxis, :, :], costs, np.inf).astype(
+                np.float32,
+                copy=False,
+            )
+            obs_counts = np.where(
+                block_valid_mask[np.newaxis, np.newaxis, :, :],
+                obs_counts,
+                np.uint16(0),
+            ).astype(np.uint16, copy=False)
 
         (
             aot_best,
@@ -753,19 +856,35 @@ class MultiGridSolver:
         lower_aot_boundary_mask = np.asarray(lower_aot_boundary_mask, dtype=bool)
         zero_obs_mask = np.asarray(zero_obs_mask, dtype=bool)
         invalid_block_mask = invalid_mask.copy()
+        insufficient_support_mask = ~support_mask
 
         if block_size > 1:
-            aot_best = apply_smoothness_filter(
+            block_solver_invalid_mask = ~block_valid_mask
+            block_insufficient_support_mask = ~block_support_mask
+            invalid_mask = invalid_mask | block_solver_invalid_mask
+            zero_obs_mask = zero_obs_mask | block_insufficient_support_mask
+            trusted_block_mask = (
+                block_valid_mask
+                & ~invalid_mask
+                & ~zero_obs_mask
+                & ~boundary_mask
+                & ~lower_aot_boundary_mask
+                & np.isfinite(aot_best)
+                & np.isfinite(tcwv_best)
+            )
+            aot_best = self._smooth_grid_search_field(
                 aot_best,
                 gamma=cost_config.aot_gamma,
                 delta=cost_config.smoothness_delta,
                 n_iter=40,
+                trusted_mask=trusted_block_mask,
             ).astype(np.float32)
-            tcwv_best = apply_smoothness_filter(
+            tcwv_best = self._smooth_grid_search_field(
                 tcwv_best,
                 gamma=cost_config.tcwv_gamma,
                 delta=cost_config.smoothness_delta,
                 n_iter=40,
+                trusted_mask=trusted_block_mask,
             ).astype(np.float32)
 
             invalid_mask_full = self._broadcast_to_full(invalid_mask, shape, block_size) > 0.5
@@ -785,39 +904,57 @@ class MultiGridSolver:
             zero_obs_mask = zero_obs_mask_full
             boundary_mask = boundary_mask_full
             lower_aot_boundary_mask = lower_aot_boundary_mask_full
+            insufficient_support_mask = self._broadcast_to_full(
+                block_insufficient_support_mask,
+                shape,
+                block_size,
+            ) > 0.5
+        else:
+            zero_obs_mask = zero_obs_mask | insufficient_support_mask
+            invalid_mask = invalid_mask | insufficient_support_mask
 
         invalid_floor_pixels = int(
             np.count_nonzero(
                 invalid_mask
-                & valid_mask
+                & solve_valid_mask
                 & np.isclose(aot_best, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
             )
         )
         prior_floor_pixels = int(
             np.count_nonzero(
                 invalid_mask
-                & valid_mask
+                & solve_valid_mask
                 & np.isclose(aot_prior, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
             )
         )
 
         if block_size <= 1:
-            # Apply edge-preserving spatial smoothing to the per-pixel
-            # grid-search result. The grid search has no spatial
-            # regularization, so without this step the AOT/TCWV fields can be
-            # noisy pixel-to-pixel while genuine hotspots (fire plumes, urban
-            # emissions) should be preserved.
-            aot_best = apply_smoothness_filter(
+            trusted_pixel_mask = (
+                solve_valid_mask
+                & ~invalid_mask
+                & ~zero_obs_mask
+                & ~boundary_mask
+                & ~lower_aot_boundary_mask
+                & np.isfinite(aot_best)
+                & np.isfinite(tcwv_best)
+            )
+            # Apply edge-preserving spatial smoothing using only trusted
+            # retrievals as seeds. Invalid, zero-support, and boundary-hit
+            # retrievals are filled from neighbouring trusted seeds instead of
+            # being allowed to influence the smoothed field.
+            aot_best = self._smooth_grid_search_field(
                 aot_best,
                 gamma=cost_config.aot_gamma,
                 delta=cost_config.smoothness_delta,
                 n_iter=40,
+                trusted_mask=trusted_pixel_mask,
             ).astype(np.float32)
-            tcwv_best = apply_smoothness_filter(
+            tcwv_best = self._smooth_grid_search_field(
                 tcwv_best,
                 gamma=cost_config.tcwv_gamma,
                 delta=cost_config.smoothness_delta,
                 n_iter=40,
+                trusted_mask=trusted_pixel_mask,
             ).astype(np.float32)
 
         # Handle QA-invalid pixels.  If there are enough valid neighbours the
@@ -825,7 +962,7 @@ class MultiGridSolver:
         # pixels are invalid (complete grid-search failure) the smoothed field
         # is meaningless, so fall back to the prior.
         if np.any(invalid_mask):
-            all_invalid = np.all(invalid_mask | ~valid_mask)
+            all_invalid = np.all(invalid_mask | ~solve_valid_mask)
             if all_invalid:
                 aot_best = np.where(invalid_mask, aot_prior, aot_best).astype(np.float32, copy=False)
                 tcwv_best = np.where(invalid_mask, tcwv_prior, tcwv_best).astype(np.float32, copy=False)
@@ -842,6 +979,14 @@ class MultiGridSolver:
                 tcwv_unc,
             ).astype(np.float32, copy=False)
 
+        if np.any(no_observation_mask):
+            invalid_mask = invalid_mask | no_observation_mask
+            zero_obs_mask = zero_obs_mask | no_observation_mask
+            aot_best = np.where(no_observation_mask, np.nan, aot_best).astype(np.float32, copy=False)
+            tcwv_best = np.where(no_observation_mask, np.nan, tcwv_best).astype(np.float32, copy=False)
+            aot_unc = np.where(no_observation_mask, np.nan, aot_unc).astype(np.float32, copy=False)
+            tcwv_unc = np.where(no_observation_mask, np.nan, tcwv_unc).astype(np.float32, copy=False)
+
         flat = costs.reshape(n_aot * n_tcwv, -1)
         safe_flat = np.where(np.isfinite(flat), flat, np.inf)
         best_flat = np.argmin(safe_flat, axis=0)
@@ -856,22 +1001,24 @@ class MultiGridSolver:
                 else float("nan")
             )
         else:
-            supported = (valid_mask & ~invalid_mask).reshape(-1)
+            supported = (solve_valid_mask & ~invalid_mask).reshape(-1)
             mean_cost = (
                 float(np.mean(selected_costs[supported]))
                 if np.any(supported)
                 else float("nan")
             )
-        valid_pixels = int(np.count_nonzero(valid_mask))
-        invalid_pixels = int(np.count_nonzero(invalid_mask & valid_mask))
-        zero_obs_pixels = int(np.count_nonzero(zero_obs_mask & valid_mask))
-        boundary_pixels = int(np.count_nonzero(boundary_mask & valid_mask))
+        valid_pixels = int(np.count_nonzero(solve_valid_mask))
+        solve_invalid_pixels = int(np.count_nonzero(invalid_mask & solve_valid_mask))
+        invalid_pixels = int(np.count_nonzero(invalid_mask))
+        zero_obs_pixels = int(np.count_nonzero(zero_obs_mask))
+        no_observation_pixels = int(np.count_nonzero(no_observation_mask))
+        boundary_pixels = int(np.count_nonzero(boundary_mask & solve_valid_mask))
         lower_aot_boundary_pixels = int(
-            np.count_nonzero(lower_aot_boundary_mask & valid_mask)
+            np.count_nonzero(lower_aot_boundary_mask & solve_valid_mask)
         )
         if invalid_pixels:
             logger.warning(
-                "Grid-search QA flagged %d/%d valid pixels as invalid; %d had zero observation support and %d collapsed to the AOT floor.",
+                "Grid-search QA flagged %d pixels as invalid with %d solve-supported pixels; %d had zero observation support and %d collapsed to the AOT floor.",
                 invalid_pixels,
                 valid_pixels,
                 zero_obs_pixels,
@@ -887,13 +1034,17 @@ class MultiGridSolver:
                 "evaluations": float(n_aot * n_tcwv),
                 "valid_pixels": float(valid_pixels),
                 "qa_invalid_pixels": float(invalid_pixels),
+                "qa_solve_invalid_pixels": float(solve_invalid_pixels),
                 "qa_zero_obs_pixels": float(zero_obs_pixels),
+                "qa_no_observation_pixels": float(no_observation_pixels),
                 "qa_boundary_pixels": float(boundary_pixels),
                 "qa_lower_aot_boundary_pixels": float(lower_aot_boundary_pixels),
                 "qa_invalid_floor_pixels": float(invalid_floor_pixels),
                 "qa_prior_floor_pixels": float(prior_floor_pixels),
+                "qa_insufficient_support_pixels": float(np.count_nonzero(insufficient_support_mask)),
                 "qa_invalid_mask": invalid_mask.astype(bool, copy=False),
                 "qa_zero_obs_mask": zero_obs_mask.astype(bool, copy=False),
+                "qa_insufficient_support_mask": insufficient_support_mask.astype(bool, copy=False),
             },
         )
 
@@ -952,7 +1103,7 @@ class MultiGridSolver:
         return unique
 
     # -----------------------------------------------------------------
-    # Grouping helpers for quadratic_group_size
+    # Block-grid helpers
     # -----------------------------------------------------------------
 
     @staticmethod
@@ -995,25 +1146,6 @@ class MultiGridSolver:
         )[:full_shape[0], :full_shape[1]]
 
     @staticmethod
-    def _aggregate_mask_to_blocks(mask: np.ndarray, step: int) -> BoolArray:
-        """Aggregate a full-resolution boolean mask to an any-valid block grid."""
-        source = np.asarray(mask, dtype=bool)
-        if step <= 1:
-            return cast("BoolArray", source.astype(bool, copy=False))
-
-        by = (source.shape[0] + step - 1) // step
-        bx = (source.shape[1] + step - 1) // step
-        reduced = np.zeros((by, bx), dtype=bool)
-        for iy in range(by):
-            y0 = iy * step
-            y1 = min(y0 + step, source.shape[0])
-            for ix in range(bx):
-                x0 = ix * step
-                x1 = min(x0 + step, source.shape[1])
-                reduced[iy, ix] = bool(np.any(source[y0:y1, x0:x1]))
-        return cast("BoolArray", reduced)
-
-    @staticmethod
     def _aggregate_valid_counts(mask: np.ndarray, step: int) -> np.ndarray:
         """Count valid pixels contributing to each NxN block."""
         source = np.asarray(mask, dtype=bool)
@@ -1031,6 +1163,56 @@ class MultiGridSolver:
                 x1 = min(x0 + step, source.shape[1])
                 reduced[iy, ix] = int(np.count_nonzero(source[y0:y1, x0:x1]))
         return reduced
+
+    @staticmethod
+    def _aggregate_block_pixel_counts(shape: tuple[int, int], step: int) -> np.ndarray:
+        """Return the number of full-resolution pixels in each NxN block."""
+        if step <= 1:
+            return np.ones(shape, dtype=np.int32)
+
+        by = (shape[0] + step - 1) // step
+        bx = (shape[1] + step - 1) // step
+        counts = np.zeros((by, bx), dtype=np.int32)
+        for iy in range(by):
+            y0 = iy * step
+            y1 = min(y0 + step, shape[0])
+            for ix in range(bx):
+                x0 = ix * step
+                x1 = min(x0 + step, shape[1])
+                counts[iy, ix] = int((y1 - y0) * (x1 - x0))
+        return counts
+
+    @staticmethod
+    def _smooth_grid_search_field(
+        values: np.ndarray,
+        *,
+        gamma: float,
+        delta: float,
+        n_iter: int,
+        trusted_mask: np.ndarray,
+    ) -> Float32Array:
+        """Smooth a retrieved field using only trusted retrievals as seeds."""
+        from siac.algorithms.solver.aod_smoothing import nearest_seed_fill
+        from siac.algorithms.solver.cost import apply_smoothness_filter
+
+        source = np.asarray(values, dtype=np.float32)
+        trusted = np.asarray(trusted_mask, dtype=bool) & np.isfinite(source)
+        if source.shape != trusted.shape:
+            raise ValueError(f"Value/trusted mask shape mismatch: {source.shape} vs {trusted.shape}")
+        if not np.any(trusted):
+            return cast("Float32Array", source.astype(np.float32, copy=True))
+
+        filled = nearest_seed_fill(source, trusted)
+        if float(gamma) > 0.0:
+            smoothed = apply_smoothness_filter(
+                filled,
+                gamma=float(gamma),
+                delta=float(delta),
+                n_iter=int(n_iter),
+            )
+        else:
+            smoothed = filled
+        return cast("Float32Array", np.asarray(smoothed, dtype=np.float32))
 
     def _resample_field(
         self, field: np.ndarray, target_shape: tuple[int, int]
