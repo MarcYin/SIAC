@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
@@ -444,8 +444,8 @@ def _prepare_runtime(
             "Published spectral-library runtime does not support the requested source sensor. "
             f"source_sensor={source_sensor_id!r} supported={manifest_source_sensors!r}"
         )
-    schema = cast("object", mapper.get_sensor_schema(source_sensor_id))
-    source_schema_band_ids = tuple(cast("tuple[str, ...]", schema.band_ids()))
+    schema: Any = mapper.get_sensor_schema(source_sensor_id)
+    source_schema_band_ids = tuple(str(bid) for bid in schema.band_ids())
     source_schema_indices, ignored_source_band_names = _source_schema_indices_for_bands(
         source_bands,
         sensor_id=source_sensor_id,
@@ -456,8 +456,8 @@ def _prepare_runtime(
             "None of the requested source bands map onto the published spectral-library source basis."
         )
     target_sensor_id = _target_sensor_id(target_bands)
-    target_schema = cast("object", mapper.get_sensor_schema(target_sensor_id))
-    target_schema_band_ids = tuple(cast("tuple[str, ...]", target_schema.band_ids()))
+    target_schema: Any = mapper.get_sensor_schema(target_sensor_id)
+    target_schema_band_ids = tuple(str(bid) for bid in target_schema.band_ids())
     target_output_band_ids = _target_output_band_ids_for_bands(
         target_bands,
         sensor_id=target_sensor_id,
@@ -621,7 +621,7 @@ class SpectralMapper:
 
             unc_started = perf_counter()
             per_pixel_fit = fit_rmse[dedup_indices].astype(np.float64)
-            input_unc = np.zeros(valid_count, dtype=np.float64)
+            input_unc: npt.NDArray[np.float64] = np.zeros(valid_count, dtype=np.float64)
             if unc_flat is not None and self._supported_source_input_indices:
                 supported_unc = np.asarray(
                     unc_flat[valid_indices][:, self._supported_source_input_indices],
