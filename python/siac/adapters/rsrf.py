@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import rsrf
+from rsrf.convolve import convolution_weights as _convolution_weights
 
 from siac.catalog import get_sensor_config
 from siac.domain import SensorBand, SensorConfig
@@ -16,6 +17,78 @@ def _normalize_rsrf_root(rsrf_root: Path | str | None) -> Path | None:
     if rsrf_root is None:
         return None
     return Path(rsrf_root).expanduser().resolve()
+
+
+def _curve_from_response_definition(
+    response_definition: object,
+    *,
+    band_id: str,
+    source_variant: str | None = None,
+) -> object:
+    resolved = rsrf.coerce_response_definition(
+        response_definition,
+        band_id=band_id,
+        source_variant=source_variant or "custom",
+    )
+    if hasattr(resolved, "wavelength_nm") and hasattr(resolved, "response"):
+        return resolved
+    return rsrf.realize_curve(resolved, source_variant=source_variant)
+
+
+def band_response_definition_input(band: SensorBand) -> object:
+    """Return an rsrf-compatible response-definition input for a SIAC band."""
+    band_id = str(band.rsrf_band_id or band.name)
+    if band.rsrf_wavelengths_nm is not None and band.rsrf_response is not None:
+        return {
+            "kind": "sampled",
+            "band_id": band_id,
+            "wavelength_nm": np.asarray(band.rsrf_wavelengths_nm, dtype=float).tolist(),
+            "response": np.asarray(band.rsrf_response, dtype=float).tolist(),
+        }
+    return {
+        "kind": "gaussian",
+        "band_id": band_id,
+        "band_name": str(band.name),
+        "band_index": int(band.band_index),
+        "center_wavelength_nm": float(band.center_wavelength),
+        "fwhm_nm": float(band.bandwidth),
+    }
+
+
+def coerce_band_rsrf(
+    band: SensorBand,
+    *,
+    sensor_id: str,
+    satellite_id: str,
+) -> RelativeSpectralResponse:
+    """Realize any SIAC band through rsrf and return a tabulated response."""
+    curve = _curve_from_response_definition(
+        band_response_definition_input(band),
+        band_id=str(band.rsrf_band_id or band.name),
+        source_variant=band.rsrf_representation_variant or None,
+    )
+    source_variant = getattr(curve, "source_variant", None)
+    return RelativeSpectralResponse.from_tabulated(
+        sensor_id=sensor_id,
+        satellite_id=satellite_id,
+        band_name=band.name,
+        wavelengths_nm=np.asarray(curve.wavelength_nm, dtype=np.float32),
+        response=np.asarray(curve.response, dtype=np.float32),
+        source_id="RSRF",
+        source_version=None if source_variant is None else str(source_variant),
+    )
+
+
+def band_convolution_weights(
+    band: SensorBand,
+    spectrum_wavelength_nm: np.ndarray,
+) -> np.ndarray:
+    """Return rsrf-owned normalized band weights on a target spectral grid."""
+    weights = _convolution_weights(
+        np.asarray(spectrum_wavelength_nm, dtype=float),
+        band_response_definition_input(band),
+    )
+    return np.asarray(weights, dtype=np.float32)
 
 
 def load_band_rsrf(
@@ -36,15 +109,12 @@ def load_band_rsrf(
         band.rsrf_representation_variant or "band_average",
         root=root,
     )
-    if hasattr(response_definition, "wavelength_nm") and hasattr(response_definition, "response"):
-        curve = response_definition
-        source_variant = getattr(response_definition, "source_variant", None)
-    else:
-        curve = rsrf.realize_curve(
-            response_definition,
-            source_variant=band.rsrf_representation_variant or None,
-        )
-        source_variant = getattr(curve, "source_variant", None)
+    curve = _curve_from_response_definition(
+        response_definition,
+        band_id=str(band.rsrf_band_id or band.name),
+        source_variant=band.rsrf_representation_variant or None,
+    )
+    source_variant = getattr(curve, "source_variant", None)
 
     return RelativeSpectralResponse.from_tabulated(
         sensor_id=sensor_id,
@@ -106,6 +176,9 @@ load_sensor_config_from_rsrf = load_sensor_config_with_rsrf
 
 
 __all__ = [
+    "band_convolution_weights",
+    "band_response_definition_input",
+    "coerce_band_rsrf",
     "load_band_rsrf",
     "load_sensor_config_with_rsrf",
     "load_band_srf_from_rsrf",
