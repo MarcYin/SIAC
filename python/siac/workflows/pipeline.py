@@ -4,8 +4,8 @@ Pipeline orchestration for SIAC atmospheric correction.
 
 from __future__ import annotations
 
-import logging
 import inspect
+import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
