@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import logging
@@ -15,24 +14,13 @@ from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 import numpy as np
 import xarray as xr
 from numpy import typing as npt
-from spectral_library import (
-    BandInput,
-    SensorInput,
-    build_mapping_runtime,
-)
-from spectral_library import (
-    HyperspectralLibraryInput as PackageHyperspectralLibraryInput,
-)
-from spectral_library import (
-    PreparedRuntime as PackagePreparedRuntime,
-)
+from spectral_library import SpectralMapper as PackageSpectralMapper
+from spectral_library.distribution import resolve_prepared_library_root
+from spectral_library.mapping.engine.core import RSRF_SENSOR_BAND_SELECTIONS
 
 from siac.algorithms.surface import _spectral_curve_utils as curve_utils
 from siac.algorithms.surface._spectral_curve_utils import (
     normalized_band_response as _normalized_band_response,
-)
-from siac.algorithms.surface._spectral_curve_utils import (
-    primary_nir_band_index as _primary_nir_band_index,
 )
 from siac.runtime.models import copy_spatial_metadata_like
 from siac.storage.writers import write_raster
@@ -75,14 +63,19 @@ def _segmentize_curve(
 
 
 class _BatchArrayResultProtocol(Protocol):
-    """Protocol matching ``spectral_library.BatchMappingArrayResult`` (v0.5.0+)."""
+    """Protocol matching ``spectral_library.BatchMappingArrayResult``."""
 
     reflectance: np.ndarray
     source_fit_rmse: np.ndarray
     output_columns: tuple[str, ...]
 
 
-class _PackageRuntimeProtocol(Protocol):
+class _PackageMapperProtocol(Protocol):
+    prepared_root: Path
+    manifest: object
+
+    def get_sensor_schema(self, sensor_id: str) -> object: ...
+
     def map_reflectance_batch_arrays_ndarray(
         self,
         *,
@@ -90,7 +83,7 @@ class _PackageRuntimeProtocol(Protocol):
         reflectance_rows: Float64Array,
         valid_mask_rows: BoolArray,
         output_mode: str,
-        target_sensor: str,
+        target_sensor: str | None = None,
         k: int,
         min_valid_bands: int,
         neighbor_estimator: str,
@@ -98,66 +91,24 @@ class _PackageRuntimeProtocol(Protocol):
         knn_eps: float,
     ) -> _BatchArrayResultProtocol: ...
 
+
 _DEFAULT_K_NEIGHBORS = 5
 _UNCERTAINTY_FLOOR = 0.005
-_CANONICAL_WAVELENGTHS_NM: Float32Array = np.arange(400.0, 2501.0, 1.0, dtype=np.float32)
-_SIAC_SPECTRAL_LIBRARY_ROOT_ENV = "SIAC_SPECTRAL_LIBRARY_ROOT"
-_SIAC_SPECTRAL_MAPPING_CACHE_DIR_ENV = "SIAC_SPECTRAL_MAPPING_CACHE_DIR"
 _DEFAULT_NEIGHBOR_ESTIMATOR = "distance_weighted_mean"
 _DEFAULT_KNN_BACKEND = "scipy_ckdtree"
 
 
 @dataclass(frozen=True)
-class HyperspectralLibrary:
-    """Hyperspectral library sampled on a common wavelength axis."""
-
-    wavelengths_nm: np.ndarray
-    spectra: np.ndarray
-    sample_ids: tuple[str, ...]
-    source_id: str = "siac-default-spectral-library"
-    source_version: str = "1"
-
-    def __post_init__(self) -> None:
-        wavelengths = np.asarray(self.wavelengths_nm, dtype=np.float32)
-        spectra = np.asarray(self.spectra, dtype=np.float32)
-        if wavelengths.ndim != 1 or wavelengths.size < 2:
-            raise ValueError("wavelengths_nm must be a 1-D array with at least two samples")
-        if spectra.ndim != 2 or spectra.shape[1] != wavelengths.size:
-            raise ValueError("spectra must have shape (n_samples, n_wavelengths)")
-        if spectra.shape[0] < 1:
-            raise ValueError("spectra must contain at least one sample")
-        if len(self.sample_ids) != spectra.shape[0]:
-            raise ValueError("sample_ids must match the number of spectra")
-        if not np.all(np.isfinite(wavelengths)) or np.any(np.diff(wavelengths) <= 0.0):
-            raise ValueError("wavelengths_nm must be finite and strictly increasing")
-        if not np.all(np.isfinite(spectra)):
-            raise ValueError("spectra must be finite")
-        if np.any((spectra < 0.0) | (spectra > 1.5)):
-            raise ValueError("spectra must be bounded to a physically plausible reflectance range")
-        object.__setattr__(self, "wavelengths_nm", wavelengths)
-        object.__setattr__(self, "spectra", spectra)
-
-
-@dataclass(frozen=True)
 class SpectralMappingConfig:
-    """Configuration for the package-backed spectral-mapping adapter."""
+    """Configuration for the published-runtime spectral-mapping adapter."""
 
-    siac_library_root: Path | str | None = None
-    cache_dir: Path | str | None = None
     neighbor_estimator: str = _DEFAULT_NEIGHBOR_ESTIMATOR
     knn_backend: str = _DEFAULT_KNN_BACKEND
     knn_eps: float = 0.0
     min_valid_bands: int = 1
 
     def normalized(self) -> SpectralMappingConfig:
-        def _path(value: Path | str | None) -> Path | None:
-            if value is None:
-                return None
-            return Path(value).expanduser().resolve()
-
         return SpectralMappingConfig(
-            siac_library_root=_path(self.siac_library_root),
-            cache_dir=_path(self.cache_dir),
             neighbor_estimator=str(self.neighbor_estimator).strip() or _DEFAULT_NEIGHBOR_ESTIMATOR,
             knn_backend=str(self.knn_backend).strip() or _DEFAULT_KNN_BACKEND,
             knn_eps=float(self.knn_eps),
@@ -166,15 +117,15 @@ class SpectralMappingConfig:
 
 
 @dataclass(frozen=True)
-class _PreparedRuntime:
-    runtime: PackagePreparedRuntime
+class _PublishedRuntime:
+    mapper: _PackageMapperProtocol
+    prepared_root: Path
     source_sensor_id: str
+    source_schema_band_ids: tuple[str, ...]
+    source_schema_indices: tuple[int | None, ...]
     target_sensor_id: str
-    target_band_ids: tuple[str, ...]
-
-    @property
-    def prepared_root(self) -> Path:
-        return Path(self.runtime.prepared_root)
+    target_output_band_ids: tuple[str, ...]
+    ignored_source_band_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -264,35 +215,16 @@ def convolve_hyperspectral_reflectance(
     )
 
 
-def _mapping_config_from_env() -> SpectralMappingConfig:
-    return SpectralMappingConfig(
-        siac_library_root=os.getenv(_SIAC_SPECTRAL_LIBRARY_ROOT_ENV),
-        cache_dir=os.getenv(_SIAC_SPECTRAL_MAPPING_CACHE_DIR_ENV),
-    ).normalized()
-
-
 def _split_mapping_inputs(
-    spectral_library: HyperspectralLibrary | SpectralMappingConfig | None,
-) -> tuple[HyperspectralLibrary | None, SpectralMappingConfig]:
+    spectral_library: object | None,
+) -> SpectralMappingConfig:
     if spectral_library is None:
-        return None, _mapping_config_from_env()
-    if isinstance(spectral_library, HyperspectralLibrary):
-        return spectral_library, _mapping_config_from_env()
+        return SpectralMappingConfig()
     if isinstance(spectral_library, SpectralMappingConfig):
-        return None, spectral_library.normalized()
+        return spectral_library.normalized()
     raise TypeError(
-        "spectral_library must be a HyperspectralLibrary, SpectralMappingConfig, or None"
-    )
-
-
-def _cache_root(config: SpectralMappingConfig) -> Path:
-    if config.cache_dir is not None:
-        return Path(config.cache_dir)
-    return Path(
-        os.getenv(
-            _SIAC_SPECTRAL_MAPPING_CACHE_DIR_ENV,
-            Path.home() / ".cache" / "siac" / "spectral_mapping",
-        )
+        "spectral_library must be a SpectralMappingConfig or None. "
+        "The published spectral-library runtime now owns the hyperspectral prior."
     )
 
 
@@ -307,189 +239,90 @@ def _json_hash(payload: dict[str, object]) -> str:
     return _hash_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
-def _runtime_band_id(
-    band: SensorBand,
-    *,
-    band_index: int,
-    primary_nir_index: int | None,
-    used_band_ids: set[str],
-) -> str:
-    band_id = "nir" if primary_nir_index == band_index else str(band.name)
-    if band_id in used_band_ids:
-        band_id = f"{band_id}_{band_index}"
-    used_band_ids.add(band_id)
-    return band_id
+def _native_rsrf_band_id(band: SensorBand) -> str:
+    return str(band.rsrf_band_id or band.name)
 
 
-def _canonical_hyperspectral_spectra(library: HyperspectralLibrary) -> Float32Array:
-    if np.array_equal(library.wavelengths_nm.astype(np.float32), _CANONICAL_WAVELENGTHS_NM):
-        return np.asarray(library.spectra, dtype=np.float32)
-
-    wavelengths = np.asarray(library.wavelengths_nm, dtype=np.float32)
-    if wavelengths[0] > float(_CANONICAL_WAVELENGTHS_NM[0]) or wavelengths[-1] < float(
-        _CANONICAL_WAVELENGTHS_NM[-1]
-    ):
+def _source_sensor_id(source_bands: Sequence[SensorBand]) -> str:
+    sensor_ids = {str(band.rsrf_sensor_unit_id) for band in source_bands if band.rsrf_sensor_unit_id is not None}
+    if len(sensor_ids) != 1:
         raise ValueError(
-            "HyperspectralLibrary must cover the canonical 400-2500 nm range to drive spectral-library mapping"
+            "Published spectral-library mapping requires all source bands to share one rsrf_sensor_unit_id."
         )
-    return np.vstack(
-        [
-            np.interp(
-                _CANONICAL_WAVELENGTHS_NM,
-                wavelengths,
-                np.asarray(spectrum, dtype=np.float32),
-            ).astype(np.float32)
-            for spectrum in np.asarray(library.spectra, dtype=np.float32)
-        ]
-    )
+    return next(iter(sensor_ids))
 
 
-def _package_library_input_from_hyperspectral_library(
-    library: HyperspectralLibrary,
-) -> PackageHyperspectralLibraryInput:
-    source_version = str(library.source_version).strip()
-    metadata_rows = (
-        [{"source_version": source_version} for _ in library.sample_ids]
-        if source_version
-        else None
-    )
-    return PackageHyperspectralLibraryInput(
-        wavelengths_nm=np.asarray(_CANONICAL_WAVELENGTHS_NM, dtype=np.float64),
-        spectra=_canonical_hyperspectral_spectra(library),
-        sample_ids=tuple(str(sample_id) for sample_id in library.sample_ids),
-        metadata_rows=metadata_rows,
-        source_id=str(library.source_id),
-    )
+def _schema_band_id_for_band(sensor_id: str, band: SensorBand) -> str | None:
+    native_band_id = _native_rsrf_band_id(band)
+    selections = RSRF_SENSOR_BAND_SELECTIONS.get(sensor_id)
+    if selections is not None:
+        for selection in selections:
+            if selection.rsrf_band_id == native_band_id:
+                return str(selection.band_id)
+        return None
+    return native_band_id
 
 
-def _read_csv_rows(path: Path) -> list[dict[str, str]]:
-    with path.open("r", newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        return [dict(row) for row in reader]
-
-
-def _package_library_input_from_root(root: Path) -> PackageHyperspectralLibraryInput:
-    tabular_root = Path(root).expanduser().resolve() / "tabular"
-    metadata_path = tabular_root / "siac_spectra_metadata.csv"
-    spectra_path = tabular_root / "siac_normalized_spectra.csv"
-    if not metadata_path.exists() or not spectra_path.exists():
-        raise ValueError(
-            "SIAC spectral library root must contain tabular/siac_spectra_metadata.csv "
-            "and tabular/siac_normalized_spectra.csv."
-        )
-
-    metadata_rows = _read_csv_rows(metadata_path)
-    spectra_rows = _read_csv_rows(spectra_path)
-    if not spectra_rows:
-        raise ValueError("SIAC spectral library root must contain at least one spectrum row.")
-    if metadata_rows and len(metadata_rows) != len(spectra_rows):
-        raise ValueError("SIAC spectral library metadata and spectra row counts must match.")
-
-    spectra_fieldnames = list(spectra_rows[0])
-    wavelength_fields = [field for field in spectra_fieldnames if field.startswith("nm_")]
-    if not wavelength_fields:
-        raise ValueError("SIAC spectral library spectra CSV must include nm_<wavelength> columns.")
-
-    wavelengths_nm = np.asarray(
-        [float(field.removeprefix("nm_")) for field in wavelength_fields],
-        dtype=np.float64,
-    )
-    spectra = np.asarray(
-        [
-            [float(row[field]) for field in wavelength_fields]
-            for row in spectra_rows
-        ],
-        dtype=np.float32,
-    )
-
-    resolved_metadata_rows = metadata_rows or [
-        {
-            "source_id": str(row.get("source_id") or "siac-root"),
-            "spectrum_id": str(row.get("spectrum_id") or row.get("sample_name") or f"row_{index}"),
-            "sample_name": str(row.get("sample_name") or row.get("spectrum_id") or f"row_{index}"),
-        }
-        for index, row in enumerate(spectra_rows)
-    ]
-    sample_ids = tuple(
-        str(row.get("spectrum_id") or row.get("sample_name") or f"row_{index}")
-        for index, row in enumerate(resolved_metadata_rows)
-    )
-    source_id = str(resolved_metadata_rows[0].get("source_id") or "siac-root")
-    return PackageHyperspectralLibraryInput(
-        wavelengths_nm=wavelengths_nm,
-        spectra=spectra,
-        sample_ids=sample_ids,
-        metadata_rows=resolved_metadata_rows,
-        source_id=source_id,
-    )
-
-
-def _resolved_package_library_input(
-    library: HyperspectralLibrary | None,
-    config: SpectralMappingConfig,
-) -> PackageHyperspectralLibraryInput:
-    if library is not None:
-        return _package_library_input_from_hyperspectral_library(library)
-    if config.siac_library_root is not None:
-        return _package_library_input_from_root(Path(config.siac_library_root))
-    raise ValueError(
-        "Spectral mapping requires an explicit SIAC spectral library. "
-        "Provide spectral_library=HyperspectralLibrary(...) or set "
-        "SIAC_SPECTRAL_LIBRARY_ROOT / SpectralMappingConfig.siac_library_root."
-    )
-
-
-def _band_input_for_band(
-    band: SensorBand,
+def _source_schema_indices_for_bands(
+    source_bands: Sequence[SensorBand],
     *,
-    band_id: str,
-) -> BandInput:
-    if band.has_rsrf:
-        return BandInput(
-            band_id=band_id,
-            center_wavelength_nm=float(band.center_wavelength),
-            fwhm_nm=float(band.bandwidth),
-            response_definition={
-                "kind": "sampled",
-                "wavelength_nm": np.asarray(band.rsrf_wavelengths_nm, dtype=np.float64).tolist(),
-                "response": np.asarray(band.rsrf_response, dtype=np.float64).tolist(),
-            },
+    sensor_id: str,
+    source_schema_band_ids: tuple[str, ...],
+) -> tuple[tuple[int | None, ...], tuple[str, ...]]:
+    schema_index = {band_id: index for index, band_id in enumerate(source_schema_band_ids)}
+    indices: list[int | None] = []
+    ignored: list[str] = []
+    seen_schema_ids: set[str] = set()
+
+    for band in source_bands:
+        canonical_band_id = _schema_band_id_for_band(sensor_id, band)
+        if canonical_band_id is None or canonical_band_id not in schema_index:
+            indices.append(None)
+            ignored.append(str(band.name))
+            continue
+        if canonical_band_id in seen_schema_ids:
+            raise ValueError(
+                "Published spectral-library mapping resolved duplicate source bands onto the same canonical band.",
+            )
+        seen_schema_ids.add(canonical_band_id)
+        indices.append(schema_index[canonical_band_id])
+
+    return tuple(indices), tuple(ignored)
+
+
+def _target_sensor_id(target_bands: Sequence[SensorBand]) -> str:
+    sensor_ids = {str(band.rsrf_sensor_unit_id) for band in target_bands if band.rsrf_sensor_unit_id is not None}
+    if len(sensor_ids) != 1:
+        raise ValueError(
+            "Published spectral-library target mapping requires all target bands to share one rsrf_sensor_unit_id."
         )
-    if band.rsrf_sensor_unit_id is not None:
-        return BandInput(
-            band_id=band_id,
-            center_wavelength_nm=float(band.center_wavelength),
-            fwhm_nm=float(band.bandwidth),
-            rsrf_sensor_id=str(band.rsrf_sensor_unit_id),
-            rsrf_band_id=str(band.rsrf_band_id or band.name),
-            rsrf_representation_variant=band.rsrf_representation_variant,
-        )
-    return BandInput(
-        band_id=band_id,
-        center_wavelength_nm=float(band.center_wavelength),
-        fwhm_nm=float(band.bandwidth),
-    )
+    return next(iter(sensor_ids))
 
 
-def _sensor_input_for_bands(
-    bands: Sequence[SensorBand],
-) -> tuple[SensorInput, tuple[str, ...]]:
-    primary_nir_index = _primary_nir_band_index(bands)
-    used_band_ids: set[str] = set()
-    band_ids: list[str] = []
-    band_inputs: list[BandInput] = []
+def _target_output_band_ids_for_bands(
+    target_bands: Sequence[SensorBand],
+    *,
+    sensor_id: str,
+    target_schema_band_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    schema_index = {band_id: index for index, band_id in enumerate(target_schema_band_ids)}
+    output_band_ids: list[str] = []
+    seen_schema_ids: set[str] = set()
 
-    for index, band in enumerate(bands):
-        band_id = _runtime_band_id(
-            band,
-            band_index=index,
-            primary_nir_index=primary_nir_index,
-            used_band_ids=used_band_ids,
-        )
-        band_ids.append(band_id)
-        band_inputs.append(_band_input_for_band(band, band_id=band_id))
-
-    return SensorInput(bands=tuple(band_inputs)), tuple(band_ids)
+    for band in target_bands:
+        schema_band_id = _schema_band_id_for_band(sensor_id, band)
+        if schema_band_id is None or schema_band_id not in schema_index:
+            raise ValueError(
+                "Published spectral-library target mapping cannot resolve the requested target bands "
+                "onto the upstream target sensor schema."
+            )
+        if schema_band_id in seen_schema_ids:
+            raise ValueError(
+                "Published spectral-library target mapping resolved duplicate target bands onto the same target band."
+            )
+        seen_schema_ids.add(schema_band_id)
+        output_band_ids.append(schema_band_id)
+    return tuple(output_band_ids)
 
 
 def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
@@ -599,45 +432,58 @@ def _prepare_runtime(
     source_bands: Sequence[SensorBand],
     target_bands: Sequence[SensorBand],
     *,
-    library: HyperspectralLibrary | None,
     config: SpectralMappingConfig,
-) -> _PreparedRuntime:
-    normalized_config = config.normalized()
-    cache_root = _cache_root(normalized_config).expanduser().resolve()
-    cache_root.mkdir(parents=True, exist_ok=True)
-    source_sensor_input, _source_band_ids = _sensor_input_for_bands(source_bands)
-    target_sensor_input, _target_band_ids = _sensor_input_for_bands(target_bands)
-    runtime = build_mapping_runtime(
-        library=_resolved_package_library_input(library, normalized_config),
-        source_sensors=[source_sensor_input],
-        target_sensors=[target_sensor_input],
-        cache_root=cache_root,
-        verify_checksums=False,
+) -> _PublishedRuntime:
+    del config
+    source_sensor_id = _source_sensor_id(source_bands)
+    prepared_root = resolve_prepared_library_root()
+    mapper = cast("_PackageMapperProtocol", PackageSpectralMapper(prepared_root, verify_checksums=False))
+    manifest_source_sensors = tuple(getattr(mapper.manifest, "source_sensors", ()))
+    if source_sensor_id not in manifest_source_sensors:
+        raise ValueError(
+            "Published spectral-library runtime does not support the requested source sensor. "
+            f"source_sensor={source_sensor_id!r} supported={manifest_source_sensors!r}"
+        )
+    schema = cast("object", mapper.get_sensor_schema(source_sensor_id))
+    source_schema_band_ids = tuple(cast("tuple[str, ...]", schema.band_ids()))
+    source_schema_indices, ignored_source_band_names = _source_schema_indices_for_bands(
+        source_bands,
+        sensor_id=source_sensor_id,
+        source_schema_band_ids=source_schema_band_ids,
     )
-    source_sensor_id = runtime.source_sensor_ids[0]
-    target_sensor_id = runtime.target_sensor_ids[0]
-    return _PreparedRuntime(
-        runtime=runtime,
+    if not any(index is not None for index in source_schema_indices):
+        raise ValueError(
+            "None of the requested source bands map onto the published spectral-library source basis."
+        )
+    target_sensor_id = _target_sensor_id(target_bands)
+    target_schema = cast("object", mapper.get_sensor_schema(target_sensor_id))
+    target_schema_band_ids = tuple(cast("tuple[str, ...]", target_schema.band_ids()))
+    target_output_band_ids = _target_output_band_ids_for_bands(
+        target_bands,
+        sensor_id=target_sensor_id,
+        target_schema_band_ids=target_schema_band_ids,
+    )
+    return _PublishedRuntime(
+        mapper=mapper,
+        prepared_root=Path(prepared_root),
         source_sensor_id=source_sensor_id,
+        source_schema_band_ids=source_schema_band_ids,
+        source_schema_indices=source_schema_indices,
         target_sensor_id=target_sensor_id,
-        target_band_ids=runtime.target_band_ids[target_sensor_id],
+        target_output_band_ids=target_output_band_ids,
+        ignored_source_band_names=ignored_source_band_names,
     )
 
 
 class SpectralMapper:
-    """Package-backed mapper from one multispectral basis to another.
-
-    Uses ``spectral_library >= 0.6.0`` direct runtime construction plus the
-    batch array API for efficient
-    KNN-based spectral reconstruction.
-    """
+    """Map multispectral reflectance using the published spectral-library runtime."""
 
     def __init__(
         self,
         source_bands: Sequence[SensorBand],
         target_bands: Sequence[SensorBand],
         *,
-        spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
+        spectral_library: SpectralMappingConfig | None = None,
         k_neighbors: int = _DEFAULT_K_NEIGHBORS,
     ) -> None:
         if k_neighbors < 1:
@@ -648,25 +494,23 @@ class SpectralMapper:
         self.k_neighbors = int(k_neighbors)
         self._identity = not needs_spectral_mapping(self.source_bands, self.target_bands)
         self._target_band_names = [band.name for band in self.target_bands]
-
-        library, mapping_config = _split_mapping_inputs(spectral_library)
-        self._mapping_config = mapping_config.normalized()
-        self._spectral_library = library
-        self._runtime: _PreparedRuntime | None = None
-        self._package_mapper: _PackageRuntimeProtocol | None = None
-        self._target_internal_to_output_index: dict[str, int] = {}
+        self._mapping_config = _split_mapping_inputs(spectral_library).normalized()
+        self._runtime: _PublishedRuntime | None = None
+        self._package_mapper: _PackageMapperProtocol | None = None
+        self._supported_source_input_indices: tuple[int, ...] = ()
 
         if not self._identity:
             self._runtime = _prepare_runtime(
                 self.source_bands,
                 self.target_bands,
-                library=self._spectral_library,
                 config=self._mapping_config,
             )
-            self._package_mapper = cast("_PackageRuntimeProtocol", self._runtime.runtime)
-            self._target_internal_to_output_index = {
-                band_id: index for index, band_id in enumerate(self._runtime.target_band_ids)
-            }
+            self._package_mapper = self._runtime.mapper
+            self._supported_source_input_indices = tuple(
+                index
+                for index, schema_index in enumerate(self._runtime.source_schema_indices)
+                if schema_index is not None
+            )
 
     def map(
         self,
@@ -677,10 +521,7 @@ class SpectralMapper:
         """Map source-basis multispectral reflectance to target bands."""
         source_data = self._align_source_data(source_reflectance)
         original_dims = tuple(source_data.dims)
-        if source_uncertainty is not None:
-            source_unc = self._align_source_data(source_uncertainty)
-        else:
-            source_unc = None
+        source_unc = self._align_source_data(source_uncertainty) if source_uncertainty is not None else None
 
         if self._identity:
             identity = source_data.assign_coords(band=self._target_band_names)
@@ -731,7 +572,6 @@ class SpectralMapper:
                     unique_query_count,
                 )
 
-            # spectral_library batch array API returns arrays directly.
             batch_result = self._package_mapper.map_reflectance_batch_arrays_ndarray(
                 source_sensor=self._runtime.source_sensor_id,
                 reflectance_rows=deduplicated.queries,
@@ -743,36 +583,35 @@ class SpectralMapper:
                 neighbor_estimator=self._mapping_config.neighbor_estimator,
                 knn_backend=self._mapping_config.knn_backend,
                 knn_eps=self._mapping_config.knn_eps,
-                )
+            )
             logger.info(
                 "Spectral mapping package batch complete: queried_rows=%d elapsed=%.2fs",
                 unique_query_count,
                 perf_counter() - batch_started,
             )
 
+            output_index = {str(band_id): index for index, band_id in enumerate(batch_result.output_columns)}
+            missing_output_band_ids = [
+                band_id for band_id in self._runtime.target_output_band_ids if band_id not in output_index
+            ]
+            if missing_output_band_ids:
+                raise RuntimeError(
+                    "spectral-library target_sensor output did not include all requested target bands: "
+                    f"{missing_output_band_ids!r}"
+                )
+            mapped_unique = np.asarray(
+                batch_result.reflectance[
+                    :,
+                    [output_index[band_id] for band_id in self._runtime.target_output_band_ids],
+                ],
+                dtype=np.float32,
+            )
+            fit_rmse = np.asarray(batch_result.source_fit_rmse, dtype=np.float32)
+            dedup_indices = deduplicated.inverse_indices
             valid_indices = np.flatnonzero(package_valid_rows)
 
-            # Map batch result columns to target band positions.
-            band_id_to_col = self._target_internal_to_output_index
-            result_cols: list[int] = []
-            target_cols: list[int] = []
-            for j, col_id in enumerate(batch_result.output_columns):
-                target_j = band_id_to_col.get(col_id)
-                if target_j is not None:
-                    result_cols.append(j)
-                    target_cols.append(target_j)
-            result_col_arr = np.array(result_cols, dtype=np.intp)
-            target_col_arr = np.array(target_cols, dtype=np.intp)
-
-            # Expand deduplicated results to per-pixel arrays.
-            dedup_indices = deduplicated.inverse_indices
-            reflectance = np.asarray(batch_result.reflectance, dtype=np.float32)
-            fit_rmse = np.asarray(batch_result.source_fit_rmse, dtype=np.float32)
-
             fill_started = perf_counter()
-            target_flat[np.ix_(valid_indices, target_col_arr)] = reflectance[dedup_indices][
-                :, result_col_arr
-            ]
+            target_flat[valid_indices] = mapped_unique[dedup_indices]
             source_fit_flat[valid_indices] = fit_rmse[dedup_indices]
             logger.info(
                 "Spectral mapping reflectance fill complete: %d pixels elapsed=%.2fs",
@@ -780,13 +619,19 @@ class SpectralMapper:
                 perf_counter() - fill_started,
             )
 
-            # Vectorized uncertainty: sqrt(floor² + fit_rmse² + input_unc²).
             unc_started = perf_counter()
             per_pixel_fit = fit_rmse[dedup_indices].astype(np.float64)
-            input_unc: Float64Array = np.zeros(valid_count, dtype=np.float64)
-            if unc_flat is not None:
-                unc_sq = np.square(unc_flat[valid_indices].astype(np.float64))
-                input_unc = np.asarray(np.sqrt(np.nanmean(unc_sq, axis=1)), dtype=np.float64)
+            input_unc = np.zeros(valid_count, dtype=np.float64)
+            if unc_flat is not None and self._supported_source_input_indices:
+                supported_unc = np.asarray(
+                    unc_flat[valid_indices][:, self._supported_source_input_indices],
+                    dtype=np.float64,
+                )
+                with np.errstate(invalid="ignore"):
+                    input_unc = np.sqrt(
+                        np.nanmean(np.square(supported_unc), axis=1, dtype=np.float64)
+                    )
+                input_unc = np.nan_to_num(input_unc, nan=0.0, posinf=0.0, neginf=0.0)
             unc_per_pixel = np.sqrt(_UNCERTAINTY_FLOOR**2 + per_pixel_fit**2 + input_unc**2).astype(
                 np.float32
             )
@@ -824,25 +669,8 @@ class SpectralMapper:
         )
 
     def _cache_distance_metrics(self, metrics: dict[str, xr.DataArray]) -> None:
-        if self._identity or self._runtime is None:
-            return
-        prepared_root = getattr(self._runtime, "prepared_root", None)
-        if prepared_root is None:
-            return
-        _write_distance_metric_diagnostics(
-            Path(prepared_root).parent,
-            prefix="spectral_mapping_distances",
-            metrics=metrics,
-            metadata={
-                "source_sensor_id": self._runtime.source_sensor_id,
-                "target_sensor_id": self._runtime.target_sensor_id,
-                "source_band_names": [band.name for band in self.source_bands],
-                "target_band_names": [band.name for band in self.target_bands],
-                "k_neighbors": int(self.k_neighbors),
-                "neighbor_estimator": self._mapping_config.neighbor_estimator,
-                "knn_backend": self._mapping_config.knn_backend,
-            },
-        )
+        del metrics
+        return
 
     def _align_source_data(self, data: xr.DataArray) -> xr.DataArray:
         if "band" not in data.dims:
@@ -876,7 +704,17 @@ class SpectralMapper:
         self,
         flattened: _FlattenedSourceCube,
     ) -> tuple[Float64Array, BoolArray, BoolArray]:
-        query_rows = np.asarray(flattened.flat_values, dtype=np.float64)
+        if self._runtime is None:
+            raise RuntimeError("spectral-library runtime was not initialized")
+        query_rows = np.full(
+            (flattened.flat_values.shape[0], len(self._runtime.source_schema_band_ids)),
+            np.nan,
+            dtype=np.float64,
+        )
+        for source_index, schema_index in enumerate(self._runtime.source_schema_indices):
+            if schema_index is None:
+                continue
+            query_rows[:, schema_index] = np.asarray(flattened.flat_values[:, source_index], dtype=np.float64)
         valid_masks = np.isfinite(query_rows)
         valid_rows = np.asarray(np.any(valid_masks, axis=1), dtype=np.bool_)
         return query_rows, valid_masks, valid_rows
@@ -960,7 +798,7 @@ def map_multispectral_reflectance(
     source_bands: Sequence[SensorBand],
     target_bands: Sequence[SensorBand],
     source_uncertainty: xr.DataArray | None = None,
-    spectral_library: HyperspectralLibrary | SpectralMappingConfig | None = None,
+    spectral_library: SpectralMappingConfig | None = None,
     k_neighbors: int = _DEFAULT_K_NEIGHBORS,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Convenience wrapper around :class:`SpectralMapper`."""
@@ -978,7 +816,6 @@ def map_multispectral_reflectance(
 
 
 __all__ = [
-    "HyperspectralLibrary",
     "SpectralMappingConfig",
     "SpectralMapper",
     "convolve_hyperspectral_reflectance",

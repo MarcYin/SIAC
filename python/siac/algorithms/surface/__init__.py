@@ -20,7 +20,6 @@ from siac.algorithms.surface.reference_spectral import (
     sensor_to_reference,
 )
 from siac.algorithms.surface.spectral_mapping import (
-    HyperspectralLibrary,
     SpectralMapper,
     SpectralMappingConfig,
     convolve_hyperspectral_reflectance,
@@ -53,7 +52,6 @@ __all__ = [
     "build_monthly_composites_from_brdf",
     "build_monthly_surface_prior_database",
     "generate_monthly_composites_from_brdf",
-    "HyperspectralLibrary",
     "SpectralMappingConfig",
     "SpectralMapper",
     "convolve_hyperspectral_reflectance",

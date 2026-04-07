@@ -16,7 +16,6 @@ from siac.algorithms.solver import (
 )
 from siac.algorithms.surface import (
     BRDFWhittakerDeriver,
-    HyperspectralLibrary,
     KernelModelDeriver,
     MonthlyBestPixelComposite,
     MonthlyCompositeCollection,
@@ -66,7 +65,6 @@ __all__ = [
     "build_monthly_composites_from_brdf",
     "build_monthly_surface_prior_database",
     "generate_monthly_composites_from_brdf",
-    "HyperspectralLibrary",
     "SpectralMappingConfig",
     "SpectralMapper",
     "convolve_hyperspectral_reflectance",

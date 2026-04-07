@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, TypeAlias
 import numpy as np
 from numpy import typing as npt
 
+from siac.adapters.rsrf import band_convolution_weights
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -27,11 +29,10 @@ def trapezoid(y: np.ndarray, x: np.ndarray) -> float:
 
 
 def normalized_band_response(band: SensorBand, wavelengths_nm: Float32Array) -> Float32Array:
-    response = np.asarray(band.effective_response(wavelengths_nm), dtype=np.float32)
-    area = trapezoid(response, wavelengths_nm)
-    if not np.isfinite(area) or area <= 0.0:
+    response = np.asarray(band_convolution_weights(band, wavelengths_nm), dtype=np.float32)
+    if not np.all(np.isfinite(response)) or float(np.sum(response, dtype=np.float64)) <= 0.0:
         raise ValueError(f"Band {band.name!r} has zero support on the requested wavelength grid")
-    return np.asarray(response / area, dtype=np.float32)
+    return response
 
 
 def classify_band_region(band: SensorBand) -> str:
@@ -108,16 +109,3 @@ def canonicalize_curve(
     start = max(int(positive[0]) - 1, 0)
     stop = min(int(positive[-1]) + 2, weights.size)
     return wavelengths[start:stop], weights[start:stop]
-
-
-def gaussian_curve_from_band(band: SensorBand) -> tuple[Float32Array, Float32Array]:
-    sigma_nm = float(band.bandwidth) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-    half_window = max(1.0, 4.0 * sigma_nm)
-    start = max(350.0, float(band.center_wavelength) - half_window)
-    stop = min(2500.0, float(band.center_wavelength) + half_window)
-    wavelengths = np.arange(start, stop + 1.0, 1.0, dtype=np.float32)
-    response = np.asarray(band.gaussian_response(wavelengths), dtype=np.float32)
-    if response.size >= 2:
-        response[0] = 0.0
-        response[-1] = 0.0
-    return canonicalize_curve(wavelengths, response)
