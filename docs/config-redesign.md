@@ -75,7 +75,6 @@ dem = "/data/siac/dem/copernicus_dem.vrt"
 water_mask = "/data/siac/water/global_water.tif"
 emulator_dir = "/data/siac/emulators"
 lut_path = "s3://bucket/siac/lut.zarr"
-spectral_library_root = "/data/siac/spectral-library"
 rsrf_root = "/data/siac/RSRF"
 cache_root = "/data/siac/cache"
 
@@ -83,7 +82,6 @@ cache_root = "/data/siac/cache"
 atmo = "/data/siac/cache/atmo"
 brdf = "/data/siac/cache/brdf"
 s2 = "/data/siac/cache/s2"
-spectral_mapping = "/data/siac/cache/spectral-mapping"
 
 [auth.cdse]
 username = ""
@@ -135,7 +133,7 @@ whittaker_lambda = 10.0
 enabled = true
 k_neighbors = 5
 neighbor_estimator = "distance_weighted_mean"
-knn_backend = "numpy"
+knn_backend = "scipy_ckdtree"
 knn_eps = 0.0
 min_valid_bands = 1
 

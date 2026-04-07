@@ -6,13 +6,11 @@
 dem = "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt"
 emulator_dir = "/data/siac/emulators"
 lut_path = "s3://bucket/siac/lut.zarr"
-spectral_library_root = "/data/siac/spectral-library"
 rsrf_root = "/data/siac/RSRF"
 cache_root = "/data/siac/cache"
 
 [paths.caches]
 s2 = "/data/siac/cache/s2"
-spectral_mapping = "/data/siac/cache/spectral-mapping"
 
 [runtime]
 log_level = "INFO"

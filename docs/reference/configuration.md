@@ -34,13 +34,11 @@ Key fields:
 - `water_mask`
 - `emulator_dir`
 - `lut_path`
-- `spectral_library_root`
 - `rsrf_root`
 - `cache_root`
 - `caches.atmo`
 - `caches.brdf`
 - `caches.s2`
-- `caches.spectral_mapping`
 
 Use `cache_root` when you want SIAC to derive per-subsystem cache directories automatically.
 
@@ -161,8 +159,8 @@ Main fields:
 - `gtol` — gradient tolerance for L-BFGS-B convergence
 - `ftol` — function tolerance for L-BFGS-B convergence
 - `aerosol_resolution` — target spatial resolution (metres) for the aerosol retrieval grid
-- `quadratic_group_size` — group `NxN` solver-grid pixels when computing RT coefficients in the no-Jacobian grid-search path; reduces RT calls but still solves per pixel
-- `quadratic_block_size` — solve one shared AOT/TCWV pair for each `NxN` block in the no-Jacobian grid-search path, then broadcast the block solution back to full resolution
+- `quadratic_block_size` — solve one shared AOT/TCWV pair for each `NxN` block in the no-Jacobian grid-search path, compute RT coefficients on the same block grid, then broadcast the block solution back to full resolution
+- `quadratic_block_min_valid_fraction` — minimum fraction of pixels in each `quadratic_block_size` block that must have valid observations and surface-prior support before the block is solved (default `0.5`)
 - `use_multigrid` — enable the coarse-to-fine multi-grid solver strategy (default `true`)
 - `min_grid_size` — minimum grid dimension (pixels) for multi-grid levels
 - `bounds.aot` — `[min, max]` bounds for AOT during optimization
