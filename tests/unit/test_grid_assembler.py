@@ -704,3 +704,116 @@ class TestAssembleGrids:
         assert sib.surface_prior.boa.ndim == 3
         assert sib.surface_prior.boa.shape[0] == 2
         assert sib.surface_prior.mask.ndim == 2
+
+    def test_surface_prior_at_solver_resolution_is_not_degraded(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        mock_rt_model,
+    ):
+        """When surface prior is already at aerosol_resolution, data passes through unchanged.
+
+        M3 queries the surface prior at aerosol_resolution using the same
+        _build_target_template(bounds, crs, resolution) as M4.  When grids
+        match, _resample_da detects the shared template and returns data as-is.
+        This test verifies no numeric degradation from a redundant resample.
+        """
+        from siac.algorithms.grid.assembler import _build_target_template
+
+        resolution_m = 320.0
+        template = _build_target_template(
+            large_obs_bundle.bounds, large_obs_bundle.crs, resolution_m,
+        )
+        target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
+
+        rng = np.random.RandomState(42)
+        boa_vals = rng.uniform(0.05, 0.3, target_shape).astype(np.float32)
+        unc_vals = rng.uniform(0.01, 0.05, target_shape).astype(np.float32)
+        mask_vals = np.ones(target_shape, dtype=bool)
+        mask_vals[0, 0] = False  # one invalid pixel
+
+        from siac.geo.resample import copy_spatial_metadata_like
+
+        boa = copy_spatial_metadata_like(
+            xr.DataArray(boa_vals, dims=("y", "x"), coords=template.coords),
+            template,
+        )
+        unc = copy_spatial_metadata_like(
+            xr.DataArray(unc_vals, dims=("y", "x"), coords=template.coords),
+            template,
+        )
+        mask = copy_spatial_metadata_like(
+            xr.DataArray(mask_vals, dims=("y", "x"), coords=template.coords),
+            template,
+        )
+
+        prior = SurfacePrior(boa=boa, boa_unc=unc, kernels=None, mask=mask)
+
+        sib = assemble_grids(
+            large_obs_bundle, large_atmo, prior, mock_rt_model,
+            aerosol_resolution_m=resolution_m,
+        )
+
+        np.testing.assert_array_equal(sib.surface_prior.boa.values, boa_vals)
+        np.testing.assert_array_equal(sib.surface_prior.boa_unc.values, unc_vals)
+        np.testing.assert_array_equal(sib.surface_prior.mask.values, mask_vals)
+
+    def test_legacy_aux_resolution_override_resamples_surface_prior(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        mock_rt_model,
+    ):
+        """When aux_resolution != 500 and aerosol_resolution == 120, M4 uses aux_resolution.
+
+        This is the one scenario where M3 (querying at aerosol_resolution=120)
+        and M4 (gridding at aux_resolution) can differ, producing a real resample.
+        """
+        from siac.algorithms.grid.assembler import _build_target_template
+
+        # Surface prior generated at 120m (M3 default)
+        m3_template = _build_target_template(
+            large_obs_bundle.bounds, large_obs_bundle.crs, 120.0,
+        )
+        m3_shape = (int(m3_template.sizes["y"]), int(m3_template.sizes["x"]))
+
+        from siac.geo.resample import copy_spatial_metadata_like
+
+        boa = copy_spatial_metadata_like(
+            xr.DataArray(
+                np.full(m3_shape, 0.15, dtype=np.float32),
+                dims=("y", "x"), coords=m3_template.coords,
+            ),
+            m3_template,
+        )
+        unc = copy_spatial_metadata_like(
+            xr.DataArray(
+                np.full(m3_shape, 0.02, dtype=np.float32),
+                dims=("y", "x"), coords=m3_template.coords,
+            ),
+            m3_template,
+        )
+        mask = copy_spatial_metadata_like(
+            xr.DataArray(
+                np.ones(m3_shape, dtype=bool),
+                dims=("y", "x"), coords=m3_template.coords,
+            ),
+            m3_template,
+        )
+        prior = SurfacePrior(boa=boa, boa_unc=unc, kernels=None, mask=mask)
+
+        # Trigger legacy override: aerosol_resolution=120 + aux_resolution=320
+        sib = assemble_grids(
+            large_obs_bundle, large_atmo, prior, mock_rt_model,
+            aux_resolution_m=320.0,
+            aerosol_resolution_m=120.0,
+        )
+
+        # Grid should be at 320m (legacy override), not 120m
+        m4_template = _build_target_template(
+            large_obs_bundle.bounds, large_obs_bundle.crs, 320.0,
+        )
+        expected_shape = (int(m4_template.sizes["y"]), int(m4_template.sizes["x"]))
+        assert sib.toa.shape[1:] == expected_shape
+        assert sib.surface_prior.boa.shape == expected_shape
+        assert sib.aerosol_resolution_m == pytest.approx(320.0)
