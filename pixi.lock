@@ -495,8 +495,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/44/b5/a96872e5184f354da9c84ae119971a0a4c221fe9b27a4d94bd43f2596727/pyasn1-0.6.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/1d/3c/19ff74b0e49b92010709a5ae819575e90735f5fab03f7d779ac11df09fb6/spectral_library-0.6.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/47/d4/cdddbb8674b5e36da858eb26f7fd51c67fadffe80fb4f6ed94dbf839d5ab/spectral_library-0.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -921,8 +921,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/44/b5/a96872e5184f354da9c84ae119971a0a4c221fe9b27a4d94bd43f2596727/pyasn1-0.6.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/ad/e2/1807a5e38841c0ecc247373e5d27531dc4a0885d32bd88615e842d592dc6/spectral_library-0.6.0.tar.gz
+      - pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/eb/7035716f6baffd6c7e568ec08dd3902de3f4b78c9fd9a0676addc8002b81/spectral_library-0.6.3.tar.gz
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -1347,8 +1347,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/44/b5/a96872e5184f354da9c84ae119971a0a4c221fe9b27a4d94bd43f2596727/pyasn1-0.6.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f8/78/878e2a13c7b86e9fd058f5bdf3a3f12417e74f09af4bf3d06d9fef675579/spectral_library-0.6.0-cp312-cp312-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/af/3f/ed20a7e5e959c38e87878a1e7b3f3db3c2f2bd60df3ae5fa170b264d53f0/spectral_library-0.6.3-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
   py6s:
     channels:
@@ -1847,8 +1847,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/d4/d9440ff5da6547ac2587f93a9af7e779be0aed78e1f0734dede94e440f6b/pysolar-0.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/1d/3c/19ff74b0e49b92010709a5ae819575e90735f5fab03f7d779ac11df09fb6/spectral_library-0.6.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/47/d4/cdddbb8674b5e36da858eb26f7fd51c67fadffe80fb4f6ed94dbf839d5ab/spectral_library-0.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -2275,8 +2275,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/d4/d9440ff5da6547ac2587f93a9af7e779be0aed78e1f0734dede94e440f6b/pysolar-0.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/ad/e2/1807a5e38841c0ecc247373e5d27531dc4a0885d32bd88615e842d592dc6/spectral_library-0.6.0.tar.gz
+      - pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/eb/7035716f6baffd6c7e568ec08dd3902de3f4b78c9fd9a0676addc8002b81/spectral_library-0.6.3.tar.gz
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -2703,8 +2703,8 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/d4/d9440ff5da6547ac2587f93a9af7e779be0aed78e1f0734dede94e440f6b/pysolar-0.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/f8/78/878e2a13c7b86e9fd058f5bdf3a3f12417e74f09af4bf3d06d9fef675579/spectral_library-0.6.0-cp312-cp312-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/af/3f/ed20a7e5e959c38e87878a1e7b3f3db3c2f2bd60df3ae5fa170b264d53f0/spectral_library-0.6.3-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -15159,10 +15159,10 @@ packages:
   requires_dist:
   - pyasn1>=0.1.3
   requires_python: '>=3.6,<4'
-- pypi: https://files.pythonhosted.org/packages/14/5d/1a63cd6925bff8e2356fc2a4207b75e6d97f563475f2d05776ea16a6895c/rsrf-0.3.0-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/13/26/d9f025c3a4a437ccd19cc3d93bbbaface94afcabe19ab64cd6b2da014e57/rsrf-0.3.1-py3-none-any.whl
   name: rsrf
-  version: 0.3.0
-  sha256: 07cf1ee834b16e31126bf9857ee2101dabbbdff2ce2f220322b36eb2a42537df
+  version: 0.3.1
+  sha256: 7f391fddd01a03b08c502687331c2f1018689619ab69187eb75f03eb2ce50d6e
   requires_dist:
   - numpy>=1.21
   - openpyxl>=3.1
@@ -15896,15 +15896,15 @@ packages:
   - pkg:pypi/soupsieve?source=hash-mapping
   size: 38187
   timestamp: 1769034509657
-- pypi: https://files.pythonhosted.org/packages/1d/3c/19ff74b0e49b92010709a5ae819575e90735f5fab03f7d779ac11df09fb6/spectral_library-0.6.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/47/d4/cdddbb8674b5e36da858eb26f7fd51c67fadffe80fb4f6ed94dbf839d5ab/spectral_library-0.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
   name: spectral-library
-  version: 0.6.0
-  sha256: fe5e1530383ebe52b27eea2a1df238f3e2f5d905e54adb6c64dfcb4f7f124a70
+  version: 0.6.3
+  sha256: ec0f429f4f618c40cfaa56dfb10402b9a051f98b165f46ae227cec1663583084
   requires_dist:
   - duckdb>=1.1.0
   - numpy>=1.24.0
   - pandas>=2.0.0
-  - rsrf>=0.3.0
+  - rsrf>=0.3.1
   - mkdocs>=1.6 ; extra == 'docs'
   - mkdocs-material>=9.5 ; extra == 'docs'
   - pymdown-extensions>=10.14 ; extra == 'docs'
@@ -15936,15 +15936,15 @@ packages:
   - whitsmooth-rust>=0.1.3 ; extra == 'dev'
   - zarr>=2.18.0,<3 ; extra == 'dev'
   requires_python: '>=3.9'
-- pypi: https://files.pythonhosted.org/packages/ad/e2/1807a5e38841c0ecc247373e5d27531dc4a0885d32bd88615e842d592dc6/spectral_library-0.6.0.tar.gz
+- pypi: https://files.pythonhosted.org/packages/7d/eb/7035716f6baffd6c7e568ec08dd3902de3f4b78c9fd9a0676addc8002b81/spectral_library-0.6.3.tar.gz
   name: spectral-library
-  version: 0.6.0
-  sha256: d989dd30f0e8144856b7b035b0de61862e38f0871ce2e71cd1232f76c0a6c020
+  version: 0.6.3
+  sha256: 43f0b21171e8576f2286c16336bc31be9ebadb6ee7bb60602ea82b0c5755572a
   requires_dist:
   - duckdb>=1.1.0
   - numpy>=1.24.0
   - pandas>=2.0.0
-  - rsrf>=0.3.0
+  - rsrf>=0.3.1
   - mkdocs>=1.6 ; extra == 'docs'
   - mkdocs-material>=9.5 ; extra == 'docs'
   - pymdown-extensions>=10.14 ; extra == 'docs'
@@ -15976,15 +15976,15 @@ packages:
   - whitsmooth-rust>=0.1.3 ; extra == 'dev'
   - zarr>=2.18.0,<3 ; extra == 'dev'
   requires_python: '>=3.9'
-- pypi: https://files.pythonhosted.org/packages/f8/78/878e2a13c7b86e9fd058f5bdf3a3f12417e74f09af4bf3d06d9fef675579/spectral_library-0.6.0-cp312-cp312-macosx_11_0_arm64.whl
+- pypi: https://files.pythonhosted.org/packages/af/3f/ed20a7e5e959c38e87878a1e7b3f3db3c2f2bd60df3ae5fa170b264d53f0/spectral_library-0.6.3-cp312-cp312-macosx_11_0_arm64.whl
   name: spectral-library
-  version: 0.6.0
-  sha256: 25656fb70274df2840789ab81efeb57df07731b7729d8d79115f572ca42a5b6c
+  version: 0.6.3
+  sha256: b770e3628c2d78ab80299c83f7545e0e611030c0ea9d2dc4e8272a253c179b5c
   requires_dist:
   - duckdb>=1.1.0
   - numpy>=1.24.0
   - pandas>=2.0.0
-  - rsrf>=0.3.0
+  - rsrf>=0.3.1
   - mkdocs>=1.6 ; extra == 'docs'
   - mkdocs-material>=9.5 ; extra == 'docs'
   - pymdown-extensions>=10.14 ; extra == 'docs'

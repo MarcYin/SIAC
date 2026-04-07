@@ -44,8 +44,8 @@ dependencies = [
     "duckdb>=1.1.0",
     "pyarrow>=10.0.0",
     "openpyxl>=3.1.0",
-    "spectral-library>=0.6.0",
-    "RSRF>=0.3.0",
+    "spectral-library>=0.6.3",
+    "RSRF>=0.3.1",
 
     # ML for cloud detection
     "lightgbm>=4.0.0",
