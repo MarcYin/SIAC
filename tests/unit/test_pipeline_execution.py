@@ -350,6 +350,35 @@ def test_run_tail_attaches_aot_scatter_diagnostics(
     assert scatter.surface_reflectance.shape == scatter.observed_toa.shape == scatter.simulated_toa.shape
 
 
+def test_aot_scatter_diagnostics_fill_nan_atmo_for_lut_call(
+    mock_solver_input_bundle,
+    mock_solved_atmosphere,
+) -> None:
+    from siac.runtime import RTCoefficients
+
+    nan_aot = mock_solved_atmosphere.atmo_state.aot.copy()
+    nan_aot.values[0, 0] = np.nan
+    atmo_state = dataclasses.replace(mock_solved_atmosphere.atmo_state, aot=nan_aot)
+    solved = dataclasses.replace(mock_solved_atmosphere, atmo_state=atmo_state, aot=nan_aot)
+    calls = {"n": 0}
+
+    class _FiniteRT:
+        def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+            _ = (band, compute_jacobian)
+            calls["n"] += 1
+            assert np.isfinite(atmo_state.aot.values).all()
+            xap = xr.full_like(geometry.sza, 0.95, dtype=np.float32)
+            return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+    solver_inputs = dataclasses.replace(mock_solver_input_bundle, rt_model=_FiniteRT())
+
+    scatter = pipeline._build_aot_scatter_diagnostics(solver_inputs, solved)
+
+    assert calls["n"] > 0
+    assert scatter
+    assert scatter[0].total_valid_count == int(np.count_nonzero(np.isfinite(nan_aot.values)))
+
+
 def test_call_with_retries_recovers_and_logs(caplog: pytest.LogCaptureFixture) -> None:
     calls = {"n": 0}
 
@@ -784,3 +813,103 @@ def test_run_pipeline_thread_preloads_lut_on_atmo_grid_with_nonstandard_dims(
     assert captured["geometry_dims"] == ("latitude", "longitude")
     assert captured["atmo_dims"] == ("latitude", "longitude")
     assert captured["bands"]
+
+
+# ---------------------------------------------------------------------------
+# skip_correction tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_tail_skip_correction_returns_auxiliary_only(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_solver_input_bundle,
+    mock_rt_model,
+) -> None:
+    """When skip_correction=True, M5/M6 are skipped and BOA is empty."""
+    solver_called = False
+    corrector_called = False
+
+    def _solver(inputs, config):
+        nonlocal solver_called
+        solver_called = True
+
+    def _corrector(obs, solved, rt_model):
+        nonlocal corrector_called
+        corrector_called = True
+
+    cfg = SimpleNamespace(
+        solver=SimpleNamespace(aerosol_resolution=1000.0),
+        output=SimpleNamespace(defaults=SimpleNamespace(skip_correction=True)),
+    )
+
+    result = pipeline._run_tail(
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        cfg,
+        grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
+        solver=_solver,
+        corrector=_corrector,
+        rt_model=mock_rt_model,
+    )
+
+    assert not solver_called, "Solver should not be called when skip_correction=True"
+    assert not corrector_called, "Corrector should not be called when skip_correction=True"
+    assert isinstance(result, CorrectionResult)
+    assert len(result.boa.data_vars) == 0
+    assert result.boa_unc is None
+    assert result.solver_qa is None
+    assert result.aot is not None
+    assert result.tcwv is not None
+    assert result.cloud_mask is not None
+    assert result.surface_prior is not None
+    assert result.metadata.get("skip_correction") is True
+
+
+def test_run_tail_skip_correction_preserves_monthly_composites(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_solver_input_bundle,
+    mock_rt_model,
+) -> None:
+    """Monthly composite outputs are still attached in skip_correction mode."""
+    composite = SimpleNamespace(
+        year=2023,
+        month=7,
+        reflectance=xr.DataArray(
+            np.stack([np.full(mock_surface_prior.boa.shape, 0.14, dtype=np.float32)]),
+            dims=["band", "y", "x"],
+            coords={"band": ["B02"]},
+        ),
+        quality=xr.DataArray(
+            np.full(mock_surface_prior.boa.shape, 0.5, dtype=np.float32), dims=["y", "x"]
+        ),
+        sample_index=xr.DataArray(
+            np.full(mock_surface_prior.boa.shape, 2, dtype=np.int16), dims=["y", "x"]
+        ),
+    )
+    surface_with_monthly = dataclasses.replace(
+        mock_surface_prior, monthly_composites=(composite,)
+    )
+
+    cfg = SimpleNamespace(
+        solver=SimpleNamespace(aerosol_resolution=1000.0),
+        output=SimpleNamespace(defaults=SimpleNamespace(skip_correction=True)),
+    )
+
+    result = pipeline._run_tail(
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        surface_with_monthly,
+        cfg,
+        grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
+        solver=lambda *_a, **_k: None,
+        corrector=lambda *_a, **_k: None,
+        rt_model=mock_rt_model,
+    )
+
+    assert result.monthly_composites is not None
+    assert "2023_07" in result.monthly_composites

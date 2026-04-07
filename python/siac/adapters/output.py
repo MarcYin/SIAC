@@ -2,7 +2,7 @@
 
 Produces satellite-standard L2A output with naming convention::
 
-    {satellite}_L2A_{YYYYMMDDTHHMMSS}[_{tile}]_{product}[_{band}].ext
+    {satellite}_L2A_{YYYYMMDDTHHMMSS}_{product}[_{band}].ext
 
 and a STAC Item JSON with eo:bands, view angles, and projection metadata.
 """
@@ -54,7 +54,10 @@ def _auxiliary_dataset(result: CorrectionResult) -> xr.Dataset:
     }
     if result.solver_qa is not None:
         for name, field in sorted(result.solver_qa.data_vars.items()):
-            aux_vars[name] = resample_mask_to_template(field.astype(bool), aux_template).astype(np.uint8)
+            if np.issubdtype(field.dtype, np.floating):
+                aux_vars[name] = field.astype(np.float32)
+            else:
+                aux_vars[name] = resample_mask_to_template(field.astype(bool), aux_template).astype(np.uint8)
     return xr.Dataset(aux_vars)
 
 
@@ -100,10 +103,9 @@ def _cast_dataarray(
 # ---------------------------------------------------------------------------
 
 def _derive_scene_prefix(metadata: dict[str, Any]) -> str:
-    """Build ``S2A_L2A_20240115T103045_T32UQD`` style prefix from metadata."""
+    """Build ``S2A_L2A_20240115T103045`` style prefix from metadata."""
     satellite = metadata.get("satellite", "")
     observation_time = metadata.get("observation_time")
-    tile_id = metadata.get("tile_id")
 
     # Satellite token (e.g. "S2A", "S2B", "L8")
     sat_token = str(satellite).upper() if satellite else "SAT"
@@ -114,13 +116,7 @@ def _derive_scene_prefix(metadata: dict[str, Any]) -> str:
     else:
         ts_token = "00000000T000000"
 
-    parts = [sat_token, "L2A", ts_token]
-    if tile_id:
-        tile_str = str(tile_id)
-        if not tile_str.startswith("T"):
-            tile_str = f"T{tile_str}"
-        parts.append(tile_str)
-    return "_".join(parts)
+    return "_".join([sat_token, "L2A", ts_token])
 
 
 # ---------------------------------------------------------------------------
@@ -135,18 +131,18 @@ class ConfiguredOutputWriter:
     Output layout (raster/cog format)::
 
         output_dir/
-        ├── S2A_L2A_20240115T103045_T32UQD_BOA_B02.tif
-        ├── S2A_L2A_20240115T103045_T32UQD_BOA_B03.tif
+        ├── S2A_L2A_20240115T103045_BOA_B02.tif
+        ├── S2A_L2A_20240115T103045_BOA_B03.tif
         ├── ...
-        ├── S2A_L2A_20240115T103045_T32UQD_BOA_UNC_B02.tif   (if include_uncertainty)
-        ├── S2A_L2A_20240115T103045_T32UQD_SURF_B02.tif      (surface prior)
-        ├── S2A_L2A_20240115T103045_T32UQD_SURF_UNC_B02.tif
-        ├── S2A_L2A_20240115T103045_T32UQD_AOT.tif
-        ├── S2A_L2A_20240115T103045_T32UQD_TCWV.tif
-        ├── S2A_L2A_20240115T103045_T32UQD_CLOUD.tif
-        ├── S2A_L2A_20240115T103045_T32UQD_QA_{flag}.tif
-        ├── S2A_L2A_20240115T103045_T32UQD_RGB.tif
-        ├── S2A_L2A_20240115T103045_T32UQD.json               (STAC Item)
+        ├── S2A_L2A_20240115T103045_BOA_UNC_B02.tif   (if include_uncertainty)
+        ├── S2A_L2A_20240115T103045_SURF_B02.tif      (surface prior)
+        ├── S2A_L2A_20240115T103045_SURF_UNC_B02.tif
+        ├── S2A_L2A_20240115T103045_AOT.tif
+        ├── S2A_L2A_20240115T103045_TCWV.tif
+        ├── S2A_L2A_20240115T103045_CLOUD.tif
+        ├── S2A_L2A_20240115T103045_QA_{flag}.tif
+        ├── S2A_L2A_20240115T103045_RGB.tif
+        ├── S2A_L2A_20240115T103045.json               (STAC Item)
         └── preview/
             ├── false_colour.png        (NIR-R-G composite)
             ├── aot.png                 (colour-mapped AOT field)
@@ -245,7 +241,7 @@ class ConfiguredOutputWriter:
                 write_fn(prepared, path, compression=self.defaults.compression, nodata=nodata)
                 artifacts[f"{artifact_prefix}.{band_name}"] = path
 
-        if not skip_boa:
+        if not skip_boa and result.boa.data_vars:
             _write_bands(result.boa, "BOA", "boa")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
             _write_bands(result.boa_unc, "BOA_UNC", "boa_unc")
@@ -304,12 +300,18 @@ class ConfiguredOutputWriter:
             for name, field in aux_ds.data_vars.items():
                 if name in {"aot", "tcwv", "cloud_mask"}:
                     continue
+                is_float_qa = np.issubdtype(field.dtype, np.floating)
                 artifacts[f"auxiliary.qa.{name}"] = write_fn(
                     field,
                     output_dir / f"{prefix}_QA_{name}.tif",
                     compression="lzw",
-                    dtype="uint8",
-                    nodata=255,
+                    **({
+                        "dtype": "float32",
+                        "nodata": float("nan"),
+                    } if is_float_qa else {
+                        "dtype": "uint8",
+                        "nodata": 255,
+                    }),
                 )
 
         # --- RGB quicklook ---
@@ -348,13 +350,14 @@ class ConfiguredOutputWriter:
         prefix: str,
     ) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
-        prepared_boa = _cast_dataset(
-            result.boa,
-            dtype="float64" if self.defaults.boa_dtype == "float64" else "float32",
-            scale=self.defaults.boa_scale,
-            nodata=self.defaults.boa_nodata,
-        )
-        artifacts["boa"] = write_netcdf(prepared_boa, output_dir / f"{prefix}_BOA.nc")
+        if result.boa.data_vars:
+            prepared_boa = _cast_dataset(
+                result.boa,
+                dtype="float64" if self.defaults.boa_dtype == "float64" else "float32",
+                scale=self.defaults.boa_scale,
+                nodata=self.defaults.boa_nodata,
+            )
+            artifacts["boa"] = write_netcdf(prepared_boa, output_dir / f"{prefix}_BOA.nc")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
             artifacts["boa_unc"] = write_netcdf(result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.nc")
         if result.surface_prior is not None:
@@ -395,13 +398,14 @@ class ConfiguredOutputWriter:
         prefix: str,
     ) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
-        prepared_boa = _cast_dataset(
-            result.boa,
-            dtype="float64" if self.defaults.boa_dtype == "float64" else "float32",
-            scale=self.defaults.boa_scale,
-            nodata=self.defaults.boa_nodata,
-        )
-        artifacts["boa"] = write_zarr(prepared_boa, output_dir / f"{prefix}_BOA.zarr")
+        if result.boa.data_vars:
+            prepared_boa = _cast_dataset(
+                result.boa,
+                dtype="float64" if self.defaults.boa_dtype == "float64" else "float32",
+                scale=self.defaults.boa_scale,
+                nodata=self.defaults.boa_nodata,
+            )
+            artifacts["boa"] = write_zarr(prepared_boa, output_dir / f"{prefix}_BOA.zarr")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
             artifacts["boa_unc"] = write_zarr(result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.zarr")
         if result.surface_prior is not None:

@@ -159,7 +159,7 @@ class TestScenePrefix:
             "observation_time": datetime(2024, 3, 15, 10, 30, 45),
             "tile_id": "32UQD",
         })
-        assert prefix == "S2A_L2A_20240315T103045_T32UQD"
+        assert prefix == "S2A_L2A_20240315T103045"
 
     def test_sentinel2b_prefix(self):
         prefix = _derive_scene_prefix({
@@ -167,7 +167,7 @@ class TestScenePrefix:
             "observation_time": datetime(2024, 1, 2, 8, 15, 0),
             "tile_id": "T10SFG",
         })
-        assert prefix == "S2B_L2A_20240102T081500_T10SFG"
+        assert prefix == "S2B_L2A_20240102T081500"
 
     def test_landsat_prefix(self):
         prefix = _derive_scene_prefix({
@@ -180,13 +180,21 @@ class TestScenePrefix:
         prefix = _derive_scene_prefix({})
         assert prefix == "SAT_L2A_00000000T000000"
 
-    def test_tile_id_with_t_prefix(self):
+    def test_tile_id_is_not_included_in_output_prefix(self):
         prefix = _derive_scene_prefix({
             "satellite": "S2A",
             "observation_time": datetime(2024, 1, 1, 0, 0, 0),
             "tile_id": "T32UQD",
         })
-        assert prefix == "S2A_L2A_20240101T000000_T32UQD"
+        assert prefix == "S2A_L2A_20240101T000000"
+
+    def test_esa_long_tile_id_is_not_included_in_output_prefix(self):
+        prefix = _derive_scene_prefix({
+            "satellite": "S2C",
+            "observation_time": datetime(2025, 8, 26, 17, 22, 22),
+            "tile_id": "S2C_OPER_MSI_L1C_TL_2CPS_20250826T204551_A005087_T15TVG_N05.11",
+        })
+        assert prefix == "S2C_L2A_20250826T172222"
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +252,7 @@ def test_raster_output_uses_satellite_prefix_for_boa_bands(
     )
     artifacts = writer.write(_result(include_diagnostics=True), tmp_path)
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
 
     # BOA bands have satellite prefix
     assert "boa.B04" in artifacts
@@ -322,7 +330,7 @@ def test_correction_boa_stream_writes_boa_once_and_finishes_stac(
 
     artifacts = stream.finish(streamed_result)
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
     assert set(artifacts) >= {"boa.B04", "boa.B03", "boa.B02", "stac_item"}
     assert {path.name for path in writes} == {
         f"{prefix}_BOA_B04.tif",
@@ -350,7 +358,7 @@ def test_raster_output_emits_solver_qa_masks(
     )
     artifacts = writer.write(_result(include_uncertainty=False, include_solver_qa=True), tmp_path)
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
     qa_calls = [c for c in write_fn_calls if "QA_" in c[0].name]
     assert {c[0].name for c in qa_calls} == {
         f"{prefix}_QA_invalid_retrieval.tif",
@@ -361,6 +369,48 @@ def test_raster_output_emits_solver_qa_masks(
         "auxiliary.qa.invalid_retrieval",
         "auxiliary.qa.low_quality",
     } <= set(artifacts)
+
+
+def test_raster_output_emits_fitting_cost_as_float32(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fitting_cost is a float32 QA field, not a boolean mask."""
+    write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+
+    coords = {"y": [0, 1], "x": [0, 1]}
+    result = _result(include_uncertainty=False, include_solver_qa=True)
+    qa_with_cost = result.solver_qa.assign(
+        fitting_cost=xr.DataArray(
+            np.array([[0.01, 0.02], [0.03, 0.04]], dtype=np.float32),
+            dims=["y", "x"],
+            coords=coords,
+        ),
+    )
+    result = replace(result, solver_qa=qa_with_cost)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="cog",
+            boa_dtype="uint16",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(result, tmp_path)
+
+    prefix = "S2A_L2A_20240315T103045"
+    cost_calls = [c for c in write_fn_calls if "QA_fitting_cost" in c[0].name]
+    assert len(cost_calls) == 1
+    assert cost_calls[0][1]["dtype"] == "float32"
+
+    # Boolean QA fields should still use uint8
+    bool_calls = [c for c in write_fn_calls if "QA_" in c[0].name and "fitting_cost" not in c[0].name]
+    assert all(c[1]["dtype"] == "uint8" for c in bool_calls)
+
+    assert "auxiliary.qa.fitting_cost" in artifacts
 
 
 def test_raster_output_emits_surface_prior_and_monthly_composites(
@@ -384,7 +434,7 @@ def test_raster_output_emits_surface_prior_and_monthly_composites(
         tmp_path,
     )
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
     # Surface prior uses prefix
     assert artifacts["surface_prior.B04"].name == f"{prefix}_SURF_B04.tif"
     assert artifacts["surface_prior.B03"].name == f"{prefix}_SURF_B03.tif"
@@ -430,7 +480,7 @@ def test_netcdf_output_uses_satellite_prefix(
     )
     artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
     assert calls == [tmp_path / f"{prefix}_BOA.nc"]
     assert artifacts["boa"] == tmp_path / f"{prefix}_BOA.nc"
 
@@ -545,7 +595,7 @@ def test_zarr_output_uses_satellite_prefix(
     )
     artifacts = writer.write(_result(include_uncertainty=False), tmp_path)
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
     assert calls == [tmp_path / f"{prefix}_BOA.zarr"]
     assert artifacts["boa"] == tmp_path / f"{prefix}_BOA.zarr"
 
@@ -624,7 +674,7 @@ def test_zarr_surface_prior_and_monthly_composites(
         tmp_path,
     )
 
-    prefix = "S2A_L2A_20240315T103045_T32UQD"
+    prefix = "S2A_L2A_20240315T103045"
     assert calls == [
         tmp_path / f"{prefix}_BOA.zarr",
         tmp_path / f"{prefix}_BOA_UNC.zarr",
@@ -808,3 +858,37 @@ def test_output_with_empty_metadata_uses_fallback_prefix(
     # Should use fallback prefix
     boa_path = artifacts["boa.B04"]
     assert boa_path.name == "SAT_L2A_00000000T000000_BOA_B04.tif"
+
+
+def test_skip_correction_writes_auxiliary_without_boa(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty BOA (skip_correction mode): no BOA bands written, but AOT/TCWV/cloud are."""
+    _mock_writers(monkeypatch)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+
+    coords = {"y": [0, 1], "x": [0, 1]}
+    result = CorrectionResult(
+        boa=xr.Dataset(),
+        boa_unc=None,
+        aot=xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"], coords=coords),
+        tcwv=xr.DataArray(np.full((2, 2), 1.5, dtype=np.float32), dims=["y", "x"], coords=coords),
+        cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"], coords=coords),
+        metadata={"skip_correction": True},
+    )
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="cog",
+            include_uncertainty=False,
+            include_auxiliary=True,
+            include_rgb=False,
+        )
+    )
+    artifacts = writer.write(result, tmp_path)
+
+    assert not any(k.startswith("boa.") for k in artifacts), "No BOA bands should be written"
+    assert "auxiliary.aot" in artifacts
+    assert "auxiliary.tcwv" in artifacts
+    assert "auxiliary.cloud_mask" in artifacts

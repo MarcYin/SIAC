@@ -190,6 +190,14 @@ def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
     return list(getattr(sensor_config, "bands", ())[:2])
 
 
+def _should_skip_correction(config: Any) -> bool:
+    output = getattr(config, "output", None)
+    defaults = getattr(output, "defaults", None)
+    if defaults is None:
+        return False
+    return bool(getattr(defaults, "skip_correction", False))
+
+
 def _should_capture_aot_scatter(config: Any) -> bool:
     output = getattr(config, "output", None)
     defaults = getattr(output, "defaults", None)
@@ -223,6 +231,36 @@ def _select_band_slice(
     return cast("xr.DataArray", data.isel(band=band_index, drop=True))
 
 
+def _finite_diagnostic_field(
+    values: xr.DataArray,
+    fallback: xr.DataArray,
+) -> xr.DataArray:
+    source = np.asarray(values.values, dtype=np.float32)
+    if np.all(np.isfinite(source)):
+        return values
+
+    filled = source.copy()
+    missing = ~np.isfinite(filled)
+    if fallback.shape == values.shape:
+        fallback_values = np.asarray(fallback.values, dtype=np.float32)
+        fallback_finite = missing & np.isfinite(fallback_values)
+        filled[fallback_finite] = fallback_values[fallback_finite]
+        missing = ~np.isfinite(filled)
+
+    if np.any(missing):
+        finite_values = filled[np.isfinite(filled)]
+        fill_value = float(np.mean(finite_values)) if finite_values.size else 0.0
+        filled[missing] = np.float32(fill_value)
+
+    return xr.DataArray(
+        filled,
+        dims=values.dims,
+        coords=values.coords,
+        attrs=values.attrs,
+        name=values.name,
+    )
+
+
 def _build_aot_scatter_diagnostics(
     solver_inputs: SolverInputBundle,
     solved: SolvedAtmosphere,
@@ -235,6 +273,23 @@ def _build_aot_scatter_diagnostics(
         solver_inputs.surface_prior,
         sharp_transition_mask=solver_inputs.sharp_transition_mask,
     ).values.astype(bool)
+    atmo_state = solved.atmo_state
+    atmo_finite_mask = (
+        np.isfinite(atmo_state.aot.values)
+        & np.isfinite(atmo_state.tcwv.values)
+        & np.isfinite(atmo_state.tco3.values)
+        & np.isfinite(atmo_state.elevation.values)
+    )
+    valid_mask = valid_mask & atmo_finite_mask
+    diagnostic_atmo_state = AtmosphericState(
+        aot=_finite_diagnostic_field(atmo_state.aot, solver_inputs.atmo_prior.aot),
+        tcwv=_finite_diagnostic_field(atmo_state.tcwv, solver_inputs.atmo_prior.tcwv),
+        tco3=_finite_diagnostic_field(atmo_state.tco3, solver_inputs.atmo_prior.tco3),
+        elevation=_finite_diagnostic_field(atmo_state.elevation, solver_inputs.atmo_prior.elevation),
+        aot_unc=atmo_state.aot_unc,
+        tcwv_unc=atmo_state.tcwv_unc,
+        tco3_unc=atmo_state.tco3_unc,
+    )
     diagnostics: list[AOTScatterBandDiagnostics] = []
 
     for band_index, band in enumerate(solver_inputs.bands):
@@ -248,7 +303,7 @@ def _build_aot_scatter_diagnostics(
             continue
         coeffs = solver_inputs.rt_model.compute_coefficients(
             solver_inputs.geometry,
-            solved.atmo_state,
+            diagnostic_atmo_state,
             band,
             False,
         )
@@ -609,6 +664,46 @@ def _run_tail(
         )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
+
+    # ------------------------------------------------------------------
+    # skip_correction: write available auxiliary data without running the
+    # solver (M5) or atmospheric correction (M6).
+    # ------------------------------------------------------------------
+    if _should_skip_correction(config):
+        logger.info("skip_correction enabled — skipping M5 solver and M6 correction.")
+        surface_template = _surface_template(solver_inputs.surface_prior.boa)
+        result = CorrectionResult(
+            boa=xr.Dataset(),
+            boa_unc=None,
+            aot=solver_inputs.atmo_prior.aot.astype(np.float32),
+            tcwv=solver_inputs.atmo_prior.tcwv.astype(np.float32),
+            cloud_mask=solver_inputs.cloud_mask,
+            surface_prior=_banded_dataarray_to_dataset(
+                solver_inputs.surface_prior.boa,
+                default_name="surface_prior",
+                template=surface_template,
+            ),
+            surface_prior_unc=_banded_dataarray_to_dataset(
+                solver_inputs.surface_prior.boa_unc,
+                default_name="surface_prior_unc",
+                template=surface_template,
+            ),
+            solver_qa=None,
+            monthly_composites=_monthly_composite_outputs(
+                tuple(getattr(surface, "monthly_composites", ())),
+                template=surface_template,
+            ),
+            metadata={
+                **obs.metadata,
+                "skip_correction": True,
+                "sensor_config": obs.sensor_config,
+                "geometry": obs.geometry,
+                "crs": obs.crs,
+                "bounds": obs.bounds,
+            },
+        )
+        logger.info("Pipeline complete (auxiliary-only mode).")
+        return result
 
     t0 = time.monotonic()
     logger.info("M5: Solving for aerosol parameters...")

@@ -273,9 +273,12 @@ def build_stac_item_from_result(
     output_dir = Path(output_dir)
     metadata = result.metadata
 
-    # Spatial reference from first BOA band
-    first_band_name = next(iter(result.boa.data_vars))
-    first_band = result.boa[first_band_name]
+    # Spatial reference from first BOA band (or AOT if BOA is empty)
+    if result.boa.data_vars:
+        first_band_name = next(iter(result.boa.data_vars))
+        first_band = result.boa[first_band_name]
+    else:
+        first_band = result.aot
     fallback_bounds = metadata.get("bounds", (0.0, 0.0, 1.0, 1.0))
     native_bounds = _native_bounds(first_band, fallback_bounds)
     crs = None
@@ -571,8 +574,11 @@ def build_stac_item(
     item_id = item_id or output_dir.name
     item_href = Path(item_href) if item_href is not None else output_dir / "item.json"
 
-    first_band_name = next(iter(result.boa.data_vars))
-    first_band = result.boa[first_band_name]
+    if result.boa.data_vars:
+        first_band_name = next(iter(result.boa.data_vars))
+        first_band = result.boa[first_band_name]
+    else:
+        first_band = result.aot
     native_bounds = _native_bounds(first_band, obs.bounds)
     crs = None
     try:
