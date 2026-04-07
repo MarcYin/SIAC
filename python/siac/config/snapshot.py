@@ -100,12 +100,10 @@ def snapshot_resolved_config(
             "paths.water_mask": _path_state(config.paths.water_mask),
             "paths.emulator_dir": _path_state(config.paths.emulator_dir),
             "paths.lut_path": _path_state(config.paths.lut_path),
-            "paths.spectral_library_root": _path_state(config.paths.spectral_library_root),
             "paths.rsrf_root": _path_state(config.paths.rsrf_root),
             "paths.caches.atmo": _path_state(config.paths.caches.atmo),
             "paths.caches.brdf": _path_state(config.paths.caches.brdf),
             "paths.caches.s2": _path_state(config.paths.caches.s2),
-            "paths.caches.spectral_mapping": _path_state(config.paths.caches.spectral_mapping),
             "output.defaults.output_dir": _path_state(config.output.defaults.output_dir),
         },
     }

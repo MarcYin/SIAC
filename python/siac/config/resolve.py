@@ -69,24 +69,18 @@ def resolve_paths(system: SystemConfig) -> ResolvedPathsConfig:
         atmo=_default_cache_path(cache_root, "atmo"),
         brdf=_default_cache_path(cache_root, "brdf"),
         s2=_default_cache_path(cache_root, "s2"),
-        spectral_mapping=_default_cache_path(cache_root, "spectral-mapping"),
     )
     return ResolvedPathsConfig(
         dem=system.paths.dem,
         water_mask=system.paths.water_mask,
         emulator_dir=system.paths.emulator_dir,
         lut_path=system.paths.lut_path,
-        spectral_library_root=system.paths.spectral_library_root,
         rsrf_root=system.paths.rsrf_root,
         cache_root=cache_root,
         caches=ResolvedCachePathsConfig(
             atmo=_resolve_cache_dir(system.paths.caches.atmo, defaults.atmo),
             brdf=_resolve_cache_dir(system.paths.caches.brdf, defaults.brdf),
             s2=_resolve_cache_dir(system.paths.caches.s2, defaults.s2),
-            spectral_mapping=_resolve_cache_dir(
-                system.paths.caches.spectral_mapping,
-                defaults.spectral_mapping,
-            ),
         ),
     )
 
@@ -120,8 +114,6 @@ def resolve_config(system: SystemConfig, request: RunRequest) -> ResolvedConfig:
             **system.algorithms.surface_prior.model_dump(exclude={"spectral_mapping"}, mode="python"),
             spectral_mapping=ResolvedSpectralMappingConfig(
                 **system.algorithms.surface_prior.spectral_mapping.model_dump(mode="python"),
-                siac_library_root=paths.spectral_library_root,
-                cache_dir=paths.caches.spectral_mapping,
             ),
         ),
         rt=ResolvedRTAlgorithmConfig(

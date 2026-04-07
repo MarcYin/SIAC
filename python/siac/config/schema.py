@@ -59,9 +59,8 @@ class CachePathsConfig(SIACBaseModel):
     atmo: Path | None = None
     brdf: Path | None = None
     s2: Path | None = None
-    spectral_mapping: Path | None = None
 
-    @field_validator("atmo", "brdf", "s2", "spectral_mapping", mode="before")
+    @field_validator("atmo", "brdf", "s2", mode="before")
     @classmethod
     def normalize_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)
@@ -72,7 +71,6 @@ class PathsConfig(SIACBaseModel):
     water_mask: str | Path | None = None
     emulator_dir: Path | None = None
     lut_path: str | Path | None = DEFAULT_LUT_URL
-    spectral_library_root: Path | None = None
     rsrf_root: Path | None = None
     cache_root: Path | None = None
     caches: CachePathsConfig = Field(default_factory=CachePathsConfig)
@@ -82,7 +80,7 @@ class PathsConfig(SIACBaseModel):
     def normalize_path_or_url_fields(cls, value: Any) -> str | Path | None:
         return _coerce_path_or_url(value)
 
-    @field_validator("emulator_dir", "spectral_library_root", "rsrf_root", "cache_root", mode="before")
+    @field_validator("emulator_dir", "rsrf_root", "cache_root", mode="before")
     @classmethod
     def normalize_local_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)
@@ -241,7 +239,7 @@ class SpectralMappingAlgorithmConfig(SIACBaseModel):
     enabled: bool = True
     k_neighbors: int = Field(default=5, ge=1)
     neighbor_estimator: str = "distance_weighted_mean"
-    knn_backend: str = "numpy"
+    knn_backend: str = "scipy_ckdtree"
     knn_eps: float = Field(default=0.0, ge=0.0)
     min_valid_bands: int = Field(default=1, ge=1)
 
@@ -357,8 +355,8 @@ class SolverAlgorithmConfig(SIACBaseModel):
     gtol: float = Field(default=1e-2, gt=0.0)
     ftol: float = Field(default=1e-7, gt=0.0)
     aerosol_resolution: float = Field(default=120.0, gt=0.0)
-    quadratic_group_size: int = Field(default=1, ge=1)
     quadratic_block_size: int = Field(default=1, ge=1)
+    quadratic_block_min_valid_fraction: float = Field(default=0.5, ge=0.0, le=1.0)
     use_multigrid: bool = True
     min_grid_size: int = Field(default=4, ge=2)
     bounds: SolverBoundsConfig = Field(default_factory=SolverBoundsConfig)
@@ -550,7 +548,6 @@ class ResolvedPathsConfig(SIACBaseModel):
     water_mask: str | Path | None = None
     emulator_dir: Path | None = None
     lut_path: str | Path | None = None
-    spectral_library_root: Path | None = None
     rsrf_root: Path | None = None
     cache_root: Path | None = None
     caches: ResolvedCachePathsConfig = Field(default_factory=ResolvedCachePathsConfig)
@@ -610,8 +607,7 @@ class ResolvedProvidersConfig(SIACBaseModel):
 
 
 class ResolvedSpectralMappingConfig(SpectralMappingAlgorithmConfig):
-    siac_library_root: Path | None = None
-    cache_dir: Path | None = None
+    pass
 
 
 class ResolvedSurfacePriorAlgorithmConfig(SurfacePriorAlgorithmConfig):
