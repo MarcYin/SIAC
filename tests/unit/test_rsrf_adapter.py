@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 from rsrf.models import BandSpec, SampledCurve
 
-from siac.adapters.rsrf import load_band_rsrf, load_sensor_config_with_rsrf
+from siac.adapters.rsrf import (
+    band_convolution_weights,
+    coerce_band_rsrf,
+    load_band_rsrf,
+    load_sensor_config_with_rsrf,
+)
 from siac.catalog import SENTINEL2C_CONFIG
 from siac.domain import SensorBand, SensorConfig
 
@@ -103,3 +108,48 @@ def test_load_band_rsrf_rejects_missing_identity() -> None:
 
     with pytest.raises(ValueError, match="RSRF sensor unit id"):
         load_band_rsrf(band, sensor_id="MSI", satellite_id="S2A")
+
+
+def test_coerce_band_rsrf_realizes_band_spec_without_local_gaussian_math() -> None:
+    band = SensorBand(
+        name="B03",
+        center_wavelength=560.0,
+        bandwidth=35.0,
+        resolution=10.0,
+        band_index=1,
+    )
+
+    realized = coerce_band_rsrf(
+        band,
+        sensor_id="MSI",
+        satellite_id="S2A",
+    )
+
+    assert realized.band_name == "B03"
+    assert realized.wavelengths_nm.ndim == 1
+    assert realized.response.ndim == 1
+    assert realized.wavelengths_nm.size == realized.response.size
+    assert float(realized.wavelengths_nm.min()) < 560.0 < float(realized.wavelengths_nm.max())
+    assert np.all(realized.response >= 0.0)
+
+
+def test_band_convolution_weights_sum_to_one_for_sampled_curve() -> None:
+    band = SensorBand(
+        name="B02",
+        center_wavelength=490.0,
+        bandwidth=65.0,
+        resolution=10.0,
+        band_index=0,
+        rsrf_wavelengths_nm=np.array([480.0, 490.0, 500.0], dtype=np.float32),
+        rsrf_response=np.array([0.2, 1.0, 0.3], dtype=np.float32),
+    )
+
+    weights = band_convolution_weights(
+        band,
+        np.array([470.0, 480.0, 490.0, 500.0, 510.0], dtype=np.float32),
+    )
+
+    assert weights.shape == (5,)
+    assert float(np.sum(weights, dtype=np.float64)) == pytest.approx(1.0, rel=1e-6)
+    assert weights[2] > weights[1]
+    assert weights[2] > weights[3]

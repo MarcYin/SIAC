@@ -34,9 +34,6 @@ def _monthly_surface_prior_test_config():
         knn_backend = "numpy"
         knn_eps = 0.0
         min_valid_bands = 1
-        siac_library_root = None
-        rsrf_root = None
-        cache_dir = None
 
     class _SurfacePrior:
         psf_sigma_x = 29.75

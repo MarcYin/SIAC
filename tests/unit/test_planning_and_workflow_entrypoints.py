@@ -263,3 +263,38 @@ def test_process_scene_only_writes_when_output_path_and_writer_are_present(
     assert result_written == "result-1"
     assert result_skipped == "result-2"
     assert write_calls == [("result-1", "out", "writer")]
+
+
+def test_process_scene_skips_post_write_when_pipeline_streamed_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_calls: list[tuple[object, object, object]] = []
+    request = SceneProcessRequest(config=SimpleNamespace(sensor="s2", aoi=None), input_path="input")
+    streamed_result = SimpleNamespace(metadata={"_siac_outputs_written": True})
+    plan = SimpleNamespace(config=request.config, output_path="out", output_writer="writer")
+
+    monkeypatch.setitem(
+        scene_mod.process_scene.__globals__,
+        "build_execution_plan",
+        lambda *_a, **_kw: plan,
+    )
+    monkeypatch.setitem(
+        scene_mod.process_scene.__globals__,
+        "execute_plan",
+        lambda *_a, **_kw: streamed_result,
+    )
+    monkeypatch.setitem(
+        scene_mod.process_scene.__globals__,
+        "_resolve_execution_settings",
+        lambda *_a, **_kw: {"show_progress": False, "performance_report_path": None},
+    )
+    monkeypatch.setitem(
+        scene_mod.process_scene.__globals__,
+        "write_output",
+        lambda result, output_path, *, output_writer: write_calls.append((result, output_path, output_writer)),
+    )
+
+    result = process_scene(request, preprocessor="pre")
+
+    assert result is streamed_result
+    assert write_calls == []

@@ -272,6 +272,29 @@ class TestSmoothnessFilter:
         bg = x_smooth[:10, :10]
         assert bg.std() < x[:10, :10].std()
 
+    def test_grid_search_smoother_uses_smoothed_seed_values(self):
+        """Trusted retrievals seed smoothing but are not restored afterward."""
+        values = np.array(
+            [
+                [0.1, 0.1, 0.1],
+                [0.1, 0.5, 0.1],
+                [0.1, 0.1, 0.1],
+            ],
+            dtype=np.float32,
+        )
+        trusted = np.ones_like(values, dtype=bool)
+
+        smoothed = MultiGridSolver._smooth_grid_search_field(
+            values,
+            gamma=2.0,
+            delta=1.0,
+            n_iter=40,
+            trusted_mask=trusted,
+        )
+
+        assert smoothed[1, 1] < 0.25
+        assert smoothed[1, 1] != pytest.approx(values[1, 1])
+
     def test_backward_compat_lambda_vals(self):
         """lambda_vals positional parameter is accepted but ignored."""
         x = np.random.default_rng(0).standard_normal((20, 20))
@@ -317,6 +340,7 @@ class TestMultiGridConfig:
         assert config.n_levels == 6
         assert config.min_grid_size == 8
         assert config.aot_bounds == (0.001, 2.5)
+        assert config.quadratic_block_min_valid_fraction == pytest.approx(0.5)
 
     def test_bounds(self):
         """Bounds should be tuple of two floats."""
@@ -370,14 +394,34 @@ class TestSharpTransitionObservationExclusion:
             aot=np.full((2, 2), 0.2, dtype=np.float32),
             tcwv=np.full((2, 2), 2.0, dtype=np.float32),
             invalid_mask=np.array([[False, False], [False, True]], dtype=bool),
-            zero_obs_mask=np.zeros((2, 2), dtype=bool),
+            zero_obs_mask=np.array([[False, False], [True, False]], dtype=bool),
+            insufficient_support_mask=np.array([[False, False], [True, False]], dtype=bool),
+            no_observation_mask=np.array([[True, False], [False, False]], dtype=bool),
             sharp_transition_mask=np.array([[False, True], [True, False]], dtype=bool),
         )
 
         assert "sharp_transition_excluded" in qa.data_vars
+        assert "insufficient_observation_support" in qa.data_vars
+        assert "no_observation" in qa.data_vars
         np.testing.assert_array_equal(
             qa["sharp_transition_excluded"].values,
             np.array([[False, True], [True, False]], dtype=bool),
+        )
+        np.testing.assert_array_equal(
+            qa["zero_obs_support"].values,
+            np.array([[False, False], [True, False]], dtype=bool),
+        )
+        np.testing.assert_array_equal(
+            qa["insufficient_observation_support"].values,
+            np.array([[False, False], [True, False]], dtype=bool),
+        )
+        np.testing.assert_array_equal(
+            qa["no_observation"].values,
+            np.array([[True, False], [False, False]], dtype=bool),
+        )
+        np.testing.assert_array_equal(
+            qa["low_quality"].values,
+            np.array([[True, True], [True, True]], dtype=bool),
         )
 
 
@@ -505,6 +549,25 @@ class TestMultiGridSolver:
         assert not result.success
         assert "No valid pixels" in result.message
         np.testing.assert_allclose(result.aot.values, atmo_prior.aot.values)
+
+        nodata_surface_prior = SurfacePrior(
+            boa=surface_prior.boa,
+            boa_unc=surface_prior.boa_unc,
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        nodata_result = solver.solve(
+            toa=xr.DataArray(np.full((2, *shape), np.nan, dtype=np.float32), dims=["band", "y", "x"]),
+            surface_prior=nodata_surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+            bands=[SensorBand("B01", 443.0, 20.0, 60.0, 0)],
+        )
+
+        assert not np.any(np.isfinite(nodata_result.aot.values))
+        assert not np.any(np.isfinite(nodata_result.tcwv.values))
 
     def test_solve_uses_grid_search_when_rt_has_no_jacobian(self):
         """Solver should switch to grid-search + quadratic fit for non-jacobian RT backends."""
@@ -1003,18 +1066,18 @@ class TestMultiGridSolver:
         shape = (5, 4)
         solver = MultiGridSolver(
             MultiGridConfig(
-                grid_search_aot_points=3,
-                grid_search_tcwv_points=3,
+                grid_search_aot_points=5,
+                grid_search_tcwv_points=5,
                 aot_bounds=(0.2, 0.8),
                 tcwv_bounds=(1.0, 3.0),
                 quadratic_block_size=3,
             )
         )
 
-        toa = xr.DataArray(
-            np.stack([np.full(shape, 0.25, dtype=np.float32)]),
-            dims=["band", "y", "x"],
-        )
+        toa_values = np.full(shape, 0.25, dtype=np.float32)
+        toa_values[0, 0] = np.nan
+        toa_values[0, 1] = np.nan
+        toa = xr.DataArray(np.stack([toa_values]), dims=["band", "y", "x"])
         mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
         geometry = GeometryAngles(
             sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -1046,10 +1109,13 @@ class TestMultiGridSolver:
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
 
+        coeff_shapes: list[tuple[int, int]] = []
+
         class _DummyRT:
             def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
                 _ = (geometry, atmo_state, band, compute_jacobian)
-                factor = np.full(shape, 0.9, dtype=np.float32)
+                coeff_shapes.append(tuple(geometry.sza.shape))
+                factor = np.full(geometry.sza.shape, 0.9, dtype=np.float32)
                 xap = xr.DataArray(factor, dims=["y", "x"])
                 return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
 
@@ -1083,6 +1149,10 @@ class TestMultiGridSolver:
             block_size,
         ):  # noqa: ANN001
             assert block_size == 3
+            xap, xbp, xcp = _provider(float(aot_axis[0]), float(tcwv_axis[0]))
+            assert xap.shape == (1, *shape)
+            assert xbp.shape == (1, *shape)
+            assert xcp.shape == (1, *shape)
             costs = np.full((aot_axis.shape[0], tcwv_axis.shape[0], 2, 2), 50.0, dtype=np.float32)
             obs_counts = np.ones_like(costs, dtype=np.uint16)
             minima = {
@@ -1130,7 +1200,7 @@ class TestMultiGridSolver:
 
         expected_aot = np.array(
             [
-                [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
+                [np.nan, np.nan, aot_axis[1], aot_axis[2]],
                 [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
                 [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
                 [aot_axis[1], aot_axis[1], aot_axis[1], aot_axis[2]],
@@ -1140,7 +1210,7 @@ class TestMultiGridSolver:
         )
         expected_tcwv = np.array(
             [
-                [tcwv_axis[1], tcwv_axis[1], tcwv_axis[1], tcwv_axis[1]],
+                [np.nan, np.nan, tcwv_axis[1], tcwv_axis[1]],
                 [tcwv_axis[1], tcwv_axis[1], tcwv_axis[1], tcwv_axis[1]],
                 [tcwv_axis[1], tcwv_axis[1], tcwv_axis[1], tcwv_axis[1]],
                 [tcwv_axis[2], tcwv_axis[2], tcwv_axis[2], tcwv_axis[2]],
@@ -1149,14 +1219,163 @@ class TestMultiGridSolver:
             dtype=np.float32,
         )
 
-        np.testing.assert_allclose(out_aot, expected_aot)
-        np.testing.assert_allclose(out_tcwv, expected_tcwv)
-        np.testing.assert_allclose(out_aot_unc[:3, :3], out_aot_unc[0, 0])
-        np.testing.assert_allclose(out_tcwv_unc[:3, :3], out_tcwv_unc[0, 0])
-        assert level_diag["valid_pixels"] == pytest.approx(float(np.prod(shape)))
+        np.testing.assert_allclose(out_aot, expected_aot, equal_nan=True)
+        np.testing.assert_allclose(out_tcwv, expected_tcwv, equal_nan=True)
+        assert np.isnan(out_aot_unc[0, 0])
+        assert np.isnan(out_tcwv_unc[0, 0])
+        np.testing.assert_allclose(out_aot_unc[1:3, :3], out_aot_unc[1, 0])
+        np.testing.assert_allclose(out_tcwv_unc[1:3, :3], out_tcwv_unc[1, 0])
+        assert level_diag["valid_pixels"] == pytest.approx(float(np.prod(shape) - 2))
+        assert level_diag["qa_zero_obs_pixels"] == pytest.approx(2.0)
+        assert level_diag["qa_no_observation_pixels"] == pytest.approx(2.0)
+        assert coeff_shapes == [(2, 2)]
+
+    def test_grid_search_block_solver_requires_half_valid_block_support(self, monkeypatch):
+        """Blocked retrieval should skip blocks with too few valid observation/prior pixels."""
+        from siac.algorithms.solver import multigrid as mg_mod
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (6, 6)
+        solver = MultiGridSolver(
+            MultiGridConfig(
+                grid_search_aot_points=3,
+                grid_search_tcwv_points=3,
+                aot_bounds=(0.2, 0.8),
+                tcwv_bounds=(1.0, 3.0),
+                quadratic_block_size=3,
+                quadratic_block_min_valid_fraction=0.5,
+            )
+        )
+
+        toa_values = np.full(shape, 0.25, dtype=np.float32)
+        toa_values[:3, :3] = -0.1
+        toa_values[:2, :2] = 0.25
+        toa = xr.DataArray(np.stack([toa_values]), dims=["band", "y", "x"])
+        mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (atmo_state, band, compute_jacobian)
+                xap = xr.DataArray(np.full(geometry.sza.shape, 0.9, dtype=np.float32), dims=["y", "x"])
+                return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        def _fail_pixel_eval(*_args, **_kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("Per-pixel evaluator should not be used when quadratic_block_size > 1")
+
+        def _fake_block_eval(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            _toa,
+            _boa_prior,
+            _boa_unc,
+            _band_weights,
+            valid_mask,
+            _aot_prior,
+            _tcwv_prior,
+            _aot_prior_unc,
+            _tcwv_prior_unc,
+            block_size,
+        ):  # noqa: ANN001
+            assert block_size == 3
+            assert int(np.count_nonzero(valid_mask[:3, :3])) == 4
+            costs = np.full((aot_axis.shape[0], tcwv_axis.shape[0], 2, 2), 50.0, dtype=np.float32)
+            costs[1, 1, :, :] = 0.0
+            obs_counts = np.ones_like(costs, dtype=np.uint16)
+            return costs, obs_counts, np.ones((2, 2), dtype=bool)
+
+        def _fake_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+            _ = (costs, obs_counts)
+            np.testing.assert_array_equal(
+                valid_mask,
+                np.array([[False, True], [True, True]], dtype=bool),
+            )
+            out_aot = np.full(valid_mask.shape, float(aot_axis[1]), dtype=np.float32)
+            out_tcwv = np.full(valid_mask.shape, float(tcwv_axis[1]), dtype=np.float32)
+            out_aot_unc = np.full(valid_mask.shape, 0.07, dtype=np.float32)
+            out_tcwv_unc = np.full(valid_mask.shape, 0.21, dtype=np.float32)
+            invalid = ~valid_mask
+            boundary = np.zeros(valid_mask.shape, dtype=bool)
+            lower_aot_boundary = np.zeros(valid_mask.shape, dtype=bool)
+            zero_obs = ~valid_mask
+            return (
+                out_aot,
+                out_tcwv,
+                out_aot_unc,
+                out_tcwv_unc,
+                invalid,
+                boundary,
+                lower_aot_boundary,
+                zero_obs,
+            )
+
+        monkeypatch.setattr(mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fail_pixel_eval)
+        monkeypatch.setattr(mg_mod, "evaluate_block_grid_search_cost_cube_with_provider_qa", _fake_block_eval)
+        monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_refiner)
+
+        _out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = solver._solve_level_grid_search(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            mask=mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            cost_config=CostFunctionConfig(aot_gamma=0.0, tcwv_gamma=0.0),
+        )
+
+        assert level_diag["valid_pixels"] == pytest.approx(31.0)
+        assert level_diag["qa_invalid_pixels"] == pytest.approx(9.0)
+        assert level_diag["qa_solve_invalid_pixels"] == pytest.approx(4.0)
+        assert level_diag["qa_zero_obs_pixels"] == pytest.approx(9.0)
+        assert level_diag["qa_insufficient_support_pixels"] == pytest.approx(9.0)
+        assert np.all(level_diag["qa_insufficient_support_mask"][:3, :3])
+        assert not np.any(level_diag["qa_insufficient_support_mask"][3:, :])
+        assert not np.any(level_diag["qa_insufficient_support_mask"][:, 3:])
 
     def test_grid_search_uses_invalid_qa_to_restore_priors(self, monkeypatch):
-        """Invalid QA pixels should fall back to the atmospheric prior."""
+        """Invalid QA pixels should be smoothed from trusted neighbouring retrievals."""
         from siac.algorithms.solver import multigrid as mg_mod
         from siac.domain import SensorBand
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
@@ -1539,8 +1758,9 @@ class TestMultiGridSolver:
 
         np.testing.assert_allclose(out_aot, np.full(shape, 0.05, dtype=np.float32))
         assert level_diag["qa_invalid_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert level_diag["qa_solve_invalid_pixels"] == pytest.approx(0.0)
         assert level_diag["qa_zero_obs_pixels"] == pytest.approx(float(np.prod(shape)))
-        assert level_diag["qa_invalid_floor_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert level_diag["qa_invalid_floor_pixels"] == pytest.approx(0.0)
         assert level_diag["qa_prior_floor_pixels"] == pytest.approx(0.0)
         assert level_diag["qa_boundary_pixels"] == pytest.approx(0.0)
 

@@ -178,7 +178,8 @@ def test_build_point_coords_weight_helpers_and_reference_attrs() -> None:
     lut = _spectral_lut()
     weights = backend._spectral_integration_weights(band, lut)
     assert weights.dims == ("wavelength",)
-    assert float(weights.sel(wavelength=650.0).values) > float(weights.sel(wavelength=450.0).values)
+    assert float(weights.sel(wavelength=550.0).values) > float(weights.sel(wavelength=450.0).values)
+    assert float(weights.sel(wavelength=550.0).values) > float(weights.sel(wavelength=650.0).values)
 
     backend._lut = xr.Dataset()
     assert backend._spectral_reference_reflectances() == (0.15, 0.5)

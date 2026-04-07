@@ -15,7 +15,7 @@ from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyKernelWeightComposite,
 )
 from siac.algorithms.surface.brdf_monthly_database import build_monthly_composite_database
-from siac.algorithms.surface.spectral_mapping import HyperspectralLibrary
+from siac.algorithms.surface.spectral_mapping import SpectralMappingConfig
 from siac.algorithms.surface.swir_refine import (
     _forward_model_monthly_reflectance,
     _weekly_sample_dates,
@@ -146,37 +146,8 @@ def _database():
     )
 
 
-def _spectral_library() -> HyperspectralLibrary:
-    wavelengths = np.arange(400.0, 2501.0, 1.0, dtype=np.float32)
-    veg = np.clip(
-        0.03
-        + 0.04 * np.exp(-0.5 * ((wavelengths - 550.0) / 35.0) ** 2)
-        - 0.03 * np.exp(-0.5 * ((wavelengths - 675.0) / 20.0) ** 2)
-        + 0.45 / (1.0 + np.exp(-(wavelengths - 715.0) / 18.0)),
-        0.0,
-        0.9,
-    )
-    soil = np.clip(
-        (0.09 + 1.2e-4 * (wavelengths - 400.0))
-        * (1.0 - 0.03 * np.exp(-0.5 * ((wavelengths - 1900.0) / 80.0) ** 2)),
-        0.0,
-        0.7,
-    )
-    water = np.clip(
-        0.02 * np.exp(-(wavelengths - 400.0) / 280.0)
-        * (
-            1.0
-            - 0.65 * np.exp(-0.5 * ((wavelengths - 740.0) / 45.0) ** 2)
-            - 0.95 * np.exp(-0.5 * ((wavelengths - 1200.0) / 70.0) ** 2)
-        ),
-        0.0,
-        0.08,
-    )
-    return HyperspectralLibrary(
-        wavelengths_nm=wavelengths,
-        spectra=np.stack([veg, soil, water]).astype(np.float32),
-        sample_ids=("veg", "soil", "water"),
-    )
+def _spectral_library() -> SpectralMappingConfig:
+    return SpectralMappingConfig(knn_backend="numpy")
 
 
 def _patch_kernel_to_reflectance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -960,6 +931,31 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
                     )
                 )
             return outputs
+
+    class _FakeSpectralMapper:
+        def __init__(self, _source_bands, target_bands, **_kwargs):  # noqa: ANN001
+            self._target_band_names = [band.name for band in target_bands]
+            self._source_name_by_target_name = {
+                "B02": "Band3",
+                "B03": "Band4",
+                "B08": "Band2",
+                "B11": "Band6",
+                "B12": "Band7",
+            }
+
+        def map(self, reflectance, *, source_uncertainty=None):  # noqa: ANN001
+            mapped = xr.concat(
+                [
+                    reflectance.sel(band=self._source_name_by_target_name[name]).assign_coords(band=name)
+                    for name in self._target_band_names
+                ],
+                dim="band",
+            ).assign_coords(band=self._target_band_names)
+            mapped_unc = xr.full_like(mapped, 0.03) if source_uncertainty is None else xr.full_like(mapped, 0.03)
+            mapped_fit = xr.zeros_like(mapped.mean(dim="band", skipna=True), dtype=np.float32)
+            return mapped, mapped_unc, mapped_fit
+
+    monkeypatch.setattr(swir_refine_mod, "SpectralMapper", _FakeSpectralMapper)
 
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]

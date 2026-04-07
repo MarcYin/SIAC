@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -302,6 +303,7 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
             aot_bounds=(0.0, 1.0),
             tcwv_bounds=(0.0, 5.0),
             quadratic_block_size=5,
+            quadratic_block_min_valid_fraction=0.6,
         )
     )
     toa = mock_observation_bundle.toa["B02"]
@@ -331,6 +333,7 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
     assert solved.converged is True
     assert captured["solver_config"]["aot_gamma"] == 1.0
     assert captured["solver_config"]["quadratic_block_size"] == 5
+    assert captured["solver_config"]["quadratic_block_min_valid_fraction"] == 0.6
     assert captured["solve_args"][0] is toa
     assert rt_model == ("rt", config, "auth", mock_observation_bundle.sensor_config)
 
@@ -536,6 +539,7 @@ def test_resolve_corrector_preserves_coarse_atmo_outputs(
 
 
 def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     mock_observation_bundle,
 ) -> None:
@@ -546,14 +550,16 @@ def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
         dims=["y", "x"],
         coords={"y": [1500.0, 500.0], "x": [500.0, 1500.0]},
     )
+    tco3 = xr.where(np.isfinite(coarse), coarse + 0.1, np.nan).rename("gtco3")
+    tco3_unc = xr.where(np.isfinite(coarse), 0.05, np.nan).rename("gtco3")
     solved = SolvedAtmosphere(
         atmo_state=AtmosphericState(
             aot=coarse,
             tcwv=coarse + 1.0,
-            tco3=xr.where(np.isfinite(coarse), coarse + 0.1, np.nan),
+            tco3=tco3,
             aot_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
             tcwv_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
-            tco3_unc=xr.where(np.isfinite(coarse), 0.05, np.nan),
+            tco3_unc=tco3_unc,
             elevation=xr.zeros_like(coarse),
         ),
         aot=coarse,
@@ -577,6 +583,7 @@ def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
             captured["aot"] = np.asarray(atmo.aot.values, dtype=np.float32)
             captured["tcwv"] = np.asarray(atmo.tcwv.values, dtype=np.float32)
             captured["tco3"] = np.asarray(atmo.tco3.values, dtype=np.float32)
+            captured["tco3_unc"] = np.asarray(atmo.tco3_unc.values, dtype=np.float32)
             return CorrectionResult(
                 boa=mock_observation_bundle.toa,
                 boa_unc=None,
@@ -587,6 +594,7 @@ def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
 
     monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
 
+    caplog.set_level(logging.WARNING, logger="siac.geo.resample")
     runtime_mod.resolve_corrector(SimpleNamespace())(
         mock_observation_bundle,
         solved,
@@ -596,6 +604,11 @@ def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
     assert np.isfinite(captured["aot"]).all()
     assert np.isfinite(captured["tcwv"]).all()
     assert np.isfinite(captured["tco3"]).all()
+    assert np.isfinite(captured["tco3_unc"]).all()
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("field tco3 " in message for message in messages)
+    assert any("field tco3_unc " in message for message in messages)
+    assert not any("field gtco3 " in message for message in messages)
 
 
 def test_shares_template_grid_false_cases_cover_mismatch_paths() -> None:
@@ -712,16 +725,9 @@ def test_surface_helper_selection_and_mapping_runtime(
                 knn_backend="numpy",
                 knn_eps=0.0,
                 min_valid_bands=1,
-                siac_library_root=None,
-                rsrf_root=None,
-                cache_dir=None,
             )
         ),
-        paths=SimpleNamespace(
-            spectral_library_root="/tmp/library",
-            rsrf_root="/tmp/rsrf",
-            caches=SimpleNamespace(spectral_mapping="/tmp/cache"),
-        ),
+        paths=None,
     )
     assert surface_mod._surface_spectral_mapping_runtime(config) == (None, 4)
 
@@ -752,8 +758,8 @@ def test_surface_helper_selection_and_mapping_runtime(
         target_bands=(mock_sensor_config.bands[0],),
     )
     assert neighbors == 4
-    assert spectral_config.kwargs["siac_library_root"] == "/tmp/library"
-    assert spectral_config.kwargs["cache_dir"] == "/tmp/cache"
+    assert spectral_config.kwargs["neighbor_estimator"] == "distance_weighted_mean"
+    assert spectral_config.kwargs["knn_backend"] == "numpy"
 
 
 def test_surface_monthly_runtime_and_query_helpers(
@@ -798,9 +804,6 @@ def test_surface_monthly_runtime_and_query_helpers(
                 knn_backend="numpy",
                 knn_eps=0.0,
                 min_valid_bands=1,
-                siac_library_root=None,
-                rsrf_root=None,
-                cache_dir="/tmp/spectral-mapping-cache",
             )
         ),
         brdf=SimpleNamespace(temporal_window=16),
@@ -833,7 +836,7 @@ def test_surface_monthly_runtime_and_query_helpers(
     assert captured["database"]["geometry"] == "geometry"
     assert captured["query"]["database"] == "db"
     assert captured["query"]["k_neighbors"] == 7
-    assert captured["query"]["diagnostic_cache_dir"] == "/tmp/spectral-mapping-cache"
+    assert captured["query"]["diagnostic_cache_dir"] is None
     assert result == "prior"
     assert request["obs_time"] == mock_observation_bundle.metadata["observation_time"]
     assert surface_mod._mark_surface_prior_metadata(provider_fn, requires_atmo_prior=True) is provider_fn
@@ -862,9 +865,6 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
                 knn_backend="numpy",
                 knn_eps=0.0,
                 min_valid_bands=1,
-                siac_library_root=None,
-                rsrf_root=None,
-                cache_dir=None,
             )
         ),
         brdf=SimpleNamespace(temporal_window=16),
@@ -918,9 +918,6 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
                 knn_backend="numpy",
                 knn_eps=0.0,
                 min_valid_bands=1,
-                siac_library_root=None,
-                rsrf_root=None,
-                cache_dir=None,
             )
         ),
         brdf=SimpleNamespace(temporal_window=16),

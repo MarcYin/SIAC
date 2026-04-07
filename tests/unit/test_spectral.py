@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.adapters.rsrf import band_convolution_weights
 from siac.algorithms.surface.reference_spectral import (
     load_reference_rsrf,
     reference_to_sensor,
@@ -19,7 +20,7 @@ from siac.domain import SensorBand
 
 class TestSensorBand:
     def test_gaussian_only_construction(self):
-        """Gaussian-only (no RSRF arrays) -> has_rsrf == False."""
+        """Center/FWHM-only construction keeps band metadata but no sampled RSRF."""
         b = SensorBand("B02", 490.0, 65.0, 10.0, 0)
         assert not b.has_rsrf
         assert b.center_wavelength == 490.0
@@ -50,16 +51,14 @@ class TestSensorBand:
         with pytest.raises(AttributeError):
             b.name = "other"
 
-    def test_gaussian_response_peak(self):
-        """Peak of Gaussian response should be at center wavelength."""
+    def test_band_convolution_weights_peak_at_center_for_band_spec(self):
         b = SensorBand("B02", 490.0, 65.0, 10.0, 0)
         wl = np.linspace(400, 600, 201)
-        resp = b.gaussian_response(wl)
+        resp = band_convolution_weights(b, wl)
         peak_idx = np.argmax(resp)
         assert wl[peak_idx] == pytest.approx(490.0, abs=1.0)
 
-    def test_effective_response_uses_rsrf_when_available(self):
-        """effective_response should use RSRF when available, not Gaussian."""
+    def test_band_convolution_weights_use_tabulated_rsrf_when_available(self):
         wl_rsrf = np.array([480.0, 490.0, 500.0])
         resp_rsrf = np.array([0.2, 1.0, 0.3])
         b = SensorBand(
@@ -71,9 +70,9 @@ class TestSensorBand:
             rsrf_wavelengths_nm=wl_rsrf,
             rsrf_response=resp_rsrf,
         )
-        # At 490 nm, should return 1.0 from the RSRF
-        result = b.effective_response(np.array([490.0]))
-        assert result[0] == pytest.approx(1.0)
+        result = band_convolution_weights(b, np.array([480.0, 490.0, 500.0]))
+        assert result[1] > result[0]
+        assert result[1] > result[2]
 
     def test_legacy_srf_names_remain_supported(self):
         """Backward-compatible SRF aliases should map onto the renamed RSRF fields."""

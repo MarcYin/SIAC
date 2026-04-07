@@ -6,7 +6,6 @@ import pytest
 from siac.algorithms.surface import spectral_mapping as spectral_mapping_mod
 from siac.algorithms.surface._spectral_curve_utils import (
     classify_band_region,
-    gaussian_curve_from_band,
     normalized_band_response,
     primary_nir_band_index,
 )
@@ -37,19 +36,6 @@ def test_primary_nir_band_index_prefers_band_closest_to_865nm() -> None:
     )
 
     assert primary_nir_band_index(bands) == 2
-
-
-def test_gaussian_curve_from_band_is_trimmed_and_nonnegative() -> None:
-    wavelengths, response = gaussian_curve_from_band(SensorBand("B11", 1610.0, 90.0, 20.0, 0))
-
-    assert wavelengths.ndim == 1
-    assert response.ndim == 1
-    assert wavelengths.size == response.size
-    assert wavelengths[0] < 1610.0 < wavelengths[-1]
-    assert float(response[0]) == pytest.approx(0.0)
-    assert float(response[-1]) == pytest.approx(0.0)
-    assert np.all(response >= 0.0)
-
 
 def test_spectral_mapping_module_keeps_private_curve_helpers_available() -> None:
     wavelengths, response = spectral_mapping_mod._canonicalize_curve(

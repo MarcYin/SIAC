@@ -101,7 +101,7 @@ class TestSIACConfig:
     def test_config_to_and_from_toml(self, tmp_path: Path):
         config = SIACConfig(
             sensor="l8",
-            paths={"spectral_library_root": "/tmp/library", "lut_path": "s3://bucket/lut.zarr"},
+            paths={"lut_path": "s3://bucket/lut.zarr"},
             providers={"brdf": {"provider": "vnp43", "temporal_window": 8}},
             algorithms={
                 "surface_prior": {
@@ -121,13 +121,11 @@ class TestSIACConfig:
             data = tomllib.load(handle)
 
         assert "sensor" not in data
-        assert data["paths"]["spectral_library_root"] == "/tmp/library"
         assert data["providers"]["brdf"]["kind"] == "vnp43"
         assert data["algorithms"]["surface_prior"]["spectral_mapping"]["k_neighbors"] == 7
 
         loaded = SIACConfig.from_file(toml_path)
         assert loaded.sensor == "auto"
-        assert loaded.paths.spectral_library_root == Path("/tmp/library")
         assert loaded.brdf.temporal_window == 8
         assert loaded.surface_prior.spectral_mapping.k_neighbors == 7
 

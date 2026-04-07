@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
+from siac.adapters.rsrf import band_convolution_weights
 from siac.catalog import (
     LANDSAT8_OLI_CONFIG,
     LANDSAT9_OLI2_CONFIG,
@@ -76,21 +78,13 @@ class TestSensorConfigInvariants:
         for b in sensor_config.bands:
             assert sensor_config.get_band(b.name) is b
 
-    def test_gaussian_response_callable(self, sensor_config: SensorConfig) -> None:
-        """SensorBand.gaussian_response is available and returns correct shape."""
-        import numpy as np
+    def test_band_convolution_weights_callable(self, sensor_config: SensorConfig) -> None:
         wl = np.linspace(400.0, 2500.0, 100)
         for b in sensor_config.bands:
-            resp = b.gaussian_response(wl)
-            assert resp.shape == wl.shape
-            assert resp.max() > 0
-
-    def test_effective_response_callable(self, sensor_config: SensorConfig) -> None:
-        import numpy as np
-        wl = np.linspace(400.0, 2500.0, 100)
-        for b in sensor_config.bands:
-            resp = b.effective_response(wl)
-            assert resp.shape == wl.shape
+            weights = band_convolution_weights(b, wl)
+            assert weights.shape == wl.shape
+            assert np.all(np.isfinite(weights))
+            assert float(np.sum(weights, dtype=np.float64)) == pytest.approx(1.0, rel=1e-5)
 
 
 class TestSensorConfigRegistry:
