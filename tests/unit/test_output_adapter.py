@@ -401,7 +401,6 @@ def test_raster_output_emits_fitting_cost_as_float32(
     )
     artifacts = writer.write(result, tmp_path)
 
-    prefix = "S2A_L2A_20240315T103045"
     cost_calls = [c for c in write_fn_calls if "QA_fitting_cost" in c[0].name]
     assert len(cost_calls) == 1
     assert cost_calls[0][1]["dtype"] == "float32"
