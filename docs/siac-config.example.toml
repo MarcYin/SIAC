@@ -44,6 +44,8 @@ target_resolution_m = 10.0
 [algorithms.surface_prior]
 method = "whittaker"
 whittaker_lambda = 10.0
+# For method = "monthly_database": "provider_or_coarser" or "aerosol".
+monthly_database_resolution_policy = "provider_or_coarser"
 
 [algorithms.surface_prior.spectral_mapping]
 enabled = true
@@ -56,6 +58,15 @@ fallback_to_lut = true
 [algorithms.solver]
 aot_gamma = 10.0
 tcwv_gamma = 5.0
+
+# Optional staged solve. TCO3 is currently a carried/fixed atmospheric state
+# field; solving it is rejected until RT ozone Jacobian/grid-search support is
+# enabled.
+# [[algorithms.solver.stages]]
+# name = "aot_pass"
+# solve = ["aot"]
+# fixed = ["tcwv", "tco3"]
+# bands = ["B02", "B04"]
 
 [auth.cdse]
 username = "your-cdse-username"

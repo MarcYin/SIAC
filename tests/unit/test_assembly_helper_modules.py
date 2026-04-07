@@ -302,6 +302,9 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
             tcwv_gamma=2.0,
             aot_bounds=(0.0, 1.0),
             tcwv_bounds=(0.0, 5.0),
+            grid_search_aot_points=7,
+            grid_search_tcwv_points=5,
+            fixed_atmospheric_parameter="tcwv",
             quadratic_block_size=5,
             quadratic_block_min_valid_fraction=0.6,
         )
@@ -332,6 +335,9 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
     assert solved.n_iterations == 4
     assert solved.converged is True
     assert captured["solver_config"]["aot_gamma"] == 1.0
+    assert captured["solver_config"]["grid_search_aot_points"] == 7
+    assert captured["solver_config"]["grid_search_tcwv_points"] == 5
+    assert captured["solver_config"]["fixed_atmospheric_parameter"] == "tcwv"
     assert captured["solver_config"]["quadratic_block_size"] == 5
     assert captured["solver_config"]["quadratic_block_min_valid_fraction"] == 0.6
     assert captured["solve_args"][0] is toa
@@ -836,6 +842,7 @@ def test_surface_monthly_runtime_and_query_helpers(
     assert captured["database"]["geometry"] == "geometry"
     assert captured["query"]["database"] == "db"
     assert captured["query"]["k_neighbors"] == 7
+    assert captured["query"]["target_resolution"] == pytest.approx(500.0)
     assert captured["query"]["diagnostic_cache_dir"] is None
     assert result == "prior"
     assert request["obs_time"] == mock_observation_bundle.metadata["observation_time"]
@@ -872,8 +879,8 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
     )
 
     def _fake_resample_geometry(observation, *, resolution):  # noqa: ANN001
-        captured["geometry_resolution"] = resolution
-        return "geometry"
+        captured.setdefault("geometry_resolutions", []).append(resolution)
+        return f"geometry-{resolution:.1f}"
 
     def _fake_build_database(**kwargs):  # noqa: ANN003
         captured["geometry"] = kwargs["geometry"]
@@ -891,8 +898,68 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
 
     assert runtime.database == "db"
     assert captured["provider_resolution"] == pytest.approx(500.0)
-    assert captured["geometry_resolution"] == pytest.approx(500.0)
-    assert captured["geometry"] == "geometry"
+    assert captured["geometry_resolutions"] == pytest.approx([500.0, 120.0])
+    assert captured["geometry"] == "geometry-500.0"
+    assert runtime.geometry == "geometry-120.0"
+    assert runtime.database_resolution == pytest.approx(500.0)
+    assert runtime.query_resolution == pytest.approx(120.0)
+    assert captured["monthly_composites"].source_bands == tuple(mock_observation_bundle.sensor_config.bands)
+
+
+def test_prepare_monthly_surface_prior_runtime_can_force_aerosol_resolution(
+    mock_observation_bundle,
+) -> None:
+    captured: dict[str, object] = {}
+
+    provider = SimpleNamespace(
+        source_bands=list(mock_observation_bundle.sensor_config.bands),
+        resolution_m=500.0,
+        get_monthly_composites=lambda _observation, resolution: (
+            captured.__setitem__("provider_resolution", resolution)
+            or SimpleNamespace(source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=())
+        ),
+    )
+    config = SimpleNamespace(
+        surface_prior=SimpleNamespace(
+            monthly_database_resolution_policy="aerosol",
+            spectral_mapping=SimpleNamespace(
+                enabled=True,
+                k_neighbors=5,
+                neighbor_estimator="distance_weighted_mean",
+                knn_backend="numpy",
+                knn_eps=0.0,
+                min_valid_bands=1,
+            ),
+        ),
+        brdf=SimpleNamespace(temporal_window=16),
+        paths=None,
+    )
+
+    def _fake_resample_geometry(observation, *, resolution):  # noqa: ANN001
+        captured.setdefault("geometry_resolutions", []).append(resolution)
+        return f"geometry-{resolution:.1f}"
+
+    def _fake_build_database(**kwargs):  # noqa: ANN003
+        captured["geometry"] = kwargs["geometry"]
+        captured["monthly_composites"] = kwargs["monthly_composites"]
+        return "db"
+
+    runtime = surface_mod._prepare_monthly_surface_prior_runtime(
+        config,
+        provider,
+        observation=mock_observation_bundle,
+        resolution=120.0,
+        build_database_fn=_fake_build_database,
+        resample_geometry_fn=_fake_resample_geometry,
+    )
+
+    assert runtime.database == "db"
+    assert captured["provider_resolution"] == pytest.approx(120.0)
+    assert captured["geometry_resolutions"] == pytest.approx([120.0])
+    assert captured["geometry"] == "geometry-120.0"
+    assert runtime.geometry == "geometry-120.0"
+    assert runtime.database_resolution == pytest.approx(120.0)
+    assert runtime.query_resolution == pytest.approx(120.0)
     assert captured["monthly_composites"].source_bands == tuple(mock_observation_bundle.sensor_config.bands)
 
 
@@ -946,6 +1013,9 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
     assert captured["provider_resolution"] == pytest.approx(1000.0)
     assert captured["geometry_resolution"] == pytest.approx(1000.0)
     assert captured["geometry"] == "geometry"
+    assert runtime.geometry == "geometry"
+    assert runtime.database_resolution == pytest.approx(1000.0)
+    assert runtime.query_resolution == pytest.approx(1000.0)
     assert captured["monthly_composites"].source_bands == tuple(mock_observation_bundle.sensor_config.bands)
 
 

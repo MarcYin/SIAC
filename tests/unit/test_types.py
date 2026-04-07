@@ -102,6 +102,21 @@ class TestAtmosphericState:
         # TCO3 preserved
         np.testing.assert_allclose(updated.tco3.values, 0.3)
 
+    def test_with_updated_parameters_can_update_tco3(self, sample_state):
+        """Generic parameter updates should support staged atmospheric solving."""
+        new_tco3 = xr.DataArray(np.full((10, 10), 0.34), dims=["y", "x"])
+        new_tco3_unc = xr.DataArray(np.full((10, 10), 0.02), dims=["y", "x"])
+
+        updated = sample_state.with_updated_parameters(
+            {"tco3": new_tco3},
+            {"tco3_unc": new_tco3_unc},
+        )
+
+        xr.testing.assert_equal(updated.get_parameter("tco3"), new_tco3)
+        xr.testing.assert_equal(updated.get_uncertainty("tco3"), new_tco3_unc)
+        np.testing.assert_allclose(updated.aot.values, 0.15)
+        np.testing.assert_allclose(updated.tcwv.values, 2.5)
+
     def test_to_emulator_input_uses_shared_rt_units(self, sample_state):
         """to_emulator_input should expose the solver/LUT/emulator unit contract."""
         shape = (10, 10)

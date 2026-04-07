@@ -72,6 +72,59 @@ class TestSIACConfig:
         assert config.execution.max_workers == 8
         assert config.execution.retries == 1
 
+    def test_solver_stages_config(self):
+        config = SIACConfig(
+            algorithms={
+                "solver": {
+                    "stages": [
+                        {
+                            "name": "aot_pass",
+                            "solve": ["aot"],
+                            "fixed": ["tcwv", "tco3"],
+                            "bands": ["B02", "B04"],
+                        },
+                        {
+                            "name": "tcwv_pass",
+                            "solve": "tcwv",
+                            "fixed": ["aot", "tco3"],
+                            "initial_state": "previous",
+                        },
+                    ]
+                }
+            }
+        )
+
+        stages = config.algorithms.solver.stages
+        assert stages[0].name == "aot_pass"
+        assert stages[0].solve == ("aot",)
+        assert stages[0].fixed == ("tcwv", "tco3")
+        assert stages[0].bands == ("B02", "B04")
+        assert stages[1].solve == ("tcwv",)
+
+    def test_surface_prior_monthly_database_resolution_policy(self):
+        config = SIACConfig(
+            algorithms={
+                "surface_prior": {
+                    "method": "monthly_database",
+                    "monthly_database_resolution_policy": "aerosol",
+                }
+            }
+        )
+
+        assert config.algorithms.surface_prior.monthly_database_resolution_policy == "aerosol"
+
+    def test_solver_stage_rejects_solve_fixed_overlap(self):
+        with pytest.raises(ValueError, match="cannot both solve and fix"):
+            SIACConfig(
+                algorithms={
+                    "solver": {
+                        "stages": [
+                            {"name": "bad", "solve": ["aot"], "fixed": ["aot"]},
+                        ]
+                    }
+                }
+            )
+
     def test_atmo_prior_remote_url_is_preserved(self):
         config = SIACConfig(
             providers={

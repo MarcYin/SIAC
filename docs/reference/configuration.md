@@ -121,6 +121,7 @@ Main fields:
 - `psf_sigma_y`
 - `apply_psf`
 - `whittaker_lambda`
+- `monthly_database_resolution_policy` — for `method = "monthly_database"`, choose `provider_or_coarser` to build the Route-B database at the prepared/provider grid when it is coarser than the AOT grid, or `aerosol` to force the Route-B database/query grid to the configured solver `aerosol_resolution`
 - `spectral_mapping.*`
 
 Supported methods:
@@ -159,12 +160,32 @@ Main fields:
 - `gtol` — gradient tolerance for L-BFGS-B convergence
 - `ftol` — function tolerance for L-BFGS-B convergence
 - `aerosol_resolution` — target spatial resolution (metres) for the aerosol retrieval grid
+- `grid_search_aot_points` — number of AOT candidates in the no-Jacobian grid-search path (default `11`)
+- `grid_search_tcwv_points` — number of TCWV candidates in the no-Jacobian grid-search path (default `11`)
+- `fixed_atmospheric_parameter` — set to `aot` or `tcwv` to hold that field at the atmospheric prior while solving only the other field (default `none`)
+- `stages` — optional staged solver chain. Each stage declares `solve`, `fixed`, optional `bands`, and `initial_state = "previous"` or `"prior"`. Current production execution supports staged AOT/TCWV combinations; `tco3` is carried through the atmospheric state and rejected as a solved parameter until RT ozone Jacobian/grid-search support is added.
 - `quadratic_block_size` — solve one shared AOT/TCWV pair for each `NxN` block in the no-Jacobian grid-search path, compute RT coefficients on the same block grid, then broadcast the block solution back to full resolution
 - `quadratic_block_min_valid_fraction` — minimum fraction of pixels in each `quadratic_block_size` block that must have valid observations and surface-prior support before the block is solved (default `0.5`)
 - `use_multigrid` — enable the coarse-to-fine multi-grid solver strategy (default `true`)
 - `min_grid_size` — minimum grid dimension (pixels) for multi-grid levels
 - `bounds.aot` — `[min, max]` bounds for AOT during optimization
 - `bounds.tcwv` — `[min, max]` bounds for TCWV during optimization
+
+Example staged solve:
+
+```toml
+[[algorithms.solver.stages]]
+name = "aot_pass"
+solve = ["aot"]
+fixed = ["tcwv", "tco3"]
+bands = ["B02", "B04"]
+
+[[algorithms.solver.stages]]
+name = "tcwv_pass"
+solve = ["tcwv"]
+fixed = ["aot", "tco3"]
+initial_state = "previous"
+```
 
 ### `algorithms.cloud_mask`
 
@@ -209,6 +230,7 @@ Main fields:
 - `include_rgb`
 - `include_uncertainty`
 - `include_auxiliary`
+- `skip_correction` — When `true`, skips the solver (M5) and atmospheric correction (M6) stages. Auxiliary data (AOT, TCWV, cloud mask, surface prior, monthly composites from atmospheric priors) is still written. Default: `false`.
 - `boa_dtype`
 - `boa_scale`
 - `boa_nodata`

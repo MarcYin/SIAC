@@ -387,6 +387,7 @@ def query_surface_prior_from_monthly_database(
     database: MonthlyCompositeDatabase,
     query_band_names: tuple[str, ...] | None = None,
     visible_band_names: tuple[str, ...] | None = None,
+    target_resolution: float | None = None,
     k_neighbors: int = 3,
     max_prediction_uncertainty: float | None = 0.05,
     max_composite_quality: float | None = 0.05,
@@ -402,11 +403,16 @@ def query_surface_prior_from_monthly_database(
     if visible_band_names is not None and tuple(visible_band_names) != expected_visible:
         raise ValueError("visible_band_names must match the database visible-band ordering")
 
-    target_shape = (
-        int(database.median_summary.sizes["y"]),
-        int(database.median_summary.sizes["x"]),
-    )
     query_template = _database_query_template(database)
+    if target_resolution is not None:
+        resolution = float(target_resolution)
+        if not np.isfinite(resolution) or resolution <= 0.0:
+            raise ValueError("target_resolution must be a finite positive value")
+        query_template = _build_target_template(observation.bounds, observation.crs, resolution)
+    target_shape = (
+        int(query_template.sizes["y"]),
+        int(query_template.sizes["x"]),
+    )
     native_query_valid = _query_observation_valid_mask(
         observation.toa,
         band_names=expected_query,

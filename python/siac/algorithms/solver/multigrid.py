@@ -19,8 +19,8 @@ using the L-BFGS-B quasi-Newton method with box constraints.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 import numpy as np
 import xarray as xr
@@ -36,7 +36,7 @@ from siac._rust_compat import (
 )
 from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig
 from siac.domain.protocols import RTModelBackend
-from siac.runtime import AtmosphericState, GeometryAngles, SurfacePrior
+from siac.runtime import AtmosphericState, BRDFKernelWeights, GeometryAngles, SurfacePrior
 from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__)
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
 Float32Array: TypeAlias = npt.NDArray[np.float32]
 Float64Array: TypeAlias = npt.NDArray[np.float64]
+AtmosphericParameterName: TypeAlias = Literal["aot", "tcwv", "tco3"]
+FixedAtmosphericParameter: TypeAlias = Literal["none", "aot", "tcwv"]
+StageInitialState: TypeAlias = Literal["prior", "previous"]
 
 
 def build_solver_valid_mask(
@@ -73,6 +76,17 @@ def build_solver_valid_mask(
         valid = valid & ~sharp_transition_mask.values.astype(bool)
 
     return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
+
+
+@dataclass(frozen=True)
+class SolverStageConfig:
+    """One atmospheric retrieval pass in a staged solver chain."""
+
+    name: str = "default"
+    solve: tuple[AtmosphericParameterName, ...] = ("aot", "tcwv")
+    fixed: tuple[AtmosphericParameterName, ...] = ("tco3",)
+    bands: tuple[str, ...] | None = None
+    initial_state: StageInitialState = "previous"
 
 
 @dataclass
@@ -114,6 +128,7 @@ class MultiGridConfig:
     use_grid_search_when_no_jacobian: bool = True
     grid_search_aot_points: int = 11
     grid_search_tcwv_points: int = 11
+    fixed_atmospheric_parameter: FixedAtmosphericParameter = "none"
 
     # Solve one shared AOT/TCWV pair per NxN block in the no-Jacobian
     # grid-search path, then broadcast that block solution back to the
@@ -124,6 +139,10 @@ class MultiGridConfig:
     # Minimum fraction of pixels in each quadratic block that must have valid
     # observation and surface-prior support before the block is solved.
     quadratic_block_min_valid_fraction: float = 0.5
+
+    # Optional sequence of solver stages. Empty preserves the legacy single
+    # AOT/TCWV solve configured by the fields above.
+    stages: tuple[SolverStageConfig, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -140,6 +159,7 @@ class SolverResult:
     message: str
     qa: xr.Dataset | None = None
     level_history: list[dict] = field(default_factory=list)
+    atmo_state: AtmosphericState | None = None
 
 
 class MultiGridSolver:
@@ -236,6 +256,12 @@ class MultiGridSolver:
         use_grid_search = (
             self.config.use_grid_search_when_no_jacobian and not has_rt_jacobian
         )
+        fixed_parameter = self._fixed_parameter()
+        if fixed_parameter != "none":
+            logger.info(
+                "Fixing %s to the atmospheric prior during solver optimization.",
+                fixed_parameter.upper(),
+            )
         if use_grid_search:
             block_size = max(1, self.config.quadratic_block_size)
             if block_size > 1:
@@ -272,6 +298,7 @@ class MultiGridSolver:
         final_invalid_mask: np.ndarray | None = None
         final_zero_obs_mask: np.ndarray | None = None
         final_insufficient_support_mask: np.ndarray | None = None
+        final_fitting_cost: np.ndarray | None = None
 
         # Multi-grid solve from coarse to fine. The non-Jacobian grid-search
         # branch does not consume coarse solutions as initial guesses, so it
@@ -338,6 +365,10 @@ class MultiGridSolver:
                     np.asarray(level_diag["qa_insufficient_support_mask"], dtype=bool),
                     full_shape,
                 )
+                final_fitting_cost = self._resample_field(
+                    np.asarray(level_diag["qa_fitting_cost_map"], dtype=np.float32),
+                    full_shape,
+                ).astype(np.float32)
                 level_success = valid_pixels > 0 and solve_invalid_pixels < valid_pixels
                 level_message = (
                     "grid-search "
@@ -357,6 +388,7 @@ class MultiGridSolver:
                         "qa_invalid_mask",
                         "qa_zero_obs_mask",
                         "qa_insufficient_support_mask",
+                        "qa_fitting_cost_map",
                     }
                 }
             else:
@@ -421,6 +453,13 @@ class MultiGridSolver:
                 aot, tcwv, atmo_prior, cost_func_last
             )
 
+        if fixed_parameter == "aot":
+            aot = atmo_prior.aot.values.astype(np.float32, copy=True)
+            aot_unc = atmo_prior.aot_unc.values.astype(np.float32, copy=True)
+        elif fixed_parameter == "tcwv":
+            tcwv = atmo_prior.tcwv.values.astype(np.float32, copy=True)
+            tcwv_unc = atmo_prior.tcwv_unc.values.astype(np.float32, copy=True)
+
         if np.any(full_no_observation_mask):
             aot = np.where(full_no_observation_mask, np.nan, aot).astype(np.float32, copy=False)
             tcwv = np.where(full_no_observation_mask, np.nan, tcwv).astype(np.float32, copy=False)
@@ -446,6 +485,7 @@ class MultiGridSolver:
             sharp_transition_mask=sharp_transition_mask.values.astype(bool)
             if sharp_transition_mask is not None
             else None,
+            fitting_cost=final_fitting_cost if use_grid_search else None,
         )
         if level_history:
             level_history[-1].update(self._summarize_solver_qa(qa))
@@ -497,6 +537,46 @@ class MultiGridSolver:
             except Exception:
                 return False
         return False
+
+    def _fixed_parameter(self) -> FixedAtmosphericParameter:
+        value = str(self.config.fixed_atmospheric_parameter).strip().lower()
+        if value in {"", "none", "false", "no"}:
+            return "none"
+        if value in {"aot", "tcwv"}:
+            return cast("FixedAtmosphericParameter", value)
+        raise ValueError(
+            "fixed_atmospheric_parameter must be one of 'none', 'aot', or 'tcwv'"
+        )
+
+    @staticmethod
+    def _fixed_axis_from_prior(
+        prior: np.ndarray,
+        bounds: tuple[float, float],
+    ) -> Float32Array:
+        finite = prior[np.isfinite(prior)]
+        if finite.size:
+            value = float(np.mean(finite))
+        else:
+            value = 0.5 * (float(bounds[0]) + float(bounds[1]))
+        return cast(
+            "Float32Array",
+            np.array([np.clip(value, float(bounds[0]), float(bounds[1]))], dtype=np.float32),
+        )
+
+    @classmethod
+    def _finite_fixed_prior_field(
+        cls,
+        prior: np.ndarray,
+        bounds: tuple[float, float],
+    ) -> Float32Array:
+        values = np.asarray(prior, dtype=np.float32)
+        if np.all(np.isfinite(values)):
+            return values.astype(np.float32, copy=True)
+
+        fixed_axis = cls._fixed_axis_from_prior(values, bounds)
+        filled = values.astype(np.float32, copy=True)
+        filled[~np.isfinite(filled)] = fixed_axis[0]
+        return cast("Float32Array", filled)
 
     @staticmethod
     def _bound_tolerance(bounds: tuple[float, float]) -> float:
@@ -551,6 +631,7 @@ class MultiGridSolver:
         insufficient_support_mask: np.ndarray | None,
         no_observation_mask: np.ndarray | None,
         sharp_transition_mask: np.ndarray | None,
+        fitting_cost: np.ndarray | None = None,
     ) -> xr.Dataset:
         valid = np.asarray(valid_mask, dtype=bool)
         invalid = np.zeros_like(valid, dtype=bool) if invalid_mask is None else np.asarray(invalid_mask, dtype=bool) & valid
@@ -583,21 +664,38 @@ class MultiGridSolver:
         parameter_boundary = aot_lower | aot_upper | tcwv_lower | tcwv_upper
         low_quality = invalid | zero_obs | insufficient_support | no_observation | parameter_boundary | sharp_transition
 
-        return xr.Dataset(
-            {
-                "invalid_retrieval": self._mask_to_data_array(invalid, template),
-                "zero_obs_support": self._mask_to_data_array(zero_obs, template),
-                "insufficient_observation_support": self._mask_to_data_array(insufficient_support, template),
-                "no_observation": self._mask_to_data_array(no_observation, template),
-                "sharp_transition_excluded": self._mask_to_data_array(sharp_transition, template),
-                "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
-                "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
-                "tcwv_lower_boundary": self._mask_to_data_array(tcwv_lower, template),
-                "tcwv_upper_boundary": self._mask_to_data_array(tcwv_upper, template),
-                "parameter_boundary": self._mask_to_data_array(parameter_boundary, template),
-                "low_quality": self._mask_to_data_array(low_quality, template),
-            }
-        )
+        qa_vars: dict[str, xr.DataArray] = {
+            "invalid_retrieval": self._mask_to_data_array(invalid, template),
+            "zero_obs_support": self._mask_to_data_array(zero_obs, template),
+            "insufficient_observation_support": self._mask_to_data_array(insufficient_support, template),
+            "no_observation": self._mask_to_data_array(no_observation, template),
+            "sharp_transition_excluded": self._mask_to_data_array(sharp_transition, template),
+            "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
+            "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
+            "tcwv_lower_boundary": self._mask_to_data_array(tcwv_lower, template),
+            "tcwv_upper_boundary": self._mask_to_data_array(tcwv_upper, template),
+            "parameter_boundary": self._mask_to_data_array(parameter_boundary, template),
+            "low_quality": self._mask_to_data_array(low_quality, template),
+        }
+        if fitting_cost is not None:
+            cost_arr = np.asarray(fitting_cost, dtype=np.float32)
+            if cost_arr.shape != template.shape:
+                from scipy.ndimage import zoom
+                cost_arr = zoom(
+                    cost_arr,
+                    (
+                        template.shape[0] / cost_arr.shape[0],
+                        template.shape[1] / cost_arr.shape[1],
+                    ),
+                    order=1,
+                ).astype(np.float32)
+                cost_arr = cost_arr[: template.shape[0], : template.shape[1]]
+            qa_vars["fitting_cost"] = xr.DataArray(
+                cost_arr,
+                dims=template.dims,
+                coords=template.coords,
+            )
+        return xr.Dataset(qa_vars)
 
     @staticmethod
     def _summarize_solver_qa(qa: xr.Dataset) -> dict[str, float]:
@@ -658,14 +756,6 @@ class MultiGridSolver:
         shape = self._get_shape(mask)
         valid_mask = mask.values.astype(bool)
 
-        n_aot = max(3, int(self.config.grid_search_aot_points))
-        n_tcwv = max(3, int(self.config.grid_search_tcwv_points))
-        aot_axis = np.linspace(
-            self.config.aot_bounds[0], self.config.aot_bounds[1], n_aot, dtype=np.float32
-        )
-        tcwv_axis = np.linspace(
-            self.config.tcwv_bounds[0], self.config.tcwv_bounds[1], n_tcwv, dtype=np.float32
-        )
         band_weights = self._compute_band_weights(
             bands, power=cost_config.band_weight_power
         )
@@ -675,6 +765,25 @@ class MultiGridSolver:
         tcwv_prior = atmo_prior.tcwv.values.astype(np.float32)
         aot_prior_unc = np.maximum(atmo_prior.aot_unc.values.astype(np.float32), cost_config.min_aot_unc)
         tcwv_prior_unc = np.maximum(atmo_prior.tcwv_unc.values.astype(np.float32), cost_config.min_tcwv_unc)
+        fixed_parameter = self._fixed_parameter()
+        solve_aot = fixed_parameter != "aot"
+        solve_tcwv = fixed_parameter != "tcwv"
+        n_aot = max(3, int(self.config.grid_search_aot_points)) if solve_aot else 1
+        n_tcwv = max(3, int(self.config.grid_search_tcwv_points)) if solve_tcwv else 1
+        aot_axis = (
+            np.linspace(
+                self.config.aot_bounds[0], self.config.aot_bounds[1], n_aot, dtype=np.float32
+            )
+            if solve_aot
+            else self._fixed_axis_from_prior(aot_prior, self.config.aot_bounds)
+        )
+        tcwv_axis = (
+            np.linspace(
+                self.config.tcwv_bounds[0], self.config.tcwv_bounds[1], n_tcwv, dtype=np.float32
+            )
+            if solve_tcwv
+            else self._fixed_axis_from_prior(tcwv_prior, self.config.tcwv_bounds)
+        )
 
         n_bands = len(bands)
         toa_values = toa.values.astype(np.float32)
@@ -729,46 +838,92 @@ class MultiGridSolver:
         support_mask = observation_support_mask & prior_support_mask
         solve_valid_mask = valid_mask & support_mask
 
-        xap_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
-        xbp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
-        xcp_stack: Float32Array = np.empty((n_bands, shape[0], shape[1]), dtype=np.float32)
-
         block_size = max(1, self.config.quadratic_block_size)
         rt_sample_step = block_size
+        coeff_spatial_shape = (
+            shape
+            if rt_sample_step <= 1
+            else (
+                (shape[0] + rt_sample_step - 1) // rt_sample_step,
+                (shape[1] + rt_sample_step - 1) // rt_sample_step,
+            )
+        )
+
+        xap_stack: Float32Array = np.empty((n_bands, *coeff_spatial_shape), dtype=np.float32)
+        xbp_stack: Float32Array = np.empty((n_bands, *coeff_spatial_shape), dtype=np.float32)
+        xcp_stack: Float32Array = np.empty((n_bands, *coeff_spatial_shape), dtype=np.float32)
+
+        coeff_geometry = geometry
+        coeff_atmo_template = atmo_prior
+        if rt_sample_step > 1:
+            coeff_geometry = self._subsample_geometry(geometry, rt_sample_step)
+            coeff_atmo_template = self._subsample_atmo_state(atmo_prior, rt_sample_step)
+
+        def _empty_float32_like(template: xr.DataArray) -> xr.DataArray:
+            return xr.DataArray(
+                np.empty(template.shape, dtype=np.float32),
+                dims=template.dims,
+                coords=template.coords,
+                attrs=template.attrs,
+                name=template.name,
+            )
+
+        candidate_aot = _empty_float32_like(coeff_atmo_template.aot)
+        candidate_tcwv = _empty_float32_like(coeff_atmo_template.tcwv)
+        candidate_aot_values = cast("Float32Array", candidate_aot.data)
+        candidate_tcwv_values = cast("Float32Array", candidate_tcwv.data)
+        if not solve_aot:
+            candidate_aot_values[...] = self._finite_fixed_prior_field(
+                coeff_atmo_template.aot.values,
+                self.config.aot_bounds,
+            )
+        if not solve_tcwv:
+            candidate_tcwv_values[...] = self._finite_fixed_prior_field(
+                coeff_atmo_template.tcwv.values,
+                self.config.tcwv_bounds,
+            )
+        candidate_atmo = AtmosphericState(
+            aot=candidate_aot,
+            tcwv=candidate_tcwv,
+            tco3=coeff_atmo_template.tco3,
+            aot_unc=coeff_atmo_template.aot_unc,
+            tcwv_unc=coeff_atmo_template.tcwv_unc,
+            tco3_unc=coeff_atmo_template.tco3_unc,
+            elevation=coeff_atmo_template.elevation,
+        )
+
+        def _assign_coeff_stack(
+            target: Float32Array,
+            band_index: int,
+            values: xr.DataArray,
+        ) -> None:
+            coeff_values = np.asarray(values.values, dtype=np.float32)
+            expected_shape = target[band_index].shape
+            if coeff_values.shape != expected_shape:
+                raise ValueError(
+                    f"RT coefficients for band {band_index} have shape {coeff_values.shape}, "
+                    f"expected {expected_shape}"
+                )
+            target[band_index] = coeff_values
 
         def _candidate_coeff_provider(
             aot_val: float, tcwv_val: float
         ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-            aot_field = xr.full_like(atmo_prior.aot, fill_value=float(aot_val), dtype=np.float32)
-            tcwv_field = xr.full_like(atmo_prior.tcwv, fill_value=float(tcwv_val), dtype=np.float32)
-            atmo_state = atmo_prior.with_updated_aot_tcwv(aot=aot_field, tcwv=tcwv_field)
+            if solve_aot:
+                candidate_aot_values.fill(np.float32(aot_val))
+            if solve_tcwv:
+                candidate_tcwv_values.fill(np.float32(tcwv_val))
 
-            if rt_sample_step <= 1:
-                for ib, band in enumerate(bands):
-                    coeffs = rt_model.compute_coefficients(
-                        geometry, atmo_state, band, compute_jacobian=False
-                    )
-                    xap_stack[ib] = np.asarray(coeffs.xap.values, dtype=np.float32)
-                    xbp_stack[ib] = np.asarray(coeffs.xbp.values, dtype=np.float32)
-                    xcp_stack[ib] = np.asarray(coeffs.xcp.values, dtype=np.float32)
-            else:
-                # Subsample geometry/atmo to a coarser grid, compute RT
-                # coefficients there, then broadcast back to full resolution.
-                sub_geometry = self._subsample_geometry(geometry, rt_sample_step)
-                sub_atmo = self._subsample_atmo_state(atmo_state, rt_sample_step)
-                for ib, band in enumerate(bands):
-                    coeffs = rt_model.compute_coefficients(
-                        sub_geometry, sub_atmo, band, compute_jacobian=False
-                    )
-                    xap_stack[ib] = self._broadcast_to_full(
-                        np.asarray(coeffs.xap.values, dtype=np.float32), shape, rt_sample_step,
-                    )
-                    xbp_stack[ib] = self._broadcast_to_full(
-                        np.asarray(coeffs.xbp.values, dtype=np.float32), shape, rt_sample_step,
-                    )
-                    xcp_stack[ib] = self._broadcast_to_full(
-                        np.asarray(coeffs.xcp.values, dtype=np.float32), shape, rt_sample_step,
-                    )
+            for ib, band in enumerate(bands):
+                coeffs = rt_model.compute_coefficients(
+                    coeff_geometry,
+                    candidate_atmo,
+                    band,
+                    compute_jacobian=False,
+                )
+                _assign_coeff_stack(xap_stack, ib, coeffs.xap)
+                _assign_coeff_stack(xbp_stack, ib, coeffs.xbp)
+                _assign_coeff_stack(xcp_stack, ib, coeffs.xcp)
             return xap_stack, xbp_stack, xcp_stack
 
         block_valid_counts = self._aggregate_valid_counts(solve_valid_mask, block_size)
@@ -799,6 +954,7 @@ class MultiGridSolver:
                 aot_prior_unc,
                 tcwv_prior_unc,
                 block_size,
+                fixed_parameter,
             )
             block_valid_mask = np.asarray(block_valid_mask_raw, dtype=bool) & block_support_mask
             refine_valid_mask = block_valid_mask.astype(bool, copy=False)
@@ -816,6 +972,7 @@ class MultiGridSolver:
                 tcwv_prior,
                 aot_prior_unc,
                 tcwv_prior_unc,
+                fixed_parameter,
             )
             refine_valid_mask = solve_valid_mask.astype(bool, copy=False)
         costs = np.asarray(costs_raw, dtype=np.float32)
@@ -846,6 +1003,7 @@ class MultiGridSolver:
             aot_axis.astype(np.float32, copy=False),
             tcwv_axis.astype(np.float32, copy=False),
             refine_valid_mask,
+            fixed_parameter,
         )
         aot_best = np.asarray(aot_best, dtype=np.float32)
         tcwv_best = np.asarray(tcwv_best, dtype=np.float32)
@@ -872,20 +1030,22 @@ class MultiGridSolver:
                 & np.isfinite(aot_best)
                 & np.isfinite(tcwv_best)
             )
-            aot_best = self._smooth_grid_search_field(
-                aot_best,
-                gamma=cost_config.aot_gamma,
-                delta=cost_config.smoothness_delta,
-                n_iter=40,
-                trusted_mask=trusted_block_mask,
-            ).astype(np.float32)
-            tcwv_best = self._smooth_grid_search_field(
-                tcwv_best,
-                gamma=cost_config.tcwv_gamma,
-                delta=cost_config.smoothness_delta,
-                n_iter=40,
-                trusted_mask=trusted_block_mask,
-            ).astype(np.float32)
+            if solve_aot:
+                aot_best = self._smooth_grid_search_field(
+                    aot_best,
+                    gamma=cost_config.aot_gamma,
+                    delta=cost_config.smoothness_delta,
+                    n_iter=40,
+                    trusted_mask=trusted_block_mask,
+                ).astype(np.float32)
+            if solve_tcwv:
+                tcwv_best = self._smooth_grid_search_field(
+                    tcwv_best,
+                    gamma=cost_config.tcwv_gamma,
+                    delta=cost_config.smoothness_delta,
+                    n_iter=40,
+                    trusted_mask=trusted_block_mask,
+                ).astype(np.float32)
 
             invalid_mask_full = self._broadcast_to_full(invalid_mask, shape, block_size) > 0.5
             zero_obs_mask_full = self._broadcast_to_full(zero_obs_mask, shape, block_size) > 0.5
@@ -915,14 +1075,16 @@ class MultiGridSolver:
 
         invalid_floor_pixels = int(
             np.count_nonzero(
-                invalid_mask
+                solve_aot
+                & invalid_mask
                 & solve_valid_mask
                 & np.isclose(aot_best, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
             )
         )
         prior_floor_pixels = int(
             np.count_nonzero(
-                invalid_mask
+                solve_aot
+                & invalid_mask
                 & solve_valid_mask
                 & np.isclose(aot_prior, float(aot_axis[0]), rtol=0.0, atol=1.0e-6)
             )
@@ -942,20 +1104,22 @@ class MultiGridSolver:
             # retrievals as seeds. Invalid, zero-support, and boundary-hit
             # retrievals are filled from neighbouring trusted seeds instead of
             # being allowed to influence the smoothed field.
-            aot_best = self._smooth_grid_search_field(
-                aot_best,
-                gamma=cost_config.aot_gamma,
-                delta=cost_config.smoothness_delta,
-                n_iter=40,
-                trusted_mask=trusted_pixel_mask,
-            ).astype(np.float32)
-            tcwv_best = self._smooth_grid_search_field(
-                tcwv_best,
-                gamma=cost_config.tcwv_gamma,
-                delta=cost_config.smoothness_delta,
-                n_iter=40,
-                trusted_mask=trusted_pixel_mask,
-            ).astype(np.float32)
+            if solve_aot:
+                aot_best = self._smooth_grid_search_field(
+                    aot_best,
+                    gamma=cost_config.aot_gamma,
+                    delta=cost_config.smoothness_delta,
+                    n_iter=40,
+                    trusted_mask=trusted_pixel_mask,
+                ).astype(np.float32)
+            if solve_tcwv:
+                tcwv_best = self._smooth_grid_search_field(
+                    tcwv_best,
+                    gamma=cost_config.tcwv_gamma,
+                    delta=cost_config.smoothness_delta,
+                    n_iter=40,
+                    trusted_mask=trusted_pixel_mask,
+                ).astype(np.float32)
 
         # Handle QA-invalid pixels.  If there are enough valid neighbours the
         # smoothing has already propagated sensible values into them.  When ALL
@@ -978,6 +1142,13 @@ class MultiGridSolver:
                 np.maximum(tcwv_prior_unc, np.float32(0.5)),
                 tcwv_unc,
             ).astype(np.float32, copy=False)
+
+        if fixed_parameter == "aot":
+            aot_best = aot_prior.astype(np.float32, copy=True)
+            aot_unc = aot_prior_unc.astype(np.float32, copy=True)
+        elif fixed_parameter == "tcwv":
+            tcwv_best = tcwv_prior.astype(np.float32, copy=True)
+            tcwv_unc = tcwv_prior_unc.astype(np.float32, copy=True)
 
         if np.any(no_observation_mask):
             invalid_mask = invalid_mask | no_observation_mask
@@ -1045,6 +1216,11 @@ class MultiGridSolver:
                 "qa_invalid_mask": invalid_mask.astype(bool, copy=False),
                 "qa_zero_obs_mask": zero_obs_mask.astype(bool, copy=False),
                 "qa_insufficient_support_mask": insufficient_support_mask.astype(bool, copy=False),
+                "qa_fitting_cost_map": (
+                    selected_costs.reshape(costs.shape[-2:])
+                    if block_size > 1
+                    else selected_costs.reshape(shape)
+                ).astype(np.float32, copy=False),
             },
         )
 
@@ -1154,15 +1330,10 @@ class MultiGridSolver:
 
         by = (source.shape[0] + step - 1) // step
         bx = (source.shape[1] + step - 1) // step
-        reduced = np.zeros((by, bx), dtype=np.int32)
-        for iy in range(by):
-            y0 = iy * step
-            y1 = min(y0 + step, source.shape[0])
-            for ix in range(bx):
-                x0 = ix * step
-                x1 = min(x0 + step, source.shape[1])
-                reduced[iy, ix] = int(np.count_nonzero(source[y0:y1, x0:x1]))
-        return reduced
+        pad_y = by * step - source.shape[0]
+        pad_x = bx * step - source.shape[1]
+        padded = np.pad(source, ((0, pad_y), (0, pad_x)), mode="constant", constant_values=False)
+        return padded.reshape(by, step, bx, step).sum(axis=(1, 3), dtype=np.int32)
 
     @staticmethod
     def _aggregate_block_pixel_counts(shape: tuple[int, int], step: int) -> np.ndarray:
@@ -1172,15 +1343,9 @@ class MultiGridSolver:
 
         by = (shape[0] + step - 1) // step
         bx = (shape[1] + step - 1) // step
-        counts = np.zeros((by, bx), dtype=np.int32)
-        for iy in range(by):
-            y0 = iy * step
-            y1 = min(y0 + step, shape[0])
-            for ix in range(bx):
-                x0 = ix * step
-                x1 = min(x0 + step, shape[1])
-                counts[iy, ix] = int((y1 - y0) * (x1 - x0))
-        return counts
+        rows = np.minimum(step, shape[0] - np.arange(by, dtype=np.int32) * step)
+        cols = np.minimum(step, shape[1] - np.arange(bx, dtype=np.int32) * step)
+        return (rows[:, np.newaxis] * cols[np.newaxis, :]).astype(np.int32, copy=False)
 
     @staticmethod
     def _smooth_grid_search_field(
@@ -1330,14 +1495,35 @@ class MultiGridSolver:
         Returns:
             Tuple of (solved_aot, solved_tcwv, optimize_result)
         """
-        # Pack initial guess
-        p0 = np.concatenate([aot_init.ravel(), tcwv_init.ravel()])
-
-        # Setup bounds
         n = aot_init.size
         bounds_aot = [self.config.aot_bounds] * n
         bounds_tcwv = [self.config.tcwv_bounds] * n
-        bounds = bounds_aot + bounds_tcwv
+        fixed_parameter = self._fixed_parameter()
+        fixed_aot = np.asarray(cost_func.aot_prior, dtype=np.float64).reshape(aot_init.shape)
+        fixed_tcwv = np.asarray(cost_func.tcwv_prior, dtype=np.float64).reshape(tcwv_init.shape)
+
+        if fixed_parameter == "aot":
+            p0 = tcwv_init.ravel()
+            bounds = bounds_tcwv
+
+            def objective(p: np.ndarray) -> tuple[float, np.ndarray]:
+                full_p = np.concatenate([fixed_aot.ravel(), p])
+                cost, grad = cost_func(full_p)
+                return cost, grad[n:]
+
+        elif fixed_parameter == "tcwv":
+            p0 = aot_init.ravel()
+            bounds = bounds_aot
+
+            def objective(p: np.ndarray) -> tuple[float, np.ndarray]:
+                full_p = np.concatenate([p, fixed_tcwv.ravel()])
+                cost, grad = cost_func(full_p)
+                return cost, grad[:n]
+
+        else:
+            p0 = np.concatenate([aot_init.ravel(), tcwv_init.ravel()])
+            bounds = bounds_aot + bounds_tcwv
+            objective = cost_func
 
         # Adjust parameters based on level
         maxiter = self.config.max_iter_per_level
@@ -1346,7 +1532,7 @@ class MultiGridSolver:
 
         # Run optimization
         result = optimize.minimize(
-            cost_func,
+            objective,
             p0,
             jac=True,
             method="L-BFGS-B",
@@ -1362,8 +1548,15 @@ class MultiGridSolver:
         )
 
         # Unpack solution
-        aot_solved = result.x[:n].reshape(aot_init.shape)
-        tcwv_solved = result.x[n:].reshape(tcwv_init.shape)
+        if fixed_parameter == "aot":
+            aot_solved = fixed_aot.astype(np.float32, copy=False)
+            tcwv_solved = result.x.reshape(tcwv_init.shape)
+        elif fixed_parameter == "tcwv":
+            aot_solved = result.x.reshape(aot_init.shape)
+            tcwv_solved = fixed_tcwv.astype(np.float32, copy=False)
+        else:
+            aot_solved = result.x[:n].reshape(aot_init.shape)
+            tcwv_solved = result.x[n:].reshape(tcwv_init.shape)
 
         return aot_solved, tcwv_solved, result
 
@@ -1441,6 +1634,327 @@ class MultiGridSolver:
         return aot_unc, tcwv_unc
 
 
+class StagedMultiGridSolver:
+    """Chain one or more atmospheric solver stages.
+
+    The staged wrapper is deliberately conservative: it can chain today's
+    supported AOT/TCWV combinations and carries TCO3 through the atmospheric
+    state, but it fails early for requested TCO3 solving until the RT Jacobian
+    and Rust/grid-search contracts expose ozone as a solved parameter.
+    """
+
+    _VALID_PARAMETERS = {"aot", "tcwv", "tco3"}
+
+    def __init__(self, config: MultiGridConfig | None = None):
+        self.config = config or MultiGridConfig()
+
+    def solve(
+        self,
+        toa: xr.DataArray,
+        surface_prior: SurfacePrior,
+        geometry: GeometryAngles,
+        atmo_prior: AtmosphericState,
+        rt_model: RTModelBackend,
+        cloud_mask: xr.DataArray,
+        bands: list[SensorBand],
+        sharp_transition_mask: xr.DataArray | None = None,
+    ) -> SolverResult:
+        stages = self._normalized_stages()
+        if not stages:
+            return MultiGridSolver(self.config).solve(
+                toa=toa,
+                surface_prior=surface_prior,
+                geometry=geometry,
+                atmo_prior=atmo_prior,
+                rt_model=rt_model,
+                cloud_mask=cloud_mask,
+                bands=bands,
+                sharp_transition_mask=sharp_transition_mask,
+            )
+
+        current_state = atmo_prior
+        total_iterations = 0
+        final_cost = float("nan")
+        final_success = True
+        messages: list[str] = []
+        level_history: list[dict[str, Any]] = []
+        final_qa: xr.Dataset | None = None
+        final_result: SolverResult | None = None
+
+        for index, stage in enumerate(stages):
+            stage_solve = set(stage.solve)
+            if not stage_solve:
+                logger.info("Skipping solver stage %s: no solved parameters.", stage.name)
+                continue
+
+            fixed_parameter = self._fixed_parameter_for_stage(stage)
+            stage_prior = atmo_prior if stage.initial_state == "prior" else current_state
+            stage_toa, stage_surface_prior, stage_bands = self._select_stage_inputs(
+                toa=toa,
+                surface_prior=surface_prior,
+                bands=bands,
+                stage=stage,
+            )
+            stage_config = replace(
+                self.config,
+                fixed_atmospheric_parameter=fixed_parameter,
+                stages=(),
+            )
+
+            logger.info(
+                "Solver stage %s: solving %s with fixed %s using %d band(s).",
+                stage.name,
+                ", ".join(stage.solve),
+                ", ".join(sorted(self._fixed_parameters_for_log(stage))),
+                len(stage_bands),
+            )
+            result = MultiGridSolver(stage_config).solve(
+                toa=stage_toa,
+                surface_prior=stage_surface_prior,
+                geometry=geometry,
+                atmo_prior=stage_prior,
+                rt_model=rt_model,
+                cloud_mask=cloud_mask,
+                bands=stage_bands,
+                sharp_transition_mask=sharp_transition_mask,
+            )
+
+            updates: dict[str, xr.DataArray] = {}
+            uncertainties: dict[str, xr.DataArray] = {}
+            if "aot" in stage_solve:
+                updates["aot"] = result.aot
+                uncertainties["aot"] = result.aot_unc
+            if "tcwv" in stage_solve:
+                updates["tcwv"] = result.tcwv
+                uncertainties["tcwv"] = result.tcwv_unc
+            current_state = stage_prior.with_updated_parameters(updates, uncertainties)
+
+            total_iterations += int(result.n_iterations)
+            final_cost = float(result.final_cost)
+            final_success = final_success and bool(result.success)
+            messages.append(f"{stage.name}: {result.message}")
+            final_qa = result.qa
+            final_result = result
+            for entry in result.level_history:
+                tagged_entry = dict(entry)
+                tagged_entry["stage"] = stage.name
+                tagged_entry["stage_index"] = index
+                tagged_entry["stage_solve"] = tuple(stage.solve)
+                level_history.append(tagged_entry)
+
+        if final_result is None:
+            return SolverResult(
+                aot=current_state.aot,
+                tcwv=current_state.tcwv,
+                aot_unc=current_state.aot_unc,
+                tcwv_unc=current_state.tcwv_unc,
+                n_iterations=0,
+                final_cost=float("nan"),
+                success=True,
+                message="No solver stages configured with active parameters",
+                qa=None,
+                level_history=[],
+                atmo_state=current_state,
+            )
+
+        return SolverResult(
+            aot=current_state.aot,
+            tcwv=current_state.tcwv,
+            aot_unc=current_state.aot_unc,
+            tcwv_unc=current_state.tcwv_unc,
+            n_iterations=total_iterations,
+            final_cost=final_cost,
+            success=final_success,
+            message="; ".join(messages),
+            qa=final_qa,
+            level_history=level_history,
+            atmo_state=current_state,
+        )
+
+    def _normalized_stages(self) -> tuple[SolverStageConfig, ...]:
+        raw_stages = tuple(getattr(self.config, "stages", ()) or ())
+        return tuple(self._coerce_stage(stage, index) for index, stage in enumerate(raw_stages))
+
+    @classmethod
+    def _coerce_stage(cls, stage: Any, index: int) -> SolverStageConfig:
+        if isinstance(stage, SolverStageConfig):
+            candidate = stage
+        elif isinstance(stage, dict):
+            candidate = SolverStageConfig(
+                name=str(stage.get("name") or f"stage_{index + 1}"),
+                solve=cls._parameter_tuple(stage.get("solve"), ("aot", "tcwv")),
+                fixed=cls._parameter_tuple(stage.get("fixed"), ("tco3",)),
+                bands=cls._band_tuple(stage.get("bands")),
+                initial_state=cast(
+                    "StageInitialState",
+                    str(stage.get("initial_state") or "previous").lower(),
+                ),
+            )
+        else:
+            candidate = SolverStageConfig(
+                name=str(getattr(stage, "name", None) or f"stage_{index + 1}"),
+                solve=cls._parameter_tuple(getattr(stage, "solve", None), ("aot", "tcwv")),
+                fixed=cls._parameter_tuple(getattr(stage, "fixed", None), ("tco3",)),
+                bands=cls._band_tuple(getattr(stage, "bands", None)),
+                initial_state=cast(
+                    "StageInitialState",
+                    str(getattr(stage, "initial_state", "previous")).lower(),
+                ),
+            )
+
+        cls._validate_stage(candidate)
+        return candidate
+
+    @classmethod
+    def _parameter_tuple(
+        cls,
+        value: Any,
+        default: tuple[AtmosphericParameterName, ...],
+    ) -> tuple[AtmosphericParameterName, ...]:
+        if value is None:
+            raw = default
+        elif isinstance(value, str):
+            raw = (value,)
+        else:
+            raw = tuple(value)
+        normalized = tuple(str(item).strip().lower() for item in raw if str(item).strip())
+        return cast("tuple[AtmosphericParameterName, ...]", normalized)
+
+    @staticmethod
+    def _band_tuple(value: Any) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return (value,)
+        return tuple(str(item) for item in value)
+
+    @classmethod
+    def _validate_stage(cls, stage: SolverStageConfig) -> None:
+        solve = set(stage.solve)
+        fixed = set(stage.fixed)
+        unknown = (solve | fixed) - cls._VALID_PARAMETERS
+        if unknown:
+            raise ValueError(
+                f"Solver stage {stage.name!r} references unknown parameter(s): "
+                f"{', '.join(sorted(unknown))}"
+            )
+        overlap = solve & fixed
+        if overlap:
+            raise ValueError(
+                f"Solver stage {stage.name!r} cannot both solve and fix "
+                f"{', '.join(sorted(overlap))}"
+            )
+        if stage.initial_state not in {"prior", "previous"}:
+            raise ValueError(
+                f"Solver stage {stage.name!r} initial_state must be 'prior' or 'previous'"
+            )
+        if "tco3" in solve:
+            raise NotImplementedError(
+                "Solver stage "
+                f"{stage.name!r} requests TCO3 solving, but ozone is currently "
+                "only a carried atmospheric state field. Add RT TCO3 Jacobian/grid-search "
+                "support before enabling solve=['tco3']."
+            )
+
+    @classmethod
+    def _fixed_parameter_for_stage(
+        cls,
+        stage: SolverStageConfig,
+    ) -> FixedAtmosphericParameter:
+        cls._validate_stage(stage)
+        solve = set(stage.solve)
+        solves_aot = "aot" in solve
+        solves_tcwv = "tcwv" in solve
+        if solves_aot and solves_tcwv:
+            return "none"
+        if solves_aot:
+            return "tcwv"
+        if solves_tcwv:
+            return "aot"
+        raise ValueError(
+            f"Solver stage {stage.name!r} must solve at least one supported "
+            "parameter: aot or tcwv"
+        )
+
+    @classmethod
+    def _fixed_parameters_for_log(cls, stage: SolverStageConfig) -> set[str]:
+        return cls._VALID_PARAMETERS - set(stage.solve)
+
+    @classmethod
+    def _select_stage_inputs(
+        cls,
+        *,
+        toa: xr.DataArray,
+        surface_prior: SurfacePrior,
+        bands: list[SensorBand],
+        stage: SolverStageConfig,
+    ) -> tuple[xr.DataArray, SurfacePrior, list[SensorBand]]:
+        if not stage.bands:
+            return toa, surface_prior, bands
+
+        requested = tuple(stage.bands)
+        index_by_name = {band.name: index for index, band in enumerate(bands)}
+        missing = [name for name in requested if name not in index_by_name]
+        if missing:
+            raise ValueError(
+                f"Solver stage {stage.name!r} requested unknown band(s): "
+                f"{', '.join(missing)}"
+            )
+
+        indices = [index_by_name[name] for name in requested]
+        selected_bands = [bands[index] for index in indices]
+        selected_toa = cls._select_band_axis(toa, indices, len(bands))
+        selected_surface_prior = cls._select_surface_prior_bands(
+            surface_prior,
+            indices,
+            len(bands),
+        )
+        return selected_toa, selected_surface_prior, selected_bands
+
+    @staticmethod
+    def _select_band_axis(
+        data: xr.DataArray,
+        indices: list[int],
+        source_band_count: int,
+    ) -> xr.DataArray:
+        if data.ndim >= 3 and data.shape[0] == source_band_count:
+            return data.isel({data.dims[0]: indices})
+        return data
+
+    @classmethod
+    def _select_surface_prior_bands(
+        cls,
+        surface_prior: SurfacePrior,
+        indices: list[int],
+        source_band_count: int,
+    ) -> SurfacePrior:
+        kernels = surface_prior.kernels
+        if kernels is not None:
+            kernels = BRDFKernelWeights(
+                f0=cls._select_band_axis(kernels.f0, indices, source_band_count),
+                f1=cls._select_band_axis(kernels.f1, indices, source_band_count),
+                f2=cls._select_band_axis(kernels.f2, indices, source_band_count),
+                f0_unc=cls._select_band_axis(kernels.f0_unc, indices, source_band_count),
+                f1_unc=cls._select_band_axis(kernels.f1_unc, indices, source_band_count),
+                f2_unc=cls._select_band_axis(kernels.f2_unc, indices, source_band_count),
+                reflectance_unc=cls._select_band_axis(
+                    kernels.reflectance_unc,
+                    indices,
+                    source_band_count,
+                )
+                if kernels.reflectance_unc is not None
+                else None,
+            )
+
+        return SurfacePrior(
+            boa=cls._select_band_axis(surface_prior.boa, indices, source_band_count),
+            boa_unc=cls._select_band_axis(surface_prior.boa_unc, indices, source_band_count),
+            kernels=kernels,
+            mask=cls._select_band_axis(surface_prior.mask, indices, source_band_count),
+            monthly_composites=surface_prior.monthly_composites,
+        )
+
+
 def solve_atmospheric_parameters(
     toa: xr.DataArray,
     surface_prior: SurfacePrior,
@@ -1467,7 +1981,12 @@ def solve_atmospheric_parameters(
     Returns:
         SolverResult with solved AOT, TCWV and diagnostics.
     """
-    solver = MultiGridSolver(config)
+    solver_cls = (
+        StagedMultiGridSolver
+        if config is not None and getattr(config, "stages", ())
+        else MultiGridSolver
+    )
+    solver = solver_cls(config)
     return solver.solve(
         toa=toa,
         surface_prior=surface_prior,

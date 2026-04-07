@@ -12,7 +12,7 @@ from siac.adapters.output import ConfiguredOutputWriter
 from siac.adapters.rt import build_rt_model
 from siac.adapters.satellite import detect_sensor, get_preprocessor
 from siac.algorithms.correction import AtmosphericCorrector, CorrectionResult
-from siac.algorithms.solver import MultiGridConfig, MultiGridSolver
+from siac.algorithms.solver import MultiGridConfig, MultiGridSolver, StagedMultiGridSolver
 from siac.domain.aoi import AOI
 from siac.geo.resample import (
     resample_field_for_correction as _resample_field_for_correction,
@@ -250,6 +250,10 @@ def resolve_solver(config: Any) -> SolverFn:
             tcwv_bounds=tuple(config.solver.tcwv_bounds),
             band_weight_power=getattr(config.solver, "alpha", -1.6),
             smoothness_delta=getattr(config.solver, "smoothness_delta", 0.02),
+            grid_search_aot_points=getattr(config.solver, "grid_search_aot_points", 11),
+            grid_search_tcwv_points=getattr(config.solver, "grid_search_tcwv_points", 11),
+            fixed_atmospheric_parameter=getattr(config.solver, "fixed_atmospheric_parameter", "none"),
+            stages=tuple(getattr(config.solver, "stages", ()) or ()),
             quadratic_block_size=getattr(config.solver, "quadratic_block_size", 1),
             quadratic_block_min_valid_fraction=getattr(
                 config.solver,
@@ -257,7 +261,13 @@ def resolve_solver(config: Any) -> SolverFn:
                 0.5,
             ),
         )
-        mg_solver = MultiGridSolver(solver_config)
+        solver_stages = (
+            solver_config.get("stages", ())
+            if isinstance(solver_config, dict)
+            else getattr(solver_config, "stages", ())
+        )
+        solver_cls = StagedMultiGridSolver if solver_stages else MultiGridSolver
+        mg_solver = solver_cls(solver_config)
         solve_kwargs: dict[str, Any] = {}
         with suppress(TypeError, ValueError):
             signature = inspect.signature(mg_solver.solve)
@@ -273,12 +283,14 @@ def resolve_solver(config: Any) -> SolverFn:
             inputs.bands,
             **solve_kwargs,
         )
-        solved_atmo = inputs.atmo_prior.with_updated_aot_tcwv(
-            aot=result.aot,
-            tcwv=result.tcwv,
-            aot_unc=result.aot_unc,
-            tcwv_unc=result.tcwv_unc,
-        )
+        solved_atmo = getattr(result, "atmo_state", None)
+        if solved_atmo is None:
+            solved_atmo = inputs.atmo_prior.with_updated_aot_tcwv(
+                aot=result.aot,
+                tcwv=result.tcwv,
+                aot_unc=result.aot_unc,
+                tcwv_unc=result.tcwv_unc,
+            )
         return SolvedAtmosphere(
             atmo_state=solved_atmo,
             aot=solved_atmo.aot,

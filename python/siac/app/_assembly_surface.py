@@ -141,6 +141,8 @@ class _MonthlySurfacePriorRuntime:
     visible_bands: list[Any]
     query_bands: list[Any]
     geometry: Any
+    database_resolution: float
+    query_resolution: float
     spectral_library: Any | None
     spectral_k_neighbors: int
     max_prediction_uncertainty: float | None
@@ -153,8 +155,18 @@ class _MonthlySurfacePriorRuntime:
 def _resolve_monthly_database_resolution(
     monthly_composite_provider: Any,
     requested_resolution: float,
+    *,
+    policy: str = "provider_or_coarser",
 ) -> float:
     requested = float(requested_resolution)
+    normalized_policy = str(policy).strip().lower()
+    if normalized_policy == "aerosol":
+        return requested
+    if normalized_policy != "provider_or_coarser":
+        raise ValueError(
+            "surface_prior.monthly_database_resolution_policy must be "
+            "'provider_or_coarser' or 'aerosol'"
+        )
     provider_resolution = getattr(monthly_composite_provider, "resolution_m", None)
     if provider_resolution is None:
         return requested
@@ -216,8 +228,20 @@ def _prepare_monthly_surface_prior_runtime(
     database_resolution = _resolve_monthly_database_resolution(
         monthly_composite_provider,
         resolution,
+        policy=str(
+            getattr(
+                getattr(config, "surface_prior", None),
+                "monthly_database_resolution_policy",
+                "provider_or_coarser",
+            )
+        ),
     )
-    geometry = resample_geometry_fn(observation, resolution=database_resolution)
+    query_resolution = float(resolution)
+    database_geometry = resample_geometry_fn(observation, resolution=database_resolution)
+    if np.isclose(query_resolution, database_resolution, rtol=0.0, atol=1.0e-6):
+        query_geometry = database_geometry
+    else:
+        query_geometry = resample_geometry_fn(observation, resolution=query_resolution)
     get_monthly_composites = getattr(monthly_composite_provider, "get_monthly_composites", None)
     if callable(get_monthly_composites):
         monthly_composites = get_monthly_composites(observation, database_resolution)
@@ -229,7 +253,7 @@ def _prepare_monthly_surface_prior_runtime(
         )
         database = build_database_fn(
             monthly_composites=monthly_composites,
-            geometry=geometry,
+            geometry=database_geometry,
             visible_bands=visible_bands,
             query_bands=query_bands,
             spectral_library=spectral_library,
@@ -248,7 +272,7 @@ def _prepare_monthly_surface_prior_runtime(
             observation=observation,
             brdf_provider=monthly_composite_provider,
             resolution=database_resolution,
-            geometry=geometry,
+            geometry=database_geometry,
             visible_bands=visible_bands,
             query_bands=query_bands,
             spectral_library=spectral_library,
@@ -258,7 +282,9 @@ def _prepare_monthly_surface_prior_runtime(
     return _MonthlySurfacePriorRuntime(
         visible_bands=visible_bands,
         query_bands=query_bands,
-        geometry=geometry,
+        geometry=query_geometry,
+        database_resolution=database_resolution,
+        query_resolution=query_resolution,
         spectral_library=spectral_library,
         spectral_k_neighbors=spectral_k_neighbors,
         max_prediction_uncertainty=max_prediction_uncertainty,
@@ -288,6 +314,7 @@ def _query_monthly_surface_prior(
         database=runtime.database,
         query_band_names=tuple(band.name for band in runtime.query_bands),
         visible_band_names=tuple(band.name for band in runtime.visible_bands),
+        target_resolution=runtime.query_resolution,
         k_neighbors=runtime.spectral_k_neighbors,
         max_prediction_uncertainty=runtime.max_prediction_uncertainty,
         max_composite_quality=runtime.max_composite_quality,

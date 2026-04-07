@@ -24,6 +24,9 @@ from siac.algorithms.solver.cost import (
 from siac.algorithms.solver.multigrid import (
     MultiGridConfig,
     MultiGridSolver,
+    SolverResult,
+    SolverStageConfig,
+    StagedMultiGridSolver,
     build_solver_valid_mask,
 )
 from siac.runtime import AtmosphericState, SurfacePrior
@@ -340,6 +343,7 @@ class TestMultiGridConfig:
         assert config.n_levels == 6
         assert config.min_grid_size == 8
         assert config.aot_bounds == (0.001, 2.5)
+        assert config.fixed_atmospheric_parameter == "none"
         assert config.quadratic_block_min_valid_fraction == pytest.approx(0.5)
 
     def test_bounds(self):
@@ -351,6 +355,146 @@ class TestMultiGridConfig:
 
         assert config.aot_bounds[0] == 0.01
         assert config.tcwv_bounds[1] == 5.0
+
+
+class TestStagedMultiGridSolver:
+    def test_staged_solver_chains_supported_aot_tcwv_passes(
+        self,
+        monkeypatch,
+        mock_atmospheric_state,
+        mock_geometry,
+        mock_surface_prior,
+        mock_rt_model,
+    ):
+        from siac.domain import SensorBand
+
+        calls = []
+        bands = [
+            SensorBand("B02", 490.0, 65.0, 10.0, 0),
+            SensorBand("B04", 665.0, 30.0, 10.0, 1),
+        ]
+        shape = mock_atmospheric_state.aot.shape
+        toa = xr.DataArray(
+            np.full((2, *shape), 0.2, dtype=np.float32),
+            dims=["band", "y", "x"],
+        )
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+
+        def _fake_solve(
+            solver,
+            toa,
+            surface_prior,
+            geometry,
+            atmo_prior,
+            rt_model,
+            cloud_mask,
+            bands,
+            sharp_transition_mask=None,
+        ):
+            del surface_prior, geometry, rt_model, cloud_mask, sharp_transition_mask
+            call_index = len(calls)
+            calls.append(
+                {
+                    "fixed": solver.config.fixed_atmospheric_parameter,
+                    "aot_mean": float(atmo_prior.aot.mean()),
+                    "bands": [band.name for band in bands],
+                    "toa_shape": toa.shape,
+                }
+            )
+            if call_index == 0:
+                aot = xr.full_like(atmo_prior.aot, 0.31, dtype=np.float32)
+                tcwv = atmo_prior.tcwv
+            else:
+                aot = atmo_prior.aot
+                tcwv = xr.full_like(atmo_prior.tcwv, 3.2, dtype=np.float32)
+            return SolverResult(
+                aot=aot,
+                tcwv=tcwv,
+                aot_unc=atmo_prior.aot_unc,
+                tcwv_unc=atmo_prior.tcwv_unc,
+                n_iterations=call_index + 1,
+                final_cost=float(call_index),
+                success=True,
+                message="ok",
+                level_history=[{"level": 0}],
+            )
+
+        monkeypatch.setattr(MultiGridSolver, "solve", _fake_solve)
+        config = MultiGridConfig(
+            stages=(
+                SolverStageConfig(
+                    name="aot_pass",
+                    solve=("aot",),
+                    fixed=("tcwv", "tco3"),
+                    bands=("B02",),
+                ),
+                SolverStageConfig(
+                    name="tcwv_pass",
+                    solve=("tcwv",),
+                    fixed=("aot", "tco3"),
+                    bands=("B04",),
+                ),
+            )
+        )
+
+        result = StagedMultiGridSolver(config).solve(
+            toa=toa,
+            surface_prior=mock_surface_prior,
+            geometry=mock_geometry,
+            atmo_prior=mock_atmospheric_state,
+            rt_model=mock_rt_model,
+            cloud_mask=cloud_mask,
+            bands=bands,
+        )
+
+        assert calls[0]["fixed"] == "tcwv"
+        assert calls[0]["bands"] == ["B02"]
+        assert calls[0]["toa_shape"] == (1, *shape)
+        assert calls[1]["fixed"] == "aot"
+        assert calls[1]["bands"] == ["B04"]
+        assert calls[1]["aot_mean"] == pytest.approx(0.31)
+        assert result.n_iterations == 3
+        assert result.level_history[0]["stage"] == "aot_pass"
+        assert result.level_history[1]["stage"] == "tcwv_pass"
+        assert result.atmo_state is not None
+        np.testing.assert_allclose(result.atmo_state.aot, 0.31)
+        np.testing.assert_allclose(result.atmo_state.tcwv, 3.2)
+        np.testing.assert_allclose(result.atmo_state.tco3, mock_atmospheric_state.tco3)
+
+    def test_staged_solver_rejects_tco3_solve_until_rt_support_exists(
+        self,
+        mock_atmospheric_state,
+        mock_geometry,
+        mock_surface_prior,
+        mock_rt_model,
+    ):
+        from siac.domain import SensorBand
+
+        shape = mock_atmospheric_state.aot.shape
+        config = MultiGridConfig(
+            stages=(
+                SolverStageConfig(
+                    name="ozone_pass",
+                    solve=("tco3",),
+                    fixed=("aot", "tcwv"),
+                ),
+            )
+        )
+        solver = StagedMultiGridSolver(config)
+
+        with pytest.raises(NotImplementedError, match="TCO3"):
+            solver.solve(
+                toa=xr.DataArray(
+                    np.full((1, *shape), 0.2, dtype=np.float32),
+                    dims=["band", "y", "x"],
+                ),
+                surface_prior=mock_surface_prior,
+                geometry=mock_geometry,
+                atmo_prior=mock_atmospheric_state,
+                rt_model=mock_rt_model,
+                cloud_mask=xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"]),
+                bands=[SensorBand("B09", 945.0, 20.0, 60.0, 0)],
+            )
 
 
 class TestSharpTransitionObservationExclusion:
@@ -423,6 +567,47 @@ class TestSharpTransitionObservationExclusion:
             qa["low_quality"].values,
             np.array([[True, True], [True, True]], dtype=bool),
         )
+
+    def test_build_solver_qa_dataset_includes_fitting_cost_when_provided(self) -> None:
+        solver = MultiGridSolver()
+        template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])
+        cost_map = np.array([[0.01, 0.02], [0.03, 0.04]], dtype=np.float32)
+
+        qa = solver._build_solver_qa_dataset(
+            template=template,
+            valid_mask=np.ones((2, 2), dtype=bool),
+            aot=np.full((2, 2), 0.2, dtype=np.float32),
+            tcwv=np.full((2, 2), 2.0, dtype=np.float32),
+            invalid_mask=None,
+            zero_obs_mask=None,
+            insufficient_support_mask=None,
+            no_observation_mask=None,
+            sharp_transition_mask=None,
+            fitting_cost=cost_map,
+        )
+
+        assert "fitting_cost" in qa.data_vars
+        np.testing.assert_array_equal(qa["fitting_cost"].values, cost_map)
+        assert qa["fitting_cost"].dtype == np.float32
+
+    def test_build_solver_qa_dataset_omits_fitting_cost_when_none(self) -> None:
+        solver = MultiGridSolver()
+        template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])
+
+        qa = solver._build_solver_qa_dataset(
+            template=template,
+            valid_mask=np.ones((2, 2), dtype=bool),
+            aot=np.full((2, 2), 0.2, dtype=np.float32),
+            tcwv=np.full((2, 2), 2.0, dtype=np.float32),
+            invalid_mask=None,
+            zero_obs_mask=None,
+            insufficient_support_mask=None,
+            no_observation_mask=None,
+            sharp_transition_mask=None,
+            fitting_cost=None,
+        )
+
+        assert "fitting_cost" not in qa.data_vars
 
 
 class TestMultiGridSolver:
@@ -927,7 +1112,15 @@ class TestMultiGridSolver:
 
         called = {"n": 0}
 
-        def _fake_rust_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+        def _fake_rust_refiner(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+            fixed_parameter="none",
+        ):  # noqa: ANN001
+            assert fixed_parameter == "none"
             called["n"] += 1
             out_aot = np.full(valid_mask.shape, 0.33, dtype=np.float32)
             out_tcwv = np.full(valid_mask.shape, 1.23, dtype=np.float32)
@@ -966,6 +1159,133 @@ class TestMultiGridSolver:
         np.testing.assert_allclose(out_tcwv, 1.23)
         np.testing.assert_allclose(out_aot_unc, 0.07)
         np.testing.assert_allclose(out_tcwv_unc, 0.21)
+
+    def test_grid_search_can_fix_tcwv_to_prior(self, monkeypatch):
+        """Fixed TCWV mode should evaluate only the AOT axis and return TCWV prior."""
+        from siac.algorithms.solver import multigrid as mg_mod
+        from siac.domain import SensorBand
+        from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
+
+        shape = (2, 3)
+        solver = MultiGridSolver(
+            MultiGridConfig(
+                grid_search_aot_points=5,
+                grid_search_tcwv_points=5,
+                fixed_atmospheric_parameter="tcwv",
+            )
+        )
+        toa = xr.DataArray(np.stack([np.full(shape, 0.25, dtype=np.float32)]), dims=["band", "y", "x"])
+        mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        tcwv_prior_values = np.array([[np.nan, 1.5, 2.0], [2.5, 3.0, 3.5]], dtype=np.float32)
+        provider_tcwv_values = tcwv_prior_values.copy()
+        provider_tcwv_values[0, 0] = np.nanmean(tcwv_prior_values)
+        tcwv_unc_values = np.full(shape, 0.3, dtype=np.float32)
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.2, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(tcwv_prior_values, dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(tcwv_unc_values, dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        brdf = BRDFKernelWeights(
+            f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, 0.02), dims=["y", "x"]),
+            f0_unc=xr.DataArray(np.full(shape, 0.01), dims=["y", "x"]),
+            f1_unc=xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+            f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02, dtype=np.float32)]), dims=["band", "y", "x"]),
+            kernels=brdf,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+
+        seen_tcwv: list[np.ndarray] = []
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                _ = (band, compute_jacobian)
+                seen_tcwv.append(np.asarray(atmo_state.tcwv.values, dtype=np.float32).copy())
+                xap = xr.DataArray(np.full(geometry.sza.shape, 0.9, dtype=np.float32), dims=["y", "x"])
+                return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+            def supports_jacobian(self) -> bool:
+                return False
+
+            @property
+            def backend_name(self) -> str:
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
+                _ = (sensor_id, satellite_id)
+                return True
+
+        def _fake_pixel_eval(
+            _provider,
+            aot_axis,
+            tcwv_axis,
+            _toa,
+            _boa_prior,
+            _boa_unc,
+            _band_weights,
+            _valid_mask,
+            _aot_prior,
+            _tcwv_prior,
+            _aot_prior_unc,
+            _tcwv_prior_unc,
+            fixed_parameter,
+        ):  # noqa: ANN001
+            assert fixed_parameter == "tcwv"
+            assert aot_axis.shape == (5,)
+            assert tcwv_axis.shape == (1,)
+            _provider(float(aot_axis[2]), 999.0)
+            costs = np.full((aot_axis.shape[0], 1, *shape), 10.0, dtype=np.float32)
+            costs[2, 0, :, :] = 0.0
+            return costs, np.ones_like(costs, dtype=np.uint16)
+
+        def _fake_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask, fixed_parameter):  # noqa: ANN001
+            _ = (costs, obs_counts, aot_axis, tcwv_axis)
+            assert fixed_parameter == "tcwv"
+            return (
+                np.full(valid_mask.shape, 0.44, dtype=np.float32),
+                np.full(valid_mask.shape, -999.0, dtype=np.float32),
+                np.full(valid_mask.shape, 0.07, dtype=np.float32),
+                np.full(valid_mask.shape, 0.21, dtype=np.float32),
+                np.zeros(valid_mask.shape, dtype=bool),
+                np.zeros(valid_mask.shape, dtype=bool),
+                np.zeros(valid_mask.shape, dtype=bool),
+                np.zeros(valid_mask.shape, dtype=bool),
+            )
+
+        monkeypatch.setattr(mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fake_pixel_eval)
+        monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_refiner)
+
+        out_aot, out_tcwv, _out_aot_unc, out_tcwv_unc, diag = solver._solve_level_grid_search(
+            toa=toa,
+            surface_prior=surface_prior,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            rt_model=_DummyRT(),
+            mask=mask,
+            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            cost_config=CostFunctionConfig(aot_gamma=0.0, tcwv_gamma=0.0),
+        )
+
+        np.testing.assert_allclose(seen_tcwv[-1], provider_tcwv_values)
+        np.testing.assert_allclose(out_aot, 0.44)
+        np.testing.assert_allclose(out_tcwv, tcwv_prior_values, equal_nan=True)
+        np.testing.assert_allclose(out_tcwv_unc, tcwv_unc_values)
+        assert diag["evaluations"] == pytest.approx(5.0)
 
     @pytest.mark.skipif(
         not HAS_NATIVE_BLOCK_COST_CUBE,
@@ -1057,6 +1377,30 @@ class TestMultiGridSolver:
                 np.testing.assert_array_equal(block_counts[:, :, by, bx], expected_count)
         np.testing.assert_array_equal(block_valid, _any_blocks_reference(valid_mask, block_size))
 
+        def _coarse_provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            xap = np.ones((1, *block_valid.shape), dtype=np.float32)
+            zeros = np.zeros((1, *block_valid.shape), dtype=np.float32)
+            return xap, zeros, zeros
+
+        coarse_costs, coarse_counts, coarse_valid = evaluate_block_grid_search_cost_cube_with_provider_qa(
+            _coarse_provider,
+            aot_axis,
+            tcwv_axis,
+            toa,
+            boa_prior,
+            boa_unc,
+            band_weights,
+            valid_mask,
+            aot_prior,
+            tcwv_prior,
+            aot_prior_unc,
+            tcwv_prior_unc,
+            block_size,
+        )
+        np.testing.assert_allclose(np.asarray(coarse_costs, dtype=np.float32), block_costs)
+        np.testing.assert_array_equal(np.asarray(coarse_counts, dtype=np.uint16), block_counts)
+        np.testing.assert_array_equal(np.asarray(coarse_valid, dtype=bool), block_valid)
+
     def test_grid_search_block_solver_broadcasts_shared_block_solution(self, monkeypatch):
         """Block solver should return one shared solution per NxN block and broadcast it back."""
         from siac.algorithms.solver import multigrid as mg_mod
@@ -1147,12 +1491,14 @@ class TestMultiGridSolver:
             _aot_prior_unc,
             _tcwv_prior_unc,
             block_size,
+            fixed_parameter="none",
         ):  # noqa: ANN001
             assert block_size == 3
+            assert fixed_parameter == "none"
             xap, xbp, xcp = _provider(float(aot_axis[0]), float(tcwv_axis[0]))
-            assert xap.shape == (1, *shape)
-            assert xbp.shape == (1, *shape)
-            assert xcp.shape == (1, *shape)
+            assert xap.shape == (1, 2, 2)
+            assert xbp.shape == (1, 2, 2)
+            assert xcp.shape == (1, 2, 2)
             costs = np.full((aot_axis.shape[0], tcwv_axis.shape[0], 2, 2), 50.0, dtype=np.float32)
             obs_counts = np.ones_like(costs, dtype=np.uint16)
             minima = {
@@ -1317,16 +1663,26 @@ class TestMultiGridSolver:
             _aot_prior_unc,
             _tcwv_prior_unc,
             block_size,
+            fixed_parameter="none",
         ):  # noqa: ANN001
             assert block_size == 3
+            assert fixed_parameter == "none"
             assert int(np.count_nonzero(valid_mask[:3, :3])) == 4
             costs = np.full((aot_axis.shape[0], tcwv_axis.shape[0], 2, 2), 50.0, dtype=np.float32)
             costs[1, 1, :, :] = 0.0
             obs_counts = np.ones_like(costs, dtype=np.uint16)
             return costs, obs_counts, np.ones((2, 2), dtype=bool)
 
-        def _fake_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+        def _fake_refiner(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+            fixed_parameter="none",
+        ):  # noqa: ANN001
             _ = (costs, obs_counts)
+            assert fixed_parameter == "none"
             np.testing.assert_array_equal(
                 valid_mask,
                 np.array([[False, True], [True, True]], dtype=bool),
@@ -1436,8 +1792,16 @@ class TestMultiGridSolver:
                 _ = (sensor_id, satellite_id)
                 return True
 
-        def _fake_rust_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+        def _fake_rust_refiner(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+            fixed_parameter="none",
+        ):  # noqa: ANN001
             _ = (costs, obs_counts, aot_axis, tcwv_axis)
+            assert fixed_parameter == "none"
             out_aot = np.full(valid_mask.shape, 0.33, dtype=np.float32)
             out_tcwv = np.full(valid_mask.shape, 1.23, dtype=np.float32)
             out_aot_unc = np.full(valid_mask.shape, 0.07, dtype=np.float32)
@@ -1515,6 +1879,80 @@ class TestMultiGridSolver:
 
         for expected, actual in zip(ref, got, strict=True):
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
+
+    def test_rust_quadratic_refiner_supports_fixed_tcwv_axis(self):
+        """Fixed-TCWV mode should refine AOT using the 1-D local quadratic."""
+        aot_axis = np.linspace(0.0, 1.0, 5, dtype=np.float32)
+        tcwv_axis = np.array([2.0], dtype=np.float32)
+        valid_mask = np.array([[True]], dtype=bool)
+        target_aot = 0.4
+        costs = np.empty((aot_axis.size, 1, 1, 1), dtype=np.float32)
+        for ia, aot_val in enumerate(aot_axis):
+            costs[ia, 0, 0, 0] = np.float32((float(aot_val) - target_aot) ** 2 + 0.25)
+        obs_counts = np.ones_like(costs, dtype=np.uint16)
+
+        (
+            aot_best,
+            tcwv_best,
+            aot_unc,
+            _tcwv_unc,
+            invalid,
+            boundary,
+            lower_aot_boundary,
+            zero_obs,
+        ) = quadratic_refine_grid_search_qa(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+            "tcwv",
+        )
+
+        assert float(np.asarray(aot_best)[0, 0]) == pytest.approx(target_aot, abs=1.0e-6)
+        assert float(np.asarray(tcwv_best)[0, 0]) == pytest.approx(2.0)
+        assert np.isfinite(np.asarray(aot_unc)[0, 0])
+        assert not np.asarray(invalid, dtype=bool)[0, 0]
+        assert not np.asarray(boundary, dtype=bool)[0, 0]
+        assert not np.asarray(lower_aot_boundary, dtype=bool)[0, 0]
+        assert not np.asarray(zero_obs, dtype=bool)[0, 0]
+
+    def test_rust_quadratic_refiner_supports_fixed_aot_axis(self):
+        """Fixed-AOT mode should refine TCWV using the 1-D local quadratic."""
+        aot_axis = np.array([0.2], dtype=np.float32)
+        tcwv_axis = np.linspace(1.0, 5.0, 5, dtype=np.float32)
+        valid_mask = np.array([[True]], dtype=bool)
+        target_tcwv = 2.8
+        costs = np.empty((1, tcwv_axis.size, 1, 1), dtype=np.float32)
+        for it, tcwv_val in enumerate(tcwv_axis):
+            costs[0, it, 0, 0] = np.float32((float(tcwv_val) - target_tcwv) ** 2 + 0.25)
+        obs_counts = np.ones_like(costs, dtype=np.uint16)
+
+        (
+            aot_best,
+            tcwv_best,
+            _aot_unc,
+            tcwv_unc,
+            invalid,
+            boundary,
+            lower_aot_boundary,
+            zero_obs,
+        ) = quadratic_refine_grid_search_qa(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+            "aot",
+        )
+
+        assert float(np.asarray(aot_best)[0, 0]) == pytest.approx(0.2)
+        assert float(np.asarray(tcwv_best)[0, 0]) == pytest.approx(target_tcwv, abs=1.0e-6)
+        assert np.isfinite(np.asarray(tcwv_unc)[0, 0])
+        assert not np.asarray(invalid, dtype=bool)[0, 0]
+        assert not np.asarray(boundary, dtype=bool)[0, 0]
+        assert not np.asarray(lower_aot_boundary, dtype=bool)[0, 0]
+        assert not np.asarray(zero_obs, dtype=bool)[0, 0]
 
     def test_rust_grid_search_qa_distinguishes_prior_only_floor_from_true_boundary(self):
         """QA refiner should separate unsupported floor hits from supported boundary minima."""
@@ -1826,8 +2264,16 @@ class TestMultiGridSolver:
                 _ = (sensor_id, satellite_id)
                 return True
 
-        def _fake_rust_refiner(costs, obs_counts, aot_axis, tcwv_axis, valid_mask):  # noqa: ANN001
+        def _fake_rust_refiner(
+            costs,
+            obs_counts,
+            aot_axis,
+            tcwv_axis,
+            valid_mask,
+            fixed_parameter="none",
+        ):  # noqa: ANN001
             _ = (costs, obs_counts, aot_axis, tcwv_axis)
+            assert fixed_parameter == "none"
             out_aot = np.full(valid_mask.shape, 0.33, dtype=np.float32)
             out_tcwv = np.full(valid_mask.shape, 1.23, dtype=np.float32)
             out_aot_unc = np.full(valid_mask.shape, 0.07, dtype=np.float32)

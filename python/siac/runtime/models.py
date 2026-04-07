@@ -10,6 +10,8 @@ import numpy as np
 import xarray as xr
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from siac.domain.sensors import SensorBand, SensorConfig
 
 
@@ -192,6 +194,58 @@ class AtmosphericState:
             }
         )
 
+    def get_parameter(self, name: str) -> xr.DataArray:
+        """Return one atmospheric parameter field by canonical parameter name."""
+        if name not in {"aot", "tcwv", "tco3"}:
+            raise KeyError(f"Unknown atmospheric parameter {name!r}")
+        return getattr(self, name)
+
+    def get_uncertainty(self, name: str) -> xr.DataArray:
+        """Return one atmospheric parameter uncertainty field by parameter name."""
+        if name not in {"aot", "tcwv", "tco3"}:
+            raise KeyError(f"Unknown atmospheric parameter {name!r}")
+        return getattr(self, f"{name}_unc")
+
+    def with_updated_parameters(
+        self,
+        values: Mapping[str, xr.DataArray],
+        uncertainties: Mapping[str, xr.DataArray] | None = None,
+    ) -> AtmosphericState:
+        """Return a state with selected atmospheric parameters replaced.
+
+        ``values`` keys are canonical parameter names: ``aot``, ``tcwv``,
+        and ``tco3``. ``uncertainties`` accepts either those same keys or
+        ``*_unc`` keys for compatibility with existing result fields.
+        """
+        allowed = {"aot", "tcwv", "tco3"}
+        fields = {name: getattr(self, name) for name in allowed}
+        uncs = {name: getattr(self, f"{name}_unc") for name in allowed}
+
+        for name, value in values.items():
+            if name not in allowed:
+                raise KeyError(f"Unknown atmospheric parameter {name!r}")
+            fields[name] = copy_spatial_metadata_like(value, getattr(self, name))
+
+        if uncertainties is not None:
+            for name, value in uncertainties.items():
+                param_name = name[:-4] if name.endswith("_unc") else name
+                if param_name not in allowed:
+                    raise KeyError(f"Unknown atmospheric uncertainty {name!r}")
+                uncs[param_name] = copy_spatial_metadata_like(
+                    value,
+                    getattr(self, f"{param_name}_unc"),
+                )
+
+        return AtmosphericState(
+            aot=fields["aot"],
+            tcwv=fields["tcwv"],
+            tco3=fields["tco3"],
+            aot_unc=uncs["aot"],
+            tcwv_unc=uncs["tcwv"],
+            tco3_unc=uncs["tco3"],
+            elevation=self.elevation,
+        )
+
     def with_updated_aot_tcwv(
         self,
         aot: xr.DataArray,
@@ -199,14 +253,14 @@ class AtmosphericState:
         aot_unc: xr.DataArray | None = None,
         tcwv_unc: xr.DataArray | None = None,
     ) -> AtmosphericState:
-        return AtmosphericState(
-            aot=copy_spatial_metadata_like(aot, self.aot),
-            tcwv=copy_spatial_metadata_like(tcwv, self.tcwv),
-            tco3=self.tco3,
-            aot_unc=copy_spatial_metadata_like(aot_unc, self.aot_unc) if aot_unc is not None else self.aot_unc,
-            tcwv_unc=copy_spatial_metadata_like(tcwv_unc, self.tcwv_unc) if tcwv_unc is not None else self.tcwv_unc,
-            tco3_unc=self.tco3_unc,
-            elevation=self.elevation,
+        uncertainties: dict[str, xr.DataArray] = {}
+        if aot_unc is not None:
+            uncertainties["aot"] = aot_unc
+        if tcwv_unc is not None:
+            uncertainties["tcwv"] = tcwv_unc
+        return self.with_updated_parameters(
+            {"aot": aot, "tcwv": tcwv},
+            uncertainties or None,
         )
 
 

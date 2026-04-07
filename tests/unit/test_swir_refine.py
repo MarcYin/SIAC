@@ -222,6 +222,45 @@ def test_query_surface_prior_from_monthly_database_returns_visible_surface_prior
     assert bool(prior.mask.values.all())
 
 
+def test_query_surface_prior_from_monthly_database_honors_target_resolution() -> None:
+    sensor_config = _sensor_config()
+    target_shape = (4, 2)
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.zeros(target_shape, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.zeros(target_shape, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full(target_shape, 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full(target_shape, 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full(target_shape, 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry(target_shape),
+        cloud_mask=xr.DataArray(np.zeros(target_shape, dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 2.0, 4.0),
+    )
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_database(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        target_resolution=1.0,
+        k_neighbors=1,
+    )
+
+    assert prior.boa.shape == (2, *target_shape)
+    assert prior.mask.shape == target_shape
+    assert prior.boa.sizes["y"] == 4
+    assert prior.boa.sizes["x"] == 2
+    assert bool(prior.mask.values.all())
+
+
 def test_query_surface_prior_from_monthly_database_resamples_coarse_atmo_prior() -> None:
     sensor_config = _sensor_config()
     obs = ObservationBundle(

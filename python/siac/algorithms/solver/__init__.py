@@ -22,6 +22,8 @@ from siac.algorithms.solver.multigrid import (
     MultiGridConfig,
     MultiGridSolver,
     SolverResult,
+    SolverStageConfig,
+    StagedMultiGridSolver,
     build_solver_valid_mask,
     solve_atmospheric_parameters,
 )
@@ -35,7 +37,9 @@ __all__ = [
     "create_sparse_laplacian",
     # Multi-grid solver
     "MultiGridSolver",
+    "StagedMultiGridSolver",
     "MultiGridConfig",
+    "SolverStageConfig",
     "SolverResult",
     "build_solver_valid_mask",
     "solve_atmospheric_parameters",

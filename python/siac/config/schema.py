@@ -23,6 +23,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 AtmoProviderKind = Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"]
 BRDFProviderKind = Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"]
 MonthlyCompositeProviderKind = Literal["generated_brdf", "user_callable", "prepared_store"]
+AtmosphericParameterName = Literal["aot", "tcwv", "tco3"]
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 
@@ -256,6 +257,9 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     method: Literal["kernel_model", "whittaker", "monthly_database", "neural", "direct"] = (
         "kernel_model"
     )
+    monthly_database_resolution_policy: Literal["provider_or_coarser", "aerosol"] = (
+        "provider_or_coarser"
+    )
     psf_sigma_x: float = Field(default=29.75, gt=0.0)
     psf_sigma_y: float = Field(default=39.0, gt=0.0)
     apply_psf: bool = True
@@ -287,6 +291,51 @@ class SolverBoundsConfig(SIACBaseModel):
         if value[0] >= value[1]:
             raise ValueError(f"Bounds must have min < max, got {value}")
         return value
+
+
+class SolverStageConfig(SIACBaseModel):
+    name: str = "default"
+    solve: tuple[AtmosphericParameterName, ...] = ("aot", "tcwv")
+    fixed: tuple[AtmosphericParameterName, ...] = ("tco3",)
+    bands: tuple[str, ...] | None = None
+    initial_state: Literal["prior", "previous"] = "previous"
+
+    @field_validator("solve", "fixed", mode="before")
+    @classmethod
+    def normalize_parameters(cls, value: Any) -> Any:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        return value
+
+    @field_validator("bands", mode="before")
+    @classmethod
+    def normalize_bands(cls, value: Any) -> Any:
+        if value is None or isinstance(value, tuple):
+            return value
+        if isinstance(value, str):
+            return (value,)
+        return tuple(value)
+
+    @model_validator(mode="after")
+    def validate_stage(self) -> SolverStageConfig:
+        duplicated_solve = {name for name in self.solve if self.solve.count(name) > 1}
+        duplicated_fixed = {name for name in self.fixed if self.fixed.count(name) > 1}
+        duplicated = duplicated_solve | duplicated_fixed
+        if duplicated:
+            raise ValueError(
+                f"Solver stage {self.name!r} duplicates parameter(s): "
+                f"{', '.join(sorted(duplicated))}"
+            )
+
+        overlap = set(self.solve) & set(self.fixed)
+        if overlap:
+            raise ValueError(
+                f"Solver stage {self.name!r} cannot both solve and fix "
+                f"{', '.join(sorted(overlap))}"
+            )
+        return self
 
 
 class SharpTransitionFilterConfig(SIACBaseModel):
@@ -355,6 +404,10 @@ class SolverAlgorithmConfig(SIACBaseModel):
     gtol: float = Field(default=1e-2, gt=0.0)
     ftol: float = Field(default=1e-7, gt=0.0)
     aerosol_resolution: float = Field(default=120.0, gt=0.0)
+    grid_search_aot_points: int = Field(default=11, ge=3)
+    grid_search_tcwv_points: int = Field(default=11, ge=3)
+    fixed_atmospheric_parameter: Literal["none", "aot", "tcwv"] = "none"
+    stages: tuple[SolverStageConfig, ...] = Field(default_factory=tuple)
     quadratic_block_size: int = Field(default=1, ge=1)
     quadratic_block_min_valid_fraction: float = Field(default=0.5, ge=0.0, le=1.0)
     use_multigrid: bool = True
@@ -429,6 +482,7 @@ class OutputDefaultsConfig(SIACBaseModel):
     include_rgb: bool = True
     include_uncertainty: bool = True
     include_auxiliary: bool = True
+    skip_correction: bool = False
     boa_dtype: Literal["float32", "float64", "uint16"] = "float32"
     boa_scale: float = Field(default=10000.0, gt=0.0)
     boa_nodata: float = 0.0
