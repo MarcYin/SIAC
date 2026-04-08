@@ -52,6 +52,13 @@ def _ordered_unique_band_names(names: list[str]) -> tuple[str, ...]:
 
 
 def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[str, ...] | None:
+    """Select bands to eagerly load at native resolution during preprocessing.
+
+    Only cloud-mask bands are preloaded (at their native resolution, e.g. 10 m
+    for Sentinel-2 B03/B04/B08).  Other bands (solver-only, surface-prior
+    query) are loaded lazily via the TOA band loader at the resolution needed
+    by their consumer, avoiding expensive cross-resolution reprojection.
+    """
     if not hasattr(sensor_config, "select_nearest_band") or not hasattr(sensor_config, "bands"):
         return None
     cloud_mask = getattr(config, "cloud_mask", None)
@@ -60,27 +67,21 @@ def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[s
         return None
 
     names: list[str] = []
+    # Reference band (B04 for MSI) — needed as alignment anchor.
     ref_band = sensor_config.select_nearest_band(665.0, tolerance_nm=80.0)
     if ref_band is None:
         ref_band = sensor_config.bands[0]
     names.append(ref_band.name)
 
-    names.extend(band.name for band in sensor_config.default_aerosol_solver_bands())
-
+    # Cloud-mask bands only (green / red / nir).
+    # Solver bands (e.g. B02) and surface-prior query bands (e.g. B11, B12)
+    # are loaded lazily at the target resolution when first needed.
     if cloud_mode == "auto":
         for wl_min, wl_max in ((530.0, 590.0), (630.0, 690.0), (760.0, 900.0)):
             names.extend(
                 band.name
                 for band in sensor_config.select_bands_in_range(wl_min, wl_max)
             )
-
-    surface_prior = getattr(config, "surface_prior", None)
-    if str(getattr(surface_prior, "method", "")).lower() == "monthly_database":
-        from siac.app._assembly_surface import _select_route_b_query_bands
-
-        names.extend(
-            band.name for band in _select_route_b_query_bands(sensor_config)
-        )
 
     resolved = _ordered_unique_band_names(names)
     return resolved or None
