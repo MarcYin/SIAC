@@ -1098,7 +1098,7 @@ def _run_pipeline_dask(
                     timeout_errors=(FuturesTimeoutError, DaskTimeoutError),
                 )
             finally:
-                preload_executor.shutdown(wait=False, cancel_futures=False)
+                preload_executor.shutdown(wait=True, cancel_futures=False)
 
     return _run_tail(
         obs,
