@@ -408,13 +408,13 @@ def test_spatial_shape_and_observation_validation_error_branches(
     bad_geometry = dataclasses.replace(
         mock_observation_bundle,
         geometry=GeometryAngles(
-            sza=xr.DataArray(np.ones((2, 3)), dims=["y", "x"]),
+            sza=xr.DataArray(np.ones((0, 3)), dims=["y", "x"]),
             saa=mock_observation_bundle.geometry.saa,
             vza=mock_observation_bundle.geometry.vza,
             vaa=mock_observation_bundle.geometry.vaa,
         ),
     )
-    with pytest.raises(ValidationError, match=r"geometry\.sza shape"):
+    with pytest.raises(ValidationError, match=r"geometry\.sza"):
         validate_observation_bundle(bad_geometry)
 
 

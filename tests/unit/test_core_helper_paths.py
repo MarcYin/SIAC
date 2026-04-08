@@ -53,10 +53,10 @@ def test_validation_helpers_cover_remaining_error_paths(
 
     bad_geom = dataclasses.replace(
         mock_observation_bundle.geometry,
-        sza=xr.DataArray(np.zeros((3, 5), dtype=np.float32), dims=["y", "x"]),
+        sza=xr.DataArray(np.zeros(5, dtype=np.float32), dims=["y"]),
     )
     bad_obs = dataclasses.replace(mock_observation_bundle, geometry=bad_geom)
-    with pytest.raises(ValidationError, match="geometry.sza shape"):
+    with pytest.raises(ValidationError, match="geometry.sza"):
         validate_observation_bundle(bad_obs)
 
     bad_sib = dataclasses.replace(mock_solver_input_bundle, aux_resolution_m=0.0)

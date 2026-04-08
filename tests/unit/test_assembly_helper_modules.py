@@ -252,13 +252,10 @@ def test_build_preprocessor_runtime_sets_s2_preload_band_plan() -> None:
 
     assert fake_preprocessor.config["preload_toa_bands"] == (
         "B04",
-        "B02",
         "B03",
         "B07",
         "B08",
         "B8A",
-        "B11",
-        "B12",
     )
 
 

@@ -183,13 +183,13 @@ def test_compute_coefficients_spectral_interpolates_after_wavelength_collapse(mo
     backend._lut = lut
     backend._lut_coords = {name: coord.values for name, coord in lut.coords.items()}
     calls: list[tuple[str, ...]] = []
-    original = backend._interpolate_variable
+    original = backend._interpolate_variable_fast
 
-    def _record_interp_dims(var: xr.DataArray, coords: dict[str, xr.DataArray], method: str) -> xr.DataArray:
+    def _record_interp_dims(var: xr.DataArray, coords: dict[str, xr.DataArray], method: str):
         calls.append(var.dims)
         return original(var, coords, method)
 
-    monkeypatch.setattr(backend, "_interpolate_variable", _record_interp_dims)
+    monkeypatch.setattr(backend, "_interpolate_variable_fast", _record_interp_dims)
 
     band = SensorBand(
         name="B02",

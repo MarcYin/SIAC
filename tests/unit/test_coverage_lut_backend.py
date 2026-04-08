@@ -404,8 +404,11 @@ class TestZarrLUTBackend:
                 compute_jacobian=False,
             )
 
-    def test_spectral_scene_cache_key_uses_stable_nonfinite_fallbacks(self):
-        key = ZarrLUTBackend._spectral_scene_cache_key(
+    def test_spectral_scene_cache_key_uses_stable_nonfinite_fallbacks(self, tmp_path: Path):
+        lut_dir = _write_small_lut(tmp_path / "cache_key_lut.zarr")
+        backend = ZarrLUTBackend(lut_dir, interpolation_method="nearest")
+        _ = backend.lut  # trigger coord loading
+        key = backend._spectral_scene_cache_key(
             sza=np.full((2, 2), 20.0, dtype=np.float32),
             vza=np.full((2, 2), 10.0, dtype=np.float32),
             raa=np.full((2, 2), 90.0, dtype=np.float32),
@@ -413,7 +416,10 @@ class TestZarrLUTBackend:
             elevation=np.array([[np.inf, -np.inf], [np.inf, -np.inf]], dtype=np.float32),
         )
 
-        assert key == (20.0, 10.0, 90.0, 0.0, 0.0, 0.0, 0.0)
+        # sza=20 snaps to nearest LUT grid point (30.0 in the test LUT),
+        # vza=10 snaps to 10.0, raa=90 snaps to 90.0.
+        # NaN/Inf fallback to 0.0 for tco3 and elevation.
+        assert key == (30.0, 10.0, 90.0, 0.0, 0.0, 0.0, 0.0)
 
     def test_load_local_zipped_zarr(self, tmp_path: Path):
         lut_dir = _write_small_lut(tmp_path / "lut_zip.zarr")
