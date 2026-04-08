@@ -179,77 +179,82 @@ class MonthlyCompositeDatabase:
         quality_flat = quality.reshape(n_pixels)
         source_fit_flat = source_fit_rmse.reshape(n_pixels)
         distance_flat = knn_feature_distance.reshape(n_pixels)
-        chunk_size = 4096
 
-        for start in range(0, valid_query_rows.size, chunk_size):
-            query_rows = valid_query_rows[start : start + chunk_size]
-            query_feature_values = features_flat[query_rows, :n_query]
-            distances, neighbor_rows = neighbor_index.query(
-                features_flat[query_rows],
-                k=neighbor_count,
-                workers=1,
-            )
-            if neighbor_count == 1:
-                distances = np.asarray(distances, dtype=np.float32)[:, np.newaxis]
-                neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)[:, np.newaxis]
-            else:
-                distances = np.asarray(distances, dtype=np.float32)
-                neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)
+        # Single batch KNN query with multi-threaded tree traversal.
+        distances, neighbor_rows = neighbor_index.query(
+            features_flat[valid_query_rows],
+            k=neighbor_count,
+            workers=-1,
+        )
+        if neighbor_count == 1:
+            distances = np.asarray(distances, dtype=np.float32)[:, np.newaxis]
+            neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)[:, np.newaxis]
+        else:
+            distances = np.asarray(distances, dtype=np.float32)
+            neighbor_rows = np.asarray(neighbor_rows, dtype=np.intp)
 
-            selected_visible = self.entries_visible[neighbor_rows]
-            selected_quality = self.entries_quality[neighbor_rows]
-            selected_source_fit = self.entries_source_fit_rmse[neighbor_rows]
-            selected_query_features = self.entries_features[neighbor_rows, :n_query]
-            feature_distance = np.sqrt(
-                np.mean(
-                    np.square(
-                        selected_query_features - query_feature_values[:, np.newaxis, :],
-                        dtype=np.float32,
-                    ),
-                    axis=2,
+        # Gather all neighbor data in bulk.
+        selected_visible = self.entries_visible[neighbor_rows]
+        selected_quality = self.entries_quality[neighbor_rows]
+        selected_source_fit = self.entries_source_fit_rmse[neighbor_rows]
+        selected_query_features = self.entries_features[neighbor_rows, :n_query]
+
+        query_feature_values = features_flat[valid_query_rows, :n_query]
+        feature_distance = np.sqrt(
+            np.mean(
+                np.square(
+                    selected_query_features - query_feature_values[:, np.newaxis, :],
                     dtype=np.float32,
-                )
-            ).astype(np.float32, copy=False)
-            zero_mask = distances == 0.0
-            nonzero_rows = ~np.any(zero_mask, axis=1)
+                ),
+                axis=2,
+                dtype=np.float32,
+            )
+        ).astype(np.float32, copy=False)
 
-            if np.any(nonzero_rows):
-                selected_distances = distances[nonzero_rows]
-                weighted_visible = selected_visible[nonzero_rows]
-                weights = 1.0 / np.maximum(selected_distances, 1e-6)
-                weights = weights / np.sum(weights, axis=1, keepdims=True)
-                estimate = np.sum(weighted_visible * weights[..., np.newaxis], axis=1)
-                spread = np.sqrt(
-                    np.sum(
-                        ((weighted_visible - estimate[:, np.newaxis, :]) ** 2)
-                        * weights[..., np.newaxis],
-                        axis=1,
-                    )
-                )
-                predicted_flat[query_rows[nonzero_rows]] = estimate.astype(np.float32, copy=False)
-                uncertainty_flat[query_rows[nonzero_rows]] = spread.astype(np.float32, copy=False)
-                quality_flat[query_rows[nonzero_rows]] = np.sum(selected_quality[nonzero_rows] * weights, axis=1)
-                source_fit_flat[query_rows[nonzero_rows]] = np.sum(selected_source_fit[nonzero_rows] * weights, axis=1)
-                distance_flat[query_rows[nonzero_rows]] = np.sum(feature_distance[nonzero_rows] * weights, axis=1)
+        # Vectorised inverse-distance weighting for all non-exact-match rows.
+        zero_mask = distances == 0.0
+        nonzero_rows = ~np.any(zero_mask, axis=1)
 
-            if np.any(~nonzero_rows):
-                zero_rows = np.flatnonzero(~nonzero_rows)
-                for local_index in zero_rows:
-                    matched = selected_visible[local_index][zero_mask[local_index]]
-                    matched_quality = selected_quality[local_index][zero_mask[local_index]]
-                    matched_source_fit = selected_source_fit[local_index][zero_mask[local_index]]
-                    estimate = matched.mean(axis=0)
-                    spread = (
-                        matched.std(axis=0)
-                        if matched.shape[0] > 1
-                        else np.zeros(n_visible, dtype=np.float32)
-                    )
-                    flat_index = query_rows[local_index]
-                    predicted_flat[flat_index] = estimate.astype(np.float32, copy=False)
-                    uncertainty_flat[flat_index] = spread.astype(np.float32, copy=False)
-                    quality_flat[flat_index] = np.float32(matched_quality.mean())
-                    source_fit_flat[flat_index] = np.float32(matched_source_fit.mean())
-                    distance_flat[flat_index] = 0.0
+        if np.any(nonzero_rows):
+            nz_idx = np.flatnonzero(nonzero_rows)
+            nz_distances = distances[nz_idx]
+            nz_visible = selected_visible[nz_idx]
+            weights = 1.0 / np.maximum(nz_distances, 1e-6)
+            weights = weights / np.sum(weights, axis=1, keepdims=True)
+            estimate = np.sum(nz_visible * weights[..., np.newaxis], axis=1)
+            spread = np.sqrt(
+                np.sum(
+                    ((nz_visible - estimate[:, np.newaxis, :]) ** 2)
+                    * weights[..., np.newaxis],
+                    axis=1,
+                )
+            )
+            out_idx = valid_query_rows[nz_idx]
+            predicted_flat[out_idx] = estimate.astype(np.float32, copy=False)
+            uncertainty_flat[out_idx] = spread.astype(np.float32, copy=False)
+            quality_flat[out_idx] = np.sum(selected_quality[nz_idx] * weights, axis=1)
+            source_fit_flat[out_idx] = np.sum(selected_source_fit[nz_idx] * weights, axis=1)
+            distance_flat[out_idx] = np.sum(feature_distance[nz_idx] * weights, axis=1)
+
+        # Handle exact-match rows (rare but possible).
+        if np.any(~nonzero_rows):
+            zero_rows = np.flatnonzero(~nonzero_rows)
+            for local_index in zero_rows:
+                matched = selected_visible[local_index][zero_mask[local_index]]
+                matched_quality = selected_quality[local_index][zero_mask[local_index]]
+                matched_source_fit = selected_source_fit[local_index][zero_mask[local_index]]
+                estimate = matched.mean(axis=0)
+                spread = (
+                    matched.std(axis=0)
+                    if matched.shape[0] > 1
+                    else np.zeros(n_visible, dtype=np.float32)
+                )
+                flat_index = valid_query_rows[local_index]
+                predicted_flat[flat_index] = estimate.astype(np.float32, copy=False)
+                uncertainty_flat[flat_index] = spread.astype(np.float32, copy=False)
+                quality_flat[flat_index] = np.float32(matched_quality.mean())
+                source_fit_flat[flat_index] = np.float32(matched_source_fit.mean())
+                distance_flat[flat_index] = 0.0
 
         return _output_arrays()
 

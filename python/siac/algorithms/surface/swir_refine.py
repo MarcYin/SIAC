@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 import collections.abc
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
@@ -418,24 +419,49 @@ def query_surface_prior_from_monthly_database(
         band_names=expected_query,
         cloud_mask=observation.cloud_mask,
     )
+    # Pre-warm the KDTree in a background thread so it's ready when needed.
+    import concurrent.futures
+
+    def _prewarm_tree(db: object) -> None:
+        idx = getattr(db, "_neighbor_index", None)
+        if idx is None and hasattr(db, "predict_visible_with_diagnostics"):
+            # Trigger any lazy property on the underlying database.
+            inner = getattr(db, "_inner", None) or getattr(db, "_database", None)
+            if inner is not None:
+                getattr(inner, "_neighbor_index", None)
+
+    _tree_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        _tree_future = _tree_pool.submit(_prewarm_tree, database)
+    except Exception:
+        _tree_pool.shutdown(wait=False)
+        raise
+
+    _t0 = time.perf_counter()
     coarse_query_toa, coarse_query_valid = _resample_dataset_with_validity(
         observation.toa,
         band_names=expected_query,
         valid_mask=native_query_valid,
         target_shape=target_shape,
         template=query_template,
+        cloud_mask=observation.cloud_mask,
     )
+    logger.info("M3 timing: _resample_dataset_with_validity %.3f s", time.perf_counter() - _t0)
+    _t0 = time.perf_counter()
     coarse_geometry = _resample_geometry_to_target_shape(observation.geometry, target_shape)
     coarse_atmo = _resample_atmo_to_target_shape(atmo_prior, target_shape)
     coarse_cloud_mask = _resample_cloud_mask_to_target_shape(observation.cloud_mask, target_shape)
+    logger.info("M3 timing: resample geometry/atmo/cloud %.3f s", time.perf_counter() - _t0)
     coarse_invalid = coarse_cloud_mask | (~coarse_query_valid)
     corrector = AtmosphericCorrector(rt_model, observation.sensor_config)
+    _t0 = time.perf_counter()
     correction = corrector.correct(
         coarse_query_toa,
         coarse_geometry,
         coarse_atmo,
         cloud_mask=coarse_invalid,
     )
+    logger.info("M3 timing: AtmosphericCorrector.correct (first-pass) %.3f s", time.perf_counter() - _t0)
     corrected_query_mask = _resample_cloud_mask_to_target_shape(correction.cloud_mask, target_shape)
     corrected_query = _apply_invalid_mask_to_dataset(
         _resample_dataset(
@@ -448,16 +474,21 @@ def query_surface_prior_from_monthly_database(
         invalid_mask=corrected_query_mask,
     )
     if hasattr(database, "predict_visible_with_diagnostics"):
+        # Ensure KDTree is built before entering the prediction loop.
+        _tree_future.result()
+        _t0 = time.perf_counter()
         prediction = database.predict_visible_with_diagnostics(
             corrected_query,
             k_neighbors=k_neighbors,
         )
+        logger.info("M3 timing: predict_visible_with_diagnostics %.3f s", time.perf_counter() - _t0)
         predicted_visible = prediction.predicted
         predicted_unc = prediction.uncertainty
         predicted_quality = prediction.quality
         predicted_source_fit = prediction.source_fit_rmse
         predicted_distance = prediction.knn_feature_distance
     else:
+        _tree_future.result()
         predicted_visible, predicted_unc, predicted_quality = database.predict_visible(
             corrected_query,
             k_neighbors=k_neighbors,
@@ -471,6 +502,7 @@ def query_surface_prior_from_monthly_database(
             dtype=np.float32,
         )
 
+    _tree_pool.shutdown(wait=False)
     spatial_reference = cast("xr.DataArray", predicted_visible.isel(band=0, drop=True))
     predicted_source_fit = copy_spatial_metadata_like(predicted_source_fit.astype(np.float32), spatial_reference)
     predicted_distance = copy_spatial_metadata_like(predicted_distance.astype(np.float32), spatial_reference)
@@ -1137,31 +1169,34 @@ def _resample_geometry_to_target_shape(
     geometry: GeometryAngles,
     target_shape: tuple[int, int],
 ) -> GeometryAngles:
+    from concurrent.futures import ThreadPoolExecutor
+
     if geometry.sza.shape == target_shape:
         return geometry
-    return GeometryAngles(
-        sza=_resample_da(geometry.sza, target_shape, "bilinear"),
-        saa=_resample_da(geometry.saa, target_shape, "bilinear"),
-        vza=_resample_da(geometry.vza, target_shape, "bilinear"),
-        vaa=_resample_da(geometry.vaa, target_shape, "bilinear"),
-    )
+    fields = {"sza": geometry.sza, "saa": geometry.saa, "vza": geometry.vza, "vaa": geometry.vaa}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {name: pool.submit(_resample_da, da, target_shape, "bilinear") for name, da in fields.items()}
+        results = {name: fut.result() for name, fut in futures.items()}
+    return GeometryAngles(**results)
 
 
 def _resample_atmo_to_target_shape(
     atmo_prior: AtmosphericState,
     target_shape: tuple[int, int],
 ) -> AtmosphericState:
+    from concurrent.futures import ThreadPoolExecutor
+
     if atmo_prior.aot.shape == target_shape:
         return atmo_prior
-    return AtmosphericState(
-        aot=_resample_da(atmo_prior.aot, target_shape, "bilinear"),
-        tcwv=_resample_da(atmo_prior.tcwv, target_shape, "bilinear"),
-        tco3=_resample_da(atmo_prior.tco3, target_shape, "bilinear"),
-        aot_unc=_resample_da(atmo_prior.aot_unc, target_shape, "bilinear"),
-        tcwv_unc=_resample_da(atmo_prior.tcwv_unc, target_shape, "bilinear"),
-        tco3_unc=_resample_da(atmo_prior.tco3_unc, target_shape, "bilinear"),
-        elevation=_resample_da(atmo_prior.elevation, target_shape, "bilinear"),
-    )
+    fields = {
+        "aot": atmo_prior.aot, "tcwv": atmo_prior.tcwv, "tco3": atmo_prior.tco3,
+        "aot_unc": atmo_prior.aot_unc, "tcwv_unc": atmo_prior.tcwv_unc,
+        "tco3_unc": atmo_prior.tco3_unc, "elevation": atmo_prior.elevation,
+    }
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        futures = {name: pool.submit(_resample_da, da, target_shape, "bilinear") for name, da in fields.items()}
+        results = {name: fut.result() for name, fut in futures.items()}
+    return AtmosphericState(**results)
 
 
 def _resample_cloud_mask_to_target_shape(
@@ -1181,6 +1216,13 @@ def _query_observation_valid_mask(
     band_names: collections.abc.Sequence[str],
     cloud_mask: xr.DataArray,
 ) -> xr.DataArray:
+    """Compute a boolean valid-pixel mask at the cloud-mask resolution.
+
+    Only bands that are already present in *dataset.data_vars* (i.e. at the
+    same spatial grid as the cloud mask) are incorporated.  Bands that must be
+    loaded lazily at a different native resolution are handled separately
+    inside :func:`_resample_dataset_with_validity`.
+    """
     valid = ~cloud_mask.values.astype(bool)
     for name in band_names:
         if name not in dataset.data_vars:
@@ -1190,6 +1232,9 @@ def _query_observation_valid_mask(
     return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
 
 
+_TOA_BAND_LOADER_ATTR = "_siac_toa_band_loader"
+
+
 def _resample_dataset_with_validity(
     dataset: xr.Dataset,
     *,
@@ -1197,20 +1242,88 @@ def _resample_dataset_with_validity(
     valid_mask: xr.DataArray,
     target_shape: tuple[int, int],
     template: xr.DataArray | None = None,
+    cloud_mask: xr.DataArray | None = None,
 ) -> tuple[xr.Dataset, xr.DataArray]:
+    """Resample bands to *target_shape* honouring a per-pixel validity mask.
+
+    Bands already in *dataset.data_vars* (same grid as *valid_mask*) are
+    processed using the precomputed mask.  Bands **not** in data_vars are
+    fetched via the TOA band loader at their native resolution; a per-band
+    validity mask is computed independently at that resolution so that
+    mixed-resolution inputs are handled correctly without an expensive
+    intermediate reproject.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     valid_fraction = _resample_da(valid_mask.astype(np.float32), target_shape, "area", template=template)
     valid_support = valid_fraction > 0.0
     valid_denominator = valid_fraction.where(valid_support)
-    data_vars = {}
+
+    combined_valid_support = valid_support
+    data_vars: dict[str, xr.DataArray] = {}
+    band_loader = dataset.attrs.get(_TOA_BAND_LOADER_ATTR)
+
+    # ── Separate bands by resolution path ────────────────────────────
+    in_dataset_names: list[str] = []
+    lazy_names: list[str] = []
     for name in band_names:
-        if name not in dataset.data_vars:
-            continue
+        if name in dataset.data_vars:
+            in_dataset_names.append(name)
+        elif callable(band_loader):
+            lazy_names.append(name)
+
+    # ── Resample same-resolution bands in parallel ───────────────────
+    def _resample_in_dataset_band(name: str) -> tuple[str, xr.DataArray]:
         masked_band = dataset[name].where(valid_mask, 0.0)
         masked_mean = _resample_da(masked_band, target_shape, "area", template=template)
-        data_vars[name] = masked_mean / valid_denominator
+        return name, masked_mean / valid_denominator
+
+    def _resample_lazy_band(name: str) -> tuple[str, xr.DataArray, xr.DataArray] | None:
+        try:
+            band_da = band_loader(name, native=True)
+        except (KeyError, RuntimeError):
+            return None
+        band_vals = band_da.values
+        band_finite = np.isfinite(band_vals) & (band_vals > 0.0) & (band_vals < 1.0)
+        if cloud_mask is not None:
+            cm_at_band_res = _resample_da(
+                cloud_mask.astype(np.float32), band_da.shape, "nearest",
+            ).values > 0.5
+            band_valid = band_finite & ~cm_at_band_res
+        else:
+            band_valid = band_finite
+        band_valid_da = xr.DataArray(
+            band_valid.astype(np.float32), dims=band_da.dims, coords=band_da.coords,
+        )
+        band_valid_frac = _resample_da(band_valid_da, target_shape, "area", template=template)
+        band_valid_sup = band_valid_frac > 0.0
+        band_valid_denom = band_valid_frac.where(band_valid_sup)
+        masked_band = band_da.where(
+            xr.DataArray(band_valid, dims=band_da.dims, coords=band_da.coords), 0.0,
+        )
+        masked_mean = _resample_da(masked_band, target_shape, "area", template=template)
+        return name, masked_mean / band_valid_denom, band_valid_sup
+
+    n_workers = max(len(in_dataset_names) + len(lazy_names), 1)
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        ds_futures = [pool.submit(_resample_in_dataset_band, n) for n in in_dataset_names]
+        lazy_futures = [pool.submit(_resample_lazy_band, n) for n in lazy_names]
+
+        for fut in ds_futures:
+            name, resampled = fut.result()
+            data_vars[name] = resampled
+
+        for fut in lazy_futures:
+            result = fut.result()
+            if result is None:
+                continue
+            name, resampled, band_valid_sup = result
+            data_vars[name] = resampled
+            combined_valid_support = combined_valid_support & band_valid_sup
+
     if not data_vars:
         raise ValueError("No query bands were available in the corrected reflectance dataset")
-    return xr.Dataset(data_vars), valid_support.astype(bool)
+    return xr.Dataset(data_vars), combined_valid_support.astype(bool)
 
 
 def _resample_dataset(
