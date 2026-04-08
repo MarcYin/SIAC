@@ -665,46 +665,6 @@ def _run_tail(
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
 
-    # ------------------------------------------------------------------
-    # skip_correction: write available auxiliary data without running the
-    # solver (M5) or atmospheric correction (M6).
-    # ------------------------------------------------------------------
-    if _should_skip_correction(config):
-        logger.info("skip_correction enabled — skipping M5 solver and M6 correction.")
-        surface_template = _surface_template(solver_inputs.surface_prior.boa)
-        result = CorrectionResult(
-            boa=xr.Dataset(),
-            boa_unc=None,
-            aot=solver_inputs.atmo_prior.aot.astype(np.float32),
-            tcwv=solver_inputs.atmo_prior.tcwv.astype(np.float32),
-            cloud_mask=solver_inputs.cloud_mask,
-            surface_prior=_banded_dataarray_to_dataset(
-                solver_inputs.surface_prior.boa,
-                default_name="surface_prior",
-                template=surface_template,
-            ),
-            surface_prior_unc=_banded_dataarray_to_dataset(
-                solver_inputs.surface_prior.boa_unc,
-                default_name="surface_prior_unc",
-                template=surface_template,
-            ),
-            solver_qa=None,
-            monthly_composites=_monthly_composite_outputs(
-                tuple(getattr(surface, "monthly_composites", ())),
-                template=surface_template,
-            ),
-            metadata={
-                **obs.metadata,
-                "skip_correction": True,
-                "sensor_config": obs.sensor_config,
-                "geometry": obs.geometry,
-                "crs": obs.crs,
-                "bounds": obs.bounds,
-            },
-        )
-        logger.info("Pipeline complete (auxiliary-only mode).")
-        return result
-
     t0 = time.monotonic()
     logger.info("M5: Solving for aerosol parameters...")
     with observe_stage("M5.solver"):
@@ -721,6 +681,46 @@ def _run_tail(
             iterations=solved.n_iterations,
             cost_final=solved.cost_final,
         )
+
+    # ------------------------------------------------------------------
+    # skip_correction: aerosol retrieval (M5) ran, but skip applying the
+    # retrieved parameters for atmospheric correction (M6).
+    # ------------------------------------------------------------------
+    if _should_skip_correction(config):
+        logger.info("skip_correction enabled — skipping M6 atmospheric correction.")
+        surface_template = _surface_template(solver_inputs.surface_prior.boa)
+        result = CorrectionResult(
+            boa=xr.Dataset(),
+            boa_unc=None,
+            aot=solved.aot,
+            tcwv=solved.tcwv,
+            cloud_mask=solver_inputs.cloud_mask,
+            surface_prior=_banded_dataarray_to_dataset(
+                solver_inputs.surface_prior.boa,
+                default_name="surface_prior",
+                template=surface_template,
+            ),
+            surface_prior_unc=_banded_dataarray_to_dataset(
+                solver_inputs.surface_prior.boa_unc,
+                default_name="surface_prior_unc",
+                template=surface_template,
+            ),
+            solver_qa=solved.qa,
+            monthly_composites=_monthly_composite_outputs(
+                tuple(getattr(surface, "monthly_composites", ())),
+                template=surface_template,
+            ),
+            metadata={
+                **obs.metadata,
+                "skip_correction": True,
+                "sensor_config": obs.sensor_config,
+                "geometry": obs.geometry,
+                "crs": obs.crs,
+                "bounds": obs.bounds,
+            },
+        )
+        logger.info("Pipeline complete (retrieval-only mode, no BOA correction).")
+        return result
 
     t0 = time.monotonic()
     logger.info("M6: Applying atmospheric correction...")

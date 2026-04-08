@@ -230,7 +230,7 @@ Main fields:
 - `include_rgb`
 - `include_uncertainty`
 - `include_auxiliary`
-- `skip_correction` — When `true`, skips the solver (M5) and atmospheric correction (M6) stages. Auxiliary data (AOT, TCWV, cloud mask, surface prior, monthly composites from atmospheric priors) is still written. Default: `false`.
+- `skip_correction` — When `true`, the aerosol retrieval solver (M5) still runs but the atmospheric correction (M6) is skipped, so no BOA reflectance is produced. The retrieved AOT, TCWV, solver QA, cloud mask, surface prior, and monthly composites are still written. Default: `false`.
 - `boa_dtype`
 - `boa_scale`
 - `boa_nodata`

@@ -825,15 +825,17 @@ def test_run_tail_skip_correction_returns_auxiliary_only(
     mock_atmospheric_state,
     mock_surface_prior,
     mock_solver_input_bundle,
+    mock_solved_atmosphere,
     mock_rt_model,
 ) -> None:
-    """When skip_correction=True, M5/M6 are skipped and BOA is empty."""
+    """When skip_correction=True, M5 still runs but M6 is skipped and BOA is empty."""
     solver_called = False
     corrector_called = False
 
     def _solver(inputs, config):
         nonlocal solver_called
         solver_called = True
+        return mock_solved_atmosphere
 
     def _corrector(obs, solved, rt_model):
         nonlocal corrector_called
@@ -855,12 +857,11 @@ def test_run_tail_skip_correction_returns_auxiliary_only(
         rt_model=mock_rt_model,
     )
 
-    assert not solver_called, "Solver should not be called when skip_correction=True"
+    assert solver_called, "Solver should still run when skip_correction=True"
     assert not corrector_called, "Corrector should not be called when skip_correction=True"
     assert isinstance(result, CorrectionResult)
     assert len(result.boa.data_vars) == 0
     assert result.boa_unc is None
-    assert result.solver_qa is None
     assert result.aot is not None
     assert result.tcwv is not None
     assert result.cloud_mask is not None
@@ -873,6 +874,7 @@ def test_run_tail_skip_correction_preserves_monthly_composites(
     mock_atmospheric_state,
     mock_surface_prior,
     mock_solver_input_bundle,
+    mock_solved_atmosphere,
     mock_rt_model,
 ) -> None:
     """Monthly composite outputs are still attached in skip_correction mode."""
@@ -906,7 +908,7 @@ def test_run_tail_skip_correction_preserves_monthly_composites(
         surface_with_monthly,
         cfg,
         grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
-        solver=lambda *_a, **_k: None,
+        solver=lambda *_a, **_k: mock_solved_atmosphere,
         corrector=lambda *_a, **_k: None,
         rt_model=mock_rt_model,
     )
