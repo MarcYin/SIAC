@@ -355,10 +355,11 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         cache: dict[str, xr.DataArray] = {}
         loaded = set(loaded_band_names)
 
-        def _load_band(band_name: str) -> xr.DataArray:
-            if band_name in cache:
-                return cache[band_name]
-            if band_name in loaded:
+        def _load_band(band_name: str, *, native: bool = False) -> xr.DataArray:
+            cache_key = (band_name, native)
+            if cache_key in cache:
+                return cache[cache_key]
+            if band_name in loaded and not native:
                 raise KeyError(f"Band {band_name!r} is already present in the loaded TOA dataset.")
             band_file = band_files.get(band_name)
             if band_file is None:
@@ -366,13 +367,13 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             band = self._load_aligned_band(
                 band_name=band_name,
                 band_file=band_file,
-                reference_grid=reference_grid,
+                reference_grid=None if native else reference_grid,
                 quantification=quantification,
                 offset=float(offsets.get(band_name, 0.0)),
                 subset_bounds=subset_bounds,
                 subset_crs=subset_crs,
             )
-            cache[band_name] = band
+            cache[cache_key] = band
             return band
 
         return _load_band
@@ -410,13 +411,14 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 raise FileNotFoundError(f"No reference band found under {img_data_path}")
             ref_da = self._read_band(band_files[ref_name])
 
-        # Resample angles to image grid
-        sza = self._angles_to_grid(sun_angles["zenith"], ref_da)
-        saa = self._angles_to_grid(sun_angles["azimuth"], ref_da)
-
-        # Use mean view angles (average across detectors)
-        vza = self._angles_to_grid(view_angles["zenith"], ref_da)
-        vaa = self._angles_to_grid(view_angles["azimuth"], ref_da)
+        # Keep angle grids at their native 23×23 resolution (5 km spacing).
+        # Every downstream consumer resamples to its own target grid, so
+        # upsampling to 10980×10980 here would be wasted work.
+        sza, saa, vza, vaa = self._georeference_angle_grids(
+            [sun_angles["zenith"], sun_angles["azimuth"],
+             view_angles["zenith"], view_angles["azimuth"]],
+            ref_da,
+        )
 
         # Convert to radians
         return GeometryAngles(
@@ -779,6 +781,73 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         # Resample to target grid
         return reproject_match(da, target, resampling="bilinear")
+
+    def _angles_to_grid_batch(
+        self,
+        angle_grids: list[np.ndarray],
+        target: xr.DataArray,
+    ) -> list[xr.DataArray]:
+        """Upsample multiple angle grids to image resolution using PIL resize.
+
+        The angle grids (23×23) live on the same CRS/extent as the target — no
+        actual reprojection is needed, just bilinear upsampling.  PIL's
+        float32-mode resize is ~7× faster than scipy.ndimage.zoom for this
+        extreme upsampling ratio.
+        """
+        from PIL import Image
+
+        h_out, w_out = target.sizes["y"], target.sizes["x"]
+        results: list[xr.DataArray] = []
+        for angles in angle_grids:
+            src = angles.astype(np.float32)
+            # PIL.resize takes (width, height) — opposite of numpy (rows, cols).
+            out = np.array(
+                Image.fromarray(src, mode="F").resize((w_out, h_out), Image.BILINEAR),
+                dtype=np.float32,
+            )
+            da = xr.DataArray(
+                out,
+                dims=["y", "x"],
+                coords={"y": target.coords["y"], "x": target.coords["x"]},
+                attrs=target.attrs,
+            )
+            if target.rio.crs is not None:
+                da = da.rio.write_crs(target.rio.crs)
+                da = da.rio.write_transform(target.rio.transform())
+            results.append(da)
+        return results
+
+    def _georeference_angle_grids(
+        self,
+        angle_grids: list[np.ndarray],
+        ref_da: xr.DataArray,
+    ) -> list[xr.DataArray]:
+        """Wrap raw angle grids (23×23) as georeferenced DataArrays.
+
+        The grids keep their native resolution but receive y/x coordinates
+        and CRS metadata derived from *ref_da* so that downstream
+        resampling (``resample_field_to_template``, ``_resample_da``, etc.)
+        can correctly interpolate them to any target grid.
+        """
+        bounds = ref_da.rio.bounds()          # (left, bottom, right, top)
+        crs = ref_da.rio.crs
+
+        results: list[xr.DataArray] = []
+        for angles in angle_grids:
+            src = np.asarray(angles, dtype=np.float32)
+            h, w = src.shape
+            # Pixel-centre coordinates spanning the tile extent.
+            x = np.linspace(bounds[0], bounds[2], w, dtype=np.float64)
+            y = np.linspace(bounds[3], bounds[1], h, dtype=np.float64)  # top→bottom
+            da = xr.DataArray(
+                src,
+                dims=["y", "x"],
+                coords={"y": y, "x": x},
+            )
+            if crs is not None:
+                da = da.rio.write_crs(crs)
+            results.append(da)
+        return results
 
     def _cloud_mask_settings(self, input_path: Path) -> dict[str, Any]:
         """Resolve cloud-mask settings from preprocessor config and input path."""
