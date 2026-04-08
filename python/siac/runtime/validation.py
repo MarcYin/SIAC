@@ -61,13 +61,11 @@ def validate_observation_bundle(obs: ObservationBundle) -> None:
 
     for angle_name in ("sza", "saa", "vza", "vaa"):
         angle = getattr(obs.geometry, angle_name)
-        try:
-            np.broadcast_shapes(angle.shape, toa_shape)
-        except ValueError as err:
+        if angle.ndim != 2 or angle.size == 0:
             raise ValidationError(
-                f"geometry.{angle_name} shape {angle.shape} must be "
-                f"broadcastable to TOA spatial shape {toa_shape}"
-            ) from err
+                f"geometry.{angle_name} must be a non-empty 2-D array, "
+                f"got shape {angle.shape}"
+            )
 
 
 def validate_atmospheric_state(atmo: AtmosphericState) -> None:
