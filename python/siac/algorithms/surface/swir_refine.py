@@ -502,7 +502,7 @@ def query_surface_prior_from_monthly_database(
             dtype=np.float32,
         )
 
-    _tree_pool.shutdown(wait=False)
+    _tree_pool.shutdown(wait=True)
     spatial_reference = cast("xr.DataArray", predicted_visible.isel(band=0, drop=True))
     predicted_source_fit = copy_spatial_metadata_like(predicted_source_fit.astype(np.float32), spatial_reference)
     predicted_distance = copy_spatial_metadata_like(predicted_distance.astype(np.float32), spatial_reference)
