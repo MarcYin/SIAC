@@ -340,6 +340,62 @@ def test_correction_boa_stream_writes_boa_once_and_finishes_stac(
     assert stream.has_written is True
 
 
+def test_correction_boa_stream_can_skip_reopen_for_speed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: dict[Path, xr.DataArray] = {}
+
+    def _fake_write_fn(data, path, **_kwargs):  # noqa: ANN001
+        path = Path(path)
+        writes[path] = data
+        return path
+
+    def _unexpected_read_raster(*_args, **_kwargs):  # noqa: ANN001
+        raise AssertionError("read_raster should not be called when reopen_streamed_boa=false")
+
+    monkeypatch.setattr(output_module, "write_cog", _fake_write_fn)
+    monkeypatch.setattr("siac.storage.readers.read_raster", _unexpected_read_raster)
+    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda *_a, **_kw: None)
+    monkeypatch.setattr(output_module, "write_false_colour_preview", lambda *_a, **_kw: None)
+    monkeypatch.setattr(output_module, "write_field_preview", lambda *_a, **_kw: None)
+    monkeypatch.setattr(output_module, "write_cloud_mask_preview", lambda *_a, **_kw: None)
+
+    writer = ConfiguredOutputWriter(
+        OutputDefaultsConfig(
+            format="cog",
+            boa_dtype="float32",
+            include_uncertainty=False,
+            include_auxiliary=False,
+            include_rgb=False,
+            reopen_streamed_boa=False,
+        )
+    )
+    result = _result(include_uncertainty=False)
+    stream = writer.open_correction_boa_stream(tmp_path, metadata=result.metadata)
+
+    assert stream is not None
+    streamed_boa = xr.Dataset(
+        {
+            name: stream.write_boa_band(name, field)
+            for name, field in result.boa.data_vars.items()
+        }
+    )
+    streamed_result = replace(result, boa=streamed_boa)
+
+    artifacts = stream.finish(streamed_result)
+
+    prefix = "S2A_L2A_20240315T103045"
+    assert set(artifacts) >= {"boa.B04", "boa.B03", "boa.B02", "stac_item"}
+    assert {path.name for path in writes} == {
+        f"{prefix}_BOA_B04.tif",
+        f"{prefix}_BOA_B03.tif",
+        f"{prefix}_BOA_B02.tif",
+    }
+    assert stream.has_written is True
+
+
 def test_raster_output_emits_solver_qa_masks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

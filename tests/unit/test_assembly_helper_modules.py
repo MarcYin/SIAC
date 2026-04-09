@@ -541,6 +541,62 @@ def test_resolve_corrector_preserves_coarse_atmo_outputs(
     assert captured["atmo_shape"] == (2, 2)
 
 
+def test_resolve_corrector_passes_configured_correction_workers(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_observation_bundle,
+    mock_atmospheric_state,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeCorrector:
+        def __init__(
+            self,
+            rt_model: object,
+            sensor_config: object,
+            correction_workers: int = 1,
+        ) -> None:
+            captured["init"] = (rt_model, sensor_config, correction_workers)
+
+        def correct(self, toa, geometry, atmo, cloud_mask):  # noqa: ANN001
+            _ = (toa, geometry, atmo, cloud_mask)
+            return "corrected"
+
+    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+
+    small = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
+    solved = SolvedAtmosphere(
+        atmo_state=type(mock_atmospheric_state)(
+            aot=small,
+            tcwv=small,
+            tco3=small,
+            aot_unc=small,
+            tcwv_unc=small,
+            tco3_unc=small,
+            elevation=small,
+        ),
+        aot=small,
+        tcwv=small,
+        aot_unc=small,
+        tcwv_unc=small,
+        cost_final=0.0,
+        n_iterations=1,
+        converged=True,
+    )
+
+    result = runtime_mod.resolve_corrector(
+        SimpleNamespace(
+            execution=SimpleNamespace(max_workers=8, correction_max_workers=3),
+        )
+    )(
+        mock_observation_bundle,
+        solved,
+        "rt-model",
+    )
+
+    assert result == "corrected"
+    assert captured["init"] == ("rt-model", mock_observation_bundle.sensor_config, 3)
+
+
 def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,

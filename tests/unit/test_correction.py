@@ -163,6 +163,11 @@ class TestAtmosphericCorrector:
         with pytest.raises(TypeError, match="rt_model must implement RTModelBackend"):
             AtmosphericCorrector(object(), SENTINEL2A_CONFIG)
 
+    def test_invalid_correction_workers_raises(self, mock_rt_model):
+        """Correction workers must be at least one."""
+        with pytest.raises(ValueError, match="correction_workers must be >= 1"):
+            AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG, correction_workers=0)
+
     def test_apply_correction_consistency(self, sample_inputs, mock_rt_model):
         """Corrector should produce same result as RTCoefficients.apply_correction()."""
         toa, geometry, atmo_state = sample_inputs
@@ -211,6 +216,27 @@ class TestAtmosphericCorrector:
 
         assert set(result.boa.data_vars) == {"B02", "B03", "B04"}
         assert late_calls == ["B03", "B04"]
+
+    def test_parallel_correction_matches_serial_and_preserves_writer_order(self, sample_inputs, mock_rt_model):
+        """Parallel band correction should remain numerically stable and deterministic in output ordering."""
+        toa, geometry, atmo_state = sample_inputs
+
+        writer_calls: list[str] = []
+
+        def _writer(band_name: str, data: xr.DataArray) -> xr.DataArray:
+            writer_calls.append(band_name)
+            return data
+
+        serial = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG, correction_workers=1)
+        parallel = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG, correction_workers=3)
+
+        serial_result = serial.correct(toa, geometry, atmo_state)
+        parallel_result = parallel.correct(toa, geometry, atmo_state, boa_band_writer=_writer)
+
+        assert set(serial_result.boa.data_vars) == set(parallel_result.boa.data_vars)
+        for name in serial_result.boa.data_vars:
+            np.testing.assert_allclose(serial_result.boa[name].values, parallel_result.boa[name].values, rtol=1e-6)
+        assert writer_calls == ["B02", "B03", "B04"]
 
     def test_correct_resamples_coefficients_to_band_grid(self):
         """Coefficient computation may stay on the atmospheric grid and upsample afterwards."""

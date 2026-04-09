@@ -24,6 +24,7 @@ legacy emulator features ``[cos(sza), cos(vza), cos(raa)]``.
 from __future__ import annotations
 
 import logging
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -87,6 +88,7 @@ class TwoLayerNNEmulator:
 
         # Bounded LRU cache for loaded band emulators (limit: 32 bands).
         self._band_emulators: OrderedDict[str, _BandEmulator] = OrderedDict()
+        self._band_emulators_lock = threading.Lock()
         self._max_cached_bands = 32
 
         # Discover available bands
@@ -171,50 +173,51 @@ class TwoLayerNNEmulator:
 
     def _load_band_emulator(self, band_name: str) -> _BandEmulator:
         """Load emulator weights for a specific band (LRU-cached)."""
-        if band_name in self._band_emulators:
-            self._band_emulators.move_to_end(band_name)
-            return self._band_emulators[band_name]
+        with self._band_emulators_lock:
+            if band_name in self._band_emulators:
+                self._band_emulators.move_to_end(band_name)
+                return self._band_emulators[band_name]
 
-        path = self._get_emulator_path(band_name)
-        if path is None:
-            raise FileNotFoundError(
-                f"No emulator found for band {band_name} "
-                f"(sensor: {self.sensor_id}/{self.satellite_id})"
+            path = self._get_emulator_path(band_name)
+            if path is None:
+                raise FileNotFoundError(
+                    f"No emulator found for band {band_name} "
+                    f"(sensor: {self.sensor_id}/{self.satellite_id})"
+                )
+
+            logger.debug(f"Loading emulator from {path}")
+
+            # Load numpy model file.
+            # allow_pickle is required because the emulator .npz files store
+            # layer weights as object arrays (lists of [weight, bias] pairs).
+            # Only files resolved from the trusted emulator_dir are loaded.
+            resolved = path.resolve()
+            if not resolved.is_relative_to(self.emulator_dir.resolve()):
+                raise ValueError(
+                    f"Emulator path {resolved} is outside the trusted "
+                    f"emulator directory {self.emulator_dir.resolve()}"
+                )
+            data = np.load(path, allow_pickle=True)  # noqa: S301
+
+            hidden_layers = data["Hidden_Layers"].tolist()
+            output_layers = data["Output_Layers"].tolist()
+
+            # Normalize bias shapes
+            for layer in hidden_layers:
+                layer[1] = np.atleast_1d(layer[1]).ravel().astype(np.float32)
+
+            for layer in output_layers:
+                layer[1] = np.atleast_1d(layer[1]).ravel().astype(np.float32)
+
+            emulator = _BandEmulator(
+                hidden_layers=hidden_layers,
+                output_layers=output_layers,
             )
 
-        logger.debug(f"Loading emulator from {path}")
-
-        # Load numpy model file.
-        # allow_pickle is required because the emulator .npz files store
-        # layer weights as object arrays (lists of [weight, bias] pairs).
-        # Only files resolved from the trusted emulator_dir are loaded.
-        resolved = path.resolve()
-        if not resolved.is_relative_to(self.emulator_dir.resolve()):
-            raise ValueError(
-                f"Emulator path {resolved} is outside the trusted "
-                f"emulator directory {self.emulator_dir.resolve()}"
-            )
-        data = np.load(path, allow_pickle=True)  # noqa: S301
-
-        hidden_layers = data["Hidden_Layers"].tolist()
-        output_layers = data["Output_Layers"].tolist()
-
-        # Normalize bias shapes
-        for layer in hidden_layers:
-            layer[1] = np.atleast_1d(layer[1]).ravel().astype(np.float32)
-
-        for layer in output_layers:
-            layer[1] = np.atleast_1d(layer[1]).ravel().astype(np.float32)
-
-        emulator = _BandEmulator(
-            hidden_layers=hidden_layers,
-            output_layers=output_layers,
-        )
-
-        self._band_emulators[band_name] = emulator
-        if len(self._band_emulators) > self._max_cached_bands:
-            self._band_emulators.popitem(last=False)
-        return emulator
+            self._band_emulators[band_name] = emulator
+            if len(self._band_emulators) > self._max_cached_bands:
+                self._band_emulators.popitem(last=False)
+            return emulator
 
     def _prepare_inputs(
         self,

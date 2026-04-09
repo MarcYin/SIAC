@@ -51,6 +51,16 @@ def _ordered_unique_band_names(names: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name for name in names if name))
 
 
+def _callable_supports_kwarg(target: Any, keyword: str) -> bool:
+    with suppress(TypeError, ValueError):
+        signature = inspect.signature(target)
+        return keyword in signature.parameters or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
+    return False
+
+
 def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[str, ...] | None:
     """Select bands to eagerly load at native resolution during preprocessing.
 
@@ -308,14 +318,23 @@ def resolve_solver(config: Any) -> SolverFn:
     return _default_solver
 
 
-def resolve_corrector(_config: Any) -> CorrectorFn:
+def resolve_corrector(config: Any) -> CorrectorFn:
+    execution = getattr(config, "execution", None)
+    correction_workers = getattr(execution, "correction_max_workers", None)
+    if correction_workers is None:
+        correction_workers = getattr(execution, "max_workers", 1) if execution is not None else 1
+    correction_workers = max(1, int(correction_workers))
+
     def _default_corrector(
         obs: ObservationBundle,
         solved: SolvedAtmosphere,
         rt_model: Any,
         output_stream: Any | None = None,
     ) -> CorrectionResult:
-        corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config)
+        init_kwargs: dict[str, Any] = {}
+        if _callable_supports_kwarg(AtmosphericCorrector, "correction_workers"):
+            init_kwargs["correction_workers"] = correction_workers
+        corrector_obj = AtmosphericCorrector(rt_model, obs.sensor_config, **init_kwargs)
         atmo = solved.atmo_state
         matched_atmo = AtmosphericState(
             aot=_resample_field_for_correction(atmo.aot, atmo.aot, field_name="aot"),
@@ -333,14 +352,8 @@ def resolve_corrector(_config: Any) -> CorrectorFn:
             vaa=_resample_field_for_correction(obs.geometry.vaa, atmo.aot, field_name="vaa"),
         )
         correct_kwargs: dict[str, Any] = {}
-        if output_stream is not None:
-            with suppress(TypeError, ValueError):
-                signature = inspect.signature(corrector_obj.correct)
-                if "boa_band_writer" in signature.parameters or any(
-                    param.kind == inspect.Parameter.VAR_KEYWORD
-                    for param in signature.parameters.values()
-                ):
-                    correct_kwargs["boa_band_writer"] = output_stream.write_boa_band
+        if output_stream is not None and _callable_supports_kwarg(corrector_obj.correct, "boa_band_writer"):
+            correct_kwargs["boa_band_writer"] = output_stream.write_boa_band
         corrected = corrector_obj.correct(
             obs.toa,
             coeff_geometry,

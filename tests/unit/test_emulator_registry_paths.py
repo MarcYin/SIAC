@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -127,6 +129,45 @@ def test_band_emulator_initializes_combined_rust_output_layer(monkeypatch):
     assert captured["w1"].shape == (7, 3)
     assert captured["w3"].shape == (3, 3)
     assert captured["b3"].shape == (3,)
+
+
+def test_load_band_emulator_serializes_parallel_cache_miss(monkeypatch, tmp_path: Path):
+    hidden_layers, output_layers = _weights(hidden=3)
+    np.savez(
+        tmp_path / "S2A_B02.npz",
+        Hidden_Layers=np.array(hidden_layers, dtype=object),
+        Output_Layers=np.array(output_layers, dtype=object),
+    )
+    emu = tnn.TwoLayerNNEmulator(tmp_path, sensor_id="MSI", satellite_id="S2A")
+
+    real_load = np.load
+    first_load_started = threading.Event()
+    release_first_load = threading.Event()
+    load_calls = 0
+    load_calls_lock = threading.Lock()
+
+    def _tracked_load(*args, **kwargs):  # noqa: ANN002,ANN003
+        nonlocal load_calls
+        with load_calls_lock:
+            load_calls += 1
+            current_call = load_calls
+            if current_call == 1:
+                first_load_started.set()
+        if current_call == 1:
+            assert release_first_load.wait(timeout=5)
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(tnn.np, "load", _tracked_load)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        first = executor.submit(emu._load_band_emulator, "B02")
+        assert first_load_started.wait(timeout=5)
+        others = [executor.submit(emu._load_band_emulator, "B02") for _ in range(3)]
+        release_first_load.set()
+        results = [first.result(), *(future.result() for future in others)]
+
+    assert load_calls == 1
+    assert all(result is results[0] for result in results[1:])
 
 
 def test_emulator_registry_branching(monkeypatch, tmp_path: Path):

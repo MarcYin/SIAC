@@ -453,6 +453,7 @@ class AlgorithmsConfig(SIACBaseModel):
 class ExecutionRuntimeConfig(SIACBaseModel):
     backend: Literal["thread", "dask"] = "thread"
     max_workers: int = Field(default=4, ge=1)
+    correction_max_workers: int | None = Field(default=None, ge=1)
     retries: int = Field(default=2, ge=0)
     stage_timeout_s: float | None = Field(default=None, gt=0.0)
     dashboard: bool = False
@@ -486,6 +487,7 @@ class OutputDefaultsConfig(SIACBaseModel):
     boa_dtype: Literal["float32", "float64", "uint16"] = "float32"
     boa_scale: float = Field(default=10000.0, gt=0.0)
     boa_nodata: float = 0.0
+    reopen_streamed_boa: bool = True
 
     @field_validator("output_dir", mode="before")
     @classmethod

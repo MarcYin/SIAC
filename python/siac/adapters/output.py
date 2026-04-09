@@ -558,6 +558,11 @@ class _RasterCorrectionBoaStream:
         write_fn(prepared, path, compression=self.writer.defaults.compression, nodata=nodata)
         self.artifacts[f"boa.{band_name}"] = path
 
+        if not self.writer.defaults.reopen_streamed_boa:
+            prepared.name = band_name
+            prepared.attrs.update(data.attrs)
+            return prepared
+
         from siac.storage.readers import read_raster
 
         reopened = read_raster(path, masked=True)
