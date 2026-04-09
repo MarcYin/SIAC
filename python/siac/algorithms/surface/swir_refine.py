@@ -1253,7 +1253,7 @@ def _resample_dataset_with_validity(
     mixed-resolution inputs are handled correctly without an expensive
     intermediate reproject.
     """
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import Future, ThreadPoolExecutor
 
     valid_fraction = _resample_da(valid_mask.astype(np.float32), target_shape, "area", template=template)
     valid_support = valid_fraction > 0.0
@@ -1306,15 +1306,19 @@ def _resample_dataset_with_validity(
 
     n_workers = max(len(in_dataset_names) + len(lazy_names), 1)
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        ds_futures = [pool.submit(_resample_in_dataset_band, n) for n in in_dataset_names]
-        lazy_futures = [pool.submit(_resample_lazy_band, n) for n in lazy_names]
+        ds_futures: list[Future[tuple[str, xr.DataArray]]] = [
+            pool.submit(_resample_in_dataset_band, n) for n in in_dataset_names
+        ]
+        lazy_futures: list[Future[tuple[str, xr.DataArray, xr.DataArray] | None]] = [
+            pool.submit(_resample_lazy_band, n) for n in lazy_names
+        ]
 
         for fut in ds_futures:
             name, resampled = fut.result()
             data_vars[name] = resampled
 
-        for fut in lazy_futures:
-            result = fut.result()
+        for lazy_fut in lazy_futures:
+            result = lazy_fut.result()
             if result is None:
                 continue
             name, resampled, band_valid_sup = result

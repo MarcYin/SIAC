@@ -692,7 +692,7 @@ class ZarrLUTBackend:
 
         applicable_names = [name for name in var.dims if name in coords]
         if not applicable_names:
-            return np.asarray(var.values, dtype=np.float32)
+            return np.asarray(var.values, dtype=np.float32)  # type: ignore[no-any-return]
 
         grid_axes = tuple(
             np.asarray(var.coords[name].values, dtype=np.float64)
@@ -713,7 +713,8 @@ class ZarrLUTBackend:
             np.asarray(coords[name].values, dtype=np.float64)
             for name in applicable_names
         ])
-        return interp(query_points).astype(np.float32)
+        result: np.ndarray = interp(query_points).astype(np.float32)
+        return result
 
     def _compute_coefficients_from_spectral_lut(
         self,

@@ -352,7 +352,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         subset_crs: str | None,
         loaded_band_names: tuple[str, ...],
     ) -> Any:
-        cache: dict[str, xr.DataArray] = {}
+        cache: dict[tuple[str, bool], xr.DataArray] = {}
         loaded = set(loaded_band_names)
 
         def _load_band(band_name: str, *, native: bool = False) -> xr.DataArray:
@@ -799,7 +799,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         h_out, w_out = target.sizes["y"], target.sizes["x"]
         results: list[xr.DataArray] = []
         for angles in angle_grids:
-            src = angles.astype(np.float32)
+            src: np.ndarray = np.asarray(angles, dtype=np.float32)
             # PIL.resize takes (width, height) — opposite of numpy (rows, cols).
             out = np.array(
                 Image.fromarray(src, mode="F").resize((w_out, h_out), Image.BILINEAR),
