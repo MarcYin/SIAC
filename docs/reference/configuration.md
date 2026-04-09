@@ -206,6 +206,7 @@ Execution knobs:
 
 - `backend`
 - `max_workers`
+- `correction_max_workers` — Optional worker count for M6 atmospheric correction band-level parallelism. If omitted, uses `max_workers`.
 - `retries`
 - `stage_timeout_s`
 - `dashboard`
@@ -234,6 +235,7 @@ Main fields:
 - `boa_dtype`
 - `boa_scale`
 - `boa_nodata`
+- `reopen_streamed_boa` — When `true` (default), BOA bands streamed during M6 are reopened from disk after write so downstream steps consume on-disk values. Set `false` for faster runs when write/read parity is not required.
 
 Supported formats:
 

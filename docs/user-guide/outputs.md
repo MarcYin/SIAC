@@ -45,6 +45,7 @@ SIAC supports:
 | `output.defaults.include_rgb` | Writes RGB quicklook when compatible bands are present |
 | `output.defaults.boa_dtype` | Controls BOA encoding dtype |
 | `output.defaults.compression` | Controls output compression |
+| `output.defaults.reopen_streamed_boa` | Reopens streamed BOA bands from disk after write (default `true`); set `false` for faster streamed correction output |
 
 ## Interpreting the result in Python
 

@@ -66,6 +66,9 @@ Controls execution options such as log level, chunk size, and the thread or Dask
 
 Controls output directory, format, compression, uncertainty inclusion, auxiliary outputs, and BOA encoding details.
 
+Execution tuning includes `runtime.execution.max_workers` and optional
+`runtime.execution.correction_max_workers` for M6 band-level correction parallelism.
+
 ## Environment overlay
 
 The config loader fills missing auth fields from environment variables. Common examples include:

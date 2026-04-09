@@ -83,3 +83,4 @@ api_key = "uid:key"
 format = "cog"
 include_rgb = true
 include_uncertainty = true
+reopen_streamed_boa = true
