@@ -166,6 +166,8 @@ Main fields:
 - `stages` — optional staged solver chain. Each stage declares `solve`, `fixed`, optional `bands`, and `initial_state = "previous"` or `"prior"`. Current production execution supports staged AOT/TCWV combinations; `tco3` is carried through the atmospheric state and rejected as a solved parameter until RT ozone Jacobian/grid-search support is added.
 - `quadratic_block_size` — solve one shared AOT/TCWV pair for each `NxN` block in the no-Jacobian grid-search path, compute RT coefficients on the same block grid, then broadcast the block solution back to full resolution
 - `quadratic_block_min_valid_fraction` — minimum fraction of pixels in each `quadratic_block_size` block that must have valid observations and surface-prior support before the block is solved (default `0.5`)
+- `water_mask_buffer_pixels` — dilate the native water mask by this many native mask pixels before it is reprojected to the aerosol solver grid
+- `sharp_transition_filter.*` — optional native-resolution edge/singularity detector used to exclude unstable transitions before the solver-grid aggregation step
 - `use_multigrid` — enable the coarse-to-fine multi-grid solver strategy (default `true`)
 - `min_grid_size` — minimum grid dimension (pixels) for multi-grid levels
 - `bounds.aot` — `[min, max]` bounds for AOT during optimization
@@ -178,7 +180,7 @@ Example staged solve:
 name = "aot_pass"
 solve = ["aot"]
 fixed = ["tcwv", "tco3"]
-bands = ["B02", "B04"]
+bands = ["B01", "B02", "B04"]
 
 [[algorithms.solver.stages]]
 name = "tcwv_pass"

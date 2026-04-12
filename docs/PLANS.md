@@ -1479,9 +1479,10 @@ which return the same `SurfacePrior` contract.
      - SWIR-1
      - SWIR-2
      - the median summary derived from the 15 monthly composites
-  5. apply a first-pass atmospheric correction with prior atmospheric parameters to the target
-     scene, then use the corrected NIR/SWIR query vector to retrieve the visible reflectance
-     estimate from the database
+  5. average-resample the target-scene NIR/SWIR TOA observations to the query/solving
+     resolution, resample geometry and prior atmospheric parameters to that same grid, apply a
+     first-pass atmospheric correction there, then use the corrected NIR/SWIR query vector to
+     retrieve the visible reflectance estimate from the database
   6. return visible/NIR/SWIR prior reflectance and uncertainty for the retrieved candidate, and
      feed the visible prior into the AOD solve
 - Role:

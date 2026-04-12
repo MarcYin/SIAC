@@ -65,6 +65,13 @@ Relevant areas:
 - `python/siac/algorithms/surface/swir_refine.py`
 - `src/siac_rs/src/psf.rs`
 
+For the Route-B monthly-database query specifically, the initial NIR/SWIR
+correction is intentionally done on the coarse query grid: SIAC area-resamples
+the native TOA query bands to the target solving/database resolution first,
+then applies the first-pass correction on that coarse grid. This is separate
+from M6, where the final atmospheric correction is still applied back at the
+native band resolutions.
+
 ## Cloud masking
 
 Cloud handling is part of the upstream observation preparation and affects which pixels contribute to later stages. The current repository exposes cloud-mask configuration through:

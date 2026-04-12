@@ -1,13 +1,17 @@
 # Canonical SIAC system configuration example.
+# Based on the real CDSE + MCD43 + prepared monthly-store + LUT + staged-solver
+# setup used for the T44RPN Sentinel-2 run, with generic machine/project paths.
 # This file is for stable machine/project settings only.
 # Keep per-run inputs such as AOI, input scenes, and output paths out of this file.
 
 [paths]
 dem = "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt"
-emulator_dir = "/data/siac/emulators"
-lut_path = "s3://bucket/siac/lut.zarr"
-rsrf_root = "/data/siac/RSRF"
+water_mask = "https://zenodo.org/records/14899246/files/landWater2020.vrt?download=1"
 cache_root = "/data/siac/cache"
+# Optional local assets if you override the defaults elsewhere:
+# emulator_dir = "/data/siac/emulators"
+# lut_path = "s3://bucket/siac/lut.zarr"
+# rsrf_root = "/data/siac/RSRF"
 
 [paths.caches]
 s2 = "/data/siac/cache/s2"
@@ -15,26 +19,37 @@ s2 = "/data/siac/cache/s2"
 [runtime]
 log_level = "INFO"
 n_jobs = -1
-chunk_size = 2048
+chunk_size = 1024
 
 [runtime.execution]
 backend = "thread"
 max_workers = 4
-retries = 2
+correction_max_workers = 4
+retries = 1
 
 [providers.atmo]
 kind = "cams"
+data_path = "/data/siac/cache/atmo"
+cache_dir = "/data/siac/cache/atmo"
 download_missing = true
+temporal_interpolation = "nearest"
 
 [providers.brdf]
 kind = "mcd43"
 temporal_window = 16
+cache_dir = "/data/siac/cache/brdf"
+use_cache = true
+
+[providers.monthly_composites]
+kind = "prepared_store"
+store_path = "/data/siac/monthly_store_native"
+strict_coverage = true
 
 [providers.s2]
 backend = "cdse"
 cache_dir = "/data/siac/cache/s2"
-max_cloud_cover = 40.0
 processing_level = "L1C"
+max_cloud_cover = 100.0
 
 [algorithms.cloud_mask]
 mode = "auto"
@@ -42,31 +57,44 @@ provider = "omnicloudmask"
 target_resolution_m = 10.0
 
 [algorithms.surface_prior]
-method = "whittaker"
-whittaker_lambda = 10.0
-# For method = "monthly_database": "provider_or_coarser" or "aerosol".
+method = "monthly_database"
+# Keep the Route-B monthly database at the prepared/provider grid when that
+# grid is coarser than the aerosol retrieval grid.
 monthly_database_resolution_policy = "provider_or_coarser"
 
 [algorithms.surface_prior.spectral_mapping]
 enabled = true
 k_neighbors = 5
+knn_backend = "scipy_ckdtree"
 
 [algorithms.rt]
-backend = "emulator"
+backend = "lut"
 fallback_to_lut = true
+fallback_to_py6s = false
 
 [algorithms.solver]
-aot_gamma = 10.0
-tcwv_gamma = 5.0
+aerosol_resolution = 60.0
+grid_search_aot_points = 40
+quadratic_block_size = 8
+quadratic_block_min_valid_fraction = 0.5
+aot_gamma = 3.0
+tcwv_gamma = 3.0
+smoothness_delta = 0.30
+water_mask_buffer_pixels = 10
 
-# Optional staged solve. TCO3 is currently a carried/fixed atmospheric state
-# field; solving it is rejected until RT ozone Jacobian/grid-search support is
-# enabled.
-# [[algorithms.solver.stages]]
-# name = "aot_pass"
-# solve = ["aot"]
-# fixed = ["tcwv", "tco3"]
-# bands = ["B02", "B04"]
+[[algorithms.solver.stages]]
+name = "aot_pass"
+solve = ["aot"]
+fixed = ["tcwv", "tco3"]
+bands = ["B01", "B02", "B04"]
+initial_state = "previous"
+
+[algorithms.solver.sharp_transition_filter]
+enabled = true
+blur_kernel_pixels_native = 31
+dilation_pixels = 5
+solver_cell_fraction_threshold = 0.5
+cloud_buffer_pixels = 2
 
 [auth.cdse]
 username = "your-cdse-username"
@@ -82,5 +110,7 @@ api_key = "uid:key"
 [output.defaults]
 format = "cog"
 include_rgb = true
-include_uncertainty = true
-reopen_streamed_boa = true
+include_uncertainty = false
+include_auxiliary = true
+skip_correction = false
+reopen_streamed_boa = false
