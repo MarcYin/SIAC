@@ -20,6 +20,7 @@ import numpy as np
 import xarray as xr
 from numpy import typing as npt
 
+from siac.adapters.data.water_mask import DEFAULT_WATER_MASK_VRT_URL
 from siac.algorithms.solver import build_solver_valid_mask
 from siac.observability import (
     ExecutionObserver,
@@ -175,19 +176,60 @@ def _aerosol_resolution(config: Any) -> float:
     return 120.0
 
 
-def _select_solver_bands_for_preload(sensor_config: SensorConfig) -> list[Any]:
+def _requested_solver_band_names(config: Any) -> tuple[str, ...] | None:
+    """Return the union of stage-requested solver bands, if any."""
+    solver_config = getattr(config, "solver", None)
+    if solver_config is None:
+        return None
+
+    stages = tuple(getattr(solver_config, "stages", ()) or ())
+    if not stages:
+        return None
+
+    requested: list[str] = []
+    for stage in stages:
+        raw_bands = getattr(stage, "bands", None)
+        if raw_bands is None:
+            continue
+        bands = (raw_bands,) if isinstance(raw_bands, str) else tuple(raw_bands)
+        for name in bands:
+            normalized = str(name).strip()
+            if normalized and normalized not in requested:
+                requested.append(normalized)
+
+    return tuple(requested) or None
+
+
+def _select_solver_bands_for_preload(
+    sensor_config: SensorConfig,
+    requested_band_names: tuple[str, ...] | None = None,
+) -> list[Any]:
     """Mirror M4 band-selection logic for LUT preloading hints."""
     default_selector = getattr(sensor_config, "default_aerosol_solver_bands", None)
     if callable(default_selector):
-        return list(default_selector())
+        default_bands = list(default_selector())
+    else:
+        range_selector = getattr(sensor_config, "select_bands_in_range", None)
+        if callable(range_selector):
+            bands = list(range_selector(400.0, 520.0))
+            default_bands = bands or list(getattr(sensor_config, "bands", ())[:2])
+        else:
+            default_bands = list(getattr(sensor_config, "bands", ())[:2])
 
-    range_selector = getattr(sensor_config, "select_bands_in_range", None)
-    if callable(range_selector):
-        bands = list(range_selector(400.0, 520.0))
-        if bands:
-            return bands
+    if not requested_band_names:
+        return default_bands
 
-    return list(getattr(sensor_config, "bands", ())[:2])
+    available_by_name = {band.name: band for band in sensor_config.bands}
+    missing = [name for name in requested_band_names if name not in available_by_name]
+    if missing:
+        raise ValueError(
+            "Requested solver band(s) are not available for sensor "
+            f"{getattr(sensor_config, 'sensor_id', 'unknown')}: {', '.join(missing)}"
+        )
+
+    selected_names = {band.name for band in default_bands}
+    selected_names.update(requested_band_names)
+    return [band for band in sensor_config.bands if band.name in selected_names]
 
 
 def _should_skip_correction(config: Any) -> bool:
@@ -272,6 +314,7 @@ def _build_aot_scatter_diagnostics(
         solver_inputs.toa,
         solver_inputs.surface_prior,
         sharp_transition_mask=solver_inputs.sharp_transition_mask,
+        water_mask=solver_inputs.water_mask,
     ).values.astype(bool)
     atmo_state = solved.atmo_state
     atmo_finite_mask = (
@@ -366,6 +409,7 @@ def _maybe_submit_lut_preload(
     *,
     obs: ObservationBundle,
     atmo: AtmosphericState,
+    requested_band_names: tuple[str, ...] | None,
     retries: int,
     observer_id: str | None = None,
 ) -> Any | None:
@@ -374,7 +418,10 @@ def _maybe_submit_lut_preload(
     if not callable(preload_fn):
         return None
 
-    bands = _select_solver_bands_for_preload(obs.sensor_config)
+    bands = _select_solver_bands_for_preload(
+        obs.sensor_config,
+        requested_band_names=requested_band_names,
+    )
     preload_geometry = _geometry_for_atmo_grid(obs.geometry, atmo)
     logger.info(
         "Starting LUT preload in parallel on the atmospheric grid (scene subset + %d band grid%s).",
@@ -477,6 +524,10 @@ def _call_grid_assembler(
     *,
     aerosol_resolution_m: float,
     sharp_transition_filter: Any | None = None,
+    water_mask_path: str | Path | None = None,
+    water_mask_cache_dir: str | Path | None = None,
+    water_mask_buffer_pixels: int = 0,
+    solver_band_names: tuple[str, ...] | None = None,
 ) -> SolverInputBundle:
     """Call the grid assembler with a standardised interface.
 
@@ -488,15 +539,36 @@ def _call_grid_assembler(
     ``sharp_transition_filter`` keyword, a single fallback attempt is made
     without it.
     """
+    kwargs = {
+        "aerosol_resolution_m": aerosol_resolution_m,
+        "sharp_transition_filter": sharp_transition_filter,
+        "water_mask_path": water_mask_path,
+        "water_mask_cache_dir": water_mask_cache_dir,
+        "water_mask_buffer_pixels": water_mask_buffer_pixels,
+        "solver_band_names": solver_band_names,
+    }
     try:
-        return grid_assembler(
-            obs, atmo, surface, rt_model,
-            aerosol_resolution_m=aerosol_resolution_m,
-            sharp_transition_filter=sharp_transition_filter,
+        signature = inspect.signature(grid_assembler)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None:
+        accepts_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
         )
+        supported_kwargs = (
+            kwargs
+            if accepts_kwargs
+            else {key: value for key, value in kwargs.items() if key in signature.parameters}
+        )
+        return grid_assembler(obs, atmo, surface, rt_model, **supported_kwargs)
+
+    try:
+        return grid_assembler(obs, atmo, surface, rt_model, **kwargs)
     except TypeError:
         logger.debug(
-            "Grid assembler rejected sharp_transition_filter keyword; retrying without it",
+            "Grid assembler rejected optional keyword(s); retrying with aerosol_resolution only",
             exc_info=True,
         )
         return grid_assembler(
@@ -649,6 +721,12 @@ def _run_tail(
     validate_surface_prior(surface)
     aerosol_resolution = _aerosol_resolution(config)
     solver_config = getattr(config, "solver", None)
+    paths_config = getattr(config, "paths", None)
+    water_mask_path = getattr(paths_config, "water_mask", None) or DEFAULT_WATER_MASK_VRT_URL
+    cache_root = getattr(paths_config, "cache_root", None)
+    water_mask_cache_dir = None if cache_root is None else Path(cache_root).expanduser() / "water-mask"
+    water_mask_buffer_pixels = int(getattr(solver_config, "water_mask_buffer_pixels", 0))
+    solver_band_names = _requested_solver_band_names(config)
 
     t0 = time.monotonic()
     logger.info("M4: Assembling solver grids...")
@@ -661,6 +739,10 @@ def _run_tail(
             rt_model,
             aerosol_resolution_m=aerosol_resolution,
             sharp_transition_filter=getattr(solver_config, "sharp_transition_filter", None),
+            water_mask_path=water_mask_path,
+            water_mask_cache_dir=water_mask_cache_dir,
+            water_mask_buffer_pixels=water_mask_buffer_pixels,
+            solver_band_names=solver_band_names,
         )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
@@ -825,6 +907,7 @@ def _fetch_priors(
     retries = settings["retries"]
     resolution = _aerosol_resolution(config)
     requires_atmo = _surface_prior_requires_atmo(surface_prior_provider)
+    solver_band_names = _requested_solver_band_names(config)
 
     f_m2 = submit_fn(
         _call_with_retries,
@@ -892,6 +975,7 @@ def _fetch_priors(
             rt_model,
             obs=obs,
             atmo=atmo,
+            requested_band_names=solver_band_names,
             retries=retries,
             observer_id=observer_id,
         )

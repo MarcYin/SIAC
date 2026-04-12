@@ -558,8 +558,8 @@ def test_cams_extract_transforms_projected_bounds(tmp_path: Path) -> None:
     )
 
     assert out.dims == ("latitude", "longitude")
-    assert out.shape == (1, 1)
-    assert float(out.values[0, 0]) == pytest.approx(0.5)
+    assert out.shape == (3, 3)
+    assert float(out.values[1, 1]) == pytest.approx(0.5)
 
 
 

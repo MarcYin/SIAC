@@ -395,7 +395,13 @@ def query_surface_prior_from_monthly_database(
     max_knn_feature_distance: float | None = 0.05,
     diagnostic_cache_dir: Path | str | None = None,
 ) -> SurfacePrior:
-    """Build a visible-band surface prior from first-pass corrected NIR/SWIR."""
+    """Build a visible-band surface prior from first-pass corrected NIR/SWIR.
+
+    The first-pass correction is evaluated on the coarse query grid used by the
+    monthly database, not at the native observation resolution. Query bands are
+    area-resampled into that target footprint before correction so the NIR/SWIR
+    query vector matches the atmospheric-support scale used here.
+    """
     expected_query = tuple(database.query_band_names)
     if query_band_names is not None and tuple(query_band_names) != expected_query:
         raise ValueError("query_band_names must match the database query-band ordering")
@@ -438,6 +444,9 @@ def query_surface_prior_from_monthly_database(
         raise
 
     _t0 = time.perf_counter()
+    # Route B only needs a query vector at the database/solver support scale, so
+    # average the native TOA samples into that footprint before first-pass
+    # correction instead of correcting every native observation pixel.
     coarse_query_toa, coarse_query_valid = _resample_dataset_with_validity(
         observation.toa,
         band_names=expected_query,

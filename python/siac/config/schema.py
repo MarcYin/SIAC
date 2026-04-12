@@ -410,6 +410,7 @@ class SolverAlgorithmConfig(SIACBaseModel):
     stages: tuple[SolverStageConfig, ...] = Field(default_factory=tuple)
     quadratic_block_size: int = Field(default=1, ge=1)
     quadratic_block_min_valid_fraction: float = Field(default=0.5, ge=0.0, le=1.0)
+    water_mask_buffer_pixels: int = Field(default=0, ge=0)
     use_multigrid: bool = True
     min_grid_size: int = Field(default=4, ge=2)
     bounds: SolverBoundsConfig = Field(default_factory=SolverBoundsConfig)

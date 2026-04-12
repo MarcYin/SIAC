@@ -289,7 +289,7 @@ class TestCAMSProvider:
         assert arr.shape == (4, 4)
         assert float(arr.mean()) == pytest.approx(0.15)
 
-    def test_get_prior_from_dataset_and_no_temporal_interp(self, tmp_path: Path):
+    def test_get_prior_from_dataset_and_no_temporal_interp(self, tmp_path: Path, monkeypatch):
         time = np.array([np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T03:00:00")])
         lat = np.array([1.0, 0.0, -1.0], dtype=np.float32)
         lon = np.array([0.0, 1.0], dtype=np.float32)
@@ -308,13 +308,13 @@ class TestCAMSProvider:
         f = tmp_path / "cams_20240101_test.nc"
         f.write_text("dummy")
 
-        # Monkeypatch loader internals using closure
-        orig = xr.open_mfdataset
-        try:
-            xr.open_mfdataset = lambda *_args, **_kwargs: ds  # type: ignore[assignment]
-            state = p.get_prior((0.0, -1.0, 1.0, 1.0), "EPSG:4326", datetime(2024, 1, 1, 1), 1.0)
-        finally:
-            xr.open_mfdataset = orig  # type: ignore[assignment]
+        monkeypatch.setattr(xr, "open_dataset", lambda path, **_kwargs: ds if path == f else None)
+        monkeypatch.setattr(
+            xr,
+            "open_mfdataset",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("open_mfdataset should not be used")),
+        )
+        state = p.get_prior((0.0, -1.0, 1.0, 1.0), "EPSG:4326", datetime(2024, 1, 1, 1), 1.0)
 
         assert state.aot.size > 0
         assert float(state.aot.mean()) == pytest.approx(0.2)

@@ -3,6 +3,7 @@ Layer 3 — Grid assembler (M4) unit tests.
 """
 
 import dataclasses
+import warnings
 
 import numpy as np
 import pytest
@@ -136,6 +137,24 @@ class TestAssembleGrids:
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
         assert [b.name for b in sib.bands] == ["B01", "B02"]
 
+    def test_band_selection_includes_requested_stage_bands_in_sensor_order(
+        self,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        sib = assemble_grids(
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            solver_band_names=("B04", "B02", "B01"),
+        )
+
+        assert [band.name for band in sib.bands] == ["B01", "B02", "B04"]
+        assert list(np.asarray(sib.toa.coords["band"].values).tolist()) == ["B01", "B02", "B04"]
+
     def test_surface_prior_is_aligned_to_solver_band_names(self, large_atmo, mock_rt_model):
         shape = (4, 4)
         toa = xr.Dataset(
@@ -217,6 +236,225 @@ class TestAssembleGrids:
         sib = assemble_grids(obs, large_atmo, large_surface, mock_rt_model)
         # The cloud region should still have True values after resampling
         assert sib.cloud_mask.values.any(), "Cloud region should be preserved"
+
+    def test_water_mask_is_loaded_and_aggregated_to_solver_grid(
+        self,
+        monkeypatch,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ):
+        native = xr.DataArray(np.zeros((64, 64), dtype=bool), dims=["y", "x"])
+        native.values[10:20, 10:20] = True
+
+        captured: dict[str, object] = {}
+
+        def _fake_load(bounds, crs, *, source=None, cache_dir=None, session=None):  # noqa: ANN001
+            del session
+            captured["bounds"] = bounds
+            captured["crs"] = crs
+            captured["source"] = source
+            captured["cache_dir"] = cache_dir
+            return native
+
+        monkeypatch.setattr(assembler_mod, "load_water_mask_subset", _fake_load)
+
+        sib = assemble_grids(
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            water_mask_path="https://example.com/landWater2020.vrt",
+            water_mask_cache_dir="/tmp/water-mask-cache",
+        )
+
+        assert sib.water_mask is not None
+        assert sib.water_mask.values.any()
+        assert captured["source"] == "https://example.com/landWater2020.vrt"
+        assert captured["cache_dir"] == "/tmp/water-mask-cache"
+
+    def test_water_mask_buffer_is_applied_before_resampling(
+        self,
+        monkeypatch,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ):
+        native = xr.DataArray(np.zeros((64, 64), dtype=bool), dims=["y", "x"])
+        native.values[20, 20] = True
+
+        def _fake_load(_bounds, _crs, *, source=None, cache_dir=None, session=None):  # noqa: ANN001
+            del source, cache_dir, session
+            return native
+
+        monkeypatch.setattr(assembler_mod, "load_water_mask_subset", _fake_load)
+
+        sib = assemble_grids(
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=10.0,
+            water_mask_path="https://example.com/landWater2020.vrt",
+            water_mask_buffer_pixels=1,
+        )
+
+        expected = assembler_mod._dilate_mask(native.values, 1)
+        np.testing.assert_array_equal(sib.water_mask.values, expected)
+
+    def test_water_mask_is_geospatially_reprojected_to_solver_grid(
+        self,
+        monkeypatch,
+        large_obs_bundle,
+        large_atmo,
+        large_surface,
+        mock_rt_model,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from rasterio.transform import from_bounds
+        from rasterio.warp import transform_bounds
+
+        lon_min, lat_min, lon_max, lat_max = transform_bounds(
+            large_obs_bundle.crs,
+            "EPSG:4326",
+            *large_obs_bundle.bounds,
+        )
+        height = width = 64
+        x = lon_min + (np.arange(width, dtype=np.float64) + 0.5) * ((lon_max - lon_min) / width)
+        y = lat_max - (np.arange(height, dtype=np.float64) + 0.5) * ((lat_max - lat_min) / height)
+        native = xr.DataArray(
+            np.zeros((height, width), dtype=bool),
+            dims=["y", "x"],
+            coords={"x": x, "y": y},
+        )
+        native.values[:, : width // 2] = True
+        native = native.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        native = native.rio.write_crs("EPSG:4326")
+        native = native.rio.write_transform(from_bounds(lon_min, lat_min, lon_max, lat_max, width, height))
+
+        def _fake_load(_bounds, _crs, *, source=None, cache_dir=None, session=None):  # noqa: ANN001
+            del _bounds, _crs, source, cache_dir, session
+            return native
+
+        monkeypatch.setattr(assembler_mod, "load_water_mask_subset", _fake_load)
+
+        sib = assemble_grids(
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
+            aerosol_resolution_m=320.0,
+            water_mask_path="https://example.com/landWater2020.vrt",
+        )
+
+        target_template = assembler_mod._build_target_template(
+            large_obs_bundle.bounds,
+            large_obs_bundle.crs,
+            320.0,
+        )
+        expected_fraction = assembler_mod._resample_da(
+            native.astype(np.float32),
+            target_template.shape,
+            "area",
+            template=target_template,
+        )
+        expected = expected_fraction.values > 0.0
+
+        np.testing.assert_array_equal(sib.water_mask.values, expected)
+
+    def test_shape_only_mask_remap_requires_matching_crs_and_bounds(
+        self,
+        large_obs_bundle,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from rasterio.transform import from_bounds
+        from rasterio.warp import transform_bounds
+
+        target_template = assembler_mod._build_target_template(
+            large_obs_bundle.bounds,
+            large_obs_bundle.crs,
+            320.0,
+        )
+
+        lon_min, lat_min, lon_max, lat_max = transform_bounds(
+            large_obs_bundle.crs,
+            "EPSG:4326",
+            *large_obs_bundle.bounds,
+        )
+        wgs84_x = lon_min + (np.arange(64, dtype=np.float64) + 0.5) * ((lon_max - lon_min) / 64.0)
+        wgs84_y = lat_max - (np.arange(64, dtype=np.float64) + 0.5) * ((lat_max - lat_min) / 64.0)
+        wgs84_mask = xr.DataArray(
+            np.zeros((64, 64), dtype=bool),
+            dims=["y", "x"],
+            coords={"x": wgs84_x, "y": wgs84_y},
+        )
+        wgs84_mask = wgs84_mask.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        wgs84_mask = wgs84_mask.rio.write_crs("EPSG:4326")
+        wgs84_mask = wgs84_mask.rio.write_transform(from_bounds(lon_min, lat_min, lon_max, lat_max, 64, 64))
+
+        assert not assembler_mod._shape_only_mask_remap_is_safe(wgs84_mask, target_template)
+
+        utm_xmin, utm_ymin, utm_xmax, utm_ymax = large_obs_bundle.bounds
+        utm_x = utm_xmin + (np.arange(64, dtype=np.float64) + 0.5) * ((utm_xmax - utm_xmin) / 64.0)
+        utm_y = utm_ymax - (np.arange(64, dtype=np.float64) + 0.5) * ((utm_ymax - utm_ymin) / 64.0)
+        utm_mask = xr.DataArray(
+            np.zeros((64, 64), dtype=bool),
+            dims=["y", "x"],
+            coords={"x": utm_x, "y": utm_y},
+        )
+        utm_mask = utm_mask.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        utm_mask = utm_mask.rio.write_crs(large_obs_bundle.crs)
+        utm_mask = utm_mask.rio.write_transform(from_bounds(utm_xmin, utm_ymin, utm_xmax, utm_ymax, 64, 64))
+
+        assert assembler_mod._shape_only_mask_remap_is_safe(utm_mask, target_template)
+
+    def test_cloud_mask_geospatial_fallback_when_source_is_not_aligned(
+        self,
+        large_obs_bundle,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from rasterio.transform import from_bounds
+        from rasterio.warp import transform_bounds
+
+        target_template = assembler_mod._build_target_template(
+            large_obs_bundle.bounds,
+            large_obs_bundle.crs,
+            320.0,
+        )
+
+        lon_min, lat_min, lon_max, lat_max = transform_bounds(
+            large_obs_bundle.crs,
+            "EPSG:4326",
+            *large_obs_bundle.bounds,
+        )
+        x = lon_min + (np.arange(64, dtype=np.float64) + 0.5) * ((lon_max - lon_min) / 64.0)
+        y = lat_max - (np.arange(64, dtype=np.float64) + 0.5) * ((lat_max - lat_min) / 64.0)
+        mask = xr.DataArray(
+            np.zeros((64, 64), dtype=bool),
+            dims=["y", "x"],
+            coords={"x": x, "y": y},
+        )
+        mask.values[:, :32] = True
+        mask = mask.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        mask = mask.rio.write_crs("EPSG:4326")
+        mask = mask.rio.write_transform(from_bounds(lon_min, lat_min, lon_max, lat_max, 64, 64))
+
+        resampled = assembler_mod._resample_cloud_mask(
+            mask,
+            target_template.shape,
+            template=target_template,
+        )
+        expected_fraction = assembler_mod._resample_da(
+            mask.astype(np.float32),
+            target_template.shape,
+            "area",
+            template=target_template,
+        )
+        expected = expected_fraction.values > 0.0
+
+        np.testing.assert_array_equal(resampled.values, expected)
 
     def test_cloud_mask_preserves_non_divisible_edge_clouds(self):
         mask = xr.DataArray(np.zeros((5, 5), dtype=bool), dims=["y", "x"])
@@ -597,6 +835,58 @@ class TestAssembleGrids:
         assert bilinear.shape == (2, 2)
         assert nearest.shape == (2, 2)
         assert calls == [RasterioResampling.bilinear, RasterioResampling.nearest]
+
+    def test_resample_da_falls_back_when_gdal_reports_missing_georeferencing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import rioxarray  # noqa: F401
+        from affine import Affine
+        from rasterio.errors import NotGeoreferencedWarning
+        from rioxarray.raster_array import RasterArray
+
+        source = xr.DataArray(
+            np.arange(16, dtype=np.float32).reshape(4, 4),
+            dims=["y", "x"],
+            coords={
+                "x": 300000.0 + (np.arange(4, dtype=np.float64) + 0.5) * 10.0,
+                "y": 5500040.0 - (np.arange(4, dtype=np.float64) + 0.5) * 10.0,
+            },
+        )
+        source = source.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        source = source.rio.write_crs("EPSG:32632")
+
+        template = xr.DataArray(
+            np.zeros((2, 2), dtype=np.float32),
+            dims=["y", "x"],
+            coords={
+                "x": 300000.0 + (np.arange(2, dtype=np.float64) + 0.5) * 20.0,
+                "y": 5500040.0 - (np.arange(2, dtype=np.float64) + 0.5) * 20.0,
+            },
+        )
+        template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        template = template.rio.write_crs("EPSG:32632")
+        template = template.rio.write_transform(
+            Affine(20.0, 0.0, 300000.0, 0.0, -20.0, 5500040.0)
+        )
+
+        def _warn_reproject_match(self, target, *, resampling, **kwargs):  # type: ignore[no-untyped-def]
+            del self, target, resampling, kwargs
+            warnings.warn(
+                "Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.",
+                NotGeoreferencedWarning,
+                stacklevel=1,
+            )
+            raise AssertionError("GDAL resampling should fall back after the warning.")
+
+        monkeypatch.setattr(RasterArray, "reproject_match", _warn_reproject_match)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = assembler_mod._resample_da(source, (2, 2), method="area", template=template)
+
+        assert out.shape == (2, 2)
+        assert not any(isinstance(item.message, NotGeoreferencedWarning) for item in caught)
 
     def test_geographic_source_dims_dispatch_use_gdal(
         self,

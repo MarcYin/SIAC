@@ -338,15 +338,25 @@ class CostFunction:
         Returns:
             Tuple of (cost, d_cost/d_aot, d_cost/d_tcwv)
         """
+        valid = np.asarray(self.mask, dtype=bool)
+
         # AOT prior cost
         diff_aot = aot - self.aot_prior
-        weight_aot = 1.0 / (self.aot_unc ** 2)
+        weight_aot = np.where(
+            valid & np.isfinite(diff_aot) & np.isfinite(self.aot_unc),
+            1.0 / (self.aot_unc ** 2),
+            0.0,
+        )
         j_aot = 0.5 * np.sum(weight_aot * diff_aot ** 2)
         dj_aot = weight_aot * diff_aot
 
         # TCWV prior cost
         diff_tcwv = tcwv - self.tcwv_prior
-        weight_tcwv = 1.0 / (self.tcwv_unc ** 2)
+        weight_tcwv = np.where(
+            valid & np.isfinite(diff_tcwv) & np.isfinite(self.tcwv_unc),
+            1.0 / (self.tcwv_unc ** 2),
+            0.0,
+        )
         j_tcwv = 0.5 * np.sum(weight_tcwv * diff_tcwv ** 2)
         dj_tcwv = weight_tcwv * diff_tcwv
 
@@ -403,6 +413,46 @@ class CostFunction:
 
         return cost, grad
 
+    @staticmethod
+    def _masked_pseudo_huber_cost_grad(
+        field: np.ndarray,
+        valid_mask: np.ndarray,
+        gamma: float,
+        delta: float,
+    ) -> tuple[float, np.ndarray]:
+        """Compute smoothness cost using only edges whose endpoints are valid."""
+        valid = np.asarray(valid_mask, dtype=bool)
+        if field.shape != valid.shape:
+            raise ValueError(f"Field/mask shape mismatch: {field.shape} vs {valid.shape}")
+        if not np.any(valid):
+            return 0.0, np.zeros_like(field)
+
+        dy = np.diff(field, axis=0)
+        dx = np.diff(field, axis=1)
+        valid_dy = valid[:-1, :] & valid[1:, :]
+        valid_dx = valid[:, :-1] & valid[:, 1:]
+
+        delta2 = delta * delta
+        r_dy = np.sqrt(1.0 + (dy * dy) / delta2)
+        r_dx = np.sqrt(1.0 + (dx * dx) / delta2)
+
+        cost = gamma * gamma * delta2 * (
+            np.sum(np.where(valid_dy, r_dy - 1.0, 0.0))
+            + np.sum(np.where(valid_dx, r_dx - 1.0, 0.0))
+        )
+
+        dphi_dy = np.where(valid_dy, dy / r_dy, 0.0)
+        dphi_dx = np.where(valid_dx, dx / r_dx, 0.0)
+
+        grad = np.zeros_like(field)
+        grad[:-1, :] -= dphi_dy
+        grad[1:, :] += dphi_dy
+        grad[:, :-1] -= dphi_dx
+        grad[:, 1:] += dphi_dx
+        grad *= gamma * gamma
+
+        return cost, grad
+
     def _smoothness_cost(
         self, aot: np.ndarray, tcwv: np.ndarray
     ) -> tuple[float, np.ndarray, np.ndarray]:
@@ -417,11 +467,13 @@ class CostFunction:
         """
         delta = self.config.smoothness_delta
 
-        j_aot, dj_aot = self._pseudo_huber_cost_grad(
-            aot, self.config.aot_gamma, delta,
+        valid = np.asarray(self.mask, dtype=bool)
+
+        j_aot, dj_aot = self._masked_pseudo_huber_cost_grad(
+            aot, valid, self.config.aot_gamma, delta,
         )
-        j_tcwv, dj_tcwv = self._pseudo_huber_cost_grad(
-            tcwv, self.config.tcwv_gamma, delta,
+        j_tcwv, dj_tcwv = self._masked_pseudo_huber_cost_grad(
+            tcwv, valid, self.config.tcwv_gamma, delta,
         )
 
         return j_aot + j_tcwv, dj_aot, dj_tcwv

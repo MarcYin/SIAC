@@ -10,8 +10,9 @@ See PLANS.md §4.4 for the full specification.
 from __future__ import annotations
 
 import logging
+import warnings
 from contextlib import suppress
-from typing import Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import cv2
 import numpy as np
@@ -23,6 +24,7 @@ from scipy.ndimage import (
     zoom,
 )
 
+from siac.adapters.data.water_mask import load_water_mask_subset
 from siac.geo.resample import shares_template_grid
 from siac.runtime import (
     AtmosphericState,
@@ -32,6 +34,9 @@ from siac.runtime import (
     SurfacePrior,
 )
 from siac.runtime.models import copy_spatial_metadata_like
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +212,7 @@ def _resample_da_gdal(
     try:
         import rioxarray  # noqa: F401
         from rasterio.enums import Resampling as RasterioResampling
+        from rasterio.errors import NotGeoreferencedWarning
     except Exception:
         logger.debug("rioxarray/rasterio not available; skipping GDAL resampling.")
         return None
@@ -241,19 +247,34 @@ def _resample_da_gdal(
         return None
 
     try:
-        source = da.rio.set_spatial_dims(x_dim=source_x_dim, y_dim=source_y_dim)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
+            source = da.rio.set_spatial_dims(x_dim=source_x_dim, y_dim=source_y_dim)
+    except NotGeoreferencedWarning:
+        logger.debug("Skipping GDAL resampling because the source lacks a geotransform.")
+        return None
     except Exception:
         logger.debug("Failed to set spatial dims for GDAL resampling.", exc_info=True)
         return None
 
     try:
-        source_crs = source.rio.crs
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
+            source_crs = source.rio.crs
+    except NotGeoreferencedWarning:
+        logger.debug("Skipping GDAL resampling because the source CRS/transform is incomplete.")
+        return None
     except Exception:
         source_crs = None
 
     try:
-        target = _ensure_template_transform(template)
-        target_crs = target.rio.crs
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
+            target = _ensure_template_transform(template)
+            target_crs = target.rio.crs
+    except NotGeoreferencedWarning:
+        logger.debug("Skipping GDAL resampling because the target lacks a geotransform.")
+        return None
     except Exception:
         logger.debug("Failed to read target CRS/transform.", exc_info=True)
         return None
@@ -261,11 +282,22 @@ def _resample_da_gdal(
     if target_crs is None or source_crs is None:
         return None
 
-    with suppress(Exception):
-        source = source.rio.write_transform(source.rio.transform(recalc=True))
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
+            with suppress(Exception):
+                source = source.rio.write_transform(source.rio.transform(recalc=True))
+    except NotGeoreferencedWarning:
+        logger.debug("Skipping GDAL resampling because the source transform cannot be derived.")
+        return None
 
     try:
-        out = source.rio.reproject_match(target, resampling=resampling)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
+            out = source.rio.reproject_match(target, resampling=resampling)
+    except NotGeoreferencedWarning:
+        logger.debug("Skipping GDAL resampling because rasterio reported missing georeferencing.")
+        return None
     except Exception:
         logger.debug("GDAL reproject_match failed; falling back to scipy.", exc_info=True)
         return None
@@ -279,6 +311,7 @@ def _resample_cloud_mask(
     target_shape: tuple[int, int],
     *,
     template: xr.DataArray | None = None,
+    assume_aligned_native_grid: bool = False,
 ) -> xr.DataArray:
     """Conservative OR resampling for cloud masks.
 
@@ -291,7 +324,13 @@ def _resample_cloud_mask(
     if src.shape == target_shape:
         return copy_spatial_metadata_like(mask, template) if template is not None else mask
 
-    if src.ndim == 2 and h_out <= src.shape[0] and w_out <= src.shape[1]:
+    use_shape_only = (
+        template is None
+        or assume_aligned_native_grid
+        or _shape_only_mask_remap_is_safe(mask, template)
+    )
+
+    if use_shape_only and src.ndim == 2 and h_out <= src.shape[0] and w_out <= src.shape[1]:
         # Match the center-based coarse-grid assignment used by the Rust field
         # remapper so masks and resampled fields describe the same footprint.
         out = np.zeros(target_shape, dtype=bool)
@@ -307,6 +346,9 @@ def _resample_cloud_mask(
             )
             out[dst_y, dst_x] = True
     else:
+        geospatial = _resample_mask_geospatial(mask, target_shape, template=template)
+        if geospatial is not None:
+            return geospatial
         out = cast(
             "BoolArray",
             zoom(src.astype(np.uint8, copy=False), (h_out / src.shape[0], w_out / src.shape[1]), order=0) > 0,
@@ -327,6 +369,73 @@ def _resample_cloud_mask(
         attrs=mask.attrs,
     )
     return copy_spatial_metadata_like(out_mask, template) if template is not None else out_mask
+
+
+def _shape_only_mask_remap_is_safe(
+    mask: xr.DataArray,
+    template: xr.DataArray | None,
+) -> bool:
+    """Return True when a shape-only remap is safe for *mask* -> *template*.
+
+    The fast shape-only remapper is only valid when the source mask already
+    lives on the same CRS and geographic footprint as the target grid. This
+    helper enforces that contract for any georeferenced source/target pair.
+    """
+    if template is None:
+        return False
+    if shares_template_grid(mask, template):
+        return True
+
+    source_dims = _spatial_dims(mask)
+    target_dims = _spatial_dims(template)
+    if source_dims is None or target_dims is None:
+        return False
+
+    try:
+        source = mask.rio.set_spatial_dims(x_dim=source_dims[0], y_dim=source_dims[1])
+        target = template.rio.set_spatial_dims(x_dim=target_dims[0], y_dim=target_dims[1])
+        source_crs = source.rio.crs
+        target_crs = target.rio.crs
+        if source_crs is None or target_crs is None or str(source_crs) != str(target_crs):
+            return False
+        source_bounds = tuple(float(v) for v in source.rio.bounds())
+        target_bounds = tuple(float(v) for v in target.rio.bounds())
+        source_res = source.rio.resolution()
+        target_res = target.rio.resolution()
+    except Exception:
+        return False
+
+    tolerance = max(
+        abs(float(source_res[0])),
+        abs(float(source_res[1])),
+        abs(float(target_res[0])),
+        abs(float(target_res[1])),
+        1e-6,
+    )
+    return all(abs(src_bound - dst_bound) <= tolerance for src_bound, dst_bound in zip(source_bounds, target_bounds))
+
+
+def _resample_mask_geospatial(
+    mask: xr.DataArray,
+    target_shape: tuple[int, int],
+    *,
+    template: xr.DataArray | None,
+    fraction_threshold: float = 0.0,
+) -> xr.DataArray | None:
+    """Geospatially reproject a mask to *template* when metadata allows it."""
+    if template is None:
+        return None
+    fraction = _resample_da(mask.astype(np.float32), target_shape, "area", template=template)
+    values = np.asarray(fraction.values, dtype=np.float32)
+    threshold = float(fraction_threshold)
+    out = values > 0.0 if threshold <= 0.0 else values >= threshold
+    out_mask = xr.DataArray(
+        out,
+        dims=template.dims,
+        coords=_template_coords(template),
+        attrs=mask.attrs,
+    )
+    return copy_spatial_metadata_like(out_mask, template)
 
 
 def _native_solver_band_stack(
@@ -443,7 +552,12 @@ def _aggregate_native_exclusion_mask(
 ) -> xr.DataArray:
     threshold = float(fraction_threshold)
     if threshold <= 0.0:
-        return _resample_cloud_mask(native_mask, target_shape, template=template)
+        return _resample_cloud_mask(
+            native_mask,
+            target_shape,
+            template=template,
+            assume_aligned_native_grid=True,
+        )
 
     fraction = _resample_da(native_mask.astype(np.float32), target_shape, "area", template=template)
     out_mask = xr.DataArray(
@@ -451,6 +565,42 @@ def _aggregate_native_exclusion_mask(
         dims=template.dims,
         coords=_template_coords(template),
         attrs=native_mask.attrs,
+    )
+    return copy_spatial_metadata_like(out_mask, template)
+
+
+def _resample_external_exclusion_mask(
+    mask: xr.DataArray,
+    target_shape: tuple[int, int],
+    *,
+    template: xr.DataArray,
+    fraction_threshold: float = 0.0,
+) -> xr.DataArray:
+    """Reproject an externally sourced exclusion mask onto the solver grid.
+
+    Native SIAC masks such as cloud and sharp-transition layers are already on
+    the observation grid, so shape-based conservative remapping is sufficient.
+    External masks such as the Zenodo land/water product can arrive in a
+    different CRS/grid (e.g. EPSG:4326 versus UTM), so they must be
+    reprojected geospatially before any boolean thresholding.
+    """
+    if shares_template_grid(mask, template):
+        return _aggregate_native_exclusion_mask(
+            mask,
+            target_shape,
+            template=template,
+            fraction_threshold=fraction_threshold,
+        )
+
+    fraction = _resample_da(mask.astype(np.float32), target_shape, "area", template=template)
+    values = np.asarray(fraction.values, dtype=np.float32)
+    threshold = float(fraction_threshold)
+    out = values > 0.0 if threshold <= 0.0 else values >= threshold
+    out_mask = xr.DataArray(
+        out,
+        dims=template.dims,
+        coords=_template_coords(template),
+        attrs=mask.attrs,
     )
     return copy_spatial_metadata_like(out_mask, template)
 
@@ -503,7 +653,12 @@ def _resample_surface_prior(
         boa=_resample_da(sp.boa, target_shape, "area", template=template),
         boa_unc=_resample_da(sp.boa_unc, target_shape, "area", template=template),
         kernels=sp.kernels,  # keep original (used for spectral, not spatial)
-        mask=_resample_cloud_mask(mask, target_shape, template=template),
+        mask=_resample_cloud_mask(
+            mask,
+            target_shape,
+            template=template,
+            assume_aligned_native_grid=True,
+        ),
         monthly_composites=sp.monthly_composites,
     )
 
@@ -541,6 +696,34 @@ def _align_surface_prior_to_bands(
     )
 
 
+def _resolve_solver_bands(
+    sensor_config: Any,
+    requested_band_names: tuple[str, ...] | None,
+) -> list[Any]:
+    """Resolve the full solver-band set needed for grid assembly.
+
+    Default aerosol bands remain the baseline. When staged solving requests
+    extra bands, include them here as well so M4 assembles everything M5 may
+    later select.
+    """
+    default_bands = list(sensor_config.default_aerosol_solver_bands())
+    if not requested_band_names:
+        return default_bands
+
+    requested = tuple(dict.fromkeys(str(name).strip() for name in requested_band_names if str(name).strip()))
+    available_by_name = {band.name: band for band in sensor_config.bands}
+    missing = [name for name in requested if name not in available_by_name]
+    if missing:
+        raise ValueError(
+            "Requested solver band(s) are not available for sensor "
+            f"{getattr(sensor_config, 'sensor_id', 'unknown')}: {', '.join(missing)}"
+        )
+
+    selected_names = {band.name for band in default_bands}
+    selected_names.update(requested)
+    return [band for band in sensor_config.bands if band.name in selected_names]
+
+
 # ── Public API ─────────────────────────────────────────────────────────
 
 def assemble_grids(
@@ -551,6 +734,10 @@ def assemble_grids(
     aux_resolution_m: float = 500.0,
     aerosol_resolution_m: float = 120.0,
     sharp_transition_filter: Any | None = None,
+    water_mask_path: str | Path | None = None,
+    water_mask_cache_dir: str | Path | None = None,
+    water_mask_buffer_pixels: int = 0,
+    solver_band_names: tuple[str, ...] | None = None,
 ) -> SolverInputBundle:
     """Resample and align all upstream outputs to solver grids.
 
@@ -573,7 +760,7 @@ def assemble_grids(
         SolverInputBundle ready for the solver.
     """
     # 1. Select solver bands using the sensor defaults.
-    bands = obs.sensor_config.default_aerosol_solver_bands()
+    bands = _resolve_solver_bands(obs.sensor_config, solver_band_names)
     logger.info(f"Selected {len(bands)} solver bands: {[b.name for b in bands]}")
 
     # 2. Determine the solver grid from the configured aerosol retrieval
@@ -597,6 +784,7 @@ def assemble_grids(
     # 3. Detect native sharp transitions before solver-grid averaging.
     band_names = [b.name for b in bands]
     sharp_transition_mask: xr.DataArray | None = None
+    water_mask: xr.DataArray | None = None
     if sharp_transition_filter is not None and bool(getattr(sharp_transition_filter, "enabled", False)):
         native_solver_toa = _native_solver_band_stack(obs, band_names)
         native_mask = _detect_sharp_transition_mask_native(
@@ -611,6 +799,33 @@ def assemble_grids(
             fraction_threshold=float(
                 getattr(sharp_transition_filter, "solver_cell_fraction_threshold", 0.0)
             ),
+        )
+
+    if water_mask_path is not None:
+        native_water_mask = load_water_mask_subset(
+            obs.bounds,
+            obs.crs,
+            source=water_mask_path,
+            cache_dir=water_mask_cache_dir,
+        )
+        if water_mask_buffer_pixels > 0:
+            native_water_reference = native_water_mask
+            buffered_water = _dilate_mask(
+                np.asarray(native_water_mask.values, dtype=bool),
+                int(water_mask_buffer_pixels),
+            )
+            native_water_mask = xr.DataArray(
+                buffered_water,
+                dims=native_water_mask.dims,
+                coords=native_water_mask.coords,
+                attrs=native_water_mask.attrs,
+                name=native_water_mask.name,
+            )
+            native_water_mask = copy_spatial_metadata_like(native_water_mask, native_water_reference)
+        water_mask = _resample_external_exclusion_mask(
+            native_water_mask,
+            target_shape,
+            template=target_template,
         )
 
     # 4. Resample TOA for solver bands into (band, y, x) DataArray.
@@ -641,7 +856,13 @@ def assemble_grids(
     with ThreadPoolExecutor(max_workers=max(len(band_names) + 4, 6)) as pool:
         toa_futures = {bn: pool.submit(_resample_toa_band, bn) for bn in band_names}
         geom_future = pool.submit(_resample_geometry, obs.geometry, target_shape, template=target_template)
-        cloud_future = pool.submit(_resample_cloud_mask, obs.cloud_mask, target_shape, template=target_template)
+        cloud_future = pool.submit(
+            _resample_cloud_mask,
+            obs.cloud_mask,
+            target_shape,
+            template=target_template,
+            assume_aligned_native_grid=True,
+        )
         atmo_future = pool.submit(_resample_atmo_state, atmo, target_shape, template=target_template)
         surface_future = pool.submit(_resample_surface_prior, surface_aligned, target_shape, template=target_template)
 
@@ -673,6 +894,7 @@ def assemble_grids(
         geometry=geometry,
         cloud_mask=cloud_mask,
         sharp_transition_mask=sharp_transition_mask,
+        water_mask=water_mask,
         sensor_config=obs.sensor_config,
         bands=bands,
         atmo_prior=atmo_resampled,

@@ -399,6 +399,7 @@ class SolverInputBundle:
     aux_resolution_m: float
     aerosol_resolution_m: float
     sharp_transition_mask: xr.DataArray | None = None
+    water_mask: xr.DataArray | None = None
 
 
 @dataclass(frozen=True)

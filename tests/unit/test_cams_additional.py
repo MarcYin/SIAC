@@ -90,6 +90,28 @@ def test_load_cams_data_handles_non_directory_and_failed_local_candidates(
     assert fallback._load_cams_data(datetime(2024, 1, 1)) is None
 
 
+def test_load_cams_data_uses_open_dataset_for_single_local_netcdf(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_dir = tmp_path / "cams"
+    local_dir.mkdir()
+    candidate = local_dir / "CAMS_2024-01-01.nc"
+    candidate.write_text("x")
+    provider = CAMSProvider(local_dir)
+    expected = _dataset(("aod550", "tcwv", "gtco3"))
+
+    monkeypatch.setattr(xr, "open_dataset", lambda path: expected if path == candidate else None)
+    monkeypatch.setattr(
+        xr,
+        "open_mfdataset",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("open_mfdataset should not be used")),
+    )
+
+    loaded = provider._load_cams_data(datetime(2024, 1, 1))
+    assert loaded is expected
+
+
 def test_load_cams_data_falls_back_for_remote_and_local_sources(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -308,6 +330,32 @@ def test_normalize_source_and_storage_context_helpers(
     no_auth_provider = CAMSProvider("https://example.com/cams/")
     with no_auth_provider._remote_storage_options_context("https://example.com/cams/file.nc") as opts:
         assert opts == {}
+
+
+def test_extract_variable_adds_halo_before_reprojection(tmp_path: Path) -> None:
+    provider = CAMSProvider(tmp_path)
+    data = xr.Dataset(
+        {
+            "tcwv": xr.DataArray(
+                np.arange(25, dtype=np.float32).reshape(1, 5, 5),
+                dims=["time", "latitude", "longitude"],
+                coords={
+                    "time": [np.datetime64("2026-04-05T03:00:00")],
+                    "latitude": [35.6, 35.2, 34.8, 34.4, 34.0],
+                    "longitude": [118.0, 118.4, 118.8, 119.2, 119.6],
+                },
+            )
+        }
+    )
+    bounds = (600000.0, 3790200.0, 709800.0, 3900000.0)
+    crs = "EPSG:32650"
+    obs_time = datetime(2026, 4, 5, 3, 0, 0)
+
+    extracted = provider._extract_variable(data, "tcwv", bounds, crs, 60.0, obs_time)
+
+    assert extracted.shape == (5, 5)
+    assert np.array_equal(extracted.coords["latitude"].values, np.array([35.6, 35.2, 34.8, 34.4, 34.0]))
+    assert np.array_equal(extracted.coords["longitude"].values, np.array([118.0, 118.4, 118.8, 119.2, 119.6]))
 
 
 def test_remote_cache_and_loading_helpers_cover_error_paths(

@@ -113,6 +113,26 @@ class TestSIACConfig:
 
         assert config.algorithms.surface_prior.monthly_database_resolution_policy == "aerosol"
 
+    def test_solver_water_mask_buffer_pixels_config(self):
+        config = SIACConfig(
+            algorithms={
+                "solver": {
+                    "water_mask_buffer_pixels": 4,
+                }
+            }
+        )
+
+        assert config.algorithms.solver.water_mask_buffer_pixels == 4
+
+    def test_example_config_parses_and_matches_real_staged_setup(self):
+        config = SIACConfig.from_file(Path("docs/siac-config.example.toml"))
+
+        assert config.surface_prior.method == "monthly_database"
+        assert config.rt_model.backend == "lut"
+        assert config.algorithms.solver.water_mask_buffer_pixels == 10
+        assert config.algorithms.solver.stages[0].bands == ("B01", "B02", "B04")
+        assert config.algorithms.solver.sharp_transition_filter.enabled is True
+
     def test_solver_stage_rejects_solve_fixed_overlap(self):
         with pytest.raises(ValueError, match="cannot both solve and fix"):
             SIACConfig(

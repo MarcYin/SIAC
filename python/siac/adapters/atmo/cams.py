@@ -274,10 +274,12 @@ class CAMSProvider:
         local_candidates_found = False
 
         for pattern in patterns:
-            files = list(data_dir.glob(pattern))
+            files = sorted(data_dir.glob(pattern))
             if files:
                 local_candidates_found = True
                 try:
+                    if len(files) == 1:
+                        return xr.open_dataset(files[0])
                     return xr.open_mfdataset(files, combine="by_coords")
                 except Exception as e:
                     logger.warning(f"Failed to load CAMS: {e}")
@@ -442,10 +444,16 @@ class CAMSProvider:
             ymin, ymax = sorted((float(ymin), float(ymax)))
 
             latitude_vals = var.coords["latitude"].values
+            lat_pad = self._coordinate_edge_padding(latitude_vals)
             lat_descending = bool(latitude_vals[0] > latitude_vals[-1])
-            lat_slice = slice(ymax, ymin) if lat_descending else slice(ymin, ymax)
+            lat_min = ymin - lat_pad
+            lat_max = ymax + lat_pad
+            lat_slice = slice(lat_max, lat_min) if lat_descending else slice(lat_min, lat_max)
 
             longitude_vals = np.asarray(var.coords["longitude"].values, dtype=np.float32)
+            lon_pad = self._coordinate_edge_padding(longitude_vals)
+            xmin -= lon_pad
+            xmax += lon_pad
             if float(np.nanmin(longitude_vals)) >= 0.0:
                 xmin = xmin % 360.0
                 xmax = xmax % 360.0
@@ -453,6 +461,18 @@ class CAMSProvider:
             var = self._select_longitude_window(var, xmin=xmin, xmax=xmax)
 
         return self._ensure_geographic_metadata(var)
+
+    @staticmethod
+    def _coordinate_edge_padding(values: np.ndarray) -> float:
+        """Return a one-cell halo size for coarse-grid reprojection support."""
+        numeric = np.asarray(values, dtype=np.float64)
+        if numeric.size < 2:
+            return 0.0
+        diffs = np.abs(np.diff(numeric))
+        finite = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+        if finite.size == 0:
+            return 0.0
+        return float(np.median(finite))
 
     @staticmethod
     def _ensure_geographic_metadata(var: xr.DataArray) -> xr.DataArray:

@@ -58,6 +58,7 @@ def build_solver_valid_mask(
     surface_prior: SurfacePrior,
     *,
     sharp_transition_mask: xr.DataArray | None = None,
+    water_mask: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Build the same valid-pixel mask used by the aerosol solver."""
     valid = ~cloud_mask.values.astype(bool)
@@ -74,6 +75,8 @@ def build_solver_valid_mask(
         valid = valid & surface_mask.astype(bool)
     if sharp_transition_mask is not None:
         valid = valid & ~sharp_transition_mask.values.astype(bool)
+    if water_mask is not None:
+        valid = valid & ~water_mask.values.astype(bool)
 
     return xr.DataArray(valid, dims=cloud_mask.dims, coords=cloud_mask.coords)
 
@@ -193,6 +196,7 @@ class MultiGridSolver:
         cloud_mask: xr.DataArray,
         bands: list[SensorBand],
         sharp_transition_mask: xr.DataArray | None = None,
+        water_mask: xr.DataArray | None = None,
     ) -> SolverResult:
         """
         Solve for atmospheric parameters (AOT, TCWV).
@@ -224,6 +228,7 @@ class MultiGridSolver:
             toa,
             surface_prior,
             sharp_transition_mask=sharp_transition_mask,
+            water_mask=water_mask,
         )
         full_no_observation_mask = ~self._observation_presence_mask(toa)
         n_valid = int(np.count_nonzero(mask.values))
@@ -460,6 +465,42 @@ class MultiGridSolver:
             tcwv = atmo_prior.tcwv.values.astype(np.float32, copy=True)
             tcwv_unc = atmo_prior.tcwv_unc.values.astype(np.float32, copy=True)
 
+        gap_fill_mask = ~mask.values.astype(bool) & ~full_no_observation_mask
+        if np.any(gap_fill_mask):
+            trusted_mask = mask.values.astype(bool)
+            if fixed_parameter != "aot":
+                trusted_aot_mask = trusted_mask & np.isfinite(aot)
+                if np.any(trusted_aot_mask):
+                    aot_gap_filled = self._smooth_grid_search_field(
+                        aot,
+                        gamma=self.config.aot_gamma,
+                        delta=self.config.smoothness_delta,
+                        n_iter=40,
+                        trusted_mask=trusted_aot_mask,
+                    )
+                    aot = np.where(gap_fill_mask, aot_gap_filled, aot).astype(np.float32, copy=False)
+                    aot_unc = np.where(
+                        gap_fill_mask,
+                        np.maximum(atmo_prior.aot_unc.values.astype(np.float32), np.float32(0.1)),
+                        aot_unc,
+                    ).astype(np.float32, copy=False)
+            if fixed_parameter != "tcwv":
+                trusted_tcwv_mask = trusted_mask & np.isfinite(tcwv)
+                if np.any(trusted_tcwv_mask):
+                    tcwv_gap_filled = self._smooth_grid_search_field(
+                        tcwv,
+                        gamma=self.config.tcwv_gamma,
+                        delta=self.config.smoothness_delta,
+                        n_iter=40,
+                        trusted_mask=trusted_tcwv_mask,
+                    )
+                    tcwv = np.where(gap_fill_mask, tcwv_gap_filled, tcwv).astype(np.float32, copy=False)
+                    tcwv_unc = np.where(
+                        gap_fill_mask,
+                        np.maximum(atmo_prior.tcwv_unc.values.astype(np.float32), np.float32(0.5)),
+                        tcwv_unc,
+                    ).astype(np.float32, copy=False)
+
         if np.any(full_no_observation_mask):
             aot = np.where(full_no_observation_mask, np.nan, aot).astype(np.float32, copy=False)
             tcwv = np.where(full_no_observation_mask, np.nan, tcwv).astype(np.float32, copy=False)
@@ -485,6 +526,7 @@ class MultiGridSolver:
             sharp_transition_mask=sharp_transition_mask.values.astype(bool)
             if sharp_transition_mask is not None
             else None,
+            water_mask=water_mask.values.astype(bool) if water_mask is not None else None,
             fitting_cost=final_fitting_cost if use_grid_search else None,
         )
         if level_history:
@@ -631,6 +673,7 @@ class MultiGridSolver:
         insufficient_support_mask: np.ndarray | None,
         no_observation_mask: np.ndarray | None,
         sharp_transition_mask: np.ndarray | None,
+        water_mask: np.ndarray | None,
         fitting_cost: np.ndarray | None = None,
     ) -> xr.Dataset:
         valid = np.asarray(valid_mask, dtype=bool)
@@ -651,6 +694,11 @@ class MultiGridSolver:
             if sharp_transition_mask is None
             else np.asarray(sharp_transition_mask, dtype=bool)
         )
+        water_excluded = (
+            np.zeros_like(valid, dtype=bool)
+            if water_mask is None
+            else np.asarray(water_mask, dtype=bool)
+        )
         aot_lower, aot_upper = self._boundary_hit_masks(
             np.asarray(aot, dtype=np.float32),
             self.config.aot_bounds,
@@ -662,7 +710,15 @@ class MultiGridSolver:
             valid,
         )
         parameter_boundary = aot_lower | aot_upper | tcwv_lower | tcwv_upper
-        low_quality = invalid | zero_obs | insufficient_support | no_observation | parameter_boundary | sharp_transition
+        low_quality = (
+            invalid
+            | zero_obs
+            | insufficient_support
+            | no_observation
+            | parameter_boundary
+            | sharp_transition
+            | water_excluded
+        )
 
         qa_vars: dict[str, xr.DataArray] = {
             "invalid_retrieval": self._mask_to_data_array(invalid, template),
@@ -670,6 +726,7 @@ class MultiGridSolver:
             "insufficient_observation_support": self._mask_to_data_array(insufficient_support, template),
             "no_observation": self._mask_to_data_array(no_observation, template),
             "sharp_transition_excluded": self._mask_to_data_array(sharp_transition, template),
+            "water_mask_excluded": self._mask_to_data_array(water_excluded, template),
             "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
             "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
             "tcwv_lower_boundary": self._mask_to_data_array(tcwv_lower, template),
@@ -708,6 +765,9 @@ class MultiGridSolver:
             "qa_final_no_observation_pixels": float(np.count_nonzero(np.asarray(qa["no_observation"].values, dtype=bool))),
             "qa_final_sharp_transition_pixels": float(
                 np.count_nonzero(np.asarray(qa["sharp_transition_excluded"].values, dtype=bool))
+            ),
+            "qa_final_water_excluded_pixels": float(
+                np.count_nonzero(np.asarray(qa["water_mask_excluded"].values, dtype=bool))
             ),
             "qa_final_aot_lower_boundary_pixels": float(np.count_nonzero(np.asarray(qa["aot_lower_boundary"].values, dtype=bool))),
             "qa_final_aot_upper_boundary_pixels": float(np.count_nonzero(np.asarray(qa["aot_upper_boundary"].values, dtype=bool))),
@@ -1237,6 +1297,7 @@ class MultiGridSolver:
         surface_prior: SurfacePrior,
         *,
         sharp_transition_mask: xr.DataArray | None = None,
+        water_mask: xr.DataArray | None = None,
     ) -> xr.DataArray:
         """Create combined valid pixel mask."""
         return build_solver_valid_mask(
@@ -1244,6 +1305,7 @@ class MultiGridSolver:
             toa,
             surface_prior,
             sharp_transition_mask=sharp_transition_mask,
+            water_mask=water_mask,
         )
 
     def _compute_grid_levels(
@@ -1658,6 +1720,7 @@ class StagedMultiGridSolver:
         cloud_mask: xr.DataArray,
         bands: list[SensorBand],
         sharp_transition_mask: xr.DataArray | None = None,
+        water_mask: xr.DataArray | None = None,
     ) -> SolverResult:
         stages = self._normalized_stages()
         if not stages:
@@ -1670,6 +1733,7 @@ class StagedMultiGridSolver:
                 cloud_mask=cloud_mask,
                 bands=bands,
                 sharp_transition_mask=sharp_transition_mask,
+                water_mask=water_mask,
             )
 
         current_state = atmo_prior
@@ -1717,6 +1781,7 @@ class StagedMultiGridSolver:
                 cloud_mask=cloud_mask,
                 bands=stage_bands,
                 sharp_transition_mask=sharp_transition_mask,
+                water_mask=water_mask,
             )
 
             updates: dict[str, xr.DataArray] = {}

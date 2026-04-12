@@ -108,6 +108,11 @@ def _result(
                     dims=["y", "x"],
                     coords=coords,
                 ),
+                "water_mask_excluded": xr.DataArray(
+                    np.array([[False, False], [True, False]], dtype=bool),
+                    dims=["y", "x"],
+                    coords=coords,
+                ),
             }
         )
         if include_solver_qa
@@ -419,11 +424,13 @@ def test_raster_output_emits_solver_qa_masks(
     assert {c[0].name for c in qa_calls} == {
         f"{prefix}_QA_invalid_retrieval.tif",
         f"{prefix}_QA_low_quality.tif",
+        f"{prefix}_QA_water_mask_excluded.tif",
     }
     assert all(c[1]["dtype"] == "uint8" for c in qa_calls)
     assert {
         "auxiliary.qa.invalid_retrieval",
         "auxiliary.qa.low_quality",
+        "auxiliary.qa.water_mask_excluded",
     } <= set(artifacts)
 
 
@@ -617,7 +624,7 @@ def test_netcdf_auxiliary_includes_solver_qa_masks(
 
     aux_key = next(k for k in captured if "AUX" in k)
     aux_ds = captured[aux_key]
-    assert {"invalid_retrieval", "low_quality"} <= set(aux_ds.data_vars)
+    assert {"invalid_retrieval", "low_quality", "water_mask_excluded"} <= set(aux_ds.data_vars)
     assert aux_ds["invalid_retrieval"].dtype == np.uint8
 
 

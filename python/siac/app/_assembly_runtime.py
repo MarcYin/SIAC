@@ -284,6 +284,8 @@ def resolve_solver(config: Any) -> SolverFn:
             signature = inspect.signature(mg_solver.solve)
             if "sharp_transition_mask" in signature.parameters:
                 solve_kwargs["sharp_transition_mask"] = inputs.sharp_transition_mask
+            if "water_mask" in signature.parameters:
+                solve_kwargs["water_mask"] = inputs.water_mask
         result = mg_solver.solve(
             inputs.toa,
             inputs.surface_prior,

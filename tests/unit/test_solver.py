@@ -379,6 +379,10 @@ class TestStagedMultiGridSolver:
             dims=["band", "y", "x"],
         )
         cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        water_mask = xr.DataArray(
+            np.array([[False, True], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
 
         def _fake_solve(
             solver,
@@ -390,6 +394,7 @@ class TestStagedMultiGridSolver:
             cloud_mask,
             bands,
             sharp_transition_mask=None,
+            water_mask=None,
         ):
             del surface_prior, geometry, rt_model, cloud_mask, sharp_transition_mask
             call_index = len(calls)
@@ -399,6 +404,7 @@ class TestStagedMultiGridSolver:
                     "aot_mean": float(atmo_prior.aot.mean()),
                     "bands": [band.name for band in bands],
                     "toa_shape": toa.shape,
+                    "water_mask": water_mask,
                 }
             )
             if call_index == 0:
@@ -445,14 +451,17 @@ class TestStagedMultiGridSolver:
             rt_model=mock_rt_model,
             cloud_mask=cloud_mask,
             bands=bands,
+            water_mask=water_mask,
         )
 
         assert calls[0]["fixed"] == "tcwv"
         assert calls[0]["bands"] == ["B02"]
         assert calls[0]["toa_shape"] == (1, *shape)
+        assert calls[0]["water_mask"] is water_mask
         assert calls[1]["fixed"] == "aot"
         assert calls[1]["bands"] == ["B04"]
         assert calls[1]["aot_mean"] == pytest.approx(0.31)
+        assert calls[1]["water_mask"] is water_mask
         assert result.n_iterations == 3
         assert result.level_history[0]["stage"] == "aot_pass"
         assert result.level_history[1]["stage"] == "tcwv_pass"
@@ -528,6 +537,124 @@ class TestSharpTransitionObservationExclusion:
         expected = np.array([[True, False], [True, True]], dtype=bool)
         np.testing.assert_array_equal(valid.values, expected)
 
+    def test_build_solver_valid_mask_honors_water_mask(self) -> None:
+        cloud_mask = xr.DataArray(
+            np.array([[False, False], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
+        toa = xr.DataArray(
+            np.full((1, 2, 2), 0.2, dtype=np.float32),
+            dims=["band", "y", "x"],
+        )
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones((2, 2), dtype=bool), dims=["y", "x"]),
+        )
+        water_mask = xr.DataArray(
+            np.array([[False, True], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
+
+        valid = build_solver_valid_mask(
+            cloud_mask,
+            toa,
+            surface_prior,
+            water_mask=water_mask,
+        )
+
+        expected = np.array([[True, False], [True, True]], dtype=bool)
+        np.testing.assert_array_equal(valid.values, expected)
+
+    def test_lbfgsb_solver_excluded_water_pixels_are_gap_filled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from siac.domain import SensorBand
+
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
+                del geometry, atmo_state, band, compute_jacobian
+                raise AssertionError("Optimisation is stubbed in this test")
+
+            def supports_jacobian(self):
+                return True
+
+            @property
+            def backend_name(self):
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id, satellite_id):
+                del sensor_id, satellite_id
+                return True
+
+        class _OptResult:
+            nit = 1
+            fun = 0.0
+            success = True
+            message = "ok"
+
+        solver = MultiGridSolver(MultiGridConfig(n_levels=1, min_grid_size=2, max_iter_per_level=1))
+        shape = (2, 2)
+        toa = xr.DataArray(np.full((1, *shape), 0.2, dtype=np.float32), dims=["band", "y", "x"])
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        water_mask = xr.DataArray(np.array([[False, True], [False, False]], dtype=bool), dims=["y", "x"])
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.full(shape, 0.12, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        from siac.runtime import GeometryAngles
+
+        geometry = GeometryAngles(
+            sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
+            saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.15, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+
+        def _fake_optimize_level(self, cost_func, aot_level, tcwv_level, level):  # noqa: ANN001
+            del self, cost_func, aot_level, tcwv_level, level
+            return (
+                np.array([[0.4, 9.0], [0.4, 0.4]], dtype=np.float32),
+                np.array([[3.0, 99.0], [3.0, 3.0]], dtype=np.float32),
+                _OptResult(),
+            )
+
+        def _fake_uncertainties(self, aot, tcwv, atmo_prior_arg, cost_func):  # noqa: ANN001
+            del self, aot, tcwv, atmo_prior_arg, cost_func
+            return (
+                np.full(shape, 0.02, dtype=np.float32),
+                np.full(shape, 0.1, dtype=np.float32),
+            )
+
+        monkeypatch.setattr(MultiGridSolver, "_optimize_level", _fake_optimize_level)
+        monkeypatch.setattr(MultiGridSolver, "_estimate_uncertainties", _fake_uncertainties)
+
+        result = solver.solve(
+            toa,
+            surface_prior,
+            geometry,
+            atmo_prior,
+            _DummyRT(),
+            cloud_mask,
+            [SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+            water_mask=water_mask,
+        )
+
+        assert result.qa is not None
+        assert bool(result.qa["water_mask_excluded"].values[0, 1])
+        assert result.aot.values[0, 1] == pytest.approx(0.4, rel=1e-6)
+        assert result.tcwv.values[0, 1] == pytest.approx(3.0, rel=1e-6)
+
     def test_build_solver_qa_dataset_exposes_sharp_transition_layer(self) -> None:
         solver = MultiGridSolver()
         template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])
@@ -542,14 +669,20 @@ class TestSharpTransitionObservationExclusion:
             insufficient_support_mask=np.array([[False, False], [True, False]], dtype=bool),
             no_observation_mask=np.array([[True, False], [False, False]], dtype=bool),
             sharp_transition_mask=np.array([[False, True], [True, False]], dtype=bool),
+            water_mask=np.array([[False, False], [False, True]], dtype=bool),
         )
 
         assert "sharp_transition_excluded" in qa.data_vars
+        assert "water_mask_excluded" in qa.data_vars
         assert "insufficient_observation_support" in qa.data_vars
         assert "no_observation" in qa.data_vars
         np.testing.assert_array_equal(
             qa["sharp_transition_excluded"].values,
             np.array([[False, True], [True, False]], dtype=bool),
+        )
+        np.testing.assert_array_equal(
+            qa["water_mask_excluded"].values,
+            np.array([[False, False], [False, True]], dtype=bool),
         )
         np.testing.assert_array_equal(
             qa["zero_obs_support"].values,
@@ -583,6 +716,7 @@ class TestSharpTransitionObservationExclusion:
             insufficient_support_mask=None,
             no_observation_mask=None,
             sharp_transition_mask=None,
+            water_mask=None,
             fitting_cost=cost_map,
         )
 
@@ -604,6 +738,7 @@ class TestSharpTransitionObservationExclusion:
             insufficient_support_mask=None,
             no_observation_mask=None,
             sharp_transition_mask=None,
+            water_mask=None,
             fitting_cost=None,
         )
 
@@ -2740,3 +2875,121 @@ class TestCostFunctionGradient:
         assert j_hotspot < j_l2
         # And both should be > smooth cost
         assert j_hotspot > j_smooth
+
+    def test_prior_cost_ignores_masked_pixels(self, cost_function_inputs):
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
+                del geometry, atmo_state, band, compute_jacobian
+                raise AssertionError("RT coefficients are not used in prior_cost_only")
+
+            def supports_jacobian(self):
+                return True
+
+            @property
+            def backend_name(self):
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id, satellite_id):
+                del sensor_id, satellite_id
+                return True
+
+        mask = xr.DataArray(
+            np.array([[True, False], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
+        toa = xr.DataArray(np.full((3, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"])
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full((2, 2), 0.02, dtype=np.float32), dims=["y", "x"]),
+            kernels=cost_function_inputs["surface_prior"].kernels,
+            mask=xr.DataArray(np.ones((2, 2), dtype=bool), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        cf = CostFunction(
+            toa,
+            surface_prior,
+            cost_function_inputs["geometry"],
+            atmo_prior,
+            _DummyRT(),
+            cost_function_inputs["bands"],
+            mask,
+        )
+
+        aot = np.full((2, 2), 0.25, dtype=np.float32)
+        tcwv = np.full((2, 2), 3.0, dtype=np.float32)
+        j_prior, grad = cf.prior_cost_only(aot, tcwv)
+        n = aot.size
+        grad_aot = grad[:n].reshape(aot.shape)
+        grad_tcwv = grad[n:].reshape(tcwv.shape)
+
+        expected = 0.5 * ((0.10 ** 2) / (0.05 ** 2) + (0.50 ** 2) / (0.3 ** 2))
+        assert j_prior == pytest.approx(expected)
+        np.testing.assert_allclose(grad_aot, np.array([[40.0, 0.0], [0.0, 0.0]], dtype=np.float32))
+        np.testing.assert_allclose(
+            grad_tcwv,
+            np.array([[5.5555553, 0.0], [0.0, 0.0]], dtype=np.float32),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+    def test_smoothness_cost_ignores_edges_touching_masked_pixels(self, cost_function_inputs):
+        class _DummyRT:
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
+                del geometry, atmo_state, band, compute_jacobian
+                raise AssertionError("RT coefficients are not used in smoothness_cost_only")
+
+            def supports_jacobian(self):
+                return True
+
+            @property
+            def backend_name(self):
+                return "dummy"
+
+            def is_available_for_sensor(self, sensor_id, satellite_id):
+                del sensor_id, satellite_id
+                return True
+
+        mask = xr.DataArray(
+            np.array([[True, False], [False, False]], dtype=bool),
+            dims=["y", "x"],
+        )
+        toa = xr.DataArray(np.full((3, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"])
+        surface_prior = SurfacePrior(
+            boa=xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full((2, 2), 0.02, dtype=np.float32), dims=["y", "x"]),
+            kernels=cost_function_inputs["surface_prior"].kernels,
+            mask=xr.DataArray(np.ones((2, 2), dtype=bool), dims=["y", "x"]),
+        )
+        atmo_prior = AtmosphericState(
+            aot=xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full((2, 2), 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        cf = CostFunction(
+            toa,
+            surface_prior,
+            cost_function_inputs["geometry"],
+            atmo_prior,
+            _DummyRT(),
+            cost_function_inputs["bands"],
+            mask,
+        )
+
+        aot = np.array([[0.15, 1.0], [2.0, 3.0]], dtype=np.float32)
+        tcwv = np.array([[2.5, 1.0], [2.0, 3.0]], dtype=np.float32)
+        j_smooth, grad = cf.smoothness_cost_only(aot, tcwv)
+
+        assert j_smooth == pytest.approx(0.0)
+        np.testing.assert_allclose(grad, 0.0, atol=1e-8)

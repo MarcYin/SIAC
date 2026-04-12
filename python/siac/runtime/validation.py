@@ -120,6 +120,18 @@ def validate_solver_input_bundle(sib: SolverInputBundle) -> None:
                 f"{tuple(sib.sharp_transition_mask.dims)} must match "
                 f"cloud_mask dims {tuple(sib.cloud_mask.dims)}"
             )
+    if sib.water_mask is not None:
+        expected_shape = sib.cloud_mask.shape
+        actual_shape = sib.water_mask.shape
+        if actual_shape != expected_shape:
+            raise ValidationError(
+                f"water_mask shape {actual_shape} must match cloud_mask shape {expected_shape}"
+            )
+        if tuple(sib.water_mask.dims) != tuple(sib.cloud_mask.dims):
+            raise ValidationError(
+                f"water_mask dims {tuple(sib.water_mask.dims)} must match "
+                f"cloud_mask dims {tuple(sib.cloud_mask.dims)}"
+            )
 
 
 def _validate_mask_dataset_shape(name: str, dataset: xr.Dataset, template: xr.DataArray) -> None:

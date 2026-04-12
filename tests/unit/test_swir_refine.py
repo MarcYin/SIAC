@@ -345,6 +345,62 @@ def test_query_surface_prior_from_monthly_database_uses_template_backed_area_res
     assert prior.boa.shape == (2, 2, 1)
 
 
+def test_query_surface_prior_from_monthly_database_corrects_on_query_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor_config = _sensor_config()
+    obs = ObservationBundle(
+        toa=xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full((4, 2), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full((4, 2), 0.0, dtype=np.float32), dims=["y", "x"]),
+                "B08": xr.DataArray(np.full((4, 2), 0.47, dtype=np.float32), dims=["y", "x"]),
+                "B11": xr.DataArray(np.full((4, 2), 0.37, dtype=np.float32), dims=["y", "x"]),
+                "B12": xr.DataArray(np.full((4, 2), 0.27, dtype=np.float32), dims=["y", "x"]),
+            }
+        ),
+        geometry=_geometry((4, 2)),
+        cloud_mask=xr.DataArray(np.zeros((4, 2), dtype=bool), dims=["y", "x"]),
+        sensor_config=sensor_config,
+        metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
+        crs="EPSG:32632",
+        bounds=(0.0, 0.0, 2.0, 4.0),
+    )
+    seen: dict[str, object] = {}
+
+    def _capture_correct(self, toa, geometry, atmo_state, *, cloud_mask=None):  # noqa: ANN001
+        seen["toa_shapes"] = {name: data.shape for name, data in toa.data_vars.items()}
+        seen["geometry_shape"] = geometry.sza.shape
+        seen["atmo_shape"] = atmo_state.aot.shape
+        seen["cloud_mask_shape"] = None if cloud_mask is None else cloud_mask.shape
+        return SimpleNamespace(
+            boa=toa,
+            cloud_mask=(
+                cloud_mask
+                if cloud_mask is not None
+                else xr.DataArray(np.zeros(geometry.sza.shape, dtype=bool), dims=geometry.sza.dims, coords=geometry.sza.coords)
+            ),
+        )
+
+    monkeypatch.setattr(swir_refine_mod.AtmosphericCorrector, "correct", _capture_correct)
+
+    prior = query_surface_prior_from_monthly_database(
+        observation=obs,
+        atmo_prior=_atmo((2, 1)),
+        rt_model=_IdentityRTModel(),
+        database=_database(),
+        query_band_names=("B08", "B11", "B12"),
+        visible_band_names=("B02", "B03"),
+        k_neighbors=1,
+    )
+
+    assert seen["toa_shapes"] == {"B08": (2, 1), "B11": (2, 1), "B12": (2, 1)}
+    assert seen["geometry_shape"] == (2, 1)
+    assert seen["atmo_shape"] == (2, 1)
+    assert seen["cloud_mask_shape"] == (2, 1)
+    assert prior.boa.shape == (2, 2, 1)
+
+
 def test_query_surface_prior_from_monthly_database_filters_high_composite_quality() -> None:
     sensor_config = _sensor_config()
     obs = ObservationBundle(

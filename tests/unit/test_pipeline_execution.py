@@ -214,7 +214,16 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
         captured["kwargs"] = kwargs
         return mock_solver_input_bundle
 
-    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=120.0))
+    cfg = SimpleNamespace(
+        solver=SimpleNamespace(
+            aerosol_resolution=120.0,
+            water_mask_buffer_pixels=3,
+            stages=(
+                SimpleNamespace(name="aot_pass", bands=("B01", "B02", "B04")),
+                SimpleNamespace(name="tcwv_pass", bands=("B02", "B04")),
+            ),
+        )
+    )
 
     result = pipeline._run_tail(
         mock_observation_bundle,
@@ -230,6 +239,9 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
     assert isinstance(result, CorrectionResult)
     assert captured["args"][0] is mock_observation_bundle
     assert captured["kwargs"]["aerosol_resolution_m"] == 120.0
+    assert captured["kwargs"]["water_mask_path"] == pipeline.DEFAULT_WATER_MASK_VRT_URL
+    assert captured["kwargs"]["water_mask_buffer_pixels"] == 3
+    assert captured["kwargs"]["solver_band_names"] == ("B01", "B02", "B04")
 
 
 def test_call_grid_assembler_falls_back_when_filter_kwarg_is_unsupported(
@@ -265,6 +277,10 @@ def test_call_grid_assembler_falls_back_when_filter_kwarg_is_unsupported(
         mock_rt_model,
         aerosol_resolution_m=120.0,
         sharp_transition_filter=SimpleNamespace(enabled=True),
+        water_mask_path="https://example.com/water-mask.vrt",
+        water_mask_cache_dir=Path("/tmp/water-mask-cache"),
+        water_mask_buffer_pixels=2,
+        solver_band_names=("B01", "B02", "B04"),
     )
 
     assert out == "solver-inputs"
@@ -277,6 +293,76 @@ def test_call_grid_assembler_falls_back_when_filter_kwarg_is_unsupported(
             "aerosol_resolution_m": 120.0,
         }
     ]
+
+
+def test_select_solver_bands_for_preload_includes_stage_requested_bands(mock_sensor_config) -> None:
+    bands = pipeline._select_solver_bands_for_preload(
+        mock_sensor_config,
+        requested_band_names=("B04", "B01"),
+    )
+
+    assert [band.name for band in bands] == ["B01", "B02", "B04"]
+
+
+def test_run_pipeline_lut_preload_includes_stage_requested_bands(
+    mock_preprocessor,
+    mock_surface_prior_provider,
+    mock_grid_assembler,
+    mock_solver_fn,
+    mock_corrector_fn,
+) -> None:
+    coarse_coords = {
+        "y": np.arange(4, dtype=np.float32),
+        "x": np.arange(4, dtype=np.float32),
+    }
+
+    def _coarse_atmo(bounds: Any, crs: str, obs_time: Any, res: float) -> AtmosphericState:
+        _ = (bounds, crs, obs_time, res)
+        aot = xr.DataArray(np.full((4, 4), 0.2, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        tcwv = xr.DataArray(np.full((4, 4), 2.0, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        tco3 = xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        unc = xr.DataArray(np.full((4, 4), 0.01, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        elevation = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        return AtmosphericState(
+            aot=aot,
+            tcwv=tcwv,
+            tco3=tco3,
+            aot_unc=unc,
+            tcwv_unc=unc,
+            tco3_unc=unc,
+            elevation=elevation,
+        )
+
+    captured: dict[str, Any] = {}
+
+    class _PreloadRTModel:
+        def preload_scene_subset(self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]) -> None:
+            captured["geometry_shape"] = tuple(geometry.sza.shape)
+            captured["atmo_shape"] = tuple(atmo_state.aot.shape)
+            captured["bands"] = [band.name for band in bands]
+
+    result = pipeline.run_pipeline(
+        Path("/fake"),
+        None,
+        SimpleNamespace(
+            solver=SimpleNamespace(
+                stages=(SimpleNamespace(name="aot_pass", bands=("B01", "B02", "B04")),),
+            )
+        ),
+        preprocessor=mock_preprocessor,
+        atmo_provider=_coarse_atmo,
+        surface_prior_provider=mock_surface_prior_provider,
+        grid_assembler=mock_grid_assembler,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=_PreloadRTModel(),
+        execution={"backend": "thread", "retries": 0},
+    )
+
+    assert isinstance(result, CorrectionResult)
+    assert captured["geometry_shape"] == (4, 4)
+    assert captured["atmo_shape"] == (4, 4)
+    assert captured["bands"] == ["B01", "B02", "B04"]
 
 
 def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
