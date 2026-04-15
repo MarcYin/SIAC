@@ -338,8 +338,40 @@ def resample_field_for_correction(
     )
 
 
+def should_resample_for_policy(
+    current_resolution_m: float,
+    target_resolution_m: float,
+    *,
+    policy: str = "auto",
+    allow_upsample: bool = False,
+) -> bool:
+    """Decide whether resampling is needed given a resolution policy.
+
+    Args:
+        current_resolution_m: Current pixel resolution in metres.
+        target_resolution_m: Desired resolution in metres.
+        policy: ``"auto"`` (resample only when beneficial) or ``"force"``.
+        allow_upsample: If True, upsampling from coarser to finer is allowed.
+
+    Returns:
+        True if the data should be resampled.
+    """
+    if target_resolution_m <= 0:
+        raise ValueError(f"target_resolution_m must be > 0, got {target_resolution_m}")
+    if policy == "force":
+        return abs(current_resolution_m - target_resolution_m) > 1e-6
+    if policy == "auto":
+        if current_resolution_m < target_resolution_m - 1e-6:
+            return True  # downsample finer to coarser
+        if current_resolution_m > target_resolution_m + 1e-6 and allow_upsample:
+            return True
+        return False
+    raise ValueError(f"resolution_policy must be 'auto' or 'force', got {policy!r}")
+
+
 __all__ = [
     "axis_resolution",
+    "should_resample_for_policy",
     "fill_nonfinite_like_template",
     "resample_coefficients_to_template",
     "resample_field_for_correction",

@@ -19,6 +19,7 @@ using the L-BFGS-B quasi-Newton method with box constraints.
 from __future__ import annotations
 
 import logging
+import time as _time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
@@ -41,6 +42,7 @@ from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.domain import SensorBand
+    from siac.runtime import SolverInputBundle
 
 logger = logging.getLogger(__name__)
 
@@ -287,11 +289,11 @@ class MultiGridSolver:
 
         logger.info(f"Grid levels: {grid_shapes}")
 
-        # Initialize solution with prior
-        aot = atmo_prior.aot.values.copy()
-        tcwv = atmo_prior.tcwv.values.copy()
-        aot_unc_final = np.maximum(atmo_prior.aot_unc.values.copy(), 0.02)
-        tcwv_unc_final = np.maximum(atmo_prior.tcwv_unc.values.copy(), 0.1)
+        # Initialize solution with views; copies are made at mutation points below.
+        aot = np.array(atmo_prior.aot.values, dtype=np.float32, copy=True)
+        tcwv = np.array(atmo_prior.tcwv.values, dtype=np.float32, copy=True)
+        aot_unc_final = np.maximum(atmo_prior.aot_unc.values, 0.02)
+        tcwv_unc_final = np.maximum(atmo_prior.tcwv_unc.values, 0.1)
 
         # Track history
         level_history = []
@@ -308,6 +310,7 @@ class MultiGridSolver:
         # Multi-grid solve from coarse to fine. The non-Jacobian grid-search
         # branch does not consume coarse solutions as initial guesses, so it
         # only runs once on the finest grid.
+        _solve_t0 = _time.monotonic()
         for level, shape in enumerate(grid_shapes):
             logger.info(f"Level {level}: {shape}")
 
@@ -448,6 +451,12 @@ class MultiGridSolver:
             final_success = level_success
             final_message = level_message
 
+        _solve_elapsed = _time.monotonic() - _solve_t0
+        logger.info(
+            "Multi-grid solver complete: %d levels, %d iterations, cost=%.4g (%.2fs)",
+            len(grid_shapes), total_iterations, final_cost, _solve_elapsed,
+        )
+
         # Compute uncertainties
         if use_grid_search:
             aot_unc, tcwv_unc = aot_unc_final, tcwv_unc_final
@@ -551,6 +560,26 @@ class MultiGridSolver:
         )
 
         return result
+
+    def solve_bundle(self, bundle: "SolverInputBundle") -> SolverResult:
+        """Solve for atmospheric parameters from a SolverInputBundle.
+
+        This is the preferred entry point. It unpacks the bundle fields and
+        delegates to :meth:`solve`.
+        """
+        from siac.runtime import SolverInputBundle as _Bundle  # avoid circular at module level
+
+        return self.solve(
+            bundle.toa,
+            bundle.surface_prior,
+            bundle.geometry,
+            bundle.atmo_prior,
+            bundle.rt_model,
+            bundle.cloud_mask,
+            bundle.bands,
+            sharp_transition_mask=bundle.sharp_transition_mask,
+            water_mask=bundle.water_mask,
+        )
 
     @staticmethod
     def _observation_presence_mask(toa: xr.DataArray) -> BoolArray:
@@ -1840,6 +1869,26 @@ class StagedMultiGridSolver:
             qa=final_qa,
             level_history=level_history,
             atmo_state=current_state,
+        )
+
+    def solve_bundle(self, bundle: "SolverInputBundle") -> SolverResult:
+        """Solve for atmospheric parameters from a SolverInputBundle.
+
+        This is the preferred entry point. It unpacks the bundle fields and
+        delegates to :meth:`solve`.
+        """
+        from siac.runtime import SolverInputBundle as _Bundle  # avoid circular at module level
+
+        return self.solve(
+            bundle.toa,
+            bundle.surface_prior,
+            bundle.geometry,
+            bundle.atmo_prior,
+            bundle.rt_model,
+            bundle.cloud_mask,
+            bundle.bands,
+            sharp_transition_mask=bundle.sharp_transition_mask,
+            water_mask=bundle.water_mask,
         )
 
     def _normalized_stages(self) -> tuple[SolverStageConfig, ...]:

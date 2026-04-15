@@ -10,9 +10,44 @@ import numpy as np
 import xarray as xr
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from siac.domain.sensors import SensorBand, SensorConfig
+
+
+@dataclass
+class BandLoaderContext:
+    """Wraps a TOA dataset with an optional lazy band loader and cache.
+
+    Instead of storing callables in xarray Dataset attrs (which is fragile
+    and non-discoverable), pass this context object alongside the dataset.
+    """
+
+    toa: xr.Dataset
+    band_loader: Callable[[str], xr.DataArray] | None = None
+    _cache: dict[str, xr.DataArray] = field(default_factory=dict)
+
+    def get_band(self, band_name: str) -> xr.DataArray:
+        """Get a band from the TOA dataset, loading lazily if needed."""
+        band = self.toa.data_vars.get(band_name)
+        if band is not None:
+            return band
+
+        cached = self._cache.get(band_name)
+        if cached is not None:
+            return cached
+
+        if self.band_loader is None:
+            raise KeyError(band_name)
+
+        loaded = self.band_loader(band_name)
+        if not isinstance(loaded, xr.DataArray):
+            raise TypeError(
+                f"Band loader must return xr.DataArray for {band_name!r}, "
+                f"got {type(loaded).__name__}"
+            )
+        self._cache[band_name] = loaded
+        return loaded
 
 
 def _as_data_array(value: object) -> xr.DataArray:

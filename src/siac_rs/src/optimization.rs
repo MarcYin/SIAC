@@ -53,6 +53,11 @@ fn validate_fixed_axes(
 ///
 /// # Returns
 /// Coarse-resolution array with averaged values
+///
+/// # Memory
+///
+/// Returns a new NumPy array. The result is copied from Rust to Python
+/// heap on return. Allocation is coarse_rows * coarse_cols * 8 bytes (f64).
 #[pyfunction]
 pub fn remap_to_coarse_grid<'py>(
     py: Python<'py>,
@@ -100,6 +105,11 @@ pub fn remap_to_coarse_grid<'py>(
 ///
 /// # Returns
 /// Fine-resolution array with interpolated values
+///
+/// # Memory
+///
+/// Returns a new NumPy array. The result is copied from Rust to Python
+/// heap on return. Allocation is fine_rows * fine_cols * 8 bytes (f64).
 #[pyfunction]
 pub fn interpolate_to_fine_grid<'py>(
     py: Python<'py>,
@@ -446,6 +456,17 @@ pub fn evaluate_grid_search_cost_cube_with_provider<'py>(
     Ok(costs.into_pyarray(py))
 }
 
+/// Evaluate the full grid-search cost cube with QA observation counts.
+///
+/// Calls the Python `coeff_provider` for each (AOT, TCWV) pair and returns
+/// a 4-D cost cube plus a matching observation-count cube.
+///
+/// # Memory
+///
+/// Returns a new NumPy array. The result is copied from Rust to Python
+/// heap on return. For a cost cube of shape (n_aot, n_tcwv, H, W), the
+/// allocation is n_aot * n_tcwv * H * W * 4 bytes. Consider chunking
+/// inputs for cubes exceeding ~100 MB.
 #[pyfunction]
 #[pyo3(signature = (
     coeff_provider,
@@ -994,6 +1015,16 @@ pub fn quadratic_refine_grid_search<'py>(
     ))
 }
 
+/// Quadratic refinement of grid-search minima with QA diagnostics.
+///
+/// Fits a parabola around the discrete minimum in each pixel to yield
+/// sub-grid-step AOT/TCWV estimates plus uncertainty and QA masks.
+///
+/// # Memory
+///
+/// Returns eight 2-D NumPy arrays (4x f32 + 4x bool), each of shape
+/// (H, W). Total allocation is H * W * (4*4 + 4*1) = H * W * 20 bytes,
+/// copied from Rust to the Python heap on return.
 #[pyfunction]
 #[pyo3(signature = (costs, obs_counts, aot_axis, tcwv_axis, valid_mask, fixed_parameter = "none"))]
 pub fn quadratic_refine_grid_search_qa<'py>(

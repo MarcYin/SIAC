@@ -263,23 +263,20 @@ def resolve_grid_assembler() -> GridAssemblerFn:
 
 def resolve_solver(config: Any) -> SolverFn:
     def _default_solver(inputs: SolverInputBundle, _config: Any) -> SolvedAtmosphere:
+        sc = config.solver
         solver_config = MultiGridConfig(
-            aot_gamma=config.solver.aot_gamma,
-            tcwv_gamma=config.solver.tcwv_gamma,
-            aot_bounds=tuple(config.solver.aot_bounds),
-            tcwv_bounds=tuple(config.solver.tcwv_bounds),
-            band_weight_power=getattr(config.solver, "alpha", -1.6),
-            smoothness_delta=getattr(config.solver, "smoothness_delta", 0.02),
-            grid_search_aot_points=getattr(config.solver, "grid_search_aot_points", 11),
-            grid_search_tcwv_points=getattr(config.solver, "grid_search_tcwv_points", 11),
-            fixed_atmospheric_parameter=getattr(config.solver, "fixed_atmospheric_parameter", "none"),
-            stages=tuple(getattr(config.solver, "stages", ()) or ()),
-            quadratic_block_size=getattr(config.solver, "quadratic_block_size", 1),
-            quadratic_block_min_valid_fraction=getattr(
-                config.solver,
-                "quadratic_block_min_valid_fraction",
-                0.5,
-            ),
+            aot_gamma=sc.aot_gamma,
+            tcwv_gamma=sc.tcwv_gamma,
+            aot_bounds=tuple(sc.aot_bounds),
+            tcwv_bounds=tuple(sc.tcwv_bounds),
+            band_weight_power=getattr(sc, "alpha", -1.6),
+            smoothness_delta=getattr(sc, "smoothness_delta", 0.02),
+            grid_search_aot_points=getattr(sc, "grid_search_aot_points", 11),
+            grid_search_tcwv_points=getattr(sc, "grid_search_tcwv_points", 11),
+            fixed_atmospheric_parameter=getattr(sc, "fixed_atmospheric_parameter", "none"),
+            stages=tuple(getattr(sc, "stages", ()) or ()),
+            quadratic_block_size=getattr(sc, "quadratic_block_size", 1),
+            quadratic_block_min_valid_fraction=getattr(sc, "quadratic_block_min_valid_fraction", 0.5),
         )
         solver_stages = (
             solver_config.get("stages", ())

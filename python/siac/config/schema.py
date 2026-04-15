@@ -457,12 +457,15 @@ class ExecutionRuntimeConfig(SIACBaseModel):
     correction_max_workers: int | None = Field(default=None, ge=1)
     retries: int = Field(default=2, ge=0)
     stage_timeout_s: float | None = Field(default=None, gt=0.0)
+    stage_timeouts: dict[str, float] = Field(default_factory=dict)
     dashboard: bool = False
     dashboard_address: str | None = None
     performance_report_path: Path | None = None
     show_progress: bool = False
     profiling_sample_interval_s: float = Field(default=5.0, gt=0.0)
     progress_heartbeat_s: float = Field(default=30.0, gt=0.0)
+    max_scatter_points_per_band: int = Field(default=4096, ge=64)
+    default_aux_resolution_m: float = Field(default=500.0, gt=0.0)
 
     @field_validator("performance_report_path", mode="before")
     @classmethod

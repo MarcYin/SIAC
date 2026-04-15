@@ -3,6 +3,7 @@
 from siac.runtime.models import (
     AOTScatterBandDiagnostics,
     AtmosphericState,
+    BandLoaderContext,
     BRDFKernelWeights,
     CorrectionDiagnostics,
     CorrectionResult,
@@ -18,6 +19,7 @@ from siac.runtime.models import (
 __all__ = [
     "AOTScatterBandDiagnostics",
     "AtmosphericState",
+    "BandLoaderContext",
     "BRDFKernelWeights",
     "CorrectionDiagnostics",
     "CorrectionResult",

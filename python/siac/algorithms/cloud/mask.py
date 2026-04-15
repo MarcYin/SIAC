@@ -12,6 +12,7 @@ from siac.algorithms.cloud.mapping import apply_class_mapping
 from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
 from siac.geo import reproject_match
 from siac.geo.reprojection import resample
+from siac.geo.resample import should_resample_for_policy
 from siac.storage.readers import read_raster
 
 if TYPE_CHECKING:
@@ -97,27 +98,12 @@ def _resample_continuous(
     allow_upsample_to_target: bool,
 ) -> xr.DataArray:
     if target_resolution_m <= 0:
-        raise ValueError("target_resolution_m must be > 0")
+        raise ValueError(f"target_resolution_m must be > 0, got {target_resolution_m}")
     if not hasattr(da, "rio") or da.rio.crs is None:
         return da
-
     current = abs(float(da.rio.resolution()[0]))
-
-    should_resample = False
-    if resolution_policy == "force":
-        should_resample = abs(current - target_resolution_m) > 1e-6
-    elif resolution_policy == "auto":
-        if current < target_resolution_m - 1e-6:
-            # downsample finer data to target (preferred default)
-            should_resample = True
-        elif current > target_resolution_m + 1e-6 and allow_upsample_to_target:
-            should_resample = True
-    else:
-        raise ValueError("resolution_policy must be 'auto' or 'force'")
-
-    if not should_resample:
+    if not should_resample_for_policy(current, target_resolution_m, policy=resolution_policy, allow_upsample=allow_upsample_to_target):
         return da
-
     return resample(da, target_resolution=target_resolution_m, resampling="bilinear")
 
 
@@ -129,23 +115,12 @@ def _resample_classes(
     allow_upsample_to_target: bool,
 ) -> xr.DataArray:
     if target_resolution_m <= 0:
-        raise ValueError("target_resolution_m must be > 0")
+        raise ValueError(f"target_resolution_m must be > 0, got {target_resolution_m}")
     if not hasattr(classes, "rio") or classes.rio.crs is None:
         return classes
-
     current = abs(float(classes.rio.resolution()[0]))
-    should_resample = False
-    if resolution_policy == "force":
-        should_resample = abs(current - target_resolution_m) > 1e-6
-    elif resolution_policy == "auto":
-        if current < target_resolution_m - 1e-6 or current > target_resolution_m + 1e-6 and allow_upsample_to_target:
-            should_resample = True
-    else:
-        raise ValueError("resolution_policy must be 'auto' or 'force'")
-
-    if not should_resample:
+    if not should_resample_for_policy(current, target_resolution_m, policy=resolution_policy, allow_upsample=allow_upsample_to_target):
         return classes
-
     return resample(classes, target_resolution=target_resolution_m, resampling="nearest")
 
 
@@ -350,6 +325,14 @@ def build_cloud_classes(
     """Build standardized cloud classes (0/1/2/3) from model/file/user inputs."""
     if len(toa.data_vars) == 0:
         raise ValueError("TOA dataset must contain at least one band")
+    if target_resolution_m <= 0:
+        raise ValueError(f"target_resolution_m must be > 0, got {target_resolution_m}")
+    if mode not in ("auto", "none", "external_file", "user_callable"):
+        raise ValueError(f"Unsupported cloud mask mode: {mode!r}")
+    if mode == "user_callable" and user_callable is None:
+        raise ValueError("user_callable must be provided when mode='user_callable'")
+    if mode == "external_file" and external_mask_path is None:
+        raise ValueError("external_mask_path must be provided when mode='external_file'")
 
     ref = _extract_band(next(iter(toa.data_vars.values())))
 
@@ -360,8 +343,6 @@ def build_cloud_classes(
         return apply_class_mapping(classes, None, unmapped_to_missing=False)
 
     if mode == "external_file":
-        if external_mask_path is None:
-            raise ValueError("external_mask_path must be provided when mode='external_file'")
         return _external_classes(
             Path(external_mask_path),
             reference=ref,
@@ -373,8 +354,6 @@ def build_cloud_classes(
         )
 
     if mode == "user_callable":
-        if user_callable is None:
-            raise ValueError("user_callable must be provided when mode='user_callable'")
         raw = _call_user_callable(
             user_callable,
             toa=toa,
@@ -394,9 +373,7 @@ def build_cloud_classes(
         )
         return apply_class_mapping(raw, class_mapping, unmapped_to_missing=unmapped_to_missing)
 
-    if mode != "auto":
-        raise ValueError(f"Unsupported cloud mode: {mode!r}")
-
+    # mode == "auto" — fall through to model-based detection.
     red, green, nir = _prepare_rgbnir(
         toa,
         sensor_config,

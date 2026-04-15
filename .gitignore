@@ -8,6 +8,9 @@ dist/
 build/
 *.egg
 
+# Hypothesis property-based testing database
+.hypothesis/
+
 # Rust
 target/
 Cargo.lock

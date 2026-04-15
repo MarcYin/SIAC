@@ -59,7 +59,7 @@ def _template_coords(template: xr.DataArray | None) -> dict[str, xr.DataArray]:
 def _ensure_template_transform(template: xr.DataArray) -> xr.DataArray:
     try:
         transform = template.rio.transform(recalc=True)
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError):
         return template
     return template.rio.write_transform(transform)
 
@@ -67,7 +67,7 @@ def _ensure_template_transform(template: xr.DataArray) -> xr.DataArray:
 def _spatial_dims(data: xr.DataArray) -> tuple[str, str] | None:
     try:
         return data.rio.x_dim, data.rio.y_dim
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError):
         pass
     if "x" in data.dims and "y" in data.dims:
         return "x", "y"
@@ -213,7 +213,7 @@ def _resample_da_gdal(
         import rioxarray  # noqa: F401
         from rasterio.enums import Resampling as RasterioResampling
         from rasterio.errors import NotGeoreferencedWarning
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         logger.debug("rioxarray/rasterio not available; skipping GDAL resampling.")
         return None
 
@@ -246,60 +246,32 @@ def _resample_da_gdal(
         logger.debug("Skipping GDAL resampling for non-monotonic source coordinates.")
         return None
 
+    # Validate georeferencing in a single warnings context to avoid repeated
+    # context-manager overhead on each call.
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings("error", category=NotGeoreferencedWarning)
+
             source = da.rio.set_spatial_dims(x_dim=source_x_dim, y_dim=source_y_dim)
-    except NotGeoreferencedWarning:
-        logger.debug("Skipping GDAL resampling because the source lacks a geotransform.")
-        return None
-    except Exception:
-        logger.debug("Failed to set spatial dims for GDAL resampling.", exc_info=True)
-        return None
-
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
             source_crs = source.rio.crs
-    except NotGeoreferencedWarning:
-        logger.debug("Skipping GDAL resampling because the source CRS/transform is incomplete.")
-        return None
-    except Exception:
-        source_crs = None
 
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
             target = _ensure_template_transform(template)
             target_crs = target.rio.crs
-    except NotGeoreferencedWarning:
-        logger.debug("Skipping GDAL resampling because the target lacks a geotransform.")
-        return None
-    except Exception:
-        logger.debug("Failed to read target CRS/transform.", exc_info=True)
-        return None
 
-    if target_crs is None or source_crs is None:
-        return None
+            if target_crs is None or source_crs is None:
+                return None
 
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
-            with suppress(Exception):
+            try:
                 source = source.rio.write_transform(source.rio.transform(recalc=True))
-    except NotGeoreferencedWarning:
-        logger.debug("Skipping GDAL resampling because the source transform cannot be derived.")
-        return None
+            except (AttributeError, RuntimeError, ValueError):
+                pass  # proceed with existing transform
 
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("error", category=NotGeoreferencedWarning)
             out = source.rio.reproject_match(target, resampling=resampling)
     except NotGeoreferencedWarning:
-        logger.debug("Skipping GDAL resampling because rasterio reported missing georeferencing.")
+        logger.debug("Skipping GDAL resampling: missing georeferencing metadata.")
         return None
-    except Exception:
-        logger.debug("GDAL reproject_match failed; falling back to scipy.", exc_info=True)
+    except (RuntimeError, ValueError, AttributeError) as exc:
+        logger.debug("GDAL reproject_match failed (%s); falling back to scipy.", type(exc).__name__, exc_info=True)
         return None
 
     out = out.astype(np.float32).assign_attrs(da.attrs)
@@ -402,7 +374,7 @@ def _shape_only_mask_remap_is_safe(
         target_bounds = tuple(float(v) for v in target.rio.bounds())
         source_res = source.rio.resolution()
         target_res = target.rio.resolution()
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError, TypeError):
         return False
 
     tolerance = max(
@@ -759,6 +731,15 @@ def assemble_grids(
     Returns:
         SolverInputBundle ready for the solver.
     """
+    # 0. Validate inputs at the M4 boundary.
+    t0 = __import__("time").monotonic()
+    if not list(obs.toa.data_vars):
+        raise ValueError("M4 grid assembly received an empty TOA dataset (no data variables).")
+    if aerosol_resolution_m <= 0:
+        raise ValueError(f"aerosol_resolution_m must be > 0, got {aerosol_resolution_m}")
+    if obs.bounds[0] >= obs.bounds[2] or obs.bounds[1] >= obs.bounds[3]:
+        raise ValueError(f"Invalid observation bounds: {obs.bounds}")
+
     # 1. Select solver bands using the sensor defaults.
     bands = _resolve_solver_bands(obs.sensor_config, solver_band_names)
     logger.info(f"Selected {len(bands)} solver bands: {[b.name for b in bands]}")
@@ -889,7 +870,7 @@ def assemble_grids(
         toa_da = toa_da.assign_coords(band=[first])
     toa_da = copy_spatial_metadata_like(toa_da, target_template)
 
-    return SolverInputBundle(
+    bundle = SolverInputBundle(
         toa=toa_da,
         geometry=geometry,
         cloud_mask=cloud_mask,
@@ -903,3 +884,20 @@ def assemble_grids(
         aux_resolution_m=aux_resolution_m,
         aerosol_resolution_m=resolved_aerosol_resolution,
     )
+
+    # Post-assembly validation: ensure shapes are consistent.
+    expected_shape = target_shape
+    if toa_da.shape[-2:] != expected_shape:
+        raise ValueError(
+            f"M4 post-assembly shape mismatch: TOA {toa_da.shape[-2:]} != target {expected_shape}"
+        )
+
+    elapsed = __import__("time").monotonic() - t0
+    logger.info(
+        "M4 grid assembly complete: %d bands, shape=%s, resolution=%.1fm (%.2fs)",
+        len(resolved_band_names),
+        target_shape,
+        resolved_aerosol_resolution,
+        elapsed,
+    )
+    return bundle
