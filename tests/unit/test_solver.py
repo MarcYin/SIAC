@@ -3024,7 +3024,7 @@ class TestCostFunctionGradient:
 # ── Error path / edge-case tests ────────────────────────────────────
 
 
-def _make_geometry(shape: tuple[int, int]) -> "GeometryAngles":
+def _make_geometry(shape: tuple[int, int]):  # noqa: ANN201
     from siac.runtime import GeometryAngles
 
     return GeometryAngles(

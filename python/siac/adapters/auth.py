@@ -14,6 +14,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
+from siac.adapters._log_filter import SecretRedactionFilter
 from siac.errors import AuthenticationError
 
 if TYPE_CHECKING:
@@ -25,8 +26,6 @@ if TYPE_CHECKING:
 requests = cast("Any", import_module("requests"))
 
 logger = logging.getLogger(__name__)
-
-from siac.adapters._log_filter import SecretRedactionFilter
 logger.addFilter(SecretRedactionFilter())
 
 _CDSE_TOKEN_URL = (

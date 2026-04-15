@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import date, datetime
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 

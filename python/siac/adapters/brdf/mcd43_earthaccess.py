@@ -11,22 +11,6 @@ import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
-# HDF4/HDF5 libraries raise their own exception types on I/O failures.
-# Import them defensively so they can be included in except clauses.
-try:
-    from pyhdf.error import HDF4Error as _HDF4Error
-except ImportError:  # pragma: no cover
-    _HDF4Error = OSError  # type: ignore[misc,assignment]
-try:
-    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[attr-defined]
-except (ImportError, AttributeError):  # pragma: no cover
-    _HDF5Error = OSError  # type: ignore[misc,assignment]
-
-# Combined tuple used in except clauses throughout this module.
-_DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
-    OSError, KeyError, ValueError, TypeError, RuntimeError, _HDF4Error, _HDF5Error,
-)
-
 from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata import (
     _build_virtual_stack_vrt,
@@ -65,6 +49,22 @@ if TYPE_CHECKING:
     from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 
 logger = logging.getLogger(__name__)
+
+# HDF4/HDF5 libraries raise their own exception types on I/O failures.
+# Import them defensively so they can be included in except clauses.
+try:
+    from pyhdf.error import HDF4Error as _HDF4Error
+except ImportError:  # pragma: no cover
+    _HDF4Error = OSError  # type: ignore[misc,assignment]
+try:
+    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[attr-defined]
+except (ImportError, AttributeError):  # pragma: no cover
+    _HDF5Error = OSError  # type: ignore[misc,assignment]
+
+# Combined tuple used in except clauses throughout this module.
+_DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
+    OSError, KeyError, ValueError, TypeError, RuntimeError, _HDF4Error, _HDF5Error,
+)
 
 _BEST_QA_REFLECTANCE_UNCERTAINTY = 0.015
 _QA_UNCERTAINTY_POWER = 1.6

@@ -561,13 +561,12 @@ class MultiGridSolver:
 
         return result
 
-    def solve_bundle(self, bundle: "SolverInputBundle") -> SolverResult:
+    def solve_bundle(self, bundle: SolverInputBundle) -> SolverResult:
         """Solve for atmospheric parameters from a SolverInputBundle.
 
         This is the preferred entry point. It unpacks the bundle fields and
         delegates to :meth:`solve`.
         """
-        from siac.runtime import SolverInputBundle as _Bundle  # avoid circular at module level
 
         return self.solve(
             bundle.toa,
@@ -1871,13 +1870,12 @@ class StagedMultiGridSolver:
             atmo_state=current_state,
         )
 
-    def solve_bundle(self, bundle: "SolverInputBundle") -> SolverResult:
+    def solve_bundle(self, bundle: SolverInputBundle) -> SolverResult:
         """Solve for atmospheric parameters from a SolverInputBundle.
 
         This is the preferred entry point. It unpacks the bundle fields and
         delegates to :meth:`solve`.
         """
-        from siac.runtime import SolverInputBundle as _Bundle  # avoid circular at module level
 
         return self.solve(
             bundle.toa,

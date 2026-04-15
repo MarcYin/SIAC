@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import warnings
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import cv2
@@ -261,10 +260,8 @@ def _resample_da_gdal(
             if target_crs is None or source_crs is None:
                 return None
 
-            try:
+            with __import__("contextlib").suppress(AttributeError, RuntimeError, ValueError):
                 source = source.rio.write_transform(source.rio.transform(recalc=True))
-            except (AttributeError, RuntimeError, ValueError):
-                pass  # proceed with existing transform
 
             out = source.rio.reproject_match(target, resampling=resampling)
     except NotGeoreferencedWarning:

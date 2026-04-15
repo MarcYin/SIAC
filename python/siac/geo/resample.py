@@ -363,9 +363,7 @@ def should_resample_for_policy(
     if policy == "auto":
         if current_resolution_m < target_resolution_m - 1e-6:
             return True  # downsample finer to coarser
-        if current_resolution_m > target_resolution_m + 1e-6 and allow_upsample:
-            return True
-        return False
+        return current_resolution_m > target_resolution_m + 1e-6 and allow_upsample
     raise ValueError(f"resolution_policy must be 'auto' or 'force', got {policy!r}")
 
 
