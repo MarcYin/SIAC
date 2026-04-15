@@ -11,6 +11,22 @@ import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
+# HDF4/HDF5 libraries raise their own exception types on I/O failures.
+# Import them defensively so they can be included in except clauses.
+try:
+    from pyhdf.error import HDF4Error as _HDF4Error
+except ImportError:  # pragma: no cover
+    _HDF4Error = OSError  # type: ignore[misc,assignment]
+try:
+    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[attr-defined]
+except (ImportError, AttributeError):  # pragma: no cover
+    _HDF5Error = OSError  # type: ignore[misc,assignment]
+
+# Combined tuple used in except clauses throughout this module.
+_DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
+    OSError, KeyError, ValueError, TypeError, RuntimeError, _HDF4Error, _HDF5Error,
+)
+
 from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata import (
     _build_virtual_stack_vrt,
@@ -90,7 +106,7 @@ def _granule_day(granule: object) -> np.datetime64 | None:
     for value in filename_candidates:
         try:
             return np.datetime64(parse_granule_date(Path(value)).date(), "D")
-        except Exception:
+        except (ValueError, TypeError, IndexError):
             continue
 
     temporal_candidates: list[str] = []
@@ -109,7 +125,7 @@ def _granule_day(granule: object) -> np.datetime64 | None:
     for value in temporal_candidates:
         try:
             return np.datetime64(value[:10], "D")
-        except Exception:
+        except (ValueError, TypeError, IndexError):
             continue
     return None
 
@@ -232,7 +248,7 @@ class _EarthAccessBRDFProvider:
                         crs=crs,
                         target_resolution=target_resolution,
                     )
-                except Exception as exc:  # pragma: no cover - external/system dependent
+                except _DATA_READ_ERRORS as exc:  # pragma: no cover - external/system dependent
                     logger.warning(
                         "%s BRDF granule parsing failed; using defaults (%s)",
                         self._source_name,
@@ -295,7 +311,7 @@ class _EarthAccessBRDFProvider:
                         target_resolution=target_resolution,
                         time_axis=time_axis,
                     )
-                except Exception as exc:  # pragma: no cover - external/system dependent
+                except _DATA_READ_ERRORS as exc:  # pragma: no cover - external/system dependent
                     logger.warning(
                         "%s temporal BRDF granule parsing failed; using defaults (%s)",
                         self._source_name,
@@ -440,7 +456,7 @@ class _EarthAccessBRDFProvider:
                             )
                         )
                     return outputs
-                except Exception as exc:  # pragma: no cover - external/system dependent
+                except _DATA_READ_ERRORS as exc:  # pragma: no cover - external/system dependent
                     logger.warning(
                         "%s batched temporal BRDF granule parsing failed; preserving NaN weights (%s)",
                         self._source_name,
@@ -622,15 +638,21 @@ class _EarthAccessBRDFProvider:
         temporal: tuple[str, str],
         count: int | None = None,
     ) -> list[object]:
+        from siac.adapters._retry import retry_transient
+
         return cast(
             "list[object]",
-            self.source.search_granules(
+            retry_transient(
+                self.source.search_granules,
                 short_name=short_name,
                 bounds=bounds,
                 crs=crs,
                 temporal=temporal,
                 provider=self.provider,
                 count=self.max_granules if count is None else count,
+                max_attempts=3,
+                base_delay_s=2.0,
+                label=f"{self._source_name}.search_granules",
             ),
         )
 
@@ -654,8 +676,30 @@ class _EarthAccessBRDFProvider:
         *,
         short_name: str,
     ) -> list[Path]:
+        from siac.adapters._retry import retry_transient
+
         dest = earthaccess_cache_dir(self.cache_dir, short_name)
-        return cast("list[Path]", self.source.download_granules(granules, dest))
+        downloaded = cast(
+            "list[Path]",
+            retry_transient(
+                self.source.download_granules,
+                granules,
+                dest,
+                max_attempts=3,
+                base_delay_s=3.0,
+                label=f"{self._source_name}.download_granules",
+            ),
+        )
+        # Warn if any downloaded path falls outside the expected cache directory.
+        cache_root = Path(dest).resolve()
+        for p in downloaded:
+            resolved = Path(p).resolve()
+            if not resolved.is_relative_to(cache_root):
+                logger.warning(
+                    "Downloaded file %s is outside cache directory %s.",
+                    resolved, cache_root,
+                )
+        return downloaded
 
     @staticmethod
     def _merge_search_batches(
@@ -797,7 +841,7 @@ class _EarthAccessBRDFProvider:
                 resolution=target_resolution,
                 resolution_name="target_resolution",
             )
-        except Exception as exc:
+        except _DATA_READ_ERRORS as exc:
             logger.debug(
                 "%s could not build source-aligned BRDF target template from %s; using AOI grid (%s)",
                 getattr(paths[0], "name", paths[0]),
@@ -1390,7 +1434,7 @@ class _EarthAccessBRDFProvider:
             out = out.rio.write_crs(reference_crs)
         try:
             return out.rio.write_transform(reference.rio.transform(recalc=True))
-        except Exception:
+        except _DATA_READ_ERRORS:
             return out
 
     @classmethod
@@ -1697,7 +1741,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 nodata=np.nan,
                 target_template=target_template,
             )
-        except Exception:
+        except _DATA_READ_ERRORS:
             logger.debug("%s direct VRT payload path unavailable; falling back to array merge.", self._source_name, exc_info=True)
             return None
 
@@ -1823,7 +1867,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 nodata=np.nan,
                 target_template=target_template,
             )
-        except Exception:
+        except _DATA_READ_ERRORS:
             logger.debug(
                 "%s direct temporal VRT payload path unavailable; falling back to per-day array merge.",
                 self._source_name,
@@ -1944,7 +1988,7 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 nodata=np.nan,
                 target_template=target_template,
             )
-        except Exception:
+        except _DATA_READ_ERRORS:
             logger.debug(
                 "%s daily-payload temporal VRT path unavailable; falling back to per-day array merge.",
                 self._source_name,
@@ -2227,7 +2271,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 nodata=np.nan,
                 target_template=target_template,
             )
-        except Exception:
+        except _DATA_READ_ERRORS:
             logger.debug("%s direct VRT payload path unavailable; falling back to array merge.", self._source_name, exc_info=True)
             return None
 
@@ -2359,7 +2403,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 nodata=np.nan,
                 target_template=target_template,
             )
-        except Exception:
+        except _DATA_READ_ERRORS:
             logger.debug(
                 "%s direct temporal VRT payload path unavailable; falling back to per-day array merge.",
                 self._source_name,
@@ -2479,7 +2523,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 nodata=np.nan,
                 target_template=target_template,
             )
-        except Exception:
+        except _DATA_READ_ERRORS:
             logger.debug(
                 "%s daily-payload temporal VRT path unavailable; falling back to per-day array merge.",
                 self._source_name,

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,6 +55,11 @@ class AtmosphericCorrector:
                 cloud_mask: xr.DataArray | None = None,
                 boa_band_writer: Callable[[str, xr.DataArray], xr.DataArray] | None = None) -> CorrectionResult:
         t0 = time.monotonic()
+        logger.info(
+            "M6 correction starting: %d sensor bands, %d workers",
+            len(self.sensor_config.band_names),
+            self.correction_workers,
+        )
         boa_vars = {}
         invalid_boa_mask: xr.DataArray | None = None
         band_loader = toa.attrs.get(_TOA_BAND_LOADER_ATTR)
@@ -93,6 +99,10 @@ class AtmosphericCorrector:
         t_compute_phase = time.perf_counter()
         if self.correction_workers > 1 and len(work_items) > 1:
             max_workers = min(self.correction_workers, len(work_items))
+            # RT coefficient computation is CPU-bound; use threads (ProcessPoolExecutor
+            # would require pickling xarray/numpy objects, which adds overhead).
+            # ThreadPoolExecutor still helps when the RT model releases the GIL
+            # (e.g. Rust-backed emulator) or when I/O is mixed in.
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
                     band_name: executor.submit(_correct_single_band, band_spec, band_data)

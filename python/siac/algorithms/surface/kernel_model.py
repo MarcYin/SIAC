@@ -268,31 +268,34 @@ class KernelModelDeriver:
         sigma_y: float,
         band_axis: int = 0,
     ) -> FloatArray:
-        """Apply 2D Gaussian convolution to each band in a 3-D cube."""
+        """Apply 2D Gaussian convolution to each band in a 3-D cube.
+
+        Uses in-place operations to reduce peak memory from ~5x to ~3x input size.
+        """
         data_arr = np.asarray(data, dtype=np.float32)
         mask = np.isfinite(data_arr)
-        data_filled = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
+
+        # Fill NaN in-place on a working copy (avoids separate data_filled allocation).
+        result: FloatArray = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
 
         # Build per-axis sigma: 0 for band axis, sigma_y/sigma_x for spatial.
         sigma_nd = [0.0] * data_arr.ndim
-        sigma_nd[band_axis] = 0.0
-        # Spatial axes are the remaining two (in order: y, x).
         spatial = [i for i in range(data_arr.ndim) if i != band_axis]
         sigma_nd[spatial[0]] = sigma_y
         sigma_nd[spatial[1]] = sigma_x
 
-        convolved = np.asarray(
-            ndimage.gaussian_filter(data_filled, sigma=sigma_nd, mode="reflect"),
-            dtype=np.float32,
-        )
-        norm = np.asarray(
-            ndimage.gaussian_filter(mask.astype(np.float32), sigma=sigma_nd, mode="reflect"),
-            dtype=np.float32,
-        )
+        # Convolve data in-place via output parameter.
+        ndimage.gaussian_filter(result, sigma=sigma_nd, mode="reflect", output=result)
+        # Convolve mask (reuse mask array to avoid extra allocation).
+        norm = mask.astype(np.float32, copy=False)
+        ndimage.gaussian_filter(norm, sigma=sigma_nd, mode="reflect", output=norm)
+
+        # Normalize in-place, then mask invalid regions.
         with np.errstate(divide="ignore", invalid="ignore"):
-            result: FloatArray = np.asarray(convolved / np.maximum(norm, 1.0e-10), dtype=np.float32)
-        restored: FloatArray = np.asarray(np.where(norm > 0.01, result, np.nan), dtype=np.float32)
-        return restored
+            np.maximum(norm, 1.0e-10, out=norm)
+            np.divide(result, norm, out=result)
+        result[norm < (1.0e-10 + 0.01)] = np.nan
+        return result
 
     def _convolve_2d(
         self,
@@ -300,36 +303,28 @@ class KernelModelDeriver:
         sigma_x: float,
         sigma_y: float,
     ) -> FloatArray:
-        """Apply 2D Gaussian convolution."""
+        """Apply 2D Gaussian convolution.
+
+        Uses in-place operations to reduce peak memory from ~5x to ~3x input size.
+        """
         data_arr = np.asarray(data, dtype=np.float32)
-        # Handle NaN values
         mask = np.isfinite(data_arr)
-        data_filled = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
 
-        # Convolve data and mask
-        convolved = np.asarray(
-            ndimage.gaussian_filter(
-                data_filled, sigma=[sigma_y, sigma_x], mode="reflect"
-            ),
-            dtype=np.float32,
-        )
-        norm = np.asarray(
-            ndimage.gaussian_filter(
-                mask.astype(np.float32), sigma=[sigma_y, sigma_x], mode="reflect"
-            ),
-            dtype=np.float32,
-        )
+        # Fill NaN in-place on a working copy.
+        result: FloatArray = np.where(mask, data_arr, 0.0).astype(np.float32, copy=False)
 
-        # Normalize to account for missing data
+        # Convolve data in-place via output parameter.
+        ndimage.gaussian_filter(result, sigma=[sigma_y, sigma_x], mode="reflect", output=result)
+        # Convolve mask (reuse array to avoid extra allocation).
+        norm = mask.astype(np.float32, copy=False)
+        ndimage.gaussian_filter(norm, sigma=[sigma_y, sigma_x], mode="reflect", output=norm)
+
+        # Normalize in-place, then mask invalid regions.
         with np.errstate(divide="ignore", invalid="ignore"):
-            result: FloatArray = np.asarray(
-                convolved / np.maximum(norm, 1.0e-10),
-                dtype=np.float32,
-            )
-
-        # Restore NaN where no valid data
-        restored: FloatArray = np.asarray(np.where(norm > 0.01, result, np.nan), dtype=np.float32)
-        return restored
+            np.maximum(norm, 1.0e-10, out=norm)
+            np.divide(result, norm, out=result)
+        result[norm < (1.0e-10 + 0.01)] = np.nan
+        return result
 
 
 class PSFConvolver:

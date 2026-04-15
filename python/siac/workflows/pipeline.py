@@ -70,9 +70,21 @@ SolverFn = Callable[[SolverInputBundle, Any], SolvedAtmosphere]
 CorrectorFn = Callable[..., CorrectionResult]
 _OUTPUTS_WRITTEN_METADATA_KEY = "_siac_outputs_written"
 
-# Module-level constants extracted from previously-hardcoded magic numbers.
+# Module-level defaults (overridable via ExecutionRuntimeConfig).
 _MAX_SCATTER_POINTS_PER_BAND = 4096
 _DEFAULT_AUX_RESOLUTION_M = 500.0
+
+
+def _config_scatter_limit(config: Any) -> int:
+    """Read max_scatter_points_per_band from config, falling back to module default."""
+    execution = getattr(config, "execution", None)
+    return int(getattr(execution, "max_scatter_points_per_band", _MAX_SCATTER_POINTS_PER_BAND))
+
+
+def _config_aux_resolution(config: Any) -> float:
+    """Read default_aux_resolution_m from config, falling back to module default."""
+    execution = getattr(config, "execution", None)
+    return float(getattr(execution, "default_aux_resolution_m", _DEFAULT_AUX_RESOLUTION_M))
 
 _EXECUTION_KEYS = (
     "backend",
@@ -823,8 +835,12 @@ def _run_tail(
         if _should_capture_aot_scatter(config):
             try:
                 scatter = _build_aot_scatter_diagnostics(solver_inputs, solved)
-            except Exception:
-                logger.exception("Failed to build aerosol-solver scatter diagnostics.")
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                logger.warning(
+                    "Failed to build aerosol-solver scatter diagnostics (%s: %s).",
+                    type(exc).__name__,
+                    exc,
+                )
             else:
                 diagnostics = replace(corrected.diagnostics, aot_scatter_plots=scatter)
         surface_template = _surface_template(solver_inputs.surface_prior.boa)
@@ -1008,7 +1024,7 @@ def _fetch_priors(
                     "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
                     float(timeout),
                 )
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 if observer is not None:
                     observer.record_error(
                         stage="LUT.preload",
@@ -1016,7 +1032,8 @@ def _fetch_priors(
                         error_message=str(exc),
                     )
                 logger.warning(
-                    "LUT preload failed (%s); proceeding with on-demand LUT reads.",
+                    "LUT preload failed (%s: %s); proceeding with on-demand LUT reads.",
+                    type(exc).__name__,
                     exc,
                 )
     except timeout_errors as exc:

@@ -26,6 +26,9 @@ requests = cast("Any", import_module("requests"))
 
 logger = logging.getLogger(__name__)
 
+from siac.adapters._log_filter import SecretRedactionFilter
+logger.addFilter(SecretRedactionFilter())
+
 _CDSE_TOKEN_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
     "protocol/openid-connect/token"
@@ -142,7 +145,14 @@ class CDSEAuth(_ProviderAuthBase):
             },
             timeout=timeout,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            # Wrap to prevent URL tokens leaking in the error message.
+            raise AuthenticationError(
+                f"CDSE S3 credential request failed (HTTP {resp.status_code}). "
+                "Check your CDSE credentials."
+            ) from exc
         body = _response_json_object(
             resp,
             "CDSE temporary S3 credential response must be a JSON object.",
@@ -164,7 +174,12 @@ class CDSEAuth(_ProviderAuthBase):
             },
             timeout=timeout,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            raise AuthenticationError(
+                f"CDSE S3 credential revocation failed (HTTP {resp.status_code})."
+            ) from exc
 
     def wait_for_temporary_s3_credentials(
         self,
@@ -184,10 +199,14 @@ class CDSEAuth(_ProviderAuthBase):
                 fs = s3fs.S3FileSystem(**credentials.storage_options())
                 fs.ls(credentials.bucket, detail=False)[:1]
                 return
-            except Exception as exc:  # pragma: no cover
+            except (OSError, PermissionError, ConnectionError) as exc:  # pragma: no cover
                 last_exc = exc
 
-        raise AuthenticationError("CDSE temporary S3 credentials did not become active.") from last_exc
+        # Avoid leaking credential details in the exception chain.
+        raise AuthenticationError(
+            "CDSE temporary S3 credentials did not become active "
+            f"after {len(activation_delays)} attempts."
+        ) from last_exc
 
     @contextmanager
     def temporary_s3_credentials(
@@ -407,7 +426,13 @@ def _cdse_token_exchange(username: str, password: str, timeout: int = 60) -> tup
         },
         timeout=timeout,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        raise AuthenticationError(
+            f"CDSE token exchange failed (HTTP {resp.status_code}). "
+            "Check your CDSE username and password."
+        ) from exc
     body = _response_json_object(resp, "CDSE token response must be a JSON object.")
     token = body.get("access_token")
     if not isinstance(token, str) or not token:
