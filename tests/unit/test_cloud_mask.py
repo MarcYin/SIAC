@@ -347,7 +347,7 @@ def test_build_cloud_classes_input_validation_errors():
     with pytest.raises(ValueError, match="user_callable"):
         build_cloud_classes(toa, cfg, mode="user_callable")
 
-    with pytest.raises(ValueError, match="Unsupported cloud mode"):
+    with pytest.raises(ValueError, match="Unsupported cloud mask mode"):
         build_cloud_classes(toa, cfg, mode="bad")
 
 
@@ -645,3 +645,42 @@ def test_omnicloud_default_predictor_and_normalize_paths(monkeypatch: pytest.Mon
     assert norm.shape == red.shape
     with pytest.raises(ValueError, match="does not match input shape"):
         OmniCloudMaskProvider._normalize_raw_output(np.zeros((2, 2), dtype=np.float32), red)
+
+
+# ── Error path and edge case tests ──────────────────────────────────
+
+
+def test_build_cloud_classes_negative_resolution():
+    """target_resolution_m <= 0 should raise immediately."""
+    cfg = _sensor_config_with_duplicate_red()
+    toa = _toa_hs((2, 2))
+    with pytest.raises(ValueError, match="target_resolution_m must be > 0"):
+        build_cloud_classes(toa, cfg, target_resolution_m=-5.0)
+
+
+def test_build_cloud_classes_nan_reflectance():
+    """All-NaN TOA data should still produce a valid cloud mask (mode=none)."""
+    cfg = _sensor_config_with_duplicate_red()
+    toa = xr.Dataset({"R1": xr.DataArray(np.full((4, 4), np.nan, dtype=np.float32), dims=["y", "x"])})
+    result = build_cloud_classes(toa, cfg, mode="none")
+    assert result.shape == (4, 4)
+    # NaN pixels should be classified as clear (0) since isfinite returns False
+    assert int(result.values[0, 0]) == 0
+
+
+def test_build_cloud_classes_single_pixel():
+    """A single-pixel image should not crash."""
+    cfg = _sensor_config_with_duplicate_red()
+    toa = _toa_hs((1, 1))
+    result = build_cloud_classes(toa, cfg, mode="none")
+    assert result.shape == (1, 1)
+
+
+def test_classes_to_bool_mask_preserves_shape():
+    """Boolean mask should have same shape as input."""
+    classes = xr.DataArray(np.array([[0, 1, 2, 3]], dtype=np.uint8), dims=["y", "x"])
+    mask = classes_to_bool_mask(classes)
+    assert mask.shape == classes.shape
+    assert mask.dtype == bool
+    # Class 1 (clear) should be False (not cloudy), others True
+    assert mask.values[0, 1] is np.bool_(False)

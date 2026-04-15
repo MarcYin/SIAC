@@ -335,7 +335,8 @@ def test_download_and_filter_helpers_cover_warning_and_passthrough_branches(
     assert selected_calls["crs"] == "EPSG:4326"
 
     cached = provider._download_granules_to_cache([{"id": "g1"}], short_name="SN:dummy_brdf")
-    assert cached == [source.download_calls[-1][1] / "granule_1.hdf"]
+    expected_cache_dir = source.download_calls[-1][1]
+    assert cached == [expected_cache_dir / "granule_1.hdf"]
     assert source.download_calls[-1][1] == Path("/tmp/mcd43-cache")
 
     monkeypatch.setattr(

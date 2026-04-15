@@ -3019,3 +3019,147 @@ class TestCostFunctionGradient:
 
         assert j_smooth == pytest.approx(0.0)
         np.testing.assert_allclose(grad, 0.0, atol=1e-8)
+
+
+# ── Error path / edge-case tests ────────────────────────────────────
+
+
+def _make_geometry(shape: tuple[int, int]) -> "GeometryAngles":
+    from siac.runtime import GeometryAngles
+
+    return GeometryAngles(
+        sza=xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"]),
+        saa=xr.DataArray(np.full(shape, 1.0, dtype=np.float32), dims=["y", "x"]),
+        vza=xr.DataArray(np.full(shape, 0.2, dtype=np.float32), dims=["y", "x"]),
+        vaa=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=["y", "x"]),
+    )
+
+
+class _StubRT:
+    """Minimal stub that satisfies isinstance(rt, RTModelBackend)."""
+    pass
+
+
+# Register _StubRT as a virtual subclass of RTModelBackend so isinstance checks pass.
+from siac.domain.protocols import RTModelBackend as _RTProtocol  # noqa: E402
+
+_RTProtocol.register(_StubRT)
+
+
+class TestSolverErrorPaths:
+    """Tests for solver error conditions and edge cases."""
+
+    def test_solver_all_cloudy_returns_prior(self):
+        """When all pixels are cloudy, solver should return the prior unchanged."""
+        shape = (4, 4)
+        toa = xr.DataArray(
+            np.full((2, *shape), 0.2, dtype=np.float32),
+            dims=["band", "y", "x"],
+        )
+        cloud_mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
+
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.15, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        sp = SurfacePrior(
+            boa=xr.DataArray(np.full((2, *shape), 0.1, dtype=np.float32), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.full((2, *shape), 0.02, dtype=np.float32), dims=["band", "y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        from siac.domain import SensorBand
+
+        bands = [SensorBand("B1", 490.0, 10.0, 10.0, 0), SensorBand("B2", 560.0, 10.0, 10.0, 1)]
+        solver = MultiGridSolver(MultiGridConfig())
+        result = solver.solve(toa, sp, _make_geometry(shape), atmo, _StubRT(), cloud_mask, bands)
+        assert not result.success
+        assert result.n_iterations == 0
+
+    def test_solver_rt_type_validation(self):
+        """Solver should reject invalid RT model type."""
+        shape = (2, 2)
+        toa = xr.DataArray(np.full((1, *shape), 0.2, dtype=np.float32), dims=["band", "y", "x"])
+        cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        atmo = AtmosphericState(
+            aot=xr.DataArray(np.full(shape, 0.15, dtype=np.float32), dims=["y", "x"]),
+            tcwv=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=["y", "x"]),
+            tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
+            tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
+            tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
+            elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        )
+        sp = SurfacePrior(
+            boa=xr.DataArray(np.full((1, *shape), 0.1, dtype=np.float32), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(np.full((1, *shape), 0.02, dtype=np.float32), dims=["band", "y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        solver = MultiGridSolver()
+        with pytest.raises(TypeError, match="RTModelBackend"):
+            solver.solve(toa, sp, _make_geometry(shape), atmo, "not_a_model", cloud_mask, [])
+
+    def test_build_solver_valid_mask_all_nan_toa(self):
+        """build_solver_valid_mask with all-NaN TOA should produce all-False mask."""
+        shape = (3, 3)
+        cloud = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        toa = xr.DataArray(np.full(shape, np.nan, dtype=np.float32), dims=["y", "x"])
+        sp = SurfacePrior(
+            boa=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        result = build_solver_valid_mask(cloud, toa, sp)
+        assert not result.values.any()
+
+    def test_build_solver_valid_mask_with_water_exclusion(self):
+        """Water mask should exclude pixels from valid mask."""
+        shape = (4, 4)
+        cloud = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        toa = xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"])
+        sp = SurfacePrior(
+            boa=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        water = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        water.values[0, 0] = True  # mark one pixel as water
+
+        result = build_solver_valid_mask(cloud, toa, sp, water_mask=water)
+        assert not result.values[0, 0]  # water pixel excluded
+        assert result.values[1, 1]  # non-water pixel included
+
+    def test_build_solver_valid_mask_out_of_range_toa(self):
+        """TOA values outside (0, 1) should be excluded."""
+        shape = (3, 3)
+        cloud = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+        toa = xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"])
+        toa.values[0, 0] = -0.1  # below range
+        toa.values[0, 1] = 1.5   # above range
+        sp = SurfacePrior(
+            boa=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+            boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+            kernels=None,
+            mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        )
+        result = build_solver_valid_mask(cloud, toa, sp)
+        assert not result.values[0, 0]  # negative TOA excluded
+        assert not result.values[0, 1]  # TOA > 1 excluded
+        assert result.values[1, 1]      # valid pixel included
+
+    def test_solver_config_defaults(self):
+        """MultiGridConfig default values should be sane."""
+        config = MultiGridConfig()
+        assert config.n_levels >= 1
+        assert config.min_grid_size >= 2
+        assert config.aot_bounds[0] < config.aot_bounds[1]
+        assert config.tcwv_bounds[0] < config.tcwv_bounds[1]
+        assert config.max_iter_per_level >= 1
