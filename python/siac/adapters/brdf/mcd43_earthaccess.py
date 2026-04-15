@@ -52,14 +52,16 @@ logger = logging.getLogger(__name__)
 
 # HDF4/HDF5 libraries raise their own exception types on I/O failures.
 # Import them defensively so they can be included in except clauses.
+_HDF4Error: type[BaseException]
 try:
-    from pyhdf.error import HDF4Error as _HDF4Error
+    from pyhdf.error import HDF4Error as _HDF4Error  # type: ignore[import-untyped,no-redef]
 except ImportError:  # pragma: no cover
-    _HDF4Error = OSError  # type: ignore[misc,assignment]
+    _HDF4Error = OSError
+_HDF5Error: type[BaseException]
 try:
-    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[attr-defined]
+    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[attr-defined,no-redef]
 except (ImportError, AttributeError):  # pragma: no cover
-    _HDF5Error = OSError  # type: ignore[misc,assignment]
+    _HDF5Error = OSError
 
 # Combined tuple used in except clauses throughout this module.
 _DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
