@@ -59,7 +59,7 @@ except ImportError:  # pragma: no cover
     _HDF4Error = OSError
 _HDF5Error: type[BaseException]
 try:
-    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[attr-defined,no-redef]
+    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[no-redef]
 except (ImportError, AttributeError):  # pragma: no cover
     _HDF5Error = OSError
 
