@@ -27,6 +27,7 @@ from siac.algorithms.cloud.mask import (
     classes_to_bool_mask,
 )
 from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
+from siac.catalog import SENTINEL2A_CONFIG
 from siac.domain import SensorBand, SensorConfig
 
 if TYPE_CHECKING:
@@ -127,6 +128,24 @@ def test_group_band_names_raises_when_missing_color():
 
     with pytest.raises(ValueError, match="green"):
         _group_band_names(toa, cfg, "green")
+
+
+def test_group_band_names_prefers_b08_for_msi_nir_without_loading_other_nir_bands():
+    toa = xr.Dataset(
+        {"B08": xr.DataArray(np.full((2, 2), 0.6, dtype=np.float32), dims=["y", "x"])}
+    )
+    load_calls: list[str] = []
+
+    def _load_band(name: str) -> xr.DataArray:
+        load_calls.append(name)
+        raise KeyError(name)
+
+    toa.attrs["_siac_toa_band_loader"] = _load_band
+
+    nir_names = _group_band_names(toa, SENTINEL2A_CONFIG, "nir")
+
+    assert nir_names == ["B08"]
+    assert load_calls == []
 
 
 

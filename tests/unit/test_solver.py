@@ -724,6 +724,32 @@ class TestSharpTransitionObservationExclusion:
         np.testing.assert_array_equal(qa["fitting_cost"].values, cost_map)
         assert qa["fitting_cost"].dtype == np.float32
 
+    def test_build_solver_qa_dataset_masks_unsupported_and_nonfinite_fitting_cost_pixels_to_nan(self) -> None:
+        solver = MultiGridSolver()
+        template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])
+        cost_map = np.array([[0.01, np.inf], [0.03, 0.04]], dtype=np.float32)
+
+        qa = solver._build_solver_qa_dataset(
+            template=template,
+            valid_mask=np.array([[True, True], [True, False]], dtype=bool),
+            aot=np.full((2, 2), 0.2, dtype=np.float32),
+            tcwv=np.full((2, 2), 2.0, dtype=np.float32),
+            invalid_mask=None,
+            zero_obs_mask=None,
+            insufficient_support_mask=np.array([[False, False], [True, False]], dtype=bool),
+            no_observation_mask=None,
+            sharp_transition_mask=None,
+            water_mask=None,
+            fitting_cost=cost_map,
+        )
+
+        fitting_cost = qa["fitting_cost"].values
+        assert fitting_cost.dtype == np.float32
+        assert fitting_cost[0, 0] == pytest.approx(np.float32(0.01))
+        assert np.isnan(fitting_cost[0, 1])
+        assert np.isnan(fitting_cost[1, 0])
+        assert np.isnan(fitting_cost[1, 1])
+
     def test_build_solver_qa_dataset_omits_fitting_cost_when_none(self) -> None:
         solver = MultiGridSolver()
         template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from datetime import date, datetime
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1121,6 +1122,117 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
         "/vsimem/day_1.vrt",
         "/vsimem/day_1_group_0.vrt",
     ]
+    np.testing.assert_allclose(
+        temporal.f0.sel(time=np.datetime64("2024-01-01"), band="B02").values,
+        np.full((1, 1), 10.0, dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        temporal.f2.sel(time=np.datetime64("2024-01-03"), band="B03").values,
+        np.full((1, 1), 42.0, dtype=np.float32),
+    )
+    assert np.isnan(temporal.f0.sel(time=np.datetime64("2024-01-02")).values).all()
+
+
+def test_stack_parameter_provider_skips_oversized_temporal_vrt_and_logs_per_day_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _install_runtime(monkeypatch)
+    provider = MCD43EarthAccessProvider(probe_earthdata=False)
+    requested = [("B02", provider._product_bands[0]), ("B03", provider._product_bands[1])]
+    time_axis = np.array(["2024-01-01", "2024-01-02", "2024-01-03"], dtype="datetime64[D]")
+    day_map = {
+        Path("/tmp/day1_a.hdf"): datetime(2024, 1, 1),
+        Path("/tmp/day1_b.hdf"): datetime(2024, 1, 1),
+        Path("/tmp/day3.hdf"): datetime(2024, 1, 3),
+    }
+    build_counter = {"count": 0}
+    merge_calls: list[list[str]] = []
+    unlink_calls: list[str] = []
+
+    monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
+    monkeypatch.setattr(mcd_mod, "gdal_available", lambda: True)
+    monkeypatch.setattr(mcd_mod, "_MAX_ONE_SHOT_TEMPORAL_VRT_OUTPUT_BYTES", 0)
+    monkeypatch.setattr(
+        provider,
+        "_read_named_dataset_attrs",
+        lambda _path, dataset_names: {dataset_name: {} for dataset_name in dataset_names},
+    )
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))))
+
+    def _fake_build_virtual_stack_vrt(source_groups, *, group_band_counts, **_kwargs):  # type: ignore[no-untyped-def]
+        index = build_counter["count"]
+        build_counter["count"] += 1
+        return SimpleNamespace(
+            path=f"/vsimem/day_{index}.vrt",
+            cleanup_paths=(f"/vsimem/day_{index}.vrt",),
+            expected_layers=int(sum(group_band_counts)),
+        )
+
+    monkeypatch.setattr(mcd_mod, "_build_virtual_stack_vrt", _fake_build_virtual_stack_vrt)
+    monkeypatch.setattr(
+        mcd_mod,
+        "read_virtual_stack_to_target",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("oversized one-shot VRT should be skipped")),
+    )
+
+    def _fake_merge_requested_payload(
+        day_paths,  # type: ignore[no-untyped-def]
+        *,
+        requested,
+        target_template,
+        **_kwargs,
+    ):
+        merge_calls.append([Path(path).name for path in day_paths])
+        base = 10.0 if "day1" in Path(day_paths[0]).name else 30.0
+        params_values = np.array(
+            [
+                [[[base]], [[base + 1.0]], [[base + 2.0]]],
+                [[[base + 10.0]], [[base + 11.0]], [[base + 12.0]]],
+            ],
+            dtype=np.float32,
+        )
+        unc_values = np.full((len(requested), 1, 1), 0.05, dtype=np.float32)
+        band_coords = [band_coord for band_coord, _ in requested]
+        params = provider._target_array_like(
+            target_template,
+            params_values,
+            dims=("band", "parameter", "y", "x"),
+            coords={
+                "band": xr.IndexVariable("band", band_coords),
+                "parameter": xr.IndexVariable("parameter", ["f0", "f1", "f2"]),
+                "y": target_template.coords["y"],
+                "x": target_template.coords["x"],
+            },
+        )
+        unc = provider._target_array_like(
+            target_template,
+            unc_values,
+            dims=("band", "y", "x"),
+            coords={
+                "band": xr.IndexVariable("band", band_coords),
+                "y": target_template.coords["y"],
+                "x": target_template.coords["x"],
+            },
+        )
+        return provider._pack_payload_stack(params, unc)
+
+    monkeypatch.setattr(provider, "_merge_requested_payload", _fake_merge_requested_payload)
+
+    with caplog.at_level(logging.INFO):
+        temporal = provider._load_temporal_from_granules(
+            [Path("/tmp/day1_a.hdf"), Path("/tmp/day1_b.hdf"), Path("/tmp/day3.hdf")],
+            requested=requested,
+            bounds=(0.0, 0.0, 1.0, 1.0),
+            crs="EPSG:4326",
+            target_resolution=500.0,
+            time_axis=time_axis,
+        )
+
+    assert merge_calls == [["day1_a.hdf", "day1_b.hdf"], ["day3.hdf"]]
+    assert "estimated warped payload" in caplog.text
+    assert "per-day fallback 1/2 day=2024-01-01" in caplog.text
+    assert "per-day fallback 2/2 day=2024-01-03" in caplog.text
     np.testing.assert_allclose(
         temporal.f0.sel(time=np.datetime64("2024-01-01"), band="B02").values,
         np.full((1, 1), 10.0, dtype=np.float32),

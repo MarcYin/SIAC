@@ -747,6 +747,12 @@ class MultiGridSolver:
                     order=1,
                 ).astype(np.float32)
                 cost_arr = cost_arr[: template.shape[0], : template.shape[1]]
+            solver_supported = valid & ~insufficient_support & ~no_observation
+            cost_arr = np.where(
+                solver_supported & np.isfinite(cost_arr),
+                cost_arr,
+                np.nan,
+            ).astype(np.float32, copy=False)
             qa_vars["fitting_cost"] = xr.DataArray(
                 cost_arr,
                 dims=template.dims,

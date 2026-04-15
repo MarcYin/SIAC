@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from siac.adapters.output import ConfiguredOutputWriter
 from siac.adapters.rt import build_rt_model
 from siac.adapters.satellite import detect_sensor, get_preprocessor
+from siac.algorithms.cloud.mask import preferred_cloud_mask_band_names
 from siac.algorithms.correction import AtmosphericCorrector, CorrectionResult
 from siac.algorithms.solver import MultiGridConfig, MultiGridSolver, StagedMultiGridSolver
 from siac.domain.aoi import AOI
@@ -87,7 +88,15 @@ def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[s
     # Solver bands (e.g. B02) and surface-prior query bands (e.g. B11, B12)
     # are loaded lazily at the target resolution when first needed.
     if cloud_mode == "auto":
-        for wl_min, wl_max in ((530.0, 590.0), (630.0, 690.0), (760.0, 900.0)):
+        for color_name, (wl_min, wl_max) in {
+            "green": (530.0, 590.0),
+            "red": (630.0, 690.0),
+            "nir": (760.0, 900.0),
+        }.items():
+            preferred = preferred_cloud_mask_band_names(sensor_config, color_name)
+            if preferred:
+                names.extend(preferred)
+                continue
             names.extend(
                 band.name
                 for band in sensor_config.select_bands_in_range(wl_min, wl_max)

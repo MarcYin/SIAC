@@ -27,6 +27,13 @@ _COLOR_WINDOWS = {
     "red": (630.0, 690.0),
     "nir": (760.0, 900.0),
 }
+_PREFERRED_CLOUD_MASK_BANDS = {
+    "MSI": {
+        "green": ("B03",),
+        "red": ("B04",),
+        "nir": ("B08",),
+    },
+}
 
 
 def classes_to_bool_mask(cloud_classes: xr.DataArray) -> xr.DataArray:
@@ -70,6 +77,16 @@ def _get_toa_band(toa: xr.Dataset, band_name: str) -> xr.DataArray:
         )
     cache[band_name] = loaded
     return _extract_band(loaded)
+
+
+def preferred_cloud_mask_band_names(
+    sensor_config: SensorConfig,
+    color_name: str,
+) -> tuple[str, ...]:
+    sensor_id = str(getattr(sensor_config, "sensor_id", "")).upper()
+    preferred = _PREFERRED_CLOUD_MASK_BANDS.get(sensor_id, {}).get(color_name, ())
+    available = {str(band.name) for band in getattr(sensor_config, "bands", ())}
+    return tuple(name for name in preferred if name in available)
 
 
 def _resample_continuous(
@@ -137,6 +154,18 @@ def _group_band_names(
     sensor_config: SensorConfig,
     color_name: str,
 ) -> list[str]:
+    preferred = preferred_cloud_mask_band_names(sensor_config, color_name)
+    if preferred:
+        names: list[str] = []
+        for name in preferred:
+            try:
+                _get_toa_band(toa, name)
+            except KeyError:
+                continue
+            names.append(name)
+        if names:
+            return names
+
     wl_min, wl_max = _COLOR_WINDOWS[color_name]
     names: list[str] = []
 

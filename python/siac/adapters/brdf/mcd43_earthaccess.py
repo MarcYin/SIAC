@@ -58,6 +58,8 @@ _RequestedBand: TypeAlias = int | SensorBand
 _RequestedBandCoord: TypeAlias = int | str
 _RequestedBandSpec: TypeAlias = tuple[_RequestedBandCoord, ProductBandDefinition]
 _PAYLOAD_FIELDS = ("f0", "f1", "f2", "unc")
+_FLOAT32_NBYTES = np.dtype(np.float32).itemsize
+_MAX_ONE_SHOT_TEMPORAL_VRT_OUTPUT_BYTES = 1024**3
 
 
 def _granule_day(granule: object) -> np.datetime64 | None:
@@ -805,6 +807,44 @@ class _EarthAccessBRDFProvider:
             return build_target_template(bounds, crs, target_resolution), float(target_resolution)
 
     @staticmethod
+    def _virtual_stack_output_bytes(
+        target_template: xr.DataArray,
+        *,
+        expected_layers: int,
+    ) -> int:
+        return (
+            int(target_template.sizes["y"])
+            * int(target_template.sizes["x"])
+            * int(expected_layers)
+            * _FLOAT32_NBYTES
+        )
+
+    def _allow_one_shot_temporal_vrt(
+        self,
+        *,
+        target_template: xr.DataArray,
+        expected_layers: int,
+        label: str,
+    ) -> bool:
+        estimated_bytes = self._virtual_stack_output_bytes(
+            target_template,
+            expected_layers=expected_layers,
+        )
+        if estimated_bytes <= _MAX_ONE_SHOT_TEMPORAL_VRT_OUTPUT_BYTES:
+            return True
+
+        logger.info(
+            "%s %s: estimated warped payload %.2f GiB across %d layer(s) exceeds the %.2f GiB one-shot budget; "
+            "falling back to smaller merges",
+            self._source_name,
+            label,
+            float(estimated_bytes) / (1024.0**3),
+            int(expected_layers),
+            float(_MAX_ONE_SHOT_TEMPORAL_VRT_OUTPUT_BYTES) / (1024.0**3),
+        )
+        return False
+
+    @staticmethod
     def _coerce_sample_day(value: date | datetime | np.datetime64) -> np.datetime64:
         if isinstance(value, np.datetime64):
             return cast("np.datetime64", value.astype("datetime64[D]"))
@@ -1188,10 +1228,21 @@ class _EarthAccessBRDFProvider:
             return daily_values
 
         if temporal_payload is None:
+            available_day_total = int(sum(1 for day in time_axis if grouped_paths.get(day)))
+            completed_days = 0
             for time_index, day in enumerate(time_axis):
                 day_paths = grouped_paths.get(day, [])
                 if not day_paths:
                     continue
+                completed_days += 1
+                logger.info(
+                    "%s temporal BRDF stack: per-day fallback %d/%d day=%s tiles=%d",
+                    self._source_name,
+                    completed_days,
+                    available_day_total,
+                    str(day),
+                    len(day_paths),
+                )
 
                 payload = self._merge_requested_payload(
                     day_paths,
@@ -1749,12 +1800,19 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                     group_band_counts.append(1)
                     entries.append(("qa", time_index, band_index, qa_name))
 
+            expected_layers = int(sum(group_band_counts))
             logger.info(
                 "%s direct temporal VRT payload: source_groups=%d expected_layers=%d",
                 self._source_name,
                 len(source_groups),
-                int(sum(group_band_counts)),
+                expected_layers,
             )
+            if not self._allow_one_shot_temporal_vrt(
+                target_template=target_template,
+                expected_layers=expected_layers,
+                label="direct temporal VRT payload",
+            ):
+                return None
             stacked = read_virtual_stack_to_target(
                 source_groups,
                 group_band_counts=group_band_counts,
@@ -1862,12 +1920,20 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 source_groups.append([day_spec.path])
                 group_band_counts.append(day_spec.expected_layers)
 
+            expected_layers = int(sum(group_band_counts))
             logger.info(
-                "%s daily-payload temporal VRT: available_days=%d requested_bands=%d",
+                "%s daily-payload temporal VRT: available_days=%d requested_bands=%d expected_layers=%d",
                 self._source_name,
                 len(available_days),
                 len(requested),
+                expected_layers,
             )
+            if not self._allow_one_shot_temporal_vrt(
+                target_template=target_template,
+                expected_layers=expected_layers,
+                label="daily-payload temporal VRT",
+            ):
+                return None
             stacked = read_virtual_stack_to_target(
                 source_groups,
                 group_band_counts=group_band_counts,
@@ -2270,12 +2336,19 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 group_band_counts.append(1)
                 entries.append(("qa", time_index, -1, -1, "Status_QA"))
 
+            expected_layers = int(sum(group_band_counts))
             logger.info(
                 "%s direct temporal VRT payload: source_groups=%d expected_layers=%d",
                 self._source_name,
                 len(source_groups),
-                int(sum(group_band_counts)),
+                expected_layers,
             )
+            if not self._allow_one_shot_temporal_vrt(
+                target_template=target_template,
+                expected_layers=expected_layers,
+                label="direct temporal VRT payload",
+            ):
+                return None
             stacked = read_virtual_stack_to_target(
                 source_groups,
                 group_band_counts=group_band_counts,
@@ -2382,12 +2455,20 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 source_groups.append([day_spec.path])
                 group_band_counts.append(day_spec.expected_layers)
 
+            expected_layers = int(sum(group_band_counts))
             logger.info(
-                "%s daily-payload temporal VRT: available_days=%d requested_bands=%d shared_qa=yes",
+                "%s daily-payload temporal VRT: available_days=%d requested_bands=%d shared_qa=yes expected_layers=%d",
                 self._source_name,
                 len(available_days),
                 len(requested),
+                expected_layers,
             )
+            if not self._allow_one_shot_temporal_vrt(
+                target_template=target_template,
+                expected_layers=expected_layers,
+                label="daily-payload temporal VRT",
+            ):
+                return None
             stacked = read_virtual_stack_to_target(
                 source_groups,
                 group_band_counts=group_band_counts,
