@@ -166,24 +166,59 @@ impl RossThickLiSparse {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use std::f64::consts::FRAC_PI_4;
 
     #[test]
-    fn test_nadir_viewing() {
+    fn test_nadir_nadir_known_answer() {
+        // At vza=sza=0 (sun and sensor both at nadir), the BRDF kernels have
+        // closed-form analytical values independent of raa:
+        //   Ross-Thick = -π/4   (from the standard MCD43 formulation)
+        //   Li-Sparse  =  0     (all prime angles collapse to 0)
         let kernel = RossThickLiSparse::new(2.0, 1.0);
-        let (ross, li) = kernel.compute_single(0.0, 0.5, 0.0);
-
-        // At nadir VZA, Li kernel should be approximately 0
-        assert!(li.abs() < 0.5);
+        let (ross, li) = kernel.compute_single(0.0, 0.0, 0.0);
+        assert_relative_eq!(ross, -FRAC_PI_4, epsilon = 1e-10);
+        assert_relative_eq!(li, 0.0, epsilon = 1e-10);
     }
 
     #[test]
-    fn test_kernel_symmetry() {
+    fn test_raa_symmetry() {
+        // Both kernels depend only on |raa| (cos(raa) and sin(raa_abs));
+        // flipping the sign of raa must leave the kernel values unchanged.
         let kernel = RossThickLiSparse::new(2.0, 1.0);
-
         let (ross_pos, li_pos) = kernel.compute_single(0.3, 0.5, 0.5);
         let (ross_neg, li_neg) = kernel.compute_single(0.3, 0.5, -0.5);
-
         assert_relative_eq!(ross_pos, ross_neg, epsilon = 1e-10);
         assert_relative_eq!(li_pos, li_neg, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_outputs_finite_over_geometry_grid() {
+        // Guard against NaN/Inf for representative view/solar geometries.
+        let kernel = RossThickLiSparse::new(2.0, 1.0);
+        for sza_deg in [0.0f64, 15.0, 30.0, 45.0, 60.0, 75.0] {
+            for vza_deg in [0.0f64, 15.0, 30.0, 45.0, 60.0] {
+                for raa_deg in [0.0f64, 45.0, 90.0, 135.0, 180.0] {
+                    let (ross, li) = kernel.compute_single(
+                        vza_deg.to_radians(),
+                        sza_deg.to_radians(),
+                        raa_deg.to_radians(),
+                    );
+                    assert!(ross.is_finite(), "ross not finite at sza={sza_deg} vza={vza_deg} raa={raa_deg}");
+                    assert!(li.is_finite(), "li not finite at sza={sza_deg} vza={vza_deg} raa={raa_deg}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_br_scaling_affects_li_only() {
+        // The br (crown-height) parameter only enters the Li-Sparse kernel.
+        // Ross-Thick is independent of br; Li-Sparse must change.
+        let k_ref = RossThickLiSparse::new(2.0, 1.0);
+        let k_tall = RossThickLiSparse::new(2.0, 2.5);
+        let (ross_ref, li_ref) = k_ref.compute_single(0.4, 0.6, 0.5);
+        let (ross_tall, li_tall) = k_tall.compute_single(0.4, 0.6, 0.5);
+        assert_relative_eq!(ross_ref, ross_tall, epsilon = 1e-12);
+        assert!((li_ref - li_tall).abs() > 1e-6, "Li kernel should depend on br");
     }
 }

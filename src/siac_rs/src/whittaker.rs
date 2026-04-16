@@ -21,6 +21,51 @@ fn second_difference_penalty(n_time: usize, lambda: f64) -> DMatrix<f64> {
     (d2.transpose() * d2) * lambda
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn penalty_zero_for_short_series() {
+        // With fewer than 3 time steps the second-difference operator is
+        // undefined; penalty matrix must collapse to zero so the solver
+        // reduces to weighted least squares.
+        let p = second_difference_penalty(2, 10.0);
+        assert_eq!(p.shape(), (2, 2));
+        assert!(p.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn penalty_structure_is_tridiagonal_like() {
+        // D2^T D2 produces a pentadiagonal symmetric matrix with known
+        // interior row pattern [1, -4, 6, -4, 1] scaled by lambda.
+        let p = second_difference_penalty(5, 1.0);
+        assert_relative_eq!(p[(2, 0)], 1.0, epsilon = 1e-12);
+        assert_relative_eq!(p[(2, 1)], -4.0, epsilon = 1e-12);
+        assert_relative_eq!(p[(2, 2)], 6.0, epsilon = 1e-12);
+        assert_relative_eq!(p[(2, 3)], -4.0, epsilon = 1e-12);
+        assert_relative_eq!(p[(2, 4)], 1.0, epsilon = 1e-12);
+        // Symmetric.
+        for i in 0..5 {
+            for j in 0..5 {
+                assert_relative_eq!(p[(i, j)], p[(j, i)], epsilon = 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn penalty_scales_linearly_with_lambda() {
+        let a = second_difference_penalty(6, 1.0);
+        let b = second_difference_penalty(6, 7.5);
+        for i in 0..6 {
+            for j in 0..6 {
+                assert_relative_eq!(b[(i, j)], 7.5 * a[(i, j)], epsilon = 1e-12);
+            }
+        }
+    }
+}
+
 /// Apply Whittaker smoothing along the time axis of a `(time, band, y, x)` cube.
 #[pyfunction]
 pub fn whittaker_smooth_cube<'py>(

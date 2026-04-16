@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from rasterio.warp import transform_bounds
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from rasterio.crs import CRS
@@ -131,7 +134,8 @@ def _cloud_cover_percent(mask: Any) -> float | None:
 def _native_bounds(first_band: Any, fallback_bounds: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     try:
         return tuple(map(float, first_band.rio.bounds()))
-    except Exception:
+    except (AttributeError, ValueError, RuntimeError, OSError) as exc:
+        logger.debug("rio.bounds() unavailable, using fallback bounds: %s", exc)
         return tuple(map(float, fallback_bounds))
 
 
@@ -165,22 +169,24 @@ def _proj_properties(first_band: Any, native_bounds: tuple[float, float, float, 
     }
     try:
         epsg = first_band.rio.crs.to_epsg()
-    except Exception:
+    except (AttributeError, ValueError, RuntimeError) as exc:
+        logger.debug("rio.crs.to_epsg() unavailable: %s", exc)
         epsg = None
     if epsg is not None:
         props["proj:epsg"] = int(epsg)
     try:
         transform = first_band.rio.transform()
         props["proj:transform"] = [float(v) for v in transform[:6]]
-    except Exception:
-        pass
+    except (AttributeError, ValueError, RuntimeError) as exc:
+        logger.debug("rio.transform() unavailable: %s", exc)
     return props
 
 
 def _gsd(first_band: Any) -> float | None:
     try:
         res_x, res_y = first_band.rio.resolution()
-    except Exception:
+    except (AttributeError, ValueError, RuntimeError) as exc:
+        logger.debug("rio.resolution() unavailable: %s", exc)
         return None
     if not np.isfinite(res_x) or not np.isfinite(res_y):
         return None

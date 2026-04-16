@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
     from siac.domain import SensorBand
 
+__all__ = ["ZarrLUTBackend"]
+
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 

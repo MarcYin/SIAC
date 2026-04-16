@@ -23,6 +23,8 @@ from scipy.ndimage import (
     zoom,
 )
 
+__all__ = ["assemble_grids"]
+
 from siac.adapters.data.water_mask import load_water_mask_subset
 from siac.geo.resample import shares_template_grid
 from siac.runtime import (

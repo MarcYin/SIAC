@@ -52,6 +52,28 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+__all__ = [
+    "build_monthly_composites_from_brdf",
+    "build_monthly_surface_prior_database",
+    "generate_monthly_composites_from_brdf",
+    "query_surface_prior_from_monthly_database",
+    "resample_geometry_for_surface_prior",
+]
+
+# Pure grid/resampling helpers live in a companion module; import them here
+# so the original call sites continue to work without changes.
+# F401 suppressions mark intentionally re-exported names (used transitively
+# by the resample helpers above) that may not appear in this file directly.
+from siac.algorithms.surface._swir_refine_resample import (  # noqa: E402
+    _deduplicate_bands,
+    _is_coarser_target_grid,  # noqa: F401
+    _monthly_composite_downsample_method,
+    _resample_band_cube_to_template,
+    _resample_brdf_weights_to_template,
+    _resample_spatial_field_to_template,
+    _shares_spatial_grid,  # noqa: F401
+)
+
 logger = logging.getLogger(__name__)
 
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
@@ -953,114 +975,8 @@ def _reflectance_from_kernel_weights(
     return reflectance.astype(np.float32), reflectance_unc.astype(np.float32)
 
 
-def _resample_brdf_weights_to_template(
-    weights: BRDFKernelWeights,
-    template: xr.DataArray,
-    *,
-    method: str,
-) -> BRDFKernelWeights:
-    return BRDFKernelWeights(
-        f0=_resample_band_cube_to_template(weights.f0, template, method),
-        f1=_resample_band_cube_to_template(weights.f1, template, method),
-        f2=_resample_band_cube_to_template(weights.f2, template, method),
-        f0_unc=_resample_band_cube_to_template(weights.f0_unc, template, method),
-        f1_unc=_resample_band_cube_to_template(weights.f1_unc, template, method),
-        f2_unc=_resample_band_cube_to_template(weights.f2_unc, template, method),
-        reflectance_unc=(
-            _resample_band_cube_to_template(weights.reflectance_unc, template, method)
-            if weights.reflectance_unc is not None
-            else None
-        ),
-    )
-
-
-def _monthly_composite_downsample_method(
-    composite: MonthlyBestPixelComposite | MonthlyKernelWeightComposite,
-    template: xr.DataArray,
-) -> str:
-    if isinstance(composite, MonthlyKernelWeightComposite):
-        source = composite.kernels.f0
-    else:
-        source = composite.reflectance
-    if _is_coarser_target_grid(source, template):
-        return "area"
-    return "bilinear"
-
-
-def _is_coarser_target_grid(
-    source: xr.DataArray,
-    template: xr.DataArray,
-) -> bool:
-    source_height = int(source.sizes.get("y", 0))
-    source_width = int(source.sizes.get("x", 0))
-    target_height = int(template.sizes.get("y", 0))
-    target_width = int(template.sizes.get("x", 0))
-    return source_height > target_height or source_width > target_width
-
-
-def _resample_band_cube_to_template(
-    data: xr.DataArray,
-    template: xr.DataArray,
-    method: str,
-) -> xr.DataArray:
-    if _shares_spatial_grid(data, template):
-        return copy_spatial_metadata_like(data.astype(np.float32), template)
-
-    target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
-    band_coords = data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
-    resampled = xr.concat(
-        [
-            _resample_da(data.sel(band=band, drop=True), target_shape, method, template=template)
-            for band in band_coords
-        ],
-        dim=xr.IndexVariable("band", band_coords),
-    )
-    coords: dict[str, object] = {"band": band_coords}
-    if "y" in template.coords:
-        coords["y"] = template.coords["y"]
-    if "x" in template.coords:
-        coords["x"] = template.coords["x"]
-    return copy_spatial_metadata_like(resampled.assign_coords(**coords).astype(np.float32), template)
-
-
-def _resample_spatial_field_to_template(
-    data: xr.DataArray,
-    template: xr.DataArray,
-    method: str,
-) -> xr.DataArray:
-    if _shares_spatial_grid(data, template):
-        return copy_spatial_metadata_like(data.astype(np.float32), template)
-    target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
-    resampled = _resample_da(data, target_shape, method, template=template)
-    coords: dict[str, object] = {}
-    if "y" in template.coords:
-        coords["y"] = template.coords["y"]
-    if "x" in template.coords:
-        coords["x"] = template.coords["x"]
-    return copy_spatial_metadata_like(resampled.assign_coords(**coords).astype(np.float32), template)
-
-
-def _shares_spatial_grid(data: xr.DataArray, template: xr.DataArray) -> bool:
-    if data.sizes.get("y") != template.sizes.get("y") or data.sizes.get("x") != template.sizes.get("x"):
-        return False
-    if "y" in data.coords and "y" in template.coords and not np.array_equal(
-        np.asarray(data.coords["y"].values),
-        np.asarray(template.coords["y"].values),
-    ):
-        return False
-    if "x" in data.coords and "x" in template.coords and not np.array_equal(
-        np.asarray(data.coords["x"].values),
-        np.asarray(template.coords["x"].values),
-    ):
-        return False
-    return not (
-        "x" in data.coords
-        and "x" in template.coords
-        and not np.array_equal(
-            np.asarray(data.coords["x"].values),
-            np.asarray(template.coords["x"].values),
-        )
-    )
+# The pure grid-alignment helpers now live in a companion module; they are
+# re-imported below at module top level via `_swir_refine_resample`.
 
 
 def _select_temporal_weights_for_month(
@@ -1134,17 +1050,6 @@ def _select_temporal_weight_indexer(
             else None
         ),
     )
-
-
-def _deduplicate_bands(bands: collections.abc.Sequence[SensorBand]) -> list[SensorBand]:
-    seen: set[str] = set()
-    ordered: list[SensorBand] = []
-    for band in bands:
-        if band.name in seen:
-            continue
-        seen.add(band.name)
-        ordered.append(band)
-    return ordered
 
 
 def _native_observation_resolution(observation: ObservationBundle) -> float:

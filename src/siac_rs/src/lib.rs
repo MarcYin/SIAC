@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 mod emulator;
 mod kernels;
 mod optimization;
+mod optimization_grid;
 mod psf;
 mod whittaker;
 
@@ -27,9 +28,9 @@ fn _rust(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<emulator::TwoLayerNN>()?;
 
     // Optimization utilities
-    m.add_function(wrap_pyfunction!(optimization::remap_to_coarse_grid, m)?)?;
-    m.add_function(wrap_pyfunction!(optimization::interpolate_to_fine_grid, m)?)?;
-    m.add_function(wrap_pyfunction!(optimization::apply_laplacian, m)?)?;
+    m.add_function(wrap_pyfunction!(optimization_grid::remap_to_coarse_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(optimization_grid::interpolate_to_fine_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(optimization_grid::apply_laplacian, m)?)?;
     m.add_function(wrap_pyfunction!(
         optimization::evaluate_grid_search_candidate_cost,
         m

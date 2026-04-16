@@ -482,17 +482,20 @@ class CAMSProvider:
 
         try:
             import rioxarray  # noqa: F401
-        except Exception:
+        except ImportError as exc:
+            logger.debug("rioxarray unavailable, skipping CAMS geographic metadata: %s", exc)
             return var
 
         try:
             out = var.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
-        except Exception:
+        except (AttributeError, ValueError, RuntimeError) as exc:
+            logger.debug("rio.set_spatial_dims failed on CAMS variable: %s", exc)
             return var
 
         try:
             source_crs = out.rio.crs
-        except Exception:
+        except (AttributeError, ValueError, RuntimeError) as exc:
+            logger.debug("rio.crs accessor failed on CAMS variable: %s", exc)
             source_crs = None
         if source_crs is None:
             out = out.rio.write_crs("EPSG:4326")

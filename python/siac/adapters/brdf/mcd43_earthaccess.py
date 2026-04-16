@@ -48,6 +48,12 @@ if TYPE_CHECKING:
 
     from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 
+__all__ = [
+    "MCD19EarthAccessProvider",
+    "MCD43EarthAccessProvider",
+    "VNP43EarthAccessProvider",
+]
+
 logger = logging.getLogger(__name__)
 
 # HDF4/HDF5 libraries raise their own exception types on I/O failures.

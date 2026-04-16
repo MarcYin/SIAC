@@ -29,6 +29,7 @@ num-traits = "0.2"
 
 [dev-dependencies]
 criterion = "0.5"
+approx = "0.5"
 
 [[bench]]
 name = "kernels"
@@ -38,3 +39,18 @@ harness = false
 lto = true
 codegen-units = 1
 opt-level = 3
+
+[lints.rust]
+unused_must_use = "deny"
+# Note: `rust_2018_idioms` is intentionally NOT enabled because the existing
+# PyO3 0.20 signatures use `<'py>` lifetimes that would trigger its
+# `elided_lifetimes_in_paths` check throughout the crate. Revisit when the
+# crate upgrades to PyO3 0.21+.
+
+[lints.clippy]
+# Baseline lint levels — escalate only the ones that catch real bugs.
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+# Pedantic is noisy — keep it opt-in per module if/when we want it.
+pedantic = { level = "allow", priority = -2 }

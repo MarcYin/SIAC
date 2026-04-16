@@ -121,3 +121,68 @@ impl PSFConvolver {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+    use ndarray::Array2;
+
+    #[test]
+    fn convolution_preserves_constant_field() {
+        // A separable Gaussian filter with weight-normalised edge handling
+        // must reproduce a uniform input exactly (sum of weights cancels).
+        let conv = PSFConvolver::new(1.5, 2.0);
+        let image = Array2::from_elem((12, 10), 0.42_f64);
+        let out = conv.dct_convolve(image.view());
+        for v in out.iter() {
+            assert_relative_eq!(*v, 0.42, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn convolution_preserves_shape() {
+        let conv = PSFConvolver::new(1.0, 1.5);
+        let image = Array2::<f64>::zeros((7, 5));
+        let out = conv.dct_convolve(image.view());
+        assert_eq!(out.shape(), image.shape());
+    }
+
+    #[test]
+    fn nan_pixels_are_ignored_in_weighted_mean() {
+        // A single NaN in an otherwise-uniform field must not contaminate
+        // output values: finite-only weighted averaging gives back the
+        // underlying constant at every output pixel.
+        let conv = PSFConvolver::new(1.0, 1.0);
+        let mut image = Array2::from_elem((6, 6), 1.0_f64);
+        image[[3, 3]] = f64::NAN;
+        let out = conv.dct_convolve(image.view());
+        for v in out.iter() {
+            assert!(v.is_finite(), "output must be finite despite input NaN");
+            assert_relative_eq!(*v, 1.0, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn all_nan_input_produces_all_nan_output() {
+        let conv = PSFConvolver::new(1.0, 1.0);
+        let image = Array2::from_elem((4, 4), f64::NAN);
+        let out = conv.dct_convolve(image.view());
+        assert!(out.iter().all(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn impulse_broadens_with_larger_sigma() {
+        // A point source should spread over a wider area as sigma increases.
+        // Compare the central-row sum of two convolutions: the wider kernel
+        // will push more mass away from the impulse column.
+        let mut image = Array2::<f64>::zeros((11, 11));
+        image[[5, 5]] = 1.0;
+        let narrow = PSFConvolver::new(0.8, 0.8).dct_convolve(image.view());
+        let wide = PSFConvolver::new(2.5, 2.5).dct_convolve(image.view());
+        assert!(
+            narrow[[5, 5]] > wide[[5, 5]],
+            "narrow PSF should leave more mass at the impulse center"
+        );
+    }
+}

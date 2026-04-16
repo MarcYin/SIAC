@@ -32,6 +32,8 @@ from siac.storage.readers import read_raster, read_raster_window
 if TYPE_CHECKING:
     from siac.domain import SensorConfig
 
+__all__ = ["Sentinel2Preprocessor"]
+
 logger = logging.getLogger(__name__)
 _TOA_BAND_LOADER_ATTR = "_siac_toa_band_loader"
 

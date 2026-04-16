@@ -150,55 +150,82 @@ impl TwoLayerNN {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
+    use approx::assert_relative_eq;
 
-    #[test]
-    fn test_forward_shape() {
-        // Create a small test network
-        let w1 = Array2::ones((7, 8));
-        let b1 = Array1::zeros(8);
-        let w2 = Array2::ones((8, 8));
-        let b2 = Array1::zeros(8);
-        let w3 = Array2::ones((8, 1));
-        let b3 = Array1::zeros(1);
-
-        let nn = TwoLayerNN {
-            w1,
-            b1,
-            w2,
-            b2,
-            w3,
-            b3,
-        };
-
-        let x = Array2::ones((10, 7));
-        let (output, _) = nn.forward(x.view(), false);
-
-        assert_eq!(output.shape(), &[10, 1]);
+    fn ones_network(input: usize, h1: usize, h2: usize, output: usize) -> TwoLayerNN {
+        TwoLayerNN {
+            w1: Array2::ones((input, h1)),
+            b1: Array1::zeros(h1),
+            w2: Array2::ones((h1, h2)),
+            b2: Array1::zeros(h2),
+            w3: Array2::ones((h2, output)),
+            b3: Array1::zeros(output),
+        }
     }
 
     #[test]
-    fn test_jacobian_shape() {
-        let w1 = Array2::ones((7, 8));
-        let b1 = Array1::zeros(8);
-        let w2 = Array2::ones((8, 8));
-        let b2 = Array1::zeros(8);
-        let w3 = Array2::ones((8, 1));
-        let b3 = Array1::zeros(1);
+    fn forward_shape() {
+        let nn = ones_network(7, 8, 8, 1);
+        let x = Array2::ones((10, 7));
+        let (output, jac) = nn.forward(x.view(), false);
+        assert_eq!(output.shape(), &[10, 1]);
+        assert!(jac.is_none());
+    }
 
-        let nn = TwoLayerNN {
-            w1,
-            b1,
-            w2,
-            b2,
-            w3,
-            b3,
-        };
-
+    #[test]
+    fn jacobian_shape() {
+        let nn = ones_network(7, 8, 8, 1);
         let x = Array2::ones((10, 7));
         let (_, jacobian) = nn.forward(x.view(), true);
+        let j = jacobian.expect("jacobian requested");
+        assert_eq!(j.shape(), &[10, 1, 7]);
+    }
 
-        assert!(jacobian.is_some());
-        assert_eq!(jacobian.unwrap().shape(), &[10, 1, 7]);
+    #[test]
+    fn architecture_matches_weights() {
+        let nn = ones_network(5, 12, 9, 3);
+        assert_eq!(nn.get_architecture(), (5, 12, 9, 3));
+    }
+
+    #[test]
+    fn all_ones_network_known_answer() {
+        // Network with all-ones weights and zero biases, ReLU activations,
+        // and a positive input of all ones: every activation is positive so
+        // ReLU is a no-op. Then the forward pass collapses to repeated
+        // matmuls of ones, giving output = input_dim * h1 * h2.
+        let (input_dim, h1, h2) = (4, 5, 6);
+        let nn = ones_network(input_dim, h1, h2, 1);
+        let x = Array2::ones((1, input_dim));
+        let (out, _) = nn.forward(x.view(), false);
+        let expected = (input_dim as f32) * (h1 as f32) * (h2 as f32);
+        assert_relative_eq!(out[[0, 0]], expected, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn negative_input_silenced_by_relu() {
+        // Purely negative pre-activation (through non-positive biases) should
+        // produce zero output via ReLU-ReLU-linear path.
+        let mut nn = ones_network(3, 4, 4, 2);
+        nn.b1.fill(-1000.0);
+        nn.b2.fill(-1000.0);
+        let x = Array2::ones((2, 3));
+        let (out, _) = nn.forward(x.view(), false);
+        for v in out.iter() {
+            assert_relative_eq!(*v, 0.0, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn jacobian_zero_when_relu_dead() {
+        // If the network is fully saturated at zero, gradients must be zero.
+        let mut nn = ones_network(3, 4, 4, 2);
+        nn.b1.fill(-1000.0);
+        nn.b2.fill(-1000.0);
+        let x = Array2::ones((2, 3));
+        let (_, jacobian) = nn.forward(x.view(), true);
+        let j = jacobian.expect("jacobian requested");
+        for v in j.iter() {
+            assert_relative_eq!(*v, 0.0, epsilon = 1e-12);
+        }
     }
 }

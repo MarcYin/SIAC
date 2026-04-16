@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,8 @@ from siac.geo.reprojection import reproject_match
 from siac.runtime import BRDFKernelWeights
 from siac.runtime.models import copy_spatial_metadata_like
 from siac.storage.writers import write_raster
+
+logger = logging.getLogger(__name__)
 
 _MANIFEST_NAME = "manifest.json"
 _STORE_VERSION = 3
@@ -629,7 +632,8 @@ def _tiff_block_size(length: int) -> int:
 def _data_array_crs(data: xr.DataArray) -> str | None:
     try:
         return str(data.rio.crs) if data.rio.crs is not None else None
-    except Exception:
+    except (AttributeError, ValueError, RuntimeError) as exc:
+        logger.debug("rio.crs accessor failed on DataArray: %s", exc)
         return None
 
 
@@ -820,7 +824,12 @@ def _load_existing_store_entry_paths(root: Path) -> set[str]:
         return set()
     try:
         manifest = read_monthly_composite_store_manifest(root)
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+        logger.warning(
+            "Could not read existing monthly composite manifest at %s (%s: %s); "
+            "treating store as empty, stale entries will not be cleaned up.",
+            manifest_path, type(exc).__name__, exc,
+        )
         return set()
     return {entry.path for entry in manifest.entries}
 
@@ -884,7 +893,8 @@ def _infer_grid_from_data(data: xr.DataArray) -> MonthlyCompositeStoreGridSpec |
 
     try:
         crs = str(data.rio.crs) if data.rio.crs is not None else None
-    except Exception:
+    except (AttributeError, ValueError, RuntimeError) as exc:
+        logger.debug("rio.crs accessor failed while inferring grid: %s", exc)
         crs = None
     if crs is None:
         return None

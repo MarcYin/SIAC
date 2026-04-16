@@ -301,8 +301,10 @@ def fill_nonfinite_like_template(
             )
             nearest_values = np.asarray(nearest.values, dtype=np.float32)
             filled = np.where(np.isfinite(filled), filled, nearest_values)
-        except Exception:
-            pass
+        except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+            logger.debug(
+                "Nearest-neighbor interp fallback failed; will use source-mean fill: %s", exc
+            )
 
     if not np.all(np.isfinite(filled)):
         source_values = np.asarray(source.values, dtype=np.float32)
