@@ -389,6 +389,10 @@ Relevant knobs:
 - `chunk_size`
 - `native_threads`
 
+If the runtime cannot create isolated module copies because of filesystem
+permissions, SIAC logs a warning and falls back to the OpenMP path instead of
+failing the whole run.
+
 ## Output Variables
 
 `output_variables` accepts any of the currently supported native names below.
@@ -497,6 +501,11 @@ parallel_backend = "worker_libraries"
 worker_libraries = 4
 chunk_size = 4096
 ```
+
+If the worker-library path still cannot create isolated native module copies in
+the configured filesystem location, SIAC warns and falls back to the OpenMP
+path. In that situation, either use a writable build/module directory or stay
+on the default OpenMP backend explicitly.
 
 ### Native backend returns some all-`NaN` pixels
 
