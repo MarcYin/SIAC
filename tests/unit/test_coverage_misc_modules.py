@@ -171,7 +171,7 @@ class TestExceptionsAndStubs:
             assert issubclass(exc, SIACError)
 
     def test_rt_direct_module(self):
-        assert direct_all == []
+        assert direct_all == ["SixSBackend"]
 
     def test_cdse_and_gcs_backends(self, tmp_path: Path, monkeypatch):
         query = S2Query(
