@@ -8,7 +8,7 @@ resolution, and snapshotting live in sibling modules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -699,13 +699,18 @@ class SixSAlgorithmConfig(SIACBaseModel):
             return None
         if len(series) != 4:
             raise ValueError("sixs.aerosol_mixture must contain four components: dust, water, oceanic, soot.")
-        return tuple(float(item) for item in series)
+        return (
+            float(series[0]),
+            float(series[1]),
+            float(series[2]),
+            float(series[3]),
+        )
 
     @field_validator("output_variables", mode="before")
     @classmethod
     def normalize_output_variables(cls, value: Any) -> tuple[str, ...]:
         if value is None:
-            return SIXS_DEFAULT_OUTPUT_VARIABLES
+            return cast("tuple[str, ...]", SIXS_DEFAULT_OUTPUT_VARIABLES)
         items = [value] if isinstance(value, str) else list(value)
         normalized: list[str] = []
         for item in items:

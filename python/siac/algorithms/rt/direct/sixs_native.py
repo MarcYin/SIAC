@@ -1065,6 +1065,7 @@ class SixSNativeRunner:
         self._observation_time: datetime | None = None
         self._openmp_session: _SixSExtensionModule | None = None
         self._worker_sessions: list[_SixSExtensionModule] = []
+        self._worker_sessions_available: bool | None = None
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
         self._observation_time = observation_time
@@ -1076,6 +1077,7 @@ class SixSNativeRunner:
         for session in self._worker_sessions:
             session.close()
         self._worker_sessions = []
+        self._worker_sessions_available = None
 
     def __del__(self) -> None:
         self.close()
@@ -1328,18 +1330,35 @@ class SixSNativeRunner:
 
     def _ensure_openmp_session(self) -> _SixSExtensionModule:
         if self._openmp_session is None:
-            self._openmp_session = _SixSExtensionModule(self._module_path, isolate=True)
+            try:
+                self._openmp_session = _SixSExtensionModule(self._module_path, isolate=True)
+            except PermissionError:
+                logger.warning(
+                    "Could not create an isolated native 6S OpenMP session; loading the compiled module in place."
+                )
+                self._openmp_session = _SixSExtensionModule(self._module_path, isolate=False)
         return self._openmp_session
 
     def _ensure_worker_sessions(self, worker_count: int) -> list[_SixSExtensionModule]:
+        if self._worker_sessions_available is False:
+            return []
         if len(self._worker_sessions) == worker_count and worker_count > 0:
             return self._worker_sessions
         for session in self._worker_sessions:
             session.close()
-        self._worker_sessions = [
-            _SixSExtensionModule(self._module_path, isolate=True)
-            for _ in range(max(1, worker_count))
-        ]
+        try:
+            self._worker_sessions = [
+                _SixSExtensionModule(self._module_path, isolate=True)
+                for _ in range(max(1, worker_count))
+            ]
+        except PermissionError:
+            self._worker_sessions = []
+            self._worker_sessions_available = False
+            logger.warning(
+                "Could not create isolated native 6S worker sessions; falling back to OpenMP execution."
+            )
+            return []
+        self._worker_sessions_available = True
         return self._worker_sessions
 
     def _worker_library_count(self) -> int:
@@ -1373,6 +1392,9 @@ class SixSNativeRunner:
         chunks = [(start, min(start + chunk_size, n_cases)) for start in range(0, n_cases, chunk_size)]
         worker_count = min(len(chunks), self._worker_library_count())
         sessions = self._ensure_worker_sessions(worker_count)
+        if not sessions:
+            extension = self._ensure_openmp_session()
+            return extension.run_batch(n_threads=self._native_threads, **kwargs)
         outputs = _empty_output_bundle(n_cases)
         status = np.zeros(n_cases, dtype=np.int32)
         assignments: list[list[tuple[int, int]]] = [[] for _ in range(worker_count)]
