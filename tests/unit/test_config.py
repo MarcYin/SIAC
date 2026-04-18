@@ -21,6 +21,7 @@ from siac.config import (
     RunRequest,
     S2DataAccessConfig,
     SIACConfig,
+    SixSAlgorithmConfig,
     SolverConfig,
     get_jasmin_config,
     get_lut_config,
@@ -28,6 +29,7 @@ from siac.config import (
     overlay_env_secrets,
 )
 from siac.config.schema import SharpTransitionFilterConfig
+from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES
 
 
 class TestSIACConfig:
@@ -340,6 +342,86 @@ class TestCloudMaskConfig:
     def test_resolution_policy_choices(self):
         cfg = CloudMaskConfig(resolution_policy="force")
         assert cfg.resolution_policy == "force"
+
+
+class TestSixSConfig:
+    def test_default_profile_uses_user_water_ozone(self):
+        cfg = SixSAlgorithmConfig()
+
+        assert cfg.atmospheric_profile == "user_water_ozone"
+        assert cfg.build_profile == "release"
+        assert cfg.parallel_backend == "openmp"
+        assert cfg.output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
+
+    def test_output_variables_normalize_and_deduplicate(self):
+        cfg = SixSAlgorithmConfig(output_variables=["xap", "tgasm", "tgasm", "sutott", "rooceaw"])
+
+        assert cfg.output_variables == ("xap", "tgasm", "sutott", "rooceaw")
+
+    def test_custom_aerosol_requires_mixture(self):
+        with pytest.raises(ValueError, match="aerosol_mixture must be provided"):
+            SixSAlgorithmConfig(aerosol_profile="user_mixture")
+
+    def test_py6s_aliases_normalize_profiles_and_components(self, tmp_path):
+        cfg = SixSAlgorithmConfig(
+            atmospheric_profile="from_latitude_and_date",
+            atmospheric_profile_latitude=51.5,
+            aerosol_profile="user",
+            aerosol_mixture={"dust": 0.55, "water": 0.3, "oceanic": 0.05, "soot": 0.1},
+        )
+
+        assert cfg.atmospheric_profile == "auto_latitude_date"
+        assert cfg.aerosol_profile == "user_mixture"
+        assert cfg.aerosol_mixture == (0.55, 0.3, 0.05, 0.1)
+
+        mie_cfg = SixSAlgorithmConfig(
+            aerosol_profile="from_mie_file",
+            mie_file_path=tmp_path / "sample.mie",
+        )
+
+        assert mie_cfg.aerosol_profile == "user_model"
+        assert mie_cfg.aerosol_model_path == tmp_path / "sample.mie"
+
+    def test_radiosonde_alias_fields_are_accepted(self):
+        levels = tuple(float(index) for index in range(34))
+        cfg = SixSAlgorithmConfig(
+            atmospheric_profile="radiosonde",
+            radiosonde_profile={
+                "altitude": levels,
+                "pressure": levels,
+                "temperature": levels,
+                "water": levels,
+                "ozone": levels,
+            },
+        )
+
+        assert cfg.atmospheric_profile == "user_profile"
+        assert cfg.radiosonde_profile is not None
+        assert cfg.radiosonde_profile.altitude_km == levels
+
+    def test_user_aerosol_model_requires_path(self):
+        with pytest.raises(ValueError, match="aerosol_model_path must be provided"):
+            SixSAlgorithmConfig(aerosol_profile="user_model")
+
+    def test_siac_config_accepts_native_sixs_backend(self):
+        cfg = SIACConfig(
+            algorithms={
+                "rt": {
+                    "backend": "sixs",
+                    "sixs": {
+                        "mode": "direct",
+                        "atmospheric_profile": "tropical",
+                        "aerosol_profile": "continental",
+                        "output_variables": ["xap", "xbp", "xcp", "tgasm", "sutott"],
+                    },
+                }
+            }
+        )
+
+        assert cfg.rt_model.backend == "sixs"
+        assert cfg.rt_model.sixs.mode == "direct"
+        assert cfg.rt_model.sixs.atmospheric_profile == "tropical"
+        assert cfg.rt_model.sixs.output_variables == ("xap", "xbp", "xcp", "tgasm", "sutott")
 
 
 class TestExecutionConfig:

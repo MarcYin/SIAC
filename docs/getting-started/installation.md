@@ -67,6 +67,52 @@ Use this only when you specifically want a non-Pixi environment.
 - `.[gee]` for Google Earth Engine support
 - `.[py6s]` for the Py6S radiative transfer backend
 
+## Native 6S Backend Setup
+
+The native `sixs` backend is separate from the optional Py6S dependency.
+
+Use the native backend when you set:
+
+```toml
+[algorithms.rt]
+backend = "sixs"
+```
+
+### Requirements
+
+Native 6S requires:
+
+- a Fortran compiler
+- `meson`
+- `ninja`
+
+The repository provides these through the Pixi `rt6s` environment/feature.
+
+### Recommended Path
+
+```bash
+pixi install
+pixi run -e rt6s build-6s-native
+```
+
+This builds the compiled Python extension used by the native backend.
+
+### Manual Path
+
+If you already have the compiler toolchain in a non-Pixi environment:
+
+```bash
+python tools/build_6s_native.py
+```
+
+`tools/build_6s_native.py` supports `--source-dir`, `--build-dir`,
+`--compiler`, and `--build-profile`.
+
+### Important Distinction
+
+`pip install -e ".[py6s]"` enables the separate `py6s` backend only. It does
+not install or build the native 6SV2.1 backend.
+
 ## Common installation issues
 
 ### Rust extension not built
@@ -85,3 +131,14 @@ Prefer the Pixi environment when GDAL, rasterio, or JP2 support is difficult to 
 ### Optional backend not available
 
 Some workflows require extra dependencies or credentials. Install the relevant optional extras and configure the matching auth variables before running remote-data flows.
+
+### Native 6S build fails
+
+Check that the active environment has:
+
+- a Fortran compiler on `PATH`
+- `meson`
+- `ninja`
+
+If you want the repo-managed toolchain, switch to the Pixi `rt6s` environment
+and rerun `pixi run -e rt6s build-6s-native`.

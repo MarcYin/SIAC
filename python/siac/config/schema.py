@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
+from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
+
 DEFAULT_LUT_URL = (
     "https://gws-access.jasmin.ac.uk/public/nceo_isp/"
     "libradtran_continental_average_lut_1nm.zarr.zip"
@@ -24,6 +26,67 @@ AtmoProviderKind = Literal["cams", "merra2", "mcd19", "vnp19", "era5", "user"]
 BRDFProviderKind = Literal["mcd43", "vnp43", "mcd19", "gee", "zarr", "user"]
 MonthlyCompositeProviderKind = Literal["generated_brdf", "user_callable", "prepared_store"]
 AtmosphericParameterName = Literal["aot", "tcwv", "tco3"]
+SixSMode = Literal["direct", "scene_lut", "auto"]
+SixSParallelBackend = Literal["openmp", "worker_libraries"]
+SixSBuildProfile = Literal["release", "parity"]
+SixSAtmosphericProfile = Literal[
+    "no_gas",
+    "tropical",
+    "midlatitude_summer",
+    "midlatitude_winter",
+    "subarctic_summer",
+    "subarctic_winter",
+    "us_standard_62",
+    "auto_latitude_date",
+    "user_water_ozone",
+    "user_profile",
+]
+SixSAerosolProfile = Literal[
+    "none",
+    "continental",
+    "maritime",
+    "urban",
+    "desert",
+    "biomass_burning",
+    "stratospheric",
+    "user_mixture",
+    "multimodal_log_normal",
+    "modified_gamma",
+    "junge_power_law",
+    "sun_photometer",
+    "layered_profile",
+    "user_model",
+]
+SixSBuiltinReflectance = Literal["green_vegetation", "clear_water", "sand", "lake_water"]
+SixSSurfaceReflectanceKind = Literal["constant", "built_in", "spectrum"]
+SixSSurfaceMode = Literal[
+    "homogeneous_lambertian",
+    "heterogeneous_lambertian",
+    "homogeneous_brdf",
+]
+SixSBRDFModel = Literal[
+    "user_defined",
+    "hapke",
+    "verstraete",
+    "roujean",
+    "walthall",
+    "minnaert",
+    "ocean",
+    "iaquinta_pinty",
+    "rahman",
+    "kuusk",
+    "modis",
+    "ross_li_maignan",
+]
+SixSAtmosphericCorrectionMode = Literal[
+    "none",
+    "lambertian_reflectance",
+    "lambertian_radiance",
+    "brdf_reflectance",
+    "brdf_radiance",
+]
+
+DEFAULT_SIXS_SOURCE_URL = "https://salsa.umd.edu/files/6S/6sV2.1.tar"
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 
@@ -48,6 +111,48 @@ def _coerce_path_or_url(value: Any) -> str | Path | None:
     if urlparse(text).scheme.lower() in _REMOTE_URI_SCHEMES:
         return text
     return Path(text).expanduser()
+
+
+def _coerce_float_tuple(value: Any) -> tuple[float, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return tuple(float(item) for item in value)
+    if isinstance(value, list):
+        return tuple(float(item) for item in value)
+    return (float(value),)
+
+
+def _coerce_int_tuple(value: Any) -> tuple[int, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return tuple(int(item) for item in value)
+    if isinstance(value, list):
+        return tuple(int(item) for item in value)
+    return (int(value),)
+
+
+def _coerce_float_matrix(value: Any) -> tuple[tuple[float, ...], ...] | None:
+    if value is None:
+        return None
+    rows = []
+    for row in value:
+        rows.append(tuple(float(item) for item in row))
+    return tuple(rows)
+
+
+def _coerce_float_series_with_broadcast(
+    value: Any,
+    *,
+    target_length: int,
+) -> tuple[float, ...] | None:
+    series = _coerce_float_tuple(value)
+    if series is None:
+        return None
+    if len(series) == 1:
+        return tuple(series[0] for _ in range(target_length))
+    return series
 
 
 class SIACBaseModel(BaseModel):
@@ -272,11 +377,455 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     )
 
 
+class SixSRadiosondeProfileConfig(SIACBaseModel):
+    altitude_km: tuple[float, ...] = Field(validation_alias=AliasChoices("altitude_km", "altitude"))
+    pressure_mb: tuple[float, ...] = Field(validation_alias=AliasChoices("pressure_mb", "pressure"))
+    temperature_k: tuple[float, ...] = Field(
+        validation_alias=AliasChoices("temperature_k", "temperature")
+    )
+    water_g_m3: tuple[float, ...] = Field(validation_alias=AliasChoices("water_g_m3", "water"))
+    ozone_g_m3: tuple[float, ...] = Field(validation_alias=AliasChoices("ozone_g_m3", "ozone"))
+
+    @field_validator(
+        "altitude_km",
+        "pressure_mb",
+        "temperature_k",
+        "water_g_m3",
+        "ozone_g_m3",
+        mode="before",
+    )
+    @classmethod
+    def normalize_series(cls, value: Any) -> tuple[float, ...]:
+        series = _coerce_float_tuple(value)
+        if series is None:
+            raise ValueError("Radiosonde profile fields cannot be null.")
+        return series
+
+    @model_validator(mode="after")
+    def validate_lengths(self) -> SixSRadiosondeProfileConfig:
+        lengths = {
+            "altitude_km": len(self.altitude_km),
+            "pressure_mb": len(self.pressure_mb),
+            "temperature_k": len(self.temperature_k),
+            "water_g_m3": len(self.water_g_m3),
+            "ozone_g_m3": len(self.ozone_g_m3),
+        }
+        if len(set(lengths.values())) != 1:
+            raise ValueError(
+                "All radiosonde profile fields must contain the same number of samples."
+            )
+        count = next(iter(lengths.values()))
+        if count != 34:
+            raise ValueError("6S radiosonde profiles must contain exactly 34 levels.")
+        return self
+
+
+class SixSAerosolDistributionComponentConfig(SIACBaseModel):
+    rmean: float = Field(gt=0.0)
+    sigma: float = Field(gt=0.0)
+    percentage_density: float = Field(gt=0.0)
+    refr_real: tuple[float, ...]
+    refr_imag: tuple[float, ...]
+
+    @field_validator("refr_real", "refr_imag", mode="before")
+    @classmethod
+    def normalize_refractive_index(cls, value: Any) -> tuple[float, ...]:
+        series = _coerce_float_tuple(value)
+        if series is None:
+            raise ValueError("Refractive-index arrays cannot be null.")
+        return series
+
+    @model_validator(mode="after")
+    def validate_component(self) -> SixSAerosolDistributionComponentConfig:
+        if len(self.refr_real) != 20 or len(self.refr_imag) != 20:
+            raise ValueError("Aerosol distribution components require 20 refractive-index values.")
+        return self
+
+
+class SixSAerosolDistributionConfig(SIACBaseModel):
+    rmin: float = Field(gt=0.0)
+    rmax: float = Field(gt=0.0)
+    components: tuple[SixSAerosolDistributionComponentConfig, ...]
+
+    @field_validator("components", mode="before")
+    @classmethod
+    def normalize_components(cls, value: Any) -> tuple[SixSAerosolDistributionComponentConfig, ...]:
+        if value is None:
+            raise ValueError("Aerosol distribution components cannot be null.")
+        return tuple(value)
+
+    @model_validator(mode="after")
+    def validate_distribution(self) -> SixSAerosolDistributionConfig:
+        if self.rmax <= self.rmin:
+            raise ValueError("Aerosol distribution rmax must be greater than rmin.")
+        if not (1 <= len(self.components) <= 4):
+            raise ValueError("6S aerosol distributions require between 1 and 4 components.")
+        return self
+
+
+class SixSSunPhotometerAerosolConfig(SIACBaseModel):
+    radii_um: tuple[float, ...] = Field(validation_alias=AliasChoices("radii_um", "r"))
+    dv_dlogr: tuple[float, ...] = Field(validation_alias=AliasChoices("dv_dlogr", "dvdlogr"))
+    refr_real: tuple[float, ...]
+    refr_imag: tuple[float, ...]
+
+    @field_validator("radii_um", "dv_dlogr", mode="before")
+    @classmethod
+    def normalize_series(cls, value: Any) -> tuple[float, ...]:
+        series = _coerce_float_tuple(value)
+        if series is None:
+            raise ValueError("Sun-photometer aerosol fields cannot be null.")
+        return series
+
+    @field_validator("refr_real", "refr_imag", mode="before")
+    @classmethod
+    def normalize_refractive_index(cls, value: Any) -> tuple[float, ...]:
+        series = _coerce_float_series_with_broadcast(value, target_length=20)
+        if series is None:
+            raise ValueError("Sun-photometer aerosol fields cannot be null.")
+        return series
+
+    @model_validator(mode="after")
+    def validate_lengths(self) -> SixSSunPhotometerAerosolConfig:
+        if len(self.radii_um) != len(self.dv_dlogr):
+            raise ValueError("Sun-photometer radii and dv_dlogr arrays must have the same length.")
+        if not (1 <= len(self.radii_um) <= 50):
+            raise ValueError("6S sun-photometer aerosol inputs support between 1 and 50 radius samples.")
+        if len(self.refr_real) != 20 or len(self.refr_imag) != 20:
+            raise ValueError("Sun-photometer aerosol refractive indices require 20 wavelengths.")
+        return self
+
+
+class SixSAerosolLayerConfig(SIACBaseModel):
+    height_km: float = Field(gt=0.0, validation_alias=AliasChoices("height_km", "height"))
+    optical_thickness: float = Field(ge=0.0)
+    aerosol_type: Literal[
+        "none",
+        "continental",
+        "maritime",
+        "urban",
+        "desert",
+        "biomass_burning",
+        "stratospheric",
+    ] = "continental"
+
+
+class SixSSpectralReflectanceConfig(SIACBaseModel):
+    kind: SixSSurfaceReflectanceKind = "constant"
+    constant: float | None = None
+    built_in: SixSBuiltinReflectance | None = None
+    values: tuple[float, ...] | None = None
+    wavelengths_um: tuple[float, ...] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("wavelengths_um", "wavelengths"),
+    )
+
+    @field_validator("values", "wavelengths_um", mode="before")
+    @classmethod
+    def normalize_series(cls, value: Any) -> tuple[float, ...] | None:
+        return _coerce_float_tuple(value)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> SixSSpectralReflectanceConfig:
+        if self.kind == "constant":
+            if self.constant is None:
+                raise ValueError("Constant surface reflectance requires `constant`.")
+        elif self.kind == "built_in":
+            if self.built_in is None:
+                raise ValueError("Built-in surface reflectance requires `built_in`.")
+        elif self.kind == "spectrum":
+            if self.values is None:
+                raise ValueError("Spectrum surface reflectance requires `values`.")
+            if self.wavelengths_um is not None and len(self.wavelengths_um) != len(self.values):
+                raise ValueError("Surface spectrum wavelengths and values must have the same length.")
+        return self
+
+
+class SixSBRDFConfig(SIACBaseModel):
+    model: SixSBRDFModel
+    parameters: dict[str, float] = Field(default_factory=dict)
+    options: dict[str, int] = Field(default_factory=dict)
+    table_solar_zenith: tuple[tuple[float, ...], ...] | None = None
+    table_view_zenith: tuple[tuple[float, ...], ...] | None = None
+    spherical_albedo: float | None = None
+    directional_reflectance: float | None = None
+
+    @field_validator("table_solar_zenith", "table_view_zenith", mode="before")
+    @classmethod
+    def normalize_tables(cls, value: Any) -> tuple[tuple[float, ...], ...] | None:
+        return _coerce_float_matrix(value)
+
+    @model_validator(mode="after")
+    def validate_brdf(self) -> SixSBRDFConfig:
+        if self.model == "user_defined":
+            if self.table_solar_zenith is None or self.table_view_zenith is None:
+                raise ValueError("User-defined BRDF requires both solar and view reflectance tables.")
+            if len(self.table_solar_zenith) != 13 or len(self.table_view_zenith) != 13:
+                raise ValueError("User-defined BRDF tables must have 13 azimuth rows.")
+            if any(len(row) != 10 for row in self.table_solar_zenith + self.table_view_zenith):
+                raise ValueError("User-defined BRDF tables must have 10 zenith samples per row.")
+            if self.spherical_albedo is None or self.directional_reflectance is None:
+                raise ValueError(
+                    "User-defined BRDF requires `spherical_albedo` and `directional_reflectance`."
+                )
+        return self
+
+
+class SixSSurfaceConfig(SIACBaseModel):
+    mode: SixSSurfaceMode = "homogeneous_lambertian"
+    target: SixSSpectralReflectanceConfig = Field(
+        default_factory=lambda: SixSSpectralReflectanceConfig(kind="constant", constant=0.0)
+    )
+    environment: SixSSpectralReflectanceConfig | None = None
+    radius_km: float = Field(default=1.0, gt=0.0, validation_alias=AliasChoices("radius_km", "radius"))
+    brdf: SixSBRDFConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_surface(self) -> SixSSurfaceConfig:
+        if self.mode == "heterogeneous_lambertian" and self.environment is None:
+            raise ValueError("Heterogeneous Lambertian surfaces require an `environment` reflectance.")
+        if self.mode == "homogeneous_brdf" and self.brdf is None:
+            raise ValueError("BRDF surfaces require a `brdf` configuration.")
+        return self
+
+
+class SixSAtmosphericCorrectionConfig(SIACBaseModel):
+    mode: SixSAtmosphericCorrectionMode = "lambertian_reflectance"
+    value: float | None = None
+
+    @model_validator(mode="after")
+    def validate_correction(self) -> SixSAtmosphericCorrectionConfig:
+        if self.mode != "none" and self.value is None:
+            raise ValueError("Atmospheric correction modes other than `none` require a `value`.")
+        return self
+
+
+class SixSAlgorithmConfig(SIACBaseModel):
+    source_url: str = DEFAULT_SIXS_SOURCE_URL
+    source_dir: Path | None = None
+    build_dir: Path | None = None
+    module_path: Path | None = None
+    library_path: Path | None = None
+    auto_build: bool = True
+    compiler: str = "gfortran"
+    build_profile: SixSBuildProfile = "release"
+    mode: SixSMode = "auto"
+    parallel_backend: SixSParallelBackend = "openmp"
+    native_threads: int | None = Field(default=None, ge=1)
+    worker_libraries: int | None = Field(default=None, ge=1)
+    chunk_size: int = Field(default=4096, ge=1)
+    scene_lut_min_pixels: int = Field(default=512, ge=1)
+    scene_lut_max_nodes_per_axis: int = Field(default=4, ge=1)
+    scene_lut_max_cases: int = Field(default=4096, ge=1)
+    scene_lut_required_speedup: float = Field(default=1.5, gt=1.0)
+    month: int = Field(default=1, ge=1, le=12)
+    day: int = Field(default=1, ge=1, le=31)
+    atmospheric_profile_latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
+    reference_reflectance: float = Field(default=0.1, gt=0.0, le=1.0)
+    atmospheric_profile: SixSAtmosphericProfile = "user_water_ozone"
+    radiosonde_profile: SixSRadiosondeProfileConfig | None = None
+    aerosol_profile: SixSAerosolProfile = "continental"
+    aerosol_mixture: tuple[float, float, float, float] | None = None
+    aerosol_distribution: SixSAerosolDistributionConfig | None = None
+    sun_photometer_aerosol: SixSSunPhotometerAerosolConfig | None = None
+    aerosol_layer_profile: tuple[SixSAerosolLayerConfig, ...] | None = None
+    aerosol_model_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("aerosol_model_path", "mie_file_path"),
+    )
+    surface: SixSSurfaceConfig = Field(default_factory=SixSSurfaceConfig)
+    atmospheric_correction: SixSAtmosphericCorrectionConfig = Field(
+        default_factory=lambda: SixSAtmosphericCorrectionConfig(
+            mode="lambertian_reflectance",
+            value=0.1,
+        )
+    )
+    output_variables: tuple[str, ...] = SIXS_DEFAULT_OUTPUT_VARIABLES
+
+    @field_validator("source_dir", "build_dir", "module_path", "library_path", "aerosol_model_path", mode="before")
+    @classmethod
+    def normalize_local_paths(cls, value: Any) -> Path | None:
+        return _coerce_pathlike(value)
+
+    @field_validator("atmospheric_profile", mode="before")
+    @classmethod
+    def normalize_atmospheric_profile(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        key = str(value).strip().lower()
+        aliases = {
+            "from_latitude_and_date": "auto_latitude_date",
+            "latitude_date": "auto_latitude_date",
+            "user_water_and_ozone": "user_water_ozone",
+            "radiosonde": "user_profile",
+            "radiosonde_profile": "user_profile",
+        }
+        return aliases.get(key, value)
+
+    @field_validator("aerosol_profile", mode="before")
+    @classmethod
+    def normalize_aerosol_profile(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        key = str(value).strip().lower()
+        aliases = {
+            "user": "user_mixture",
+            "from_mie_file": "user_model",
+            "mie_file": "user_model",
+            "user_profile": "layered_profile",
+            "multimodal_lognormal": "multimodal_log_normal",
+            "multimodal_log_normal_distribution": "multimodal_log_normal",
+            "modified_gamma_distribution": "modified_gamma",
+            "junge_power_law_distribution": "junge_power_law",
+            "sun_photometer_distribution": "sun_photometer",
+        }
+        return aliases.get(key, value)
+
+    @field_validator("aerosol_mixture", mode="before")
+    @classmethod
+    def normalize_aerosol_mixture(cls, value: Any) -> tuple[float, float, float, float] | None:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            mapping = {str(key).strip().lower(): float(component) for key, component in value.items()}
+            return (
+                mapping.get("dust", 0.0),
+                mapping.get("water", 0.0),
+                mapping.get("oceanic", 0.0),
+                mapping.get("soot", 0.0),
+            )
+        series = _coerce_float_tuple(value)
+        if series is None:
+            return None
+        if len(series) != 4:
+            raise ValueError("sixs.aerosol_mixture must contain four components: dust, water, oceanic, soot.")
+        return tuple(float(item) for item in series)
+
+    @field_validator("output_variables", mode="before")
+    @classmethod
+    def normalize_output_variables(cls, value: Any) -> tuple[str, ...]:
+        if value is None:
+            return SIXS_DEFAULT_OUTPUT_VARIABLES
+        items = [value] if isinstance(value, str) else list(value)
+        normalized: list[str] = []
+        for item in items:
+            text = str(item).strip()
+            if not text:
+                continue
+            if text not in SIXS_OUTPUT_VARIABLE_CHOICES:
+                raise ValueError(
+                    "Unknown 6S output variable "
+                    f"{text!r}. Expected one of {', '.join(SIXS_OUTPUT_VARIABLE_CHOICES)}."
+                )
+            if text not in normalized:
+                normalized.append(text)
+        return tuple(normalized) or SIXS_DEFAULT_OUTPUT_VARIABLES
+
+    @model_validator(mode="after")
+    def validate_custom_aerosol(self) -> SixSAlgorithmConfig:
+        if self.atmospheric_profile == "auto_latitude_date" and self.atmospheric_profile_latitude is None:
+            raise ValueError(
+                "sixs.atmospheric_profile_latitude must be provided when atmospheric_profile='auto_latitude_date'."
+            )
+        if self.atmospheric_profile == "user_profile" and self.radiosonde_profile is None:
+            raise ValueError(
+                "sixs.radiosonde_profile must be provided when atmospheric_profile='user_profile'."
+            )
+        if self.atmospheric_profile != "user_profile" and self.radiosonde_profile is not None:
+            raise ValueError(
+                "sixs.radiosonde_profile is only valid when atmospheric_profile='user_profile'."
+            )
+        if self.aerosol_profile == "user_mixture" and self.aerosol_mixture is None:
+            raise ValueError(
+                "sixs.aerosol_mixture must be provided when aerosol_profile='user_mixture'."
+            )
+        if self.aerosol_profile == "user_mixture" and self.aerosol_mixture is not None:
+            mixture_total = sum(float(value) for value in self.aerosol_mixture)
+            if abs(mixture_total - 1.0) > 1e-6:
+                raise ValueError(
+                    "sixs.aerosol_mixture must sum to 1.0 for user_mixture aerosol profiles."
+                )
+        if self.aerosol_profile != "user_mixture" and self.aerosol_mixture is not None:
+            raise ValueError(
+                "sixs.aerosol_mixture is only valid when aerosol_profile='user_mixture'."
+            )
+        if self.aerosol_profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
+            if self.aerosol_distribution is None:
+                raise ValueError(
+                    "sixs.aerosol_distribution must be provided for aerosol distribution profiles."
+                )
+            if (
+                self.aerosol_profile in {"modified_gamma", "junge_power_law"}
+                and len(self.aerosol_distribution.components) != 1
+            ):
+                raise ValueError(
+                    "6S modified_gamma and junge_power_law profiles require exactly one component."
+                )
+        elif self.aerosol_distribution is not None:
+            raise ValueError(
+                "sixs.aerosol_distribution is only valid for multimodal_log_normal, modified_gamma, or junge_power_law."
+            )
+        if self.aerosol_profile == "sun_photometer" and self.sun_photometer_aerosol is None:
+            raise ValueError(
+                "sixs.sun_photometer_aerosol must be provided when aerosol_profile='sun_photometer'."
+            )
+        if self.aerosol_profile != "sun_photometer" and self.sun_photometer_aerosol is not None:
+            raise ValueError(
+                "sixs.sun_photometer_aerosol is only valid when aerosol_profile='sun_photometer'."
+            )
+        if self.aerosol_profile == "layered_profile" and not self.aerosol_layer_profile:
+            raise ValueError(
+                "sixs.aerosol_layer_profile must be provided when aerosol_profile='layered_profile'."
+            )
+        if self.aerosol_profile != "layered_profile" and self.aerosol_layer_profile is not None:
+            raise ValueError(
+                "sixs.aerosol_layer_profile is only valid when aerosol_profile='layered_profile'."
+            )
+        if self.aerosol_profile == "user_model" and self.aerosol_model_path is None:
+            raise ValueError(
+                "sixs.aerosol_model_path must be provided when aerosol_profile='user_model'."
+            )
+        if self.aerosol_profile != "user_model" and self.aerosol_model_path is not None:
+            raise ValueError(
+                "sixs.aerosol_model_path is only valid when aerosol_profile='user_model'."
+            )
+        if self.aerosol_profile == "layered_profile" and self.aerosol_layer_profile is not None:
+            aerosol_types = {layer.aerosol_type for layer in self.aerosol_layer_profile}
+            if len(aerosol_types) > 1:
+                raise ValueError(
+                    "6S layered aerosol profiles require the same aerosol_type for every layer."
+                )
+        if self.surface.mode != "homogeneous_brdf" and self.atmospheric_correction.mode.startswith("brdf_"):
+            raise ValueError(
+                "BRDF atmospheric correction modes require surface.mode='homogeneous_brdf'."
+            )
+        if (
+            self.atmospheric_correction.mode == "lambertian_reflectance"
+            and abs((self.atmospheric_correction.value or -1.0) - 0.1) < 1e-9
+            and abs(self.reference_reflectance - 0.1) > 1e-9
+        ):
+            self.atmospheric_correction = SixSAtmosphericCorrectionConfig(
+                mode="lambertian_reflectance",
+                value=self.reference_reflectance,
+            )
+        if self.parallel_backend == "worker_libraries" and self.worker_libraries is not None:
+            if self.worker_libraries < 1:
+                raise ValueError("sixs.worker_libraries must be >= 1.")
+            if self.chunk_size < 1:
+                raise ValueError("sixs.chunk_size must be >= 1 for worker_libraries.")
+        if self.scene_lut_max_cases < self.scene_lut_max_nodes_per_axis:
+            raise ValueError(
+                "sixs.scene_lut_max_cases must be >= sixs.scene_lut_max_nodes_per_axis."
+            )
+        return self
+
+
 class RTAlgorithmConfig(SIACBaseModel):
-    backend: Literal["emulator", "lut", "py6s"] = "emulator"
+    backend: Literal["emulator", "lut", "py6s", "sixs"] = "emulator"
     lut_interpolation: Literal["linear", "nearest", "cubic"] = "linear"
     lut_storage_options: dict[str, Any] = Field(default_factory=dict)
     py6s_aero_profile: str = "Continental"
+    sixs: SixSAlgorithmConfig = Field(default_factory=SixSAlgorithmConfig)
     fallback_to_lut: bool = True
     fallback_to_py6s: bool = True
 

@@ -533,6 +533,12 @@ def _open_correction_output_stream(
     return opener(output_path, metadata=metadata)
 
 
+def _set_rt_observation_time(rt_model: Any, observation_time: datetime) -> None:
+    setter = getattr(rt_model, "set_observation_time", None)
+    if callable(setter):
+        setter(observation_time)
+
+
 def _call_corrector(
     corrector: CorrectorFn,
     obs: ObservationBundle,
@@ -933,6 +939,7 @@ def _run_pipeline_thread(
         config,
         preprocessor=preprocessor,
     )
+    _set_rt_observation_time(rt_model, obs_time)
 
     with ThreadPoolExecutor(max_workers=settings["max_workers"]) as executor:
         atmo, surface = _fetch_priors(
@@ -1022,6 +1029,7 @@ def _run_pipeline_dask(
                 config,
                 preprocessor=preprocessor,
             )
+            _set_rt_observation_time(rt_model, obs_time)
 
             preload_executor = ThreadPoolExecutor(max_workers=1)
             try:

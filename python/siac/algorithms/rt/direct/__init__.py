@@ -1,3 +1,5 @@
-"""Direct Py6S simulation backend."""
+"""Direct RT backends."""
 
-__all__ = []
+from siac.algorithms.rt.direct.sixs import SixSBackend
+
+__all__ = ["SixSBackend"]

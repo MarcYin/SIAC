@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from siac.domain.sensors import SensorBand, SensorConfig
 
@@ -309,10 +310,48 @@ class RTCoefficients:
     d_xap: xr.DataArray | None = None
     d_xbp: xr.DataArray | None = None
     d_xcp: xr.DataArray | None = None
+    extras: Mapping[str, xr.DataArray] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        reserved = {"xap", "xbp", "xcp", "d_xap", "d_xbp", "d_xcp", "extras"}
+        normalized_extras: dict[str, xr.DataArray] = {}
+        for name, value in self.extras.items():
+            key = str(name).strip()
+            if not key:
+                raise ValueError("RTCoefficients extras keys must be non-empty strings")
+            if key in reserved:
+                raise ValueError(f"RTCoefficients extras key {key!r} conflicts with a reserved field")
+            normalized_extras[key] = _as_data_array(value)
+        object.__setattr__(self, "extras", MappingProxyType(normalized_extras))
 
     @property
     def has_jacobian(self) -> bool:
         return self.d_xap is not None
+
+    @property
+    def output_names(self) -> tuple[str, ...]:
+        return ("xap", "xbp", "xcp", *self.extras.keys())
+
+    def get_output(self, name: str) -> xr.DataArray:
+        if name == "xap":
+            return self.xap
+        if name == "xbp":
+            return self.xbp
+        if name == "xcp":
+            return self.xcp
+        try:
+            return self.extras[name]
+        except KeyError as exc:
+            raise KeyError(
+                f"Unknown RT output {name!r}. Available outputs: {', '.join(self.output_names)}"
+            ) from exc
+
+    def to_output_arrays(
+        self,
+        names: Sequence[str] | None = None,
+    ) -> dict[str, xr.DataArray]:
+        selected = self.output_names if names is None else tuple(names)
+        return {name: self.get_output(name) for name in selected}
 
     def apply_correction(self, toa: xr.DataArray) -> xr.DataArray:
         y = _as_data_array(self.xap * toa - self.xbp)

@@ -140,6 +140,7 @@ Main fields:
 - `lut_interpolation`
 - `lut_storage_options`
 - `py6s_aero_profile`
+- `sixs.*`
 - `fallback_to_lut`
 - `fallback_to_py6s`
 
@@ -148,6 +149,150 @@ Supported backends:
 - `emulator`
 - `lut`
 - `py6s`
+- `sixs`
+
+`py6s` and `sixs` are separate backends. `.[py6s]` installs the optional Py6S
+dependency for the `py6s` backend only; the native `sixs` backend uses the
+compiled 6SV2.1 build path documented in
+[Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md).
+
+### `algorithms.rt.sixs`
+
+Main execution and build fields:
+
+- `source_url`
+- `source_dir`
+- `build_dir`
+- `module_path`
+- `library_path` — compatibility alias for native module override
+- `auto_build`
+- `compiler`
+- `build_profile` — `release` or `parity`
+- `mode` — `direct`, `scene_lut`, or `auto`
+- `parallel_backend` — `openmp` or `worker_libraries`
+- `native_threads`
+- `worker_libraries`
+- `chunk_size`
+- `scene_lut_min_pixels`
+- `scene_lut_max_nodes_per_axis`
+- `scene_lut_max_cases`
+- `scene_lut_required_speedup`
+- `month`
+- `day`
+- `reference_reflectance`
+- `output_variables`
+
+Atmospheric-profile fields:
+
+- `atmospheric_profile`
+- `atmospheric_profile_latitude`
+- `radiosonde_profile.*`
+
+Supported atmospheric profiles:
+
+- `no_gas`
+- `tropical`
+- `midlatitude_summer`
+- `midlatitude_winter`
+- `subarctic_summer`
+- `subarctic_winter`
+- `us_standard_62`
+- `auto_latitude_date`
+- `user_water_ozone`
+- `user_profile`
+
+Aerosol-profile fields:
+
+- `aerosol_profile`
+- `aerosol_mixture`
+- `aerosol_distribution.*`
+- `sun_photometer_aerosol.*`
+- `aerosol_layer_profile.*`
+- `aerosol_model_path`
+
+Supported aerosol profiles:
+
+- `none`
+- `continental`
+- `maritime`
+- `urban`
+- `desert`
+- `biomass_burning`
+- `stratospheric`
+- `user_mixture`
+- `multimodal_log_normal`
+- `modified_gamma`
+- `junge_power_law`
+- `sun_photometer`
+- `layered_profile`
+- `user_model`
+
+Surface and correction fields:
+
+- `surface.mode`
+- `surface.target.*`
+- `surface.environment.*`
+- `surface.radius_km`
+- `surface.brdf.*`
+- `atmospheric_correction.mode`
+- `atmospheric_correction.value`
+
+Supported surface modes:
+
+- `homogeneous_lambertian`
+- `heterogeneous_lambertian`
+- `homogeneous_brdf`
+
+Supported surface target kinds:
+
+- `constant`
+- `built_in`
+- `spectrum`
+
+Supported built-in target/environment reflectances:
+
+- `green_vegetation`
+- `clear_water`
+- `sand`
+- `lake_water`
+
+Supported `surface.brdf.model` values:
+
+- `user_defined`
+- `hapke`
+- `verstraete`
+- `roujean`
+- `walthall`
+- `minnaert`
+- `ocean`
+- `iaquinta_pinty`
+- `rahman`
+- `kuusk`
+- `modis`
+- `ross_li_maignan`
+
+Supported atmospheric-correction modes:
+
+- `none`
+- `lambertian_reflectance`
+- `lambertian_radiance`
+- `brdf_reflectance`
+- `brdf_radiance`
+
+Important validation rules:
+
+- `atmospheric_profile = "auto_latitude_date"` requires
+  `atmospheric_profile_latitude`
+- `atmospheric_profile = "user_profile"` requires `radiosonde_profile`
+- `aerosol_profile = "user_mixture"` requires `aerosol_mixture`, which must sum
+  to `1.0`
+- `aerosol_profile = "user_model"` requires `aerosol_model_path`
+- BRDF atmospheric-correction modes require `surface.mode = "homogeneous_brdf"`
+- `output_variables` accepts the native 6S output names documented in
+  [Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md)
+
+For examples and route-selection guidance, see
+[Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md).
 
 ### `algorithms.solver`
 
@@ -261,6 +406,19 @@ format = "cog"
 include_uncertainty = true
 ```
 
+Native 6S example:
+
+```toml
+[algorithms.rt]
+backend = "sixs"
+
+[algorithms.rt.sixs]
+mode = "auto"
+parallel_backend = "openmp"
+build_profile = "release"
+output_variables = ["xap", "xbp", "xcp", "tgasm", "sutott", "sast"]
+```
+
 ## Practical examples
 
 | Use case | Important settings |
@@ -270,6 +428,7 @@ include_uncertainty = true
 | GCS-backed Sentinel-2 | `providers.s2.backend = "gcs"` plus cloud access setup |
 | emulator RT | `algorithms.rt.backend = "emulator"` |
 | LUT RT | `algorithms.rt.backend = "lut"` plus `paths.lut_path` |
+| native 6S RT | `algorithms.rt.backend = "sixs"` plus `algorithms.rt.sixs.*` |
 | Whittaker surface prior | `algorithms.surface_prior.method = "whittaker"` |
 
 ## Public configuration APIs

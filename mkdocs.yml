@@ -96,6 +96,7 @@ nav:
       - First Run: getting-started/first-run.md
   - User Guide:
       - Configuration Basics: user-guide/configuration-basics.md
+      - Native 6SV2.1 Backend: user-guide/native-sixs-backend.md
       - Running SIAC: user-guide/running-siac.md
       - Outputs: user-guide/outputs.md
       - Troubleshooting: user-guide/troubleshooting.md
@@ -111,6 +112,7 @@ nav:
       - Package Map: architecture/package-map.md
       - Execution Flow: architecture/execution-flow.md
       - Data Flow: architecture/data-flow.md
+      - Native 6SV2.1 Backend: architecture/native-sixs-backend.md
       - Rust Integration: architecture/rust-integration.md
   - Developer:
       - Dev Setup: developer/dev-setup.md

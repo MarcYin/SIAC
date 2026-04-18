@@ -264,6 +264,11 @@ def resample_coefficients_to_template(
             return result
         return field
 
+    resampled_extras: dict[str, xr.DataArray] = {}
+    for name, field in coeffs.extras.items():
+        resampled = _resample_optional(field)
+        resampled_extras[name] = field if resampled is None else resampled
+
     return RTCoefficientsClass(
         xap=resample_field_to_template(coeffs.xap, template),
         xbp=resample_field_to_template(coeffs.xbp, template),
@@ -271,6 +276,7 @@ def resample_coefficients_to_template(
         d_xap=_resample_optional(coeffs.d_xap),
         d_xbp=_resample_optional(coeffs.d_xbp),
         d_xcp=_resample_optional(coeffs.d_xcp),
+        extras=resampled_extras,
     )
 
 

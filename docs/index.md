@@ -72,8 +72,14 @@ Trace packages, runtime flow, and extension points inside the repository.
 
 - [Concepts](concepts/overview.md): overview and glossary for the SIAC domain model.
 - [Getting Started](getting-started/installation.md): installation and a first successful run.
-- [User Guide](user-guide/configuration-basics.md): runtime configuration, outputs, and troubleshooting.
+- [User Guide](user-guide/configuration-basics.md): runtime configuration, outputs, troubleshooting, and the native 6SV2.1 backend guide.
 - [Science](science/theory.md): retrieval framing, priors, and validation context.
 - [Reference](reference/configuration.md): public configuration and API surface.
-- [Architecture](architecture/package-map.md): package boundaries, execution flow, and data flow.
+- [Architecture](architecture/package-map.md): package boundaries, execution flow, data flow, and the native 6SV2.1 backend architecture.
 - [Developer](developer/dev-setup.md): local setup and extension guidance.
+
+## Key Operational Guides
+
+- [Native 6SV2.1 Backend](user-guide/native-sixs-backend.md): build, configuration, route selection, outputs, parity validation, benchmarking, and troubleshooting.
+- [Configuration Reference](reference/configuration.md): field-by-field public configuration surface, including `algorithms.rt.sixs.*`.
+- [Installation](getting-started/installation.md): environment setup, optional extras, and native 6S prerequisites.

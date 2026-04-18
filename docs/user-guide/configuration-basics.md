@@ -58,6 +58,12 @@ Controls algorithm choices and parameters for:
 - solver behavior
 - cloud masking
 
+`algorithms.rt.backend` supports `emulator`, `lut`, `py6s`, and the native
+`sixs` backend. The native backend has its own nested
+`algorithms.rt.sixs.*` configuration surface for build, routing, atmospheric
+profiles, aerosol profiles, surface modes, and output variables. See
+[Native 6SV2.1 Backend](native-sixs-backend.md).
+
 ### `runtime`
 
 Controls execution options such as log level, chunk size, and the thread or Dask backend.
@@ -88,4 +94,7 @@ The config loader fills missing auth fields from environment variables. Common e
 - Put secrets in environment variables.
 - Put scene-specific values such as input path, AOI, query, and output path in the actual API or CLI call.
 
-For the full field-by-field reference, continue to [Configuration Reference](../reference/configuration.md).
+For the full field-by-field reference, continue to
+[Configuration Reference](../reference/configuration.md). For native 6S setup
+and route-selection guidance, continue to
+[Native 6SV2.1 Backend](native-sixs-backend.md).

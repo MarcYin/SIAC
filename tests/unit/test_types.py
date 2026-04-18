@@ -7,6 +7,7 @@ import pytest
 import xarray as xr
 
 from siac.catalog import LANDSAT8_OLI_CONFIG, SENTINEL2A_CONFIG, get_sensor_config
+from siac.geo.resample import resample_coefficients_to_template
 from siac.runtime import (
     AtmosphericState,
     GeometryAngles,
@@ -172,6 +173,57 @@ class TestRTCoefficients:
     def test_has_jacobian(self, sample_coeffs):
         """has_jacobian should return False when no Jacobians."""
         assert not sample_coeffs.has_jacobian
+
+    def test_output_selection_returns_core_and_requested_extras(self, sample_coeffs):
+        trans = xr.DataArray(np.full((10, 10), 0.8), dims=["y", "x"])
+        coeffs = RTCoefficients(
+            xap=sample_coeffs.xap,
+            xbp=sample_coeffs.xbp,
+            xcp=sample_coeffs.xcp,
+            extras={"tgasm": trans, "sutott": trans + 0.1},
+        )
+
+        outputs = coeffs.to_output_arrays(("xap", "tgasm"))
+
+        assert tuple(outputs) == ("xap", "tgasm")
+        xr.testing.assert_equal(outputs["xap"], coeffs.xap)
+        xr.testing.assert_equal(outputs["tgasm"], trans)
+
+    def test_get_output_rejects_unknown_name(self, sample_coeffs):
+        with pytest.raises(KeyError, match="Unknown RT output"):
+            sample_coeffs.get_output("not_a_real_output")
+
+    def test_extras_reject_reserved_names(self, sample_coeffs):
+        with pytest.raises(ValueError, match="conflicts with a reserved field"):
+            RTCoefficients(
+                xap=sample_coeffs.xap,
+                xbp=sample_coeffs.xbp,
+                xcp=sample_coeffs.xcp,
+                extras={"xap": sample_coeffs.xap},
+            )
+
+    def test_resample_coefficients_resamples_extra_outputs(self, sample_coeffs):
+        extra = xr.DataArray(
+            np.arange(4, dtype=np.float32).reshape(2, 2),
+            dims=["y", "x"],
+            coords={"y": [0.0, 1.0], "x": [0.0, 1.0]},
+        )
+        coeffs = RTCoefficients(
+            xap=xr.DataArray(np.full((2, 2), 0.9), dims=["y", "x"], coords=extra.coords),
+            xbp=xr.DataArray(np.full((2, 2), 0.1), dims=["y", "x"], coords=extra.coords),
+            xcp=xr.DataArray(np.full((2, 2), 0.05), dims=["y", "x"], coords=extra.coords),
+            extras={"tgasm": extra},
+        )
+        template = xr.DataArray(
+            np.zeros((4, 4), dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": np.linspace(0.0, 1.0, 4), "x": np.linspace(0.0, 1.0, 4)},
+        )
+
+        resampled = resample_coefficients_to_template(coeffs, template)
+
+        assert resampled.extras["tgasm"].shape == (4, 4)
+        assert tuple(resampled.extras["tgasm"].dims) == ("y", "x")
 
 
 class TestSensorConfig:

@@ -31,6 +31,21 @@ Check the matching credentials for your chosen providers and backend:
 - CDS API key for CDS-backed atmospheric data
 - cloud credentials for AWS or GCS-backed access
 
+### Native `sixs` backend cannot build
+
+The native backend requires a Fortran compiler, `meson`, and `ninja`. If those
+tools are missing, either install them directly or use the Pixi `rt6s`
+environment and rerun:
+
+```bash
+pixi run -e rt6s build-6s-native
+```
+
+### Installed `.[py6s]` but native `sixs` still is not available
+
+`.[py6s]` only enables the separate `py6s` backend. The native `sixs` backend
+still needs the native toolchain and compiled extension.
+
 ## Runtime and configuration
 
 ### Wrong cache or output location
@@ -64,6 +79,47 @@ Check:
 - `paths.emulator_dir`
 - `algorithms.rt.backend`
 - backend fallbacks such as `fallback_to_lut`
+
+### Native `sixs` route is unexpectedly slow
+
+If `algorithms.rt.sixs.mode = "scene_lut"` is slower than expected, the scene
+likely has too much geometry or atmospheric variability to compress well into a
+reduced interpolation grid. Prefer:
+
+- `mode = "auto"` for normal runs
+- `mode = "direct"` for small or geometry-rich scenes
+
+Relevant tuning fields:
+
+- `scene_lut_min_pixels`
+- `scene_lut_max_nodes_per_axis`
+- `scene_lut_max_cases`
+- `scene_lut_required_speedup`
+
+### OpenMP-backed native execution is unstable in the target environment
+
+Switch the native backend to the fallback worker-library path:
+
+```toml
+[algorithms.rt]
+backend = "sixs"
+
+[algorithms.rt.sixs]
+parallel_backend = "worker_libraries"
+worker_libraries = 4
+chunk_size = 4096
+```
+
+### Native `sixs` config is rejected
+
+Common validation failures:
+
+- `atmospheric_profile = "auto_latitude_date"` without
+  `atmospheric_profile_latitude`
+- `atmospheric_profile = "user_profile"` without `radiosonde_profile`
+- `aerosol_profile = "user_mixture"` without `aerosol_mixture`
+- `aerosol_profile = "user_model"` without `aerosol_model_path`
+- BRDF atmospheric-correction mode without `surface.mode = "homogeneous_brdf"`
 
 ### Unexpected remote fetch behavior
 

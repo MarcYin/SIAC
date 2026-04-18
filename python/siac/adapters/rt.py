@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from siac.algorithms.rt.emulator import TwoLayerNNEmulator
-from siac.algorithms.rt.lut import ZarrLUTBackend
-
 if TYPE_CHECKING:
     from siac.adapters.auth import CredentialManager
     from siac.domain.sensors import SensorConfig
 
 logger = logging.getLogger(__name__)
+TwoLayerNNEmulator: Any | None = None
+ZarrLUTBackend: Any | None = None
+SixSBackend: Any | None = None
 
 _SENSOR_DEFAULTS: dict[str, tuple[str, str]] = {
     "s2": ("MSI", "S2A"),
@@ -47,7 +47,11 @@ def build_rt_model(
 
     if backend == "emulator":
         try:
-            return TwoLayerNNEmulator(
+            emulator_cls = TwoLayerNNEmulator
+            if emulator_cls is None:
+                from siac.algorithms.rt.emulator import TwoLayerNNEmulator as emulator_cls
+
+            return emulator_cls(
                 emulator_dir=emulator_dir,
                 sensor_id=sensor_id,
                 satellite_id=satellite_id,
@@ -61,6 +65,10 @@ def build_rt_model(
             backend = "lut"
 
     if backend == "lut" and lut_path:
+        lut_backend_cls = ZarrLUTBackend
+        if lut_backend_cls is None:
+            from siac.algorithms.rt.lut import ZarrLUTBackend as lut_backend_cls
+
         storage_options = dict(rt_config.lut_storage_options)
         if (
             auth is not None
@@ -69,10 +77,20 @@ def build_rt_model(
             and str(lut_path).startswith("s3://")
         ):
             storage_options.update(auth.aws().storage_options())
-        return ZarrLUTBackend(
+        return lut_backend_cls(
             lut_path,
             interpolation_method=rt_config.lut_interpolation,
             storage_options=storage_options,
+        )
+
+    if backend == "sixs":
+        sixs_backend_cls = SixSBackend
+        if sixs_backend_cls is None:
+            from siac.algorithms.rt.direct.sixs import SixSBackend as sixs_backend_cls
+
+        return sixs_backend_cls(
+            sixs_config=rt_config.sixs,
+            sensor_config=sensor_config,
         )
 
     raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")

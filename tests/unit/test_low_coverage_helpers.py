@@ -289,6 +289,17 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.
             }
             _FakeLUT.instances.append(self.kwargs)
 
+    class _FakeSixS:
+        instances: list[dict[str, object | None]] = []
+
+        def __init__(self, *, sixs_config=None, sensor_config=None, runner=None):  # noqa: ANN001
+            self.kwargs = {
+                "sixs_config": sixs_config,
+                "sensor_config": sensor_config,
+                "runner": runner,
+            }
+            _FakeSixS.instances.append(self.kwargs)
+
     class _FakeAws:
         def has_credentials(self) -> bool:
             return True
@@ -302,6 +313,7 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.
 
     monkeypatch.setitem(build_rt_model.__globals__, "TwoLayerNNEmulator", _FakeEmulator)
     monkeypatch.setitem(build_rt_model.__globals__, "ZarrLUTBackend", _FakeLUT)
+    monkeypatch.setitem(build_rt_model.__globals__, "SixSBackend", _FakeSixS)
 
     sensor_config = SimpleNamespace(sensor_id="MSI", satellite_id="S2C")
     emulator_config = SimpleNamespace(
@@ -340,6 +352,27 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.
     assert lut.kwargs["lut_path"] == "s3://bucket/lut.zarr"
     assert lut.kwargs["interpolation_method"] == "nearest"
     assert lut.kwargs["storage_options"] == {"anon": True, "key": "abc", "secret": "def"}
+
+    sixs_config = SimpleNamespace(
+        sensor="auto",
+        rt_model=SimpleNamespace(
+            backend="sixs",
+            sixs=SimpleNamespace(
+                mode="direct",
+                atmospheric_profile="tropical",
+                aerosol_profile="continental",
+                output_variables=("xap", "xbp", "xcp", "tgasm"),
+            ),
+            fallback_to_lut=False,
+            lut_interpolation="linear",
+            lut_storage_options={},
+        ),
+        paths=SimpleNamespace(lut_path=None, emulator_dir=None),
+    )
+
+    sixs = build_rt_model(sixs_config, sensor_config=sensor_config)
+    assert sixs.kwargs["sensor_config"] is sensor_config
+    assert sixs.kwargs["sixs_config"].output_variables == ("xap", "xbp", "xcp", "tgasm")
 
     no_fallback_config = SimpleNamespace(
         sensor="l8",

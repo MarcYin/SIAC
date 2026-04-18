@@ -1,0 +1,1409 @@
+"""Native 6SV2.1 Python-extension bridge and batched xarray runner."""
+
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import logging
+import os
+import shutil
+import sys
+import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import xarray as xr
+
+from siac.algorithms.rt.direct.sixs_build import ensure_native_sixs_module
+from siac.geo.resample import resample_field_to_template, shares_template_grid
+from siac.runtime.models import copy_spatial_metadata_like
+from siac.sixs_outputs import (
+    SIXS_BASE_OUTPUTS,
+    SIXS_NATIVE_OUTPUT_NAMES,
+    SIXS_OUTPUT_VARIABLE_CHOICES,
+)
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from siac.config.schema import SixSAlgorithmConfig
+    from siac.domain.sensors import SensorBand, SensorConfig
+    from siac.runtime import AtmosphericState, GeometryAngles
+
+logger = logging.getLogger(__name__)
+
+_SIXS_GRID_START_UM = 0.25
+_SIXS_GRID_STEP_UM = 0.0025
+_SIXS_GRID_SIZE = 1501
+_SIXS_GRID_UM = _SIXS_GRID_START_UM + _SIXS_GRID_STEP_UM * np.arange(_SIXS_GRID_SIZE, dtype=np.float64)
+_BASE_OUTPUTS = SIXS_BASE_OUTPUTS
+_ALL_OUTPUTS = SIXS_OUTPUT_VARIABLE_CHOICES
+_ATMOSPHERIC_PROFILE_CODES: dict[str, int] = {
+    "no_gas": 0,
+    "tropical": 1,
+    "midlatitude_summer": 2,
+    "midlatitude_winter": 3,
+    "subarctic_summer": 4,
+    "subarctic_winter": 5,
+    "us_standard_62": 6,
+    "user_profile": 7,
+    "user_water_ozone": 8,
+}
+_AEROSOL_PROFILE_CODES: dict[str, int] = {
+    "layered_profile": -1,
+    "none": 0,
+    "continental": 1,
+    "maritime": 2,
+    "urban": 3,
+    "user_mixture": 4,
+    "desert": 5,
+    "biomass_burning": 6,
+    "stratospheric": 7,
+    "multimodal_log_normal": 8,
+    "modified_gamma": 9,
+    "junge_power_law": 10,
+    "sun_photometer": 11,
+    "user_model": 12,
+}
+_AEROSOL_LAYER_TYPE_CODES: dict[str, int] = {
+    "none": 0,
+    "continental": 1,
+    "maritime": 2,
+    "urban": 3,
+    "desert": 5,
+    "biomass_burning": 6,
+    "stratospheric": 7,
+}
+_BUILTIN_REFLECTANCE_CODES: dict[str, int] = {
+    "green_vegetation": 1,
+    "clear_water": 2,
+    "sand": 3,
+    "lake_water": 4,
+}
+_BRDF_MODEL_CODES: dict[str, int] = {
+    "user_defined": 0,
+    "hapke": 1,
+    "verstraete": 2,
+    "roujean": 3,
+    "walthall": 4,
+    "minnaert": 5,
+    "ocean": 6,
+    "iaquinta_pinty": 7,
+    "rahman": 8,
+    "kuusk": 9,
+    "modis": 10,
+    "ross_li_maignan": 11,
+}
+_MODULE_CACHE: dict[tuple[Path, int, int], Any] = {}
+_CASE_ARRAY_NAMES: tuple[str, ...] = (
+    "sza_deg",
+    "saa_deg",
+    "vza_deg",
+    "vaa_deg",
+    "aot550",
+    "tcwv_cm",
+    "tco3_atmcm",
+    "elevation_km",
+)
+
+
+def _module_isolation_root() -> Path:
+    root = Path.home().expanduser() / ".cache" / "siac" / "rt6s" / "module_copies"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _preferred_module_isolation_root(source: Path) -> Path:
+    parent = source.expanduser().resolve().parent
+    if os.access(parent, os.W_OK | os.X_OK):
+        return parent
+    return _module_isolation_root()
+
+
+def _copy_isolated_module(source: Path, destination: Path) -> None:
+    try:
+        os.link(source, destination)
+        return
+    except OSError:
+        pass
+    last_error: PermissionError | None = None
+    for attempt in range(3):
+        try:
+            shutil.copyfile(source, destination)
+            shutil.copystat(source, destination)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt == 2:
+                break
+            time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+
+
+def _default_native_threads() -> int:
+    cpu_total = os.cpu_count() or 1
+    return max(1, cpu_total)
+
+
+def _resample_geometry_to_template(geometry: GeometryAngles, template: xr.DataArray) -> GeometryAngles:
+    if all(
+        shares_template_grid(field, template)
+        for field in (geometry.sza, geometry.saa, geometry.vza, geometry.vaa)
+    ):
+        return geometry
+    return type(geometry)(
+        sza=resample_field_to_template(geometry.sza, template),
+        saa=resample_field_to_template(geometry.saa, template),
+        vza=resample_field_to_template(geometry.vza, template),
+        vaa=resample_field_to_template(geometry.vaa, template),
+    )
+
+
+def _wrap_azimuth_degrees(angle: xr.DataArray, name: str) -> xr.DataArray:
+    return xr.DataArray(
+        np.mod(np.degrees(angle.values), 360.0),
+        dims=angle.dims,
+        coords=angle.coords,
+        name=name,
+    )
+
+
+def _to_native_output_names(output_variables: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+    if output_variables is None:
+        return _ALL_OUTPUTS
+    selected = [name for name in output_variables if name not in {"xbp", "xcp"}]
+    normalized: list[str] = ["xap", "xbp", "xcp"]
+    for name in selected:
+        if name not in normalized:
+            normalized.append(name)
+    return tuple(normalized)
+
+
+def _build_spectral_response(band: SensorBand) -> tuple[np.ndarray, float, float]:
+    if band.has_rsrf and band.rsrf_wavelengths_nm is not None and band.rsrf_response is not None:
+        wavelengths_um = np.asarray(band.rsrf_wavelengths_nm, dtype=np.float64) / 1000.0
+        response = np.asarray(band.rsrf_response, dtype=np.float64)
+    else:
+        half_width_um = max(float(band.bandwidth) / 2000.0, _SIXS_GRID_STEP_UM)
+        center_um = float(band.center_wavelength) / 1000.0
+        wavelengths_um = np.array(
+            [center_um - half_width_um, center_um + half_width_um],
+            dtype=np.float64,
+        )
+        response = np.array([1.0, 1.0], dtype=np.float64)
+
+    order = np.argsort(wavelengths_um)
+    wavelengths_um = wavelengths_um[order]
+    response = np.clip(response[order], 0.0, None)
+
+    native = np.interp(_SIXS_GRID_UM, wavelengths_um, response, left=0.0, right=0.0)
+    positive = np.flatnonzero(native > 0.0)
+    if positive.size == 0:
+        center_index = int(np.clip(round((band.wavelength_um - _SIXS_GRID_START_UM) / _SIXS_GRID_STEP_UM), 0, _SIXS_GRID_SIZE - 1))
+        native[center_index] = 1.0
+        positive = np.array([center_index], dtype=np.int64)
+
+    area = float(np.trapezoid(native, _SIXS_GRID_UM))
+    if area > 0.0:
+        native /= area
+
+    wlinf = float(_SIXS_GRID_UM[int(positive[0])])
+    wlsup = float(_SIXS_GRID_UM[int(positive[-1])])
+    return np.ascontiguousarray(native, dtype=np.float64), wlinf, wlsup
+
+
+def _empty_radiosonde_profile() -> dict[str, np.ndarray]:
+    return {
+        "altitude_km": np.zeros(34, dtype=np.float64),
+        "pressure_mb": np.zeros(34, dtype=np.float64),
+        "temperature_k": np.zeros(34, dtype=np.float64),
+        "water_g_m3": np.zeros(34, dtype=np.float64),
+        "ozone_g_m3": np.zeros(34, dtype=np.float64),
+    }
+
+
+def _empty_aerosol_inputs() -> dict[str, np.ndarray | float | int]:
+    return {
+        "mixture": np.zeros(4, dtype=np.float64),
+        "dist_rmin": 0.0,
+        "dist_rmax": 0.0,
+        "dist_component_count": 0,
+        "dist_x1": np.zeros(4, dtype=np.float64),
+        "dist_x2": np.zeros(4, dtype=np.float64),
+        "dist_x3": np.zeros(4, dtype=np.float64),
+        "dist_cij": np.zeros(4, dtype=np.float64),
+        "dist_rn": np.zeros((20, 4), dtype=np.float64),
+        "dist_ri": np.zeros((20, 4), dtype=np.float64),
+        "sun_count": 0,
+        "sun_radius": np.zeros(50, dtype=np.float64),
+        "sun_dvlogr": np.zeros(50, dtype=np.float64),
+        "layer_count": 0,
+        "layer_height": np.zeros(50, dtype=np.float64),
+        "layer_aot": np.zeros(50, dtype=np.float64),
+        "layer_type": np.zeros(50, dtype=np.int32),
+    }
+
+
+def _empty_surface_inputs() -> dict[str, np.ndarray | float | int]:
+    return {
+        "inhomo": 0,
+        "idirec": 0,
+        "target_mode": 0,
+        "target_constant": 0.0,
+        "target_spectrum": np.zeros(_SIXS_GRID_SIZE, dtype=np.float64),
+        "env_mode": 0,
+        "env_constant": 0.0,
+        "env_spectrum": np.zeros(_SIXS_GRID_SIZE, dtype=np.float64),
+        "radius_km": 1.0,
+        "brdf_model": 0,
+        "brdf_params": np.zeros(12, dtype=np.float64),
+        "brdf_options": np.zeros(5, dtype=np.int32),
+        "brdf_struct": np.zeros(4, dtype=np.float64),
+        "brdf_optics": np.zeros(3, dtype=np.float64),
+        "brdf_table_solar": np.zeros((10, 13), dtype=np.float64),
+        "brdf_table_view": np.zeros((10, 13), dtype=np.float64),
+        "brdf_spherical_albedo": 0.0,
+        "brdf_directional_reflectance": 0.0,
+    }
+
+
+def _auto_atmospheric_profile_from_latitude_and_month(latitude: float, month: int) -> str:
+    rounded_lat = int(round(latitude, -1))
+    rounded_lat = max(-80, min(80, rounded_lat))
+    profiles = {
+        1: {
+            80: "subarctic_winter",
+            70: "subarctic_winter",
+            60: "midlatitude_winter",
+            50: "midlatitude_winter",
+            40: "subarctic_summer",
+            30: "midlatitude_summer",
+            20: "tropical",
+            10: "tropical",
+            0: "tropical",
+            -10: "tropical",
+            -20: "tropical",
+            -30: "midlatitude_summer",
+            -40: "subarctic_summer",
+            -50: "subarctic_summer",
+            -60: "midlatitude_winter",
+            -70: "midlatitude_winter",
+            -80: "midlatitude_winter",
+        },
+        5: {
+            80: "subarctic_winter",
+            70: "midlatitude_winter",
+            60: "midlatitude_winter",
+            50: "subarctic_summer",
+            40: "subarctic_summer",
+            30: "midlatitude_summer",
+            20: "tropical",
+            10: "tropical",
+            0: "tropical",
+            -10: "tropical",
+            -20: "tropical",
+            -30: "midlatitude_summer",
+            -40: "subarctic_summer",
+            -50: "subarctic_summer",
+            -60: "midlatitude_winter",
+            -70: "midlatitude_winter",
+            -80: "midlatitude_winter",
+        },
+        7: {
+            80: "midlatitude_winter",
+            70: "midlatitude_winter",
+            60: "subarctic_summer",
+            50: "subarctic_summer",
+            40: "midlatitude_summer",
+            30: "tropical",
+            20: "tropical",
+            10: "tropical",
+            0: "tropical",
+            -10: "tropical",
+            -20: "midlatitude_summer",
+            -30: "midlatitude_summer",
+            -40: "subarctic_summer",
+            -50: "midlatitude_winter",
+            -60: "midlatitude_winter",
+            -70: "midlatitude_winter",
+            -80: "subarctic_winter",
+        },
+        9: {
+            80: "midlatitude_winter",
+            70: "midlatitude_winter",
+            60: "subarctic_summer",
+            50: "subarctic_summer",
+            40: "midlatitude_summer",
+            30: "tropical",
+            20: "tropical",
+            10: "tropical",
+            0: "tropical",
+            -10: "tropical",
+            -20: "midlatitude_summer",
+            -30: "midlatitude_summer",
+            -40: "subarctic_summer",
+            -50: "midlatitude_winter",
+            -60: "midlatitude_winter",
+            -70: "midlatitude_winter",
+            -80: "midlatitude_winter",
+        },
+        11: {
+            80: "subarctic_winter",
+            70: "subarctic_winter",
+            60: "midlatitude_winter",
+            50: "subarctic_summer",
+            40: "subarctic_summer",
+            30: "midlatitude_summer",
+            20: "tropical",
+            10: "tropical",
+            0: "tropical",
+            -10: "tropical",
+            -20: "tropical",
+            -30: "midlatitude_summer",
+            -40: "subarctic_summer",
+            -50: "subarctic_summer",
+            -60: "midlatitude_winter",
+            -70: "midlatitude_winter",
+            -80: "midlatitude_winter",
+        },
+    }
+    if month in {1, 2, 3, 4}:
+        lookup = profiles[1]
+    elif month in {5, 6}:
+        lookup = profiles[5]
+    elif month in {7, 8}:
+        lookup = profiles[7]
+    elif month in {9, 10}:
+        lookup = profiles[9]
+    else:
+        lookup = profiles[11]
+    return lookup[rounded_lat]
+
+
+def _resolve_atmospheric_inputs(config: SixSAlgorithmConfig, *, month: int) -> tuple[int, dict[str, np.ndarray]]:
+    profile = config.atmospheric_profile
+    radiosonde = _empty_radiosonde_profile()
+    if profile == "auto_latitude_date":
+        if config.atmospheric_profile_latitude is None:
+            raise ValueError(
+                "sixs.atmospheric_profile_latitude is required when atmospheric_profile='auto_latitude_date'."
+            )
+        profile = _auto_atmospheric_profile_from_latitude_and_month(
+            float(config.atmospheric_profile_latitude),
+            int(month),
+        )
+    if profile == "user_profile":
+        if config.radiosonde_profile is None:
+            raise ValueError("sixs.radiosonde_profile is required for user_profile atmospheric mode.")
+        radiosonde = {
+            "altitude_km": np.asarray(config.radiosonde_profile.altitude_km, dtype=np.float64),
+            "pressure_mb": np.asarray(config.radiosonde_profile.pressure_mb, dtype=np.float64),
+            "temperature_k": np.asarray(config.radiosonde_profile.temperature_k, dtype=np.float64),
+            "water_g_m3": np.asarray(config.radiosonde_profile.water_g_m3, dtype=np.float64),
+            "ozone_g_m3": np.asarray(config.radiosonde_profile.ozone_g_m3, dtype=np.float64),
+        }
+    return _ATMOSPHERIC_PROFILE_CODES[profile], radiosonde
+
+
+def _resolve_atmospheric_mode(config: SixSAlgorithmConfig) -> int:
+    mode, _ = _resolve_atmospheric_inputs(config, month=int(config.month))
+    return mode
+
+
+def _resolve_aerosol_mode(config: SixSAlgorithmConfig) -> int:
+    return _AEROSOL_PROFILE_CODES[config.aerosol_profile]
+
+
+def _resolve_aerosol_inputs(config: SixSAlgorithmConfig) -> tuple[int, dict[str, np.ndarray | float | int]]:
+    mode = _resolve_aerosol_mode(config)
+    payload = _empty_aerosol_inputs()
+    if config.aerosol_profile == "user_mixture":
+        payload["mixture"] = np.asarray(config.aerosol_mixture or (0.0, 0.0, 0.0, 0.0), dtype=np.float64)
+    elif config.aerosol_profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
+        if config.aerosol_distribution is None:
+            raise ValueError("sixs.aerosol_distribution is required for aerosol distributions.")
+        payload["dist_rmin"] = float(config.aerosol_distribution.rmin)
+        payload["dist_rmax"] = float(config.aerosol_distribution.rmax)
+        payload["dist_component_count"] = len(config.aerosol_distribution.components)
+        x1 = np.zeros(4, dtype=np.float64)
+        x2 = np.zeros(4, dtype=np.float64)
+        x3 = np.zeros(4, dtype=np.float64)
+        cij = np.zeros(4, dtype=np.float64)
+        rn = np.zeros((20, 4), dtype=np.float64)
+        ri = np.zeros((20, 4), dtype=np.float64)
+        for idx, component in enumerate(config.aerosol_distribution.components):
+            x1[idx] = float(component.rmean)
+            x2[idx] = float(component.sigma)
+            rn[:, idx] = np.asarray(component.refr_real, dtype=np.float64)
+            ri[:, idx] = np.asarray(component.refr_imag, dtype=np.float64)
+        if config.aerosol_profile == "multimodal_log_normal":
+            for idx, component in enumerate(config.aerosol_distribution.components):
+                cij[idx] = float(component.percentage_density)
+        elif config.aerosol_profile == "modified_gamma":
+            x3[0] = float(config.aerosol_distribution.components[0].percentage_density)
+            cij[0] = 1.0
+        else:
+            cij[0] = 1.0
+        payload["dist_x1"] = x1
+        payload["dist_x2"] = x2
+        payload["dist_x3"] = x3
+        payload["dist_cij"] = cij
+        payload["dist_rn"] = rn
+        payload["dist_ri"] = ri
+    elif config.aerosol_profile == "sun_photometer":
+        if config.sun_photometer_aerosol is None:
+            raise ValueError("sixs.sun_photometer_aerosol is required for sun-photometer aerosols.")
+        count = len(config.sun_photometer_aerosol.radii_um)
+        radius = np.zeros(50, dtype=np.float64)
+        dvlogr = np.zeros(50, dtype=np.float64)
+        radius[:count] = np.asarray(config.sun_photometer_aerosol.radii_um, dtype=np.float64)
+        dvlogr[:count] = np.asarray(config.sun_photometer_aerosol.dv_dlogr, dtype=np.float64)
+        rn = np.zeros((20, 4), dtype=np.float64)
+        ri = np.zeros((20, 4), dtype=np.float64)
+        rn[:, 0] = np.asarray(config.sun_photometer_aerosol.refr_real, dtype=np.float64)
+        ri[:, 0] = np.asarray(config.sun_photometer_aerosol.refr_imag, dtype=np.float64)
+        payload["sun_count"] = count
+        payload["sun_radius"] = radius
+        payload["sun_dvlogr"] = dvlogr
+        payload["dist_rn"] = rn
+        payload["dist_ri"] = ri
+    elif config.aerosol_profile == "layered_profile":
+        if not config.aerosol_layer_profile:
+            raise ValueError("sixs.aerosol_layer_profile is required for layered aerosol profiles.")
+        count = len(config.aerosol_layer_profile)
+        height = np.zeros(50, dtype=np.float64)
+        aot = np.zeros(50, dtype=np.float64)
+        layer_type = np.zeros(50, dtype=np.int32)
+        for idx, layer in enumerate(config.aerosol_layer_profile):
+            height[idx] = float(layer.height_km)
+            aot[idx] = float(layer.optical_thickness)
+            layer_type[idx] = _AEROSOL_LAYER_TYPE_CODES[layer.aerosol_type]
+        payload["layer_count"] = count
+        payload["layer_height"] = height
+        payload["layer_aot"] = aot
+        payload["layer_type"] = layer_type
+    return mode, payload
+
+
+def _build_surface_spectrum(values: tuple[float, ...] | None, wavelengths_um: tuple[float, ...] | None) -> np.ndarray:
+    if values is None:
+        return np.zeros(_SIXS_GRID_SIZE, dtype=np.float64)
+    data = np.asarray(values, dtype=np.float64)
+    if wavelengths_um is None:
+        if data.size != _SIXS_GRID_SIZE:
+            raise ValueError(
+                "Surface spectra without explicit wavelengths must contain 1501 samples at 2.5 nm spacing."
+            )
+        return np.ascontiguousarray(np.clip(data, 0.0, None), dtype=np.float64)
+    wavelength_values = np.asarray(wavelengths_um, dtype=np.float64)
+    order = np.argsort(wavelength_values)
+    interpolated = np.interp(
+        _SIXS_GRID_UM,
+        wavelength_values[order],
+        data[order],
+        left=0.0,
+        right=0.0,
+    )
+    return np.ascontiguousarray(np.clip(interpolated, 0.0, None), dtype=np.float64)
+
+
+def _resolve_surface_reflectance(
+    reflectance: Any,
+) -> tuple[int, float, np.ndarray]:
+    if reflectance.kind == "constant":
+        return 0, float(reflectance.constant or 0.0), np.zeros(_SIXS_GRID_SIZE, dtype=np.float64)
+    if reflectance.kind == "built_in":
+        return _BUILTIN_REFLECTANCE_CODES[reflectance.built_in], 0.0, np.zeros(_SIXS_GRID_SIZE, dtype=np.float64)
+    return -1, 0.0, _build_surface_spectrum(reflectance.values, reflectance.wavelengths_um)
+
+
+def _prepare_brdf_table(table: tuple[tuple[float, ...], ...] | None) -> np.ndarray:
+    if table is None:
+        return np.zeros((10, 13), dtype=np.float64)
+    values = np.asarray(table, dtype=np.float64)
+    if values.shape != (13, 10):
+        raise ValueError("BRDF tables must be provided as 13 azimuth rows by 10 zenith columns.")
+    prepared = np.zeros((10, 13), dtype=np.float64)
+    for k in range(13):
+        prepared[:, k] = values[k, ::-1]
+    return np.ascontiguousarray(prepared, dtype=np.float64)
+
+
+def _resolve_surface_inputs(config: SixSAlgorithmConfig) -> dict[str, np.ndarray | float | int]:
+    payload = _empty_surface_inputs()
+    surface = config.surface
+    target_mode, target_constant, target_spectrum = _resolve_surface_reflectance(surface.target)
+    payload["target_mode"] = target_mode
+    payload["target_constant"] = target_constant
+    payload["target_spectrum"] = target_spectrum
+
+    if surface.mode == "homogeneous_lambertian":
+        payload["inhomo"] = 0
+        payload["idirec"] = 0
+        return payload
+
+    if surface.mode == "heterogeneous_lambertian":
+        if surface.environment is None:
+            raise ValueError("Heterogeneous Lambertian surfaces require an environment reflectance.")
+        env_mode, env_constant, env_spectrum = _resolve_surface_reflectance(surface.environment)
+        payload["inhomo"] = 1
+        payload["idirec"] = 0
+        payload["env_mode"] = env_mode
+        payload["env_constant"] = env_constant
+        payload["env_spectrum"] = env_spectrum
+        payload["radius_km"] = float(surface.radius_km)
+        return payload
+
+    if surface.brdf is None:
+        raise ValueError("BRDF surfaces require a brdf configuration.")
+    brdf = surface.brdf
+    payload["inhomo"] = 0
+    payload["idirec"] = 1
+    payload["brdf_model"] = _BRDF_MODEL_CODES[brdf.model]
+    params = np.zeros(12, dtype=np.float64)
+    options = np.zeros(5, dtype=np.int32)
+    struct = np.zeros(4, dtype=np.float64)
+    optics = np.zeros(3, dtype=np.float64)
+
+    if brdf.model == "hapke":
+        params[:4] = [
+            brdf.parameters["albedo"],
+            brdf.parameters["asymmetry"],
+            brdf.parameters["amplitude"],
+            brdf.parameters["width"],
+        ]
+    elif brdf.model == "verstraete":
+        options[2] = int(brdf.options["kappa_parameterisation"])
+        options[3] = int(brdf.options["phase_function"])
+        options[4] = int(brdf.options["multiple_scattering"])
+        struct[:] = [
+            brdf.parameters["leaf_area_density"],
+            brdf.parameters["sun_flecks_radius"],
+            brdf.parameters.get("kappa1", brdf.parameters.get("chil", 0.0)),
+            brdf.parameters.get("kappa2", 0.0),
+        ]
+        optics[:] = [
+            brdf.parameters["single_scattering_albedo"],
+            brdf.parameters.get("phase_parameter_1", 0.0),
+            brdf.parameters.get("phase_parameter_2", 0.0),
+        ]
+    elif brdf.model == "roujean":
+        params[:3] = [brdf.parameters["albedo"], brdf.parameters["k1"], brdf.parameters["k2"]]
+    elif brdf.model == "walthall":
+        params[:4] = [
+            brdf.parameters["param1"],
+            brdf.parameters["param2"],
+            brdf.parameters["param3"],
+            brdf.parameters["albedo"],
+        ]
+    elif brdf.model == "minnaert":
+        params[:2] = [brdf.parameters["k"], brdf.parameters["albedo"]]
+    elif brdf.model == "ocean":
+        params[:4] = [
+            brdf.parameters["wind_speed"],
+            brdf.parameters["wind_azimuth"],
+            brdf.parameters["salinity"],
+            brdf.parameters["pigment_concentration"],
+        ]
+    elif brdf.model == "iaquinta_pinty":
+        options[0] = int(brdf.options["leaf_distribution"])
+        options[1] = int(brdf.options["hot_spot"])
+        params[:5] = [
+            brdf.parameters["lai"],
+            brdf.parameters["hot_spot_parameter"],
+            brdf.parameters["leaf_reflectance"],
+            brdf.parameters["leaf_transmittance"],
+            brdf.parameters["soil_albedo"],
+        ]
+    elif brdf.model == "rahman":
+        params[:3] = [
+            brdf.parameters["intensity"],
+            brdf.parameters["asymmetry_factor"],
+            brdf.parameters["structural_parameter"],
+        ]
+    elif brdf.model == "kuusk":
+        params[:9] = [
+            brdf.parameters["lai"],
+            brdf.parameters["lad_eps"],
+            brdf.parameters["lad_thm"],
+            brdf.parameters["relative_leaf_size"],
+            brdf.parameters["chlorophyll_content"],
+            brdf.parameters["leaf_water_equiv_thickness"],
+            brdf.parameters["effective_num_layers"],
+            brdf.parameters["ratio_refractive_indices"],
+            brdf.parameters["weight_first_price_function"],
+        ]
+    elif brdf.model in {"modis", "ross_li_maignan"}:
+        params[:3] = [brdf.parameters["k_iso"], brdf.parameters["k_vol"], brdf.parameters["k_geo"]]
+    elif brdf.model == "user_defined":
+        payload["brdf_table_solar"] = _prepare_brdf_table(brdf.table_solar_zenith)
+        payload["brdf_table_view"] = _prepare_brdf_table(brdf.table_view_zenith)
+        payload["brdf_spherical_albedo"] = float(brdf.spherical_albedo or 0.0)
+        payload["brdf_directional_reflectance"] = float(brdf.directional_reflectance or 0.0)
+
+    payload["brdf_params"] = params
+    payload["brdf_options"] = options
+    payload["brdf_struct"] = struct
+    payload["brdf_optics"] = optics
+    return payload
+
+
+def _resolve_atmospheric_correction_inputs(config: SixSAlgorithmConfig) -> tuple[int, float]:
+    correction = config.atmospheric_correction
+    value = float(correction.value if correction.value is not None else config.reference_reflectance)
+    mapping = {
+        "none": (-1, 0.0),
+        "lambertian_reflectance": (0, -value),
+        "lambertian_radiance": (0, value),
+        "brdf_reflectance": (1, -value),
+        "brdf_radiance": (1, value),
+    }
+    return mapping[correction.mode]
+
+
+def _encode_aerosol_model_path(path: Path | None) -> str:
+    if path is None:
+        return ""
+    return os.fspath(path)
+
+
+def _empty_output_bundle(length: int) -> dict[str, np.ndarray]:
+    return {name: np.empty(length, dtype=np.float64) for name in _ALL_OUTPUTS}
+
+
+def _as_float64(array: np.ndarray | xr.DataArray) -> np.ndarray:
+    values = np.asarray(array, dtype=np.float64)
+    return np.ascontiguousarray(values.reshape(-1), dtype=np.float64)
+
+
+def _as_output_array(values: np.ndarray, template: xr.DataArray, name: str) -> xr.DataArray:
+    data = xr.DataArray(
+        values.reshape(template.shape),
+        dims=template.dims,
+        coords=template.coords,
+        name=name,
+    )
+    return copy_spatial_metadata_like(data, template)
+
+
+def _nan_output_arrays(template: xr.DataArray, selected_names: tuple[str, ...]) -> dict[str, xr.DataArray]:
+    return {
+        name: _as_output_array(np.full(template.size, np.nan, dtype=np.float64), template, name)
+        for name in selected_names
+    }
+
+
+def _slice_case_kwargs(kwargs: dict[str, Any], start: int, stop: int) -> dict[str, Any]:
+    sliced = dict(kwargs)
+    for name in _CASE_ARRAY_NAMES:
+        sliced[name] = kwargs[name][start:stop]
+    return sliced
+
+
+def _build_scene_lut_axis(values: np.ndarray, target_size: int) -> np.ndarray:
+    finite = np.asarray(values[np.isfinite(values)], dtype=np.float64)
+    if finite.size == 0:
+        return np.zeros(1, dtype=np.float64)
+    unique = np.unique(finite)
+    if unique.size <= max(1, target_size):
+        return np.ascontiguousarray(unique, dtype=np.float64)
+    if target_size <= 1:
+        return np.ascontiguousarray(unique[:1], dtype=np.float64)
+    quantiles = np.linspace(0.0, 1.0, target_size, dtype=np.float64)
+    axis = np.quantile(finite, quantiles, method="linear")
+    axis[0] = float(finite.min())
+    axis[-1] = float(finite.max())
+    axis = np.unique(np.asarray(axis, dtype=np.float64))
+    if axis.size == 1 and unique.size > 1:
+        axis = np.array([unique[0], unique[-1]], dtype=np.float64)
+    return np.ascontiguousarray(axis, dtype=np.float64)
+
+
+def _scene_lut_case_count(axes: dict[str, np.ndarray]) -> int:
+    count = 1
+    for axis in axes.values():
+        count *= max(1, int(axis.size))
+    return count
+
+
+def _build_scene_lut_plan(
+    case_arrays: dict[str, np.ndarray],
+    *,
+    max_nodes_per_axis: int,
+    max_cases: int,
+) -> _SceneLUTPlan:
+    axes = {
+        name: _build_scene_lut_axis(np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis)
+        for name in _CASE_ARRAY_NAMES
+    }
+    while _scene_lut_case_count(axes) > max_cases:
+        reducible = [name for name, axis in axes.items() if axis.size > 1]
+        if not reducible:
+            break
+        name = max(reducible, key=lambda item: axes[item].size)
+        axes[name] = _build_scene_lut_axis(np.asarray(case_arrays[name], dtype=np.float64), axes[name].size - 1)
+
+    mesh = np.meshgrid(*(axes[name] for name in _CASE_ARRAY_NAMES), indexing="ij")
+    grid_case_arrays = {
+        name: np.ascontiguousarray(mesh[idx].reshape(-1), dtype=np.float64)
+        for idx, name in enumerate(_CASE_ARRAY_NAMES)
+    }
+    return _SceneLUTPlan(
+        axes=axes,
+        grid_case_arrays=grid_case_arrays,
+        direct_case_count=int(np.asarray(case_arrays[_CASE_ARRAY_NAMES[0]]).size),
+        lut_case_count=int(grid_case_arrays[_CASE_ARRAY_NAMES[0]].size),
+    )
+
+
+def _interpolate_scene_lut_outputs(
+    plan: _SceneLUTPlan,
+    native_outputs: _NativeBatchResult,
+    case_arrays: dict[str, np.ndarray],
+    selected_names: tuple[str, ...],
+) -> dict[str, np.ndarray]:
+    from scipy.interpolate import RegularGridInterpolator
+
+    axes_order = _CASE_ARRAY_NAMES
+    varying = [name for name in axes_order if plan.axes[name].size > 1]
+    n_cases = int(np.asarray(case_arrays[axes_order[0]]).size)
+    result: dict[str, np.ndarray] = {}
+    full_shape = tuple(int(plan.axes[name].size) for name in axes_order)
+    if not varying:
+        for name in selected_names:
+            value = float(np.asarray(native_outputs.outputs[name], dtype=np.float64).reshape(-1)[0])
+            result[name] = np.full(n_cases, value, dtype=np.float64)
+        return result
+
+    sample_points = np.column_stack([np.asarray(case_arrays[name], dtype=np.float64) for name in varying])
+    for name in selected_names:
+        values = np.asarray(native_outputs.outputs[name], dtype=np.float64).reshape(full_shape)
+        reduced = values
+        for axis_index in reversed(range(len(axes_order))):
+            if plan.axes[axes_order[axis_index]].size == 1:
+                reduced = np.take(reduced, 0, axis=axis_index)
+        interpolator = RegularGridInterpolator(
+            tuple(plan.axes[axis_name] for axis_name in varying),
+            reduced,
+            method="linear",
+            bounds_error=False,
+            fill_value=np.nan,
+        )
+        result[name] = np.ascontiguousarray(interpolator(sample_points), dtype=np.float64)
+    return result
+
+
+def _should_use_scene_lut(
+    *,
+    mode: str,
+    direct_case_count: int,
+    lut_case_count: int,
+    min_pixels: int,
+    required_speedup: float,
+) -> bool:
+    if mode == "direct":
+        return False
+    if mode == "scene_lut":
+        return True
+    if direct_case_count < min_pixels or lut_case_count <= 0 or lut_case_count >= direct_case_count:
+        return False
+    return (float(direct_case_count) / float(lut_case_count)) >= required_speedup
+
+
+@dataclass(frozen=True)
+class _NativeBatchResult:
+    outputs: dict[str, np.ndarray]
+    status: np.ndarray
+
+
+@dataclass(frozen=True)
+class _PreparedSceneInputs:
+    template: xr.DataArray
+    valid_mask: np.ndarray
+    flat_valid_mask: np.ndarray
+    common_kwargs: dict[str, Any]
+    case_arrays: dict[str, np.ndarray]
+
+
+@dataclass(frozen=True)
+class _SceneLUTPlan:
+    axes: dict[str, np.ndarray]
+    grid_case_arrays: dict[str, np.ndarray]
+    direct_case_count: int
+    lut_case_count: int
+
+
+def _load_extension_module(module_path: Path) -> Any:
+    resolved_path = Path(module_path).resolve()
+    stat = resolved_path.stat()
+    cache_key = (resolved_path, stat.st_mtime_ns, stat.st_size)
+    cached = _MODULE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    for stale_key in [key for key in _MODULE_CACHE if key[0] == resolved_path and key != cache_key]:
+        _MODULE_CACHE.pop(stale_key, None)
+
+    module_name = resolved_path.name.split(".", 1)[0]
+
+    loader = importlib.machinery.ExtensionFileLoader(
+        module_name,
+        os.fspath(resolved_path),
+    )
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        os.fspath(resolved_path),
+        loader=loader,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not create an import spec for native 6S module: {resolved_path}")
+
+    sys.modules.pop(module_name, None)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    _MODULE_CACHE[cache_key] = module
+    return module
+
+
+class _SixSExtensionModule:
+    """Thin loader around the compiled F2PY extension."""
+
+    def __init__(self, module_path: Path, *, isolate: bool = False) -> None:
+        self.path = Path(module_path)
+        self._temp_dir: Path | None = None
+        load_path = self.path
+        if isolate:
+            self._temp_dir = Path(
+                tempfile.mkdtemp(
+                    prefix="siac_rt6s_module_",
+                    dir=os.fspath(_preferred_module_isolation_root(self.path)),
+                )
+            )
+            load_path = self._temp_dir / self.path.name
+            _copy_isolated_module(self.path, load_path)
+        self._module = _load_extension_module(load_path)
+        self._run_batch = self._module.sixs_f2py_run_batch
+
+    def close(self) -> None:
+        if self._temp_dir is not None:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None
+
+    def __del__(self) -> None:
+        self.close()
+
+    def run_batch(
+        self,
+        *,
+        n_threads: int,
+        month: int,
+        day: int,
+        atmospheric_mode: int,
+        radiosonde_altitude_km: np.ndarray,
+        radiosonde_pressure_mb: np.ndarray,
+        radiosonde_temperature_k: np.ndarray,
+        radiosonde_water_g_m3: np.ndarray,
+        radiosonde_ozone_g_m3: np.ndarray,
+        aerosol_mode: int,
+        aerosol_mixture: np.ndarray,
+        aerosol_distribution_rmin: float,
+        aerosol_distribution_rmax: float,
+        aerosol_distribution_component_count: int,
+        aerosol_distribution_x1: np.ndarray,
+        aerosol_distribution_x2: np.ndarray,
+        aerosol_distribution_x3: np.ndarray,
+        aerosol_distribution_cij: np.ndarray,
+        aerosol_distribution_rn: np.ndarray,
+        aerosol_distribution_ri: np.ndarray,
+        aerosol_sun_count: int,
+        aerosol_sun_radius: np.ndarray,
+        aerosol_sun_dvlogr: np.ndarray,
+        aerosol_layer_count: int,
+        aerosol_layer_height: np.ndarray,
+        aerosol_layer_aot: np.ndarray,
+        aerosol_layer_type: np.ndarray,
+        reference_reflectance: float,
+        spectral_wlinf: float,
+        spectral_wlsup: float,
+        spectral_response: np.ndarray,
+        aerosol_model_path: str,
+        surface_inhomo: int,
+        surface_idirec: int,
+        surface_target_mode: int,
+        surface_target_constant: float,
+        surface_target_spectrum: np.ndarray,
+        surface_env_mode: int,
+        surface_env_constant: float,
+        surface_env_spectrum: np.ndarray,
+        surface_radius_km: float,
+        surface_brdf_model: int,
+        surface_brdf_params: np.ndarray,
+        surface_brdf_options: np.ndarray,
+        surface_brdf_struct: np.ndarray,
+        surface_brdf_optics: np.ndarray,
+        surface_brdf_table_solar: np.ndarray,
+        surface_brdf_table_view: np.ndarray,
+        surface_brdf_spherical_albedo: float,
+        surface_brdf_directional_reflectance: float,
+        atmospheric_correction_mode: int,
+        atmospheric_correction_value: float,
+        sza_deg: np.ndarray,
+        saa_deg: np.ndarray,
+        vza_deg: np.ndarray,
+        vaa_deg: np.ndarray,
+        aot550: np.ndarray,
+        tcwv_cm: np.ndarray,
+        tco3_atmcm: np.ndarray,
+        elevation_km: np.ndarray,
+    ) -> _NativeBatchResult:
+        n_cases = int(sza_deg.size)
+        if n_cases == 0:
+            return _NativeBatchResult(outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32))
+
+        native_output_matrix = np.empty(
+            (len(SIXS_NATIVE_OUTPUT_NAMES), n_cases),
+            dtype=np.float64,
+            order="F",
+        )
+        status = np.zeros(n_cases, dtype=np.int32)
+
+        self._run_batch(
+            int(month),
+            int(day),
+            int(atmospheric_mode),
+            np.asarray(radiosonde_altitude_km, dtype=np.float64),
+            np.asarray(radiosonde_pressure_mb, dtype=np.float64),
+            np.asarray(radiosonde_temperature_k, dtype=np.float64),
+            np.asarray(radiosonde_water_g_m3, dtype=np.float64),
+            np.asarray(radiosonde_ozone_g_m3, dtype=np.float64),
+            int(aerosol_mode),
+            np.asarray(aerosol_mixture, dtype=np.float64),
+            float(aerosol_distribution_rmin),
+            float(aerosol_distribution_rmax),
+            int(aerosol_distribution_component_count),
+            np.asarray(aerosol_distribution_x1, dtype=np.float64),
+            np.asarray(aerosol_distribution_x2, dtype=np.float64),
+            np.asarray(aerosol_distribution_x3, dtype=np.float64),
+            np.asarray(aerosol_distribution_cij, dtype=np.float64),
+            np.asarray(aerosol_distribution_rn, dtype=np.float64),
+            np.asarray(aerosol_distribution_ri, dtype=np.float64),
+            int(aerosol_sun_count),
+            np.asarray(aerosol_sun_radius, dtype=np.float64),
+            np.asarray(aerosol_sun_dvlogr, dtype=np.float64),
+            int(aerosol_layer_count),
+            np.asarray(aerosol_layer_height, dtype=np.float64),
+            np.asarray(aerosol_layer_aot, dtype=np.float64),
+            np.asarray(aerosol_layer_type, dtype=np.int32),
+            float(reference_reflectance),
+            float(spectral_wlinf),
+            float(spectral_wlsup),
+            np.asarray(spectral_response, dtype=np.float64),
+            str(aerosol_model_path),
+            int(surface_inhomo),
+            int(surface_idirec),
+            int(surface_target_mode),
+            float(surface_target_constant),
+            np.asarray(surface_target_spectrum, dtype=np.float64),
+            int(surface_env_mode),
+            float(surface_env_constant),
+            np.asarray(surface_env_spectrum, dtype=np.float64),
+            float(surface_radius_km),
+            int(surface_brdf_model),
+            np.asarray(surface_brdf_params, dtype=np.float64),
+            np.asarray(surface_brdf_options, dtype=np.int32),
+            np.asarray(surface_brdf_struct, dtype=np.float64),
+            np.asarray(surface_brdf_optics, dtype=np.float64),
+            np.asarray(surface_brdf_table_solar, dtype=np.float64),
+            np.asarray(surface_brdf_table_view, dtype=np.float64),
+            float(surface_brdf_spherical_albedo),
+            float(surface_brdf_directional_reflectance),
+            int(atmospheric_correction_mode),
+            float(atmospheric_correction_value),
+            np.asarray(sza_deg, dtype=np.float64),
+            np.asarray(saa_deg, dtype=np.float64),
+            np.asarray(vza_deg, dtype=np.float64),
+            np.asarray(vaa_deg, dtype=np.float64),
+            np.asarray(aot550, dtype=np.float64),
+            np.asarray(tcwv_cm, dtype=np.float64),
+            np.asarray(tco3_atmcm, dtype=np.float64),
+            np.asarray(elevation_km, dtype=np.float64),
+            int(max(1, n_threads)),
+            native_output_matrix,
+            status,
+            n_cases=int(n_cases),
+        )
+        outputs = _empty_output_bundle(n_cases)
+        for row_index, name in enumerate(SIXS_NATIVE_OUTPUT_NAMES):
+            outputs[name] = np.ascontiguousarray(native_output_matrix[row_index, :], dtype=np.float64)
+        outputs["xbp"] = np.ascontiguousarray(outputs["xb"], dtype=np.float64)
+        outputs["xcp"] = np.ascontiguousarray(outputs["xc"], dtype=np.float64)
+        return _NativeBatchResult(
+            outputs={name: np.ascontiguousarray(values, dtype=np.float64) for name, values in outputs.items()},
+            status=np.ascontiguousarray(status, dtype=np.int32),
+        )
+
+
+class SixSNativeRunner:
+    """High-level xarray runner around the native 6SV2.1 Python extension."""
+
+    def __init__(
+        self,
+        *,
+        sixs_config: SixSAlgorithmConfig,
+        sensor_config: SensorConfig | None = None,
+    ) -> None:
+        self._config = sixs_config
+        self._sensor_config = sensor_config
+        self._module_path = ensure_native_sixs_module(sixs_config)
+        self._native_threads = int(sixs_config.native_threads or _default_native_threads())
+        self._observation_time: datetime | None = None
+        self._openmp_session: _SixSExtensionModule | None = None
+        self._worker_sessions: list[_SixSExtensionModule] = []
+
+    def set_observation_time(self, observation_time: datetime | None) -> None:
+        self._observation_time = observation_time
+
+    def close(self) -> None:
+        if self._openmp_session is not None:
+            self._openmp_session.close()
+            self._openmp_session = None
+        for session in self._worker_sessions:
+            session.close()
+        self._worker_sessions = []
+
+    def __del__(self) -> None:
+        self.close()
+
+    def compute_coefficients(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        band: SensorBand,
+        output_variables: tuple[str, ...] | list[str] | None = None,
+    ) -> dict[str, xr.DataArray]:
+        return self._compute_band_outputs_multi(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            bands=[band],
+            output_variables=output_variables,
+        )[0]
+
+    def compute_coefficients_multi(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand],
+        compute_jacobian: bool = False,
+        output_variables: tuple[str, ...] | list[str] | None = None,
+    ) -> list[dict[str, xr.DataArray]]:
+        if compute_jacobian:
+            raise NotImplementedError("The native 6S backend does not expose Jacobians.")
+        return self._compute_band_outputs_multi(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            bands=bands,
+            output_variables=output_variables,
+        )
+
+    def preload_scene_subset(
+        self,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand],
+        output_variables: tuple[str, ...] | list[str] | None = None,
+    ) -> None:
+        if not bands:
+            return None
+        prepared = self._prepare_scene_inputs(geometry=geometry, atmo_state=atmo_state)
+        if not np.any(prepared.valid_mask):
+            return None
+        plan = _build_scene_lut_plan(
+            prepared.case_arrays,
+            max_nodes_per_axis=int(self._config.scene_lut_max_nodes_per_axis),
+            max_cases=int(self._config.scene_lut_max_cases),
+        )
+        if not _should_use_scene_lut(
+            mode=str(self._config.mode),
+            direct_case_count=plan.direct_case_count,
+            lut_case_count=plan.lut_case_count,
+            min_pixels=int(self._config.scene_lut_min_pixels),
+            required_speedup=float(self._config.scene_lut_required_speedup),
+        ):
+            return None
+        selected_names = _to_native_output_names(output_variables or getattr(self._config, "output_variables", None))
+        for band in bands:
+            self._run_scene_lut_batch(prepared=prepared, band=band, selected_names=selected_names, plan=plan)
+        return None
+
+    def _compute_band_outputs_multi(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand],
+        output_variables: tuple[str, ...] | list[str] | None,
+    ) -> list[dict[str, xr.DataArray]]:
+        if not bands:
+            return []
+        prepared = self._prepare_scene_inputs(geometry=geometry, atmo_state=atmo_state)
+        selected_names = _to_native_output_names(output_variables)
+        if not np.any(prepared.valid_mask):
+            return [_nan_output_arrays(prepared.template, selected_names) for _ in bands]
+        plan = _build_scene_lut_plan(
+            prepared.case_arrays,
+            max_nodes_per_axis=int(self._config.scene_lut_max_nodes_per_axis),
+            max_cases=int(self._config.scene_lut_max_cases),
+        )
+        use_scene_lut = _should_use_scene_lut(
+            mode=str(self._config.mode),
+            direct_case_count=plan.direct_case_count,
+            lut_case_count=plan.lut_case_count,
+            min_pixels=int(self._config.scene_lut_min_pixels),
+            required_speedup=float(self._config.scene_lut_required_speedup),
+        )
+        outputs: list[dict[str, xr.DataArray]] = []
+        for band in bands:
+            if use_scene_lut:
+                native_outputs = self._run_scene_lut_batch(
+                    prepared=prepared,
+                    band=band,
+                    selected_names=selected_names,
+                    plan=plan,
+                )
+            else:
+                native_outputs = self._run_native_batch(**self._band_native_kwargs(prepared, band))
+            outputs.append(self._render_native_outputs(prepared, selected_names, native_outputs))
+        return outputs
+
+    def _prepare_scene_inputs(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+    ) -> _PreparedSceneInputs:
+        template = atmo_state.aot
+        geometry_on_grid = _resample_geometry_to_template(geometry, template)
+
+        sza_deg = xr.DataArray(np.degrees(geometry_on_grid.sza.values), dims=template.dims, coords=template.coords)
+        saa_deg = _wrap_azimuth_degrees(geometry_on_grid.saa, name="saa_deg")
+        vza_deg = xr.DataArray(np.degrees(geometry_on_grid.vza.values), dims=template.dims, coords=template.coords)
+        vaa_deg = _wrap_azimuth_degrees(geometry_on_grid.vaa, name="vaa_deg")
+        valid = (
+            np.isfinite(sza_deg.values)
+            & np.isfinite(saa_deg.values)
+            & np.isfinite(vza_deg.values)
+            & np.isfinite(vaa_deg.values)
+            & np.isfinite(atmo_state.aot.values)
+            & np.isfinite(atmo_state.tcwv.values)
+            & np.isfinite(atmo_state.tco3.values)
+            & np.isfinite(atmo_state.elevation.values)
+        )
+        month = self._observation_time.month if self._observation_time is not None else self._config.month
+        day = self._observation_time.day if self._observation_time is not None else self._config.day
+        atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(self._config, month=month)
+        aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(self._config)
+        surface_inputs = _resolve_surface_inputs(self._config)
+        atmospheric_correction_mode, atmospheric_correction_value = _resolve_atmospheric_correction_inputs(
+            self._config
+        )
+        return _PreparedSceneInputs(
+            template=template,
+            valid_mask=valid,
+            flat_valid_mask=np.ravel(valid),
+            common_kwargs={
+                "month": month,
+                "day": day,
+                "atmospheric_mode": atmospheric_mode,
+                "radiosonde_altitude_km": np.ascontiguousarray(radiosonde["altitude_km"], dtype=np.float64),
+                "radiosonde_pressure_mb": np.ascontiguousarray(radiosonde["pressure_mb"], dtype=np.float64),
+                "radiosonde_temperature_k": np.ascontiguousarray(radiosonde["temperature_k"], dtype=np.float64),
+                "radiosonde_water_g_m3": np.ascontiguousarray(radiosonde["water_g_m3"], dtype=np.float64),
+                "radiosonde_ozone_g_m3": np.ascontiguousarray(radiosonde["ozone_g_m3"], dtype=np.float64),
+                "aerosol_mode": aerosol_mode,
+                "aerosol_mixture": np.ascontiguousarray(aerosol_inputs["mixture"], dtype=np.float64),
+                "aerosol_distribution_rmin": float(aerosol_inputs["dist_rmin"]),
+                "aerosol_distribution_rmax": float(aerosol_inputs["dist_rmax"]),
+                "aerosol_distribution_component_count": int(aerosol_inputs["dist_component_count"]),
+                "aerosol_distribution_x1": np.ascontiguousarray(aerosol_inputs["dist_x1"], dtype=np.float64),
+                "aerosol_distribution_x2": np.ascontiguousarray(aerosol_inputs["dist_x2"], dtype=np.float64),
+                "aerosol_distribution_x3": np.ascontiguousarray(aerosol_inputs["dist_x3"], dtype=np.float64),
+                "aerosol_distribution_cij": np.ascontiguousarray(aerosol_inputs["dist_cij"], dtype=np.float64),
+                "aerosol_distribution_rn": np.ascontiguousarray(aerosol_inputs["dist_rn"], dtype=np.float64),
+                "aerosol_distribution_ri": np.ascontiguousarray(aerosol_inputs["dist_ri"], dtype=np.float64),
+                "aerosol_sun_count": int(aerosol_inputs["sun_count"]),
+                "aerosol_sun_radius": np.ascontiguousarray(aerosol_inputs["sun_radius"], dtype=np.float64),
+                "aerosol_sun_dvlogr": np.ascontiguousarray(aerosol_inputs["sun_dvlogr"], dtype=np.float64),
+                "aerosol_layer_count": int(aerosol_inputs["layer_count"]),
+                "aerosol_layer_height": np.ascontiguousarray(aerosol_inputs["layer_height"], dtype=np.float64),
+                "aerosol_layer_aot": np.ascontiguousarray(aerosol_inputs["layer_aot"], dtype=np.float64),
+                "aerosol_layer_type": np.ascontiguousarray(aerosol_inputs["layer_type"], dtype=np.int32),
+                "reference_reflectance": float(self._config.reference_reflectance),
+                "aerosol_model_path": _encode_aerosol_model_path(self._config.aerosol_model_path),
+                "surface_inhomo": int(surface_inputs["inhomo"]),
+                "surface_idirec": int(surface_inputs["idirec"]),
+                "surface_target_mode": int(surface_inputs["target_mode"]),
+                "surface_target_constant": float(surface_inputs["target_constant"]),
+                "surface_target_spectrum": np.ascontiguousarray(surface_inputs["target_spectrum"], dtype=np.float64),
+                "surface_env_mode": int(surface_inputs["env_mode"]),
+                "surface_env_constant": float(surface_inputs["env_constant"]),
+                "surface_env_spectrum": np.ascontiguousarray(surface_inputs["env_spectrum"], dtype=np.float64),
+                "surface_radius_km": float(surface_inputs["radius_km"]),
+                "surface_brdf_model": int(surface_inputs["brdf_model"]),
+                "surface_brdf_params": np.ascontiguousarray(surface_inputs["brdf_params"], dtype=np.float64),
+                "surface_brdf_options": np.ascontiguousarray(surface_inputs["brdf_options"], dtype=np.int32),
+                "surface_brdf_struct": np.ascontiguousarray(surface_inputs["brdf_struct"], dtype=np.float64),
+                "surface_brdf_optics": np.ascontiguousarray(surface_inputs["brdf_optics"], dtype=np.float64),
+                "surface_brdf_table_solar": np.ascontiguousarray(surface_inputs["brdf_table_solar"], dtype=np.float64),
+                "surface_brdf_table_view": np.ascontiguousarray(surface_inputs["brdf_table_view"], dtype=np.float64),
+                "surface_brdf_spherical_albedo": float(surface_inputs["brdf_spherical_albedo"]),
+                "surface_brdf_directional_reflectance": float(surface_inputs["brdf_directional_reflectance"]),
+                "atmospheric_correction_mode": int(atmospheric_correction_mode),
+                "atmospheric_correction_value": float(atmospheric_correction_value),
+            },
+            case_arrays={
+                "sza_deg": _as_float64(sza_deg.values[valid]),
+                "saa_deg": _as_float64(saa_deg.values[valid]),
+                "vza_deg": _as_float64(vza_deg.values[valid]),
+                "vaa_deg": _as_float64(vaa_deg.values[valid]),
+                "aot550": _as_float64(atmo_state.aot.values[valid]),
+                "tcwv_cm": _as_float64(atmo_state.tcwv.values[valid]),
+                "tco3_atmcm": _as_float64(atmo_state.tco3.values[valid]),
+                "elevation_km": _as_float64(atmo_state.elevation.values[valid]),
+            },
+        )
+
+    def _band_native_kwargs(self, prepared: _PreparedSceneInputs, band: SensorBand) -> dict[str, Any]:
+        response, wlinf, wlsup = _build_spectral_response(band)
+        kwargs = dict(prepared.common_kwargs)
+        kwargs.update(
+            {
+                "spectral_wlinf": wlinf,
+                "spectral_wlsup": wlsup,
+                "spectral_response": response,
+            }
+        )
+        kwargs.update(prepared.case_arrays)
+        return kwargs
+
+    def _render_native_outputs(
+        self,
+        prepared: _PreparedSceneInputs,
+        selected_names: tuple[str, ...],
+        native_outputs: _NativeBatchResult,
+    ) -> dict[str, xr.DataArray]:
+        outputs_by_name: dict[str, xr.DataArray] = {}
+        for name in selected_names:
+            full = np.full(prepared.template.size, np.nan, dtype=np.float64)
+            full[prepared.flat_valid_mask] = native_outputs.outputs[name]
+            outputs_by_name[name] = _as_output_array(full, prepared.template, name)
+        return outputs_by_name
+
+    def _run_scene_lut_batch(
+        self,
+        *,
+        prepared: _PreparedSceneInputs,
+        band: SensorBand,
+        selected_names: tuple[str, ...],
+        plan: _SceneLUTPlan,
+    ) -> _NativeBatchResult:
+        native_kwargs = self._band_native_kwargs(prepared, band)
+        native_kwargs.update(plan.grid_case_arrays)
+        lut_outputs = self._run_native_batch(**native_kwargs)
+        interpolated_outputs = _interpolate_scene_lut_outputs(
+            plan,
+            lut_outputs,
+            prepared.case_arrays,
+            selected_names,
+        )
+        status = np.zeros(plan.direct_case_count, dtype=np.int32)
+        return _NativeBatchResult(outputs=interpolated_outputs, status=status)
+
+    def _ensure_openmp_session(self) -> _SixSExtensionModule:
+        if self._openmp_session is None:
+            self._openmp_session = _SixSExtensionModule(self._module_path, isolate=True)
+        return self._openmp_session
+
+    def _ensure_worker_sessions(self, worker_count: int) -> list[_SixSExtensionModule]:
+        if len(self._worker_sessions) == worker_count and worker_count > 0:
+            return self._worker_sessions
+        for session in self._worker_sessions:
+            session.close()
+        self._worker_sessions = [
+            _SixSExtensionModule(self._module_path, isolate=True)
+            for _ in range(max(1, worker_count))
+        ]
+        return self._worker_sessions
+
+    def _worker_library_count(self) -> int:
+        configured = getattr(self._config, "worker_libraries", None)
+        if configured is not None:
+            return max(1, int(configured))
+        return max(1, int(self._native_threads))
+
+    def _run_native_batch(self, **kwargs: Any) -> _NativeBatchResult:
+        backend = str(getattr(self._config, "parallel_backend", "openmp"))
+        if backend == "worker_libraries":
+            result = self._run_native_batch_worker_libraries(**kwargs)
+        else:
+            extension = self._ensure_openmp_session()
+            result = extension.run_batch(n_threads=self._native_threads, **kwargs)
+        failed = result.status != 0
+        if np.any(failed):
+            for _name, values in result.outputs.items():
+                values[failed] = np.nan
+            logger.warning(
+                "6S native runner returned %d non-zero status values.",
+                int(np.count_nonzero(failed)),
+            )
+        return result
+
+    def _run_native_batch_worker_libraries(self, **kwargs: Any) -> _NativeBatchResult:
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        if n_cases == 0:
+            return _NativeBatchResult(outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32))
+        chunk_size = max(1, int(getattr(self._config, "chunk_size", 4096)))
+        chunks = [(start, min(start + chunk_size, n_cases)) for start in range(0, n_cases, chunk_size)]
+        worker_count = min(len(chunks), self._worker_library_count())
+        sessions = self._ensure_worker_sessions(worker_count)
+        outputs = _empty_output_bundle(n_cases)
+        status = np.zeros(n_cases, dtype=np.int32)
+        assignments: list[list[tuple[int, int]]] = [[] for _ in range(worker_count)]
+        for idx, chunk in enumerate(chunks):
+            assignments[idx % worker_count].append(chunk)
+
+        def _run_assigned(session: _SixSExtensionModule, assigned: list[tuple[int, int]]) -> list[tuple[int, int, _NativeBatchResult]]:
+            completed: list[tuple[int, int, _NativeBatchResult]] = []
+            for start, stop in assigned:
+                result = session.run_batch(n_threads=1, **_slice_case_kwargs(kwargs, start, stop))
+                completed.append((start, stop, result))
+            return completed
+
+        if worker_count == 1:
+            completed_runs = [_run_assigned(sessions[0], assignments[0])]
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                completed_runs = list(
+                    executor.map(
+                        _run_assigned,
+                        sessions,
+                        assignments,
+                    )
+                )
+
+        for worker_runs in completed_runs:
+            for start, stop, result in worker_runs:
+                status[start:stop] = result.status
+                for name, values in result.outputs.items():
+                    outputs[name][start:stop] = values
+        return _NativeBatchResult(outputs=outputs, status=status)
+
+
+__all__ = ["SixSNativeRunner"]

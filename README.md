@@ -64,6 +64,25 @@ python -m pip install -e ".[dev,docs]"
 maturin develop --release --manifest-path src/siac_rs/Cargo.toml
 ```
 
+### Native 6S backend
+
+The repository also includes a native 6SV2.1 backend selected with
+`algorithms.rt.backend = "sixs"`.
+
+This is separate from the optional Py6S backend. `.[py6s]` installs Py6S for
+`backend = "py6s"` only; it does not build the native backend.
+
+To build native 6S with the repo-managed toolchain:
+
+```bash
+pixi run -e rt6s build-6s-native
+```
+
+That environment provides the required Fortran compiler, `meson`, and `ninja`.
+See [Native 6SV2.1 Backend](docs/user-guide/native-sixs-backend.md) for setup,
+configuration, route selection, outputs, parity validation, benchmark guidance,
+and troubleshooting.
+
 ## Fast Run
 
 ### Canonical developer workflow
@@ -169,9 +188,11 @@ Notes:
 - Installation guide: [docs/getting-started/installation.md](docs/getting-started/installation.md)
 - First run: [docs/getting-started/first-run.md](docs/getting-started/first-run.md)
 - Configuration basics: [docs/user-guide/configuration-basics.md](docs/user-guide/configuration-basics.md)
+- Native 6SV2.1 backend: [docs/user-guide/native-sixs-backend.md](docs/user-guide/native-sixs-backend.md)
 - Running SIAC: [docs/user-guide/running-siac.md](docs/user-guide/running-siac.md)
 - Theory: [docs/science/theory.md](docs/science/theory.md)
 - Architecture: [docs/architecture/package-map.md](docs/architecture/package-map.md)
+- Native 6SV2.1 architecture: [docs/architecture/native-sixs-backend.md](docs/architecture/native-sixs-backend.md)
 
 ## GitHub Pages
 
