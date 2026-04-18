@@ -48,4 +48,5 @@ Thumbs.db
 *output*
 !docs/user-guide/outputs.md
 !python/siac/adapters/output.py
+!python/siac/sixs_outputs.py
 !tests/unit/test_output_adapter.py
