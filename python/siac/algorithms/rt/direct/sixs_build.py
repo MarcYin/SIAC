@@ -1642,24 +1642,24 @@ def _run_distutils_backend(
         extra_link_args=_distutils_extra_link_args(flags),
     )
 
-    argv = [
-        sys.argv[0],
+    script_name = os.fspath(build_root / "setup.py")
+    script_args = [
         "build",
         "--build-temp",
         os.fspath(backend_build_dir),
         "--build-base",
         os.fspath(backend_build_dir),
         "--build-platlib",
-        ".",
+        os.fspath(build_root),
         "--disable-optimization",
         "config_fc",
         f"--f77flags={' '.join(flags)}",
         f"--f90flags={' '.join(flags)}",
     ]
+    argv = [script_name, *script_args]
 
     stdout_buffer = _EncodedStringIO()
     stderr_buffer = _EncodedStringIO()
-    old_argv = sys.argv[:]
     old_cwd = Path.cwd()
     previous_fc = os.environ.get("FC")
     previous_f77 = os.environ.get("F77")
@@ -1667,10 +1667,9 @@ def _run_distutils_backend(
     os.environ["F77"] = compiler
 
     try:
-        sys.argv = argv
         os.chdir(build_root)
         with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-            setup(ext_modules=[ext])
+            setup(script_name=script_name, script_args=script_args, ext_modules=[ext])
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 1
         return subprocess.CompletedProcess(
@@ -1688,7 +1687,6 @@ def _run_distutils_backend(
             stderr=stderr_buffer.getvalue(),
         )
     finally:
-        sys.argv = old_argv
         os.chdir(old_cwd)
         if previous_fc is None:
             os.environ.pop("FC", None)
