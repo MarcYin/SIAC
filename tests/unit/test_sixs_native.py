@@ -320,6 +320,8 @@ def test_build_f2py_command_links_openmp_runtime_for_distutils(tmp_path: Path) -
     )
 
     assert "-lgomp" in command
+    assert "-lquadmath" in command
+    assert "-lm" in command
 
 
 def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:
