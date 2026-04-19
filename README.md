@@ -80,10 +80,10 @@ pixi run -e rt6s build-6s-native
 
 That environment pins the native-build toolchain to a tested compatibility set:
 Python 3.11, `setuptools < 60`, the Fortran compiler, `meson`, and `ninja`.
-Inside that environment, SIAC tries the Meson backend first and keeps the
-legacy F2PY `distutils` backend available as a compatibility fallback. Outside
-the `rt6s` environment, `distutils` is only enabled when NumPy and
-`setuptools` still support it.
+Inside that environment the Linux smoke workflow forces the F2PY `distutils`
+backend because it is the deterministic path for this legacy Fortran extension
+on CI. Outside the `rt6s` environment, SIAC will still try the Meson backend
+first and only enables `distutils` when NumPy and `setuptools` support it.
 To reproduce the Linux native smoke path locally:
 
 ```bash

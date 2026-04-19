@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.machinery
 import importlib.metadata
+import io
 import logging
 import os
 import re
@@ -11,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1458,23 +1461,36 @@ def _compile_f2py_extension(
     env["F77"] = compiler
     failures: list[tuple[str, list[str], subprocess.CompletedProcess[str], str]] = []
     for backend in _resolve_f2py_backends():
-        cmd = _build_f2py_command(
-            backend=backend,
-            module_name=build_paths.module_name,
-            source_dir=source_dir,
-            compile_sources=compile_sources,
-            flags=flags,
-            f2py_build_dir=f2py_build_dir,
-        )
-        logger.info("Compiling native 6S Python extension with %s backend: %s", backend, " ".join(cmd))
-        completed = subprocess.run(
-            cmd,
-            cwd=build_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
+        if backend == "distutils":
+            logger.info("Compiling native 6S Python extension with distutils backend.")
+            completed = _run_distutils_backend(
+                module_name=build_paths.module_name,
+                source_dir=source_dir,
+                compile_sources=compile_sources,
+                flags=flags,
+                f2py_build_dir=f2py_build_dir,
+                build_root=build_root,
+                compiler=compiler,
+            )
+            cmd = list(completed.args)
+        else:
+            cmd = _build_f2py_command(
+                backend=backend,
+                module_name=build_paths.module_name,
+                source_dir=source_dir,
+                compile_sources=compile_sources,
+                flags=flags,
+                f2py_build_dir=f2py_build_dir,
+            )
+            logger.info("Compiling native 6S Python extension with %s backend: %s", backend, " ".join(cmd))
+            completed = subprocess.run(
+                cmd,
+                cwd=build_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
         if completed.returncode != 0:
             log_summary = _summarize_build_output(completed.stdout, completed.stderr)
             failures.append((backend, cmd, completed, log_summary))
@@ -1539,11 +1555,105 @@ def _build_f2py_command(
             f"-I{os.fspath(source_dir)}",
         ]
     )
-    if backend == "distutils" and "-fopenmp" in flags:
-        cmd.extend(["-lgomp", "-lquadmath", "-lm"])
     cmd.extend(os.fspath(path.resolve()) for path in compile_sources)
     cmd.extend(["only:", "sixs_f2py_run_batch", ":"])
     return cmd
+
+
+def _distutils_extra_link_args(flags: list[str]) -> list[str]:
+    if "-fopenmp" not in flags:
+        return []
+    return ["-lgomp", "-lquadmath", "-lm"]
+
+
+def _run_distutils_backend(
+    *,
+    module_name: str,
+    source_dir: Path,
+    compile_sources: list[Path],
+    flags: list[str],
+    f2py_build_dir: Path,
+    build_root: Path,
+    compiler: str,
+) -> subprocess.CompletedProcess[str]:
+    from numpy.distutils.core import Extension, setup
+
+    backend_build_dir = f2py_build_dir / "distutils"
+    if backend_build_dir.exists():
+        shutil.rmtree(backend_build_dir)
+    backend_build_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Extension(
+        name=module_name,
+        sources=[os.fspath(path.resolve()) for path in compile_sources],
+        include_dirs=[os.fspath(source_dir)],
+        f2py_options=["only:", "sixs_f2py_run_batch", ":"],
+        extra_link_args=_distutils_extra_link_args(flags),
+    )
+
+    argv = [
+        sys.argv[0],
+        "build",
+        "--build-temp",
+        os.fspath(backend_build_dir),
+        "--build-base",
+        os.fspath(backend_build_dir),
+        "--build-platlib",
+        ".",
+        "--disable-optimization",
+        "config_fc",
+        f"--f77flags={' '.join(flags)}",
+        f"--f90flags={' '.join(flags)}",
+    ]
+
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    old_argv = sys.argv[:]
+    old_cwd = Path.cwd()
+    previous_fc = os.environ.get("FC")
+    previous_f77 = os.environ.get("F77")
+    os.environ["FC"] = compiler
+    os.environ["F77"] = compiler
+
+    try:
+        sys.argv = argv
+        os.chdir(build_root)
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            setup(ext_modules=[ext])
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=code,
+            stdout=stdout_buffer.getvalue(),
+            stderr=stderr_buffer.getvalue(),
+        )
+    except Exception:
+        traceback.print_exc(file=stderr_buffer)
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=1,
+            stdout=stdout_buffer.getvalue(),
+            stderr=stderr_buffer.getvalue(),
+        )
+    finally:
+        sys.argv = old_argv
+        os.chdir(old_cwd)
+        if previous_fc is None:
+            os.environ.pop("FC", None)
+        else:
+            os.environ["FC"] = previous_fc
+        if previous_f77 is None:
+            os.environ.pop("F77", None)
+        else:
+            os.environ["F77"] = previous_f77
+
+    return subprocess.CompletedProcess(
+        args=argv,
+        returncode=0,
+        stdout=stdout_buffer.getvalue(),
+        stderr=stderr_buffer.getvalue(),
+    )
 
 
 def _replace_once(text: str, old: str, new: str, description: str) -> str:

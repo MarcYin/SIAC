@@ -56,11 +56,10 @@ pixi run -e rt6s build-6s-native
 ```
 
 That task runs `tools/build_6s_native.py`, which builds the native Python
-extension used by `algorithms.rt.backend = "sixs"`. In the repo-managed `rt6s`
-environment, the builder tries the Meson backend first and keeps `distutils`
-available as a compatibility fallback. Outside that environment, the builder
-only exposes `distutils` when the current NumPy and `setuptools` combination
-supports it.
+environment, the Linux smoke workflow forces `SIAC_SIXS_F2PY_BACKEND=distutils`
+for deterministic CI coverage. Outside that environment, the builder still
+tries the Meson backend first and only exposes `distutils` when the current
+NumPy and `setuptools` combination supports it.
 
 To remove the native build cache:
 
