@@ -1,0 +1,49 @@
+name: Native 6S Smoke
+
+on:
+  push:
+    branches:
+      - master
+      - feat/refactor
+    paths:
+      - ".github/workflows/rt6s-smoke.yml"
+      - "python/siac/algorithms/rt/direct/**"
+      - "python/siac/config/schema.py"
+      - "python/siac/sixs_outputs.py"
+      - "tools/build_6s_native.py"
+      - "tools/rt6s_smoke.py"
+      - "tests/unit/test_sixs_native.py"
+      - "tests/integration/test_sixs_backend_integration.py"
+  pull_request:
+    paths:
+      - ".github/workflows/rt6s-smoke.yml"
+      - "python/siac/algorithms/rt/direct/**"
+      - "python/siac/config/schema.py"
+      - "python/siac/sixs_outputs.py"
+      - "tools/build_6s_native.py"
+      - "tools/rt6s_smoke.py"
+      - "tests/unit/test_sixs_native.py"
+      - "tests/integration/test_sixs_backend_integration.py"
+  workflow_dispatch:
+
+concurrency:
+  group: rt6s-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-6s-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Pixi
+        uses: prefix-dev/setup-pixi@v0
+
+      - name: Install rt6s environment
+        run: pixi install -e rt6s
+
+      - name: Build and run native 6S smoke
+        run: PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py

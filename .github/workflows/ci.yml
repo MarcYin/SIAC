@@ -46,17 +46,24 @@ jobs:
             tests/integration/test_pipeline.py \
             tests/integration/test_injection.py -q
 
-      - name: Import smoke
+      - name: Source-tree import smoke
         run: |
           PYTHONPATH=python pixi run python - <<'PY'
           import siac
           import siac._rust
+          import siac.sixs_outputs as sixs_outputs
 
           from siac import SIAC, SIACConfig
           from siac.adapters.output import ConfiguredOutputWriter
+          from siac.config.schema import SixSAlgorithmConfig
+          from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
 
           print(siac.__version__)
           print(SIAC.__name__, SIACConfig.__name__, ConfiguredOutputWriter.__name__)
+          print(sixs_outputs.__file__)
+          assert "xap" in SIXS_DEFAULT_OUTPUT_VARIABLES
+          assert len(SIXS_OUTPUT_VARIABLE_CHOICES) >= len(SIXS_DEFAULT_OUTPUT_VARIABLES) >= 3
+          assert SixSAlgorithmConfig().output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
           PY
 
       - name: Build wheel artifact
@@ -80,12 +87,19 @@ jobs:
           "$smoke_dir/venv/bin/python" - <<'PY'
           import siac
           import siac._rust
+          import siac.sixs_outputs as sixs_outputs
 
           from siac import SIAC, SIACConfig
           from siac.adapters.output import ConfiguredOutputWriter
+          from siac.config.schema import SixSAlgorithmConfig
+          from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
 
           print(siac.__version__)
           print(SIAC.__name__, SIACConfig.__name__, ConfiguredOutputWriter.__name__)
+          print(sixs_outputs.__file__)
+          assert "xap" in SIXS_DEFAULT_OUTPUT_VARIABLES
+          assert len(SIXS_OUTPUT_VARIABLE_CHOICES) >= len(SIXS_DEFAULT_OUTPUT_VARIABLES) >= 3
+          assert SixSAlgorithmConfig().output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
           PY
 
       - name: Wheel install smoke (isolated)
@@ -107,10 +121,17 @@ jobs:
           "$smoke_dir/venv/bin/python" - <<'PY'
           import siac
           import siac._rust
+          import siac.sixs_outputs as sixs_outputs
 
           from siac import SIAC, SIACConfig
           from siac.adapters.output import ConfiguredOutputWriter
+          from siac.config.schema import SixSAlgorithmConfig
+          from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
 
           print(siac.__version__)
           print(SIAC.__name__, SIACConfig.__name__, ConfiguredOutputWriter.__name__)
+          print(sixs_outputs.__file__)
+          assert "xap" in SIXS_DEFAULT_OUTPUT_VARIABLES
+          assert len(SIXS_OUTPUT_VARIABLE_CHOICES) >= len(SIXS_DEFAULT_OUTPUT_VARIABLES) >= 3
+          assert SixSAlgorithmConfig().output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
           PY
