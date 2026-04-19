@@ -62,4 +62,4 @@ jobs:
           tar -xf tmp/6sV2.1.tar -C tmp/6s_upstream
 
       - name: Build and run native 6S smoke
-        run: PYTHONUNBUFFERED=1 PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+        run: SIAC_SIXS_F2PY_BACKEND=distutils PYTHONUNBUFFERED=1 PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
