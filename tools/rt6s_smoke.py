@@ -100,14 +100,15 @@ def _extract_key_diagnostics(text: str) -> str:
         return ""
 
     keywords = (
-        "error",
+        "error:",
         "undefined reference",
         "collect2:",
         "ld:",
+        "cannot find",
         "no such file",
-        "failed",
         "traceback",
         "fatal",
+        "undefined symbol",
     )
     matches = [line for line in lines if any(keyword in line.lower() for keyword in keywords)]
     if matches:
@@ -115,8 +116,7 @@ def _extract_key_diagnostics(text: str) -> str:
 
     if len(lines) <= 80:
         return "\n".join(lines)
-    excerpt = [*lines[:40], "...", *lines[-40:]]
-    return "\n".join(excerpt)
+    return "\n".join(lines[-80:])
 
 
 def _write_failure_diagnostics(build_dir: Path, exc: BaseException) -> list[Path]:
