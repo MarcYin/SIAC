@@ -1499,26 +1499,41 @@ def _compile_f2py_extension(
                 check=False,
                 env=env,
             )
+
+        built_extension = find_built_extension(build_paths)
+        if built_extension is not None:
+            if completed.returncode != 0:
+                logger.warning(
+                    "F2PY %s backend reported exit code %s but built extension %s was found; "
+                    "continuing with the produced module. Summary: %s",
+                    backend,
+                    completed.returncode,
+                    built_extension,
+                    _summarize_build_output(completed.stdout, completed.stderr),
+                )
+            if build_paths.module_hint_path is not None and built_extension != build_paths.module_hint_path:
+                build_paths.module_hint_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(os.fspath(built_extension), os.fspath(build_paths.module_hint_path))
+            return
+
         if completed.returncode != 0:
             log_summary = _summarize_build_output(completed.stdout, completed.stderr)
             failures.append((backend, cmd, completed, log_summary))
-            logger.warning("F2PY %s backend failed: %s", backend, log_summary)
-            continue
-
-        built_extension = find_built_extension(build_paths)
-        if built_extension is None:
-            log_summary = _summarize_build_output(completed.stdout, completed.stderr)
-            failures.append((backend, cmd, completed, log_summary))
             logger.warning(
-                "F2PY %s backend reported success but no extension was found: %s",
+                "F2PY %s backend failed: %s",
                 backend,
                 log_summary,
             )
             continue
-        if build_paths.module_hint_path is not None and built_extension != build_paths.module_hint_path:
-            build_paths.module_hint_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(os.fspath(built_extension), os.fspath(build_paths.module_hint_path))
-        return
+
+        log_summary = _summarize_build_output(completed.stdout, completed.stderr)
+        failures.append((backend, cmd, completed, log_summary))
+        logger.warning(
+            "F2PY %s backend reported success but no extension was found: %s",
+            backend,
+            log_summary,
+        )
+        continue
 
     details = []
     for backend, cmd, completed, log_summary in failures:

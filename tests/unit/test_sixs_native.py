@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import xarray as xr
 from siac.algorithms.rt.direct import sixs_build as sixs_build_module
 from siac.algorithms.rt.direct.sixs import SixSBackend
 from siac.algorithms.rt.direct.sixs_build import (
+    _compile_f2py_extension,
     _distutils_backend_supported,
     _distutils_extra_link_args,
     _EncodedStringIO,
@@ -320,6 +322,49 @@ def test_distutils_extra_link_args_include_gcc_runtime_for_openmp() -> None:
     command = _distutils_extra_link_args(["-O3", "-fopenmp"])
 
     assert command == ["-lgomp", "-lquadmath", "-lm"]
+
+
+def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
+
+    build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
+    built_module = build_paths.root_dir / f"{build_paths.module_name}.cpython-test.so"
+    find_calls = {"count": 0}
+
+    def _fake_find_built_extension(_paths):
+        find_calls["count"] += 1
+        if find_calls["count"] < 2:
+            return None
+        return built_module
+
+    def _fake_run_distutils_backend(**_kwargs):
+        built_module.parent.mkdir(parents=True, exist_ok=True)
+        built_module.write_text("built", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=["python", "-m", "numpy.f2py"],
+            returncode=1,
+            stdout="running build",
+            stderr='buildmodule: Could not find the body of interfaced routine "sixs_case_core". Skipping.',
+        )
+
+    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
+    monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
+    monkeypatch.setattr(sixs_build_module, "find_built_extension", _fake_find_built_extension)
+
+    _compile_f2py_extension(
+        source_dir=source_dir,
+        build_paths=build_paths,
+        compiler="gfortran",
+        build_profile="release",
+    )
+
+    assert built_module.exists()
 
 
 def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:
