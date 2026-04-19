@@ -12,6 +12,7 @@ from siac.algorithms.rt.direct.sixs import SixSBackend
 from siac.algorithms.rt.direct.sixs_build import (
     _distutils_backend_supported,
     _distutils_extra_link_args,
+    _EncodedStringIO,
     _resolve_f2py_backends,
     patch_aeroso_source,
     patch_discom_source,
@@ -186,6 +187,12 @@ def test_patch_threadprivate_directives_handles_common_block_styles() -> None:
     assert "c$omp threadprivate(/foo/)" in patched
     assert "c$omp threadprivate(/bar/)" in patched
     assert "c$omp threadprivate(/baz/)" in patched
+
+
+def test_encoded_string_io_reports_utf8_encoding() -> None:
+    stream = _EncodedStringIO()
+
+    assert stream.encoding == "utf-8"
 
 
 def test_default_native_profile_maps_to_user_water_ozone() -> None:

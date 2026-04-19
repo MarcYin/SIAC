@@ -107,6 +107,14 @@ class SixSBuildPaths:
     module_hint_path: Path | None
 
 
+class _EncodedStringIO(io.StringIO):
+    """String buffer that reports a real encoding for numpy.distutils."""
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+
 def _core_output_assignment_lines() -> list[str]:
     lines = ["      ier_out=ier"]
     for index, (_name, expression, condition) in enumerate(SIXS_CORE_OUTPUT_SPECS, start=1):
@@ -1606,8 +1614,8 @@ def _run_distutils_backend(
         f"--f90flags={' '.join(flags)}",
     ]
 
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
+    stdout_buffer = _EncodedStringIO()
+    stderr_buffer = _EncodedStringIO()
     old_argv = sys.argv[:]
     old_cwd = Path.cwd()
     previous_fc = os.environ.get("FC")
