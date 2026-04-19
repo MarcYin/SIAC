@@ -1398,8 +1398,6 @@ def _compile_f2py_extension(
         "-c",
         "--backend",
         "meson",
-        "--dep",
-        "openmp",
         "--build-dir",
         os.fspath(f2py_build_dir),
         "-m",
