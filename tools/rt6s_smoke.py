@@ -87,6 +87,13 @@ def _tail_text(path: Path, *, lines: int = 120) -> str:
     return "\n".join(content[-lines:])
 
 
+def _annotation_text(text: str, *, limit: int = 1800) -> str:
+    summary = " | ".join(line.strip() for line in text.splitlines() if line.strip())
+    if len(summary) > limit:
+        return f"{summary[:limit]}..."
+    return summary
+
+
 def _write_failure_diagnostics(build_dir: Path, exc: BaseException) -> list[Path]:
     diagnostics_dir = build_dir / _DIAGNOSTICS_DIRNAME
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +200,26 @@ if __name__ == "__main__":
             log_path = build_dir / _DIAGNOSTICS_DIRNAME / log_name
             if log_path.exists():
                 print(f"===== tail: {log_path} =====")
-                print(_tail_text(log_path))
+                tail = _tail_text(log_path)
+                print(tail)
+                if log_name in {"build_failure_summary.txt", "f2py-distutils.stderr.txt"}:
+                    print(
+                        f"::error title=Native 6S {log_name}::"
+                        f"{_annotation_text(tail)}"
+                    )
+        candidates_path = build_dir / _DIAGNOSTICS_DIRNAME / "module_candidates.txt"
+        if candidates_path.exists():
+            candidates_text = candidates_path.read_text(encoding="utf-8", errors="replace")
+            if candidates_text.strip():
+                print(
+                    "::notice title=Native 6S module candidates::"
+                    f"{_annotation_text(candidates_text)}"
+                )
+            else:
+                tree_tail = _tail_text(build_dir / _DIAGNOSTICS_DIRNAME / "build_tree.txt", lines=80)
+                print(
+                    "::notice title=Native 6S build tree tail::"
+                    f"{_annotation_text(tree_tail)}"
+                )
         traceback.print_exc()
         raise

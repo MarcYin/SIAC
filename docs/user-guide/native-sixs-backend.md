@@ -63,9 +63,10 @@ NumPy and `setuptools` combination supports it.
 
 When that dedicated Linux smoke workflow fails, SIAC now writes the native-build
 diagnostics under `tmp/rt6s_ci_smoke/diagnostics/`, prints the key log tails in
-the job output, and uploads the full `tmp/rt6s_ci_smoke` directory as a GitHub
+the job output, emits check annotations for the key stderr/module-candidate
+summaries, and uploads the full `tmp/rt6s_ci_smoke` directory as a GitHub
 Actions artifact. Use that artifact first when a failure reproduces only on the
-hosted runner.
+hosted runner, and use the annotations when you need a quick public summary.
 
 To remove the native build cache:
 

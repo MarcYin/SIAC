@@ -82,7 +82,8 @@ can force the compatible F2PY `distutils` backend for this legacy extension. It
 downloads a fresh upstream 6SV2.1 source tree, builds the native module, and
 runs a minimal array-backed correction case. When the smoke lane fails it now
 persists the build diagnostics under `tmp/rt6s_ci_smoke/diagnostics/`, prints
-the relevant log tails in the workflow output, and uploads the full
+the relevant log tails in the workflow output, emits targeted GitHub
+annotations for the stderr tail and discovered module candidates, and uploads the full
 `tmp/rt6s_ci_smoke` tree as a workflow artifact so Linux-only builder failures
 can be inspected after the run. Changes under
 `python/siac/algorithms/rt/direct/`, `python/siac/config/schema.py`,
