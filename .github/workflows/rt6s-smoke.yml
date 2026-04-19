@@ -49,9 +49,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p tmp
-          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+          if ! curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
             "https://salsa.umd.edu/files/6S/6sV2.1.tar" \
-            --output tmp/6sV2.1.tar
+            --output tmp/6sV2.1.tar; then
+            echo "Retrying 6S fetch with relaxed TLS verification" >&2
+            curl --fail --silent --show-error --location --retry 5 --retry-all-errors --insecure \
+              "https://salsa.umd.edu/files/6S/6sV2.1.tar" \
+              --output tmp/6sV2.1.tar
+          fi
           rm -rf tmp/6s_upstream
           mkdir -p tmp/6s_upstream
           tar -xf tmp/6sV2.1.tar -C tmp/6s_upstream
