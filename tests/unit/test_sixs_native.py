@@ -369,6 +369,43 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
     assert built_module.exists()
 
 
+def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
+
+    build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
+
+    def _fake_run_distutils_backend(**_kwargs):
+        return subprocess.CompletedProcess(
+            args=["python", "-m", "numpy.f2py"],
+            returncode=1,
+            stdout="distutils stdout",
+            stderr="distutils stderr",
+        )
+
+    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
+    monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
+
+    with pytest.raises(RuntimeError, match="6S native Python extension build failed"):
+        _compile_f2py_extension(
+            source_dir=source_dir,
+            build_paths=build_paths,
+            compiler="gfortran",
+            build_profile="release",
+        )
+
+    diagnostics_dir = build_paths.root_dir / "diagnostics"
+    assert (diagnostics_dir / "f2py-distutils.stdout.txt").read_text(encoding="utf-8") == "distutils stdout"
+    assert (diagnostics_dir / "f2py-distutils.stderr.txt").read_text(encoding="utf-8") == "distutils stderr"
+    assert "status=failed" in (diagnostics_dir / "f2py-distutils.summary.txt").read_text(encoding="utf-8")
+    assert "Backend distutils" in (diagnostics_dir / "build_failure_summary.txt").read_text(encoding="utf-8")
+
+
 def test_find_built_extension_searches_recent_extra_roots(tmp_path: Path) -> None:
     build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
     extra_root = tmp_path / "workspace"

@@ -9,6 +9,7 @@ import io
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ _ARCHIVE_NAME = "6sV2.1.tar"
 _UPSTREAM_DIRNAME = "upstream"
 _PATCHED_DIRNAME = "patched"
 _F2PY_BUILD_DIRNAME = "f2py_build"
+_DIAGNOSTICS_DIRNAME = "diagnostics"
 _MODULE_BASENAME = "_siac_rt6s_native"
 _PATCHED_MAIN_SENTINEL = "subroutine sixs_case_core"
 _COMMON_BLOCK_RE = re.compile(r"^\s*common\s*/([^/]+)/", re.IGNORECASE)
@@ -1529,6 +1531,19 @@ def _compile_f2py_extension(
             extra_roots=(caller_cwd,),
             min_mtime=build_started_at,
         )
+        attempt_status = "success-with-extension"
+        if built_extension is None and completed.returncode != 0:
+            attempt_status = "failed"
+        elif built_extension is None:
+            attempt_status = "missing-extension"
+        _write_backend_diagnostics(
+            build_paths=build_paths,
+            backend=backend,
+            cmd=cmd,
+            completed=completed,
+            status=attempt_status,
+            built_extension=built_extension,
+        )
         if built_extension is not None:
             if completed.returncode != 0:
                 logger.warning(
@@ -1571,6 +1586,7 @@ def _compile_f2py_extension(
             f"stdout:\n{completed.stdout}\n"
             f"stderr:\n{completed.stderr}"
         )
+    _write_build_failure_summary(build_paths, details)
     raise RuntimeError("6S native Python extension build failed.\n" + "\n\n".join(details))
 
 
@@ -1702,6 +1718,45 @@ def _run_distutils_backend(
         returncode=0,
         stdout=stdout_buffer.getvalue(),
         stderr=stderr_buffer.getvalue(),
+    )
+
+
+def _diagnostics_dir(build_paths: SixSBuildPaths) -> Path:
+    path = build_paths.root_dir / _DIAGNOSTICS_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_backend_diagnostics(
+    *,
+    build_paths: SixSBuildPaths,
+    backend: str,
+    cmd: list[str],
+    completed: subprocess.CompletedProcess[str],
+    status: str,
+    built_extension: Path | None,
+) -> None:
+    diagnostics_dir = _diagnostics_dir(build_paths)
+    prefix = f"f2py-{backend}"
+    _write_text(diagnostics_dir / f"{prefix}.command.txt", shlex.join(cmd))
+    _write_text(diagnostics_dir / f"{prefix}.stdout.txt", completed.stdout or "")
+    _write_text(diagnostics_dir / f"{prefix}.stderr.txt", completed.stderr or "")
+    summary_lines = [
+        f"backend={backend}",
+        f"status={status}",
+        f"returncode={completed.returncode}",
+        f"built_extension={built_extension if built_extension is not None else ''}",
+        f"command={shlex.join(cmd)}",
+        f"summary={_summarize_build_output(completed.stdout, completed.stderr)}",
+    ]
+    _write_text(diagnostics_dir / f"{prefix}.summary.txt", "\n".join(summary_lines) + "\n")
+
+
+def _write_build_failure_summary(build_paths: SixSBuildPaths, details: list[str]) -> None:
+    diagnostics_dir = _diagnostics_dir(build_paths)
+    _write_text(
+        diagnostics_dir / "build_failure_summary.txt",
+        "6S native Python extension build failed.\n\n" + "\n\n".join(details),
     )
 
 

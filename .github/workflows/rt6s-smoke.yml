@@ -75,4 +75,43 @@ jobs:
           tar -xf tmp/6sV2.1.tar -C tmp/6s_upstream
 
       - name: Build and run native 6S smoke
+        id: smoke
+        continue-on-error: true
         run: SIAC_SIXS_F2PY_BACKEND=distutils PYTHONUNBUFFERED=1 PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+
+      - name: Summarize native 6S diagnostics
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          echo "Native 6S smoke failed. Available diagnostics:"
+          find tmp/rt6s_ci_smoke -maxdepth 4 -type f | sort || true
+          for file in \
+            tmp/rt6s_ci_smoke/diagnostics/smoke_failure_summary.txt \
+            tmp/rt6s_ci_smoke/diagnostics/smoke_traceback.txt \
+            tmp/rt6s_ci_smoke/diagnostics/build_failure_summary.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.summary.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.stderr.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.stdout.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-meson.summary.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-meson.stderr.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-meson.stdout.txt \
+            tmp/rt6s_ci_smoke/diagnostics/build_tree.txt \
+            tmp/rt6s_ci_smoke/diagnostics/module_candidates.txt; do
+            if [ -f "$file" ]; then
+              echo "::group::$file"
+              tail -n 200 "$file" || true
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Upload native 6S smoke diagnostics
+        if: steps.smoke.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-6s-smoke-diagnostics-${{ github.run_id }}
+          path: tmp/rt6s_ci_smoke
+          if-no-files-found: ignore
+
+      - name: Fail workflow if smoke failed
+        if: steps.smoke.outcome == 'failure'
+        run: exit 1

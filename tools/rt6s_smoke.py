@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ import numpy as np
 import xarray as xr
 
 from siac.algorithms.rt.direct.sixs import SixSBackend
-from siac.algorithms.rt.direct.sixs_build import build_native_sixs_module
+from siac.algorithms.rt.direct.sixs_build import _DIAGNOSTICS_DIRNAME, build_native_sixs_module
 from siac.config import SixSAlgorithmConfig
 from siac.domain.sensors import SensorBand
 from siac.runtime import AtmosphericState, GeometryAngles
@@ -62,8 +63,81 @@ def _local_source_dir() -> Path | None:
     return matches[0] if matches else None
 
 
+def _render_tree(root: Path, *, limit: int = 2000) -> str:
+    if not root.exists():
+        return f"{root} does not exist\n"
+    lines: list[str] = []
+    for entries, path in enumerate(sorted(root.rglob("*")), start=1):
+        relative = path.relative_to(root)
+        suffix = "/" if path.is_dir() else ""
+        lines.append(f"{relative}{suffix}")
+        if entries >= limit:
+            lines.append(f"... truncated after {limit} entries")
+            break
+    if not lines:
+        return ".\n"
+    return "\n".join(lines) + "\n"
+
+
+def _tail_text(path: Path, *, lines: int = 120) -> str:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return f"[failed to read {path}: {exc}]"
+    return "\n".join(content[-lines:])
+
+
+def _write_failure_diagnostics(build_dir: Path, exc: BaseException) -> list[Path]:
+    diagnostics_dir = build_dir / _DIAGNOSTICS_DIRNAME
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = " ".join(str(exc).split())
+    if len(summary) > 4000:
+        summary = f"{summary[:4000]}..."
+
+    written_paths: list[Path] = []
+    summary_path = diagnostics_dir / "smoke_failure_summary.txt"
+    summary_path.write_text(
+        "\n".join(
+            [
+                f"exception_type={type(exc).__name__}",
+                f"summary={summary}",
+                f"platform={platform.platform()}",
+                f"python={sys.version}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    written_paths.append(summary_path)
+
+    traceback_path = diagnostics_dir / "smoke_traceback.txt"
+    traceback_path.write_text(traceback.format_exc(), encoding="utf-8")
+    written_paths.append(traceback_path)
+
+    tree_path = diagnostics_dir / "build_tree.txt"
+    tree_path.write_text(_render_tree(build_dir), encoding="utf-8")
+    written_paths.append(tree_path)
+
+    candidate_paths = sorted(
+        {
+            *build_dir.rglob("*.so"),
+            *build_dir.rglob("*.dylib"),
+            *build_dir.rglob("*.pyd"),
+        }
+    )
+    candidates_path = diagnostics_dir / "module_candidates.txt"
+    candidates_path.write_text(
+        ("\n".join(str(path) for path in candidate_paths) + "\n") if candidate_paths else "",
+        encoding="utf-8",
+    )
+    written_paths.append(candidates_path)
+    return written_paths
+
+
 def main() -> int:
     build_dir = Path("tmp/rt6s_ci_smoke").resolve()
+    build_dir.mkdir(parents=True, exist_ok=True)
     local_source_dir = _local_source_dir()
     requested_outputs = ("xap", "xbp", "xcp", "tgasm", "sutott", "sast")
 
@@ -94,9 +168,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    build_dir = Path("tmp/rt6s_ci_smoke").resolve()
     try:
         raise SystemExit(main())
     except Exception as exc:
+        written_paths = _write_failure_diagnostics(build_dir, exc)
         summary = " ".join(str(exc).split())
         if len(summary) > 1800:
             summary = f"{summary[:1800]}..."
@@ -104,5 +180,19 @@ if __name__ == "__main__":
             "::error title=Native 6S smoke failed::"
             f"{type(exc).__name__}: {summary} [platform={platform.platform()}]"
         )
+        print("Native 6S smoke diagnostics:")
+        for path in written_paths:
+            print(f"  - {path}")
+        for log_name in (
+            "build_failure_summary.txt",
+            "f2py-distutils.summary.txt",
+            "f2py-distutils.stderr.txt",
+            "f2py-meson.summary.txt",
+            "f2py-meson.stderr.txt",
+        ):
+            log_path = build_dir / _DIAGNOSTICS_DIRNAME / log_name
+            if log_path.exists():
+                print(f"===== tail: {log_path} =====")
+                print(_tail_text(log_path))
         traceback.print_exc()
         raise

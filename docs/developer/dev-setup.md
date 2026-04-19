@@ -80,7 +80,11 @@ That workflow validates the compiled `sixs` backend on Linux with the `rt6s`
 Pixi environment, which pins Python 3.11 and `setuptools < 60` so the workflow
 can force the compatible F2PY `distutils` backend for this legacy extension. It
 downloads a fresh upstream 6SV2.1 source tree, builds the native module, and
-runs a minimal array-backed correction case. Changes under
+runs a minimal array-backed correction case. When the smoke lane fails it now
+persists the build diagnostics under `tmp/rt6s_ci_smoke/diagnostics/`, prints
+the relevant log tails in the workflow output, and uploads the full
+`tmp/rt6s_ci_smoke` tree as a workflow artifact so Linux-only builder failures
+can be inspected after the run. Changes under
 `python/siac/algorithms/rt/direct/`, `python/siac/config/schema.py`,
 `python/siac/sixs_outputs.py`, and the native 6S tools/workflow files should be
 validated against that workflow before landing.
