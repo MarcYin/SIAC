@@ -51,6 +51,11 @@ builds.
 Run `pixi run build-rust` first in a fresh workspace so the test suite can
 import `siac._rust` during collection.
 
+`pixi run bootstrap` uses the Rust crate declared in
+`src/siac_rs/Cargo.toml`. If you move the Rust crate, update the
+`[tool.maturin]` `manifest-path` in `pyproject.toml` or editable installs will
+stop working.
+
 ## Editable install
 
 ```bash
@@ -96,6 +101,13 @@ pixi run -e rt6s build-6s-native
 ```
 
 This builds the compiled Python extension used by the native backend.
+
+For the closest CI reproduction, run the native smoke script in the same
+environment:
+
+```bash
+PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+```
 
 ### Manual Path
 

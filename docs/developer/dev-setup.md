@@ -75,6 +75,14 @@ smoke, wheel install smoke checks, and the coverage gate. If you change public
 entry points, configuration behavior, or runtime orchestration, update tests in
 the matching layer.
 
+The repository also has a dedicated `Native 6S Smoke` GitHub Actions workflow.
+That workflow validates the compiled `sixs` backend on Linux with the `rt6s`
+Pixi environment, downloads a fresh upstream 6SV2.1 source tree, builds the
+native module, and runs a minimal array-backed correction case. Changes under
+`python/siac/algorithms/rt/direct/`, `python/siac/config/schema.py`,
+`python/siac/sixs_outputs.py`, and the native 6S tools/workflow files should be
+validated against that workflow before landing.
+
 ## Docs Build Commands
 
 The documentation site is intended to compile in CI and GitHub Pages using the

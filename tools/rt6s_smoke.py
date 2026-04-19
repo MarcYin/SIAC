@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import platform
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -92,4 +94,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(
+            "::error title=Native 6S smoke failed::"
+            f"{type(exc).__name__}: {exc} [platform={platform.platform()}]"
+        )
+        traceback.print_exc()
+        raise

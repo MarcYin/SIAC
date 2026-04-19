@@ -1296,7 +1296,14 @@ def find_built_extension(paths: SixSBuildPaths) -> Path | None:
     if paths.module_hint_path is not None and paths.module_hint_path.exists():
         return paths.module_hint_path
     for suffix in native_module_suffixes():
-        candidates = sorted(paths.root_dir.glob(f"{paths.module_name}*{suffix}"))
+        candidates = sorted(
+            {
+                *paths.root_dir.glob(f"{paths.module_name}*{suffix}"),
+                *paths.root_dir.rglob(f"{paths.module_name}*{suffix}"),
+                *paths.f2py_build_dir.glob(f"{paths.module_name}*{suffix}"),
+                *paths.f2py_build_dir.rglob(f"{paths.module_name}*{suffix}"),
+            }
+        )
         if candidates:
             return max(candidates, key=lambda path: path.stat().st_mtime)
     return None

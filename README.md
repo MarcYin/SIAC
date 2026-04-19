@@ -79,6 +79,12 @@ pixi run -e rt6s build-6s-native
 ```
 
 That environment provides the required Fortran compiler, `meson`, and `ninja`.
+To reproduce the Linux native smoke path locally:
+
+```bash
+PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+```
+
 See [Native 6SV2.1 Backend](docs/user-guide/native-sixs-backend.md) for setup,
 configuration, route selection, outputs, parity validation, benchmark guidance,
 and troubleshooting.

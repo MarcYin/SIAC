@@ -110,6 +110,7 @@ Issues = "https://github.com/MarcYin/SIAC/issues"
 siac = "siac.cli:main"
 
 [tool.maturin]
+manifest-path = "src/siac_rs/Cargo.toml"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "siac._rust"
