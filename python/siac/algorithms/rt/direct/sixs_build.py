@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -1358,19 +1359,40 @@ def build_native_sixs_library(config: SixSAlgorithmConfig) -> Path:
 
 def find_built_extension(paths: SixSBuildPaths) -> Path | None:
     """Return the compiled extension path if it exists."""
-    if paths.module_hint_path is not None and paths.module_hint_path.exists():
+    return _find_built_extension(paths)
+
+
+def _find_built_extension(
+    paths: SixSBuildPaths,
+    *,
+    extra_roots: tuple[Path, ...] = (),
+    min_mtime: float | None = None,
+) -> Path | None:
+    """Return the newest compiled extension path if it exists."""
+    if (
+        paths.module_hint_path is not None
+        and paths.module_hint_path.exists()
+        and (min_mtime is None or paths.module_hint_path.stat().st_mtime >= min_mtime)
+    ):
         return paths.module_hint_path
-    for suffix in native_module_suffixes():
-        candidates = sorted(
-            {
-                *paths.root_dir.glob(f"{paths.module_name}*{suffix}"),
-                *paths.root_dir.rglob(f"{paths.module_name}*{suffix}"),
-                *paths.f2py_build_dir.glob(f"{paths.module_name}*{suffix}"),
-                *paths.f2py_build_dir.rglob(f"{paths.module_name}*{suffix}"),
+    roots = (paths.root_dir, paths.f2py_build_dir, *extra_roots)
+    candidates: dict[Path, float] = {}
+    for root in roots:
+        if not root.exists():
+            continue
+        resolved_root = root.resolve()
+        for suffix in native_module_suffixes():
+            matches = {
+                *resolved_root.glob(f"{paths.module_name}*{suffix}"),
+                *resolved_root.rglob(f"{paths.module_name}*{suffix}"),
             }
-        )
-        if candidates:
-            return max(candidates, key=lambda path: path.stat().st_mtime)
+            for candidate in matches:
+                stat = candidate.stat()
+                if min_mtime is not None and stat.st_mtime < min_mtime:
+                    continue
+                candidates[candidate] = stat.st_mtime
+    if candidates:
+        return max(candidates, key=candidates.get)
     return None
 
 
@@ -1467,6 +1489,8 @@ def _compile_f2py_extension(
     env = os.environ.copy()
     env["FC"] = compiler
     env["F77"] = compiler
+    build_started_at = time.time()
+    caller_cwd = Path.cwd().resolve()
     failures: list[tuple[str, list[str], subprocess.CompletedProcess[str], str]] = []
     for backend in _resolve_f2py_backends():
         if backend == "distutils":
@@ -1500,7 +1524,11 @@ def _compile_f2py_extension(
                 env=env,
             )
 
-        built_extension = find_built_extension(build_paths)
+        built_extension = _find_built_extension(
+            build_paths,
+            extra_roots=(caller_cwd,),
+            min_mtime=build_started_at,
+        )
         if built_extension is not None:
             if completed.returncode != 0:
                 logger.warning(

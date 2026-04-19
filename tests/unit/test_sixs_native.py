@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from siac.algorithms.rt.direct.sixs_build import (
     _distutils_backend_supported,
     _distutils_extra_link_args,
     _EncodedStringIO,
+    _find_built_extension,
     _resolve_f2py_backends,
     patch_aeroso_source,
     patch_discom_source,
@@ -365,6 +367,22 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
     )
 
     assert built_module.exists()
+
+
+def test_find_built_extension_searches_recent_extra_roots(tmp_path: Path) -> None:
+    build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
+    extra_root = tmp_path / "workspace"
+    extra_root.mkdir(parents=True, exist_ok=True)
+    module_path = extra_root / f"{build_paths.module_name}.cpython-test.so"
+    module_path.write_text("module", encoding="utf-8")
+
+    found = _find_built_extension(
+        build_paths,
+        extra_roots=(extra_root,),
+        min_mtime=time.time() - 5.0,
+    )
+
+    assert found == module_path
 
 
 def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:
