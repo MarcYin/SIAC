@@ -33,9 +33,11 @@ Check the matching credentials for your chosen providers and backend:
 
 ### Native `sixs` backend cannot build
 
-The native backend requires a Fortran compiler, `meson`, and `ninja`. If those
-tools are missing, either install them directly or use the Pixi `rt6s`
-environment and rerun:
+The native backend requires a Fortran compiler and a supported F2PY backend.
+The repo-managed `rt6s` environment pins Python 3.11 and `setuptools < 60`,
+which keeps the legacy `distutils` backend available for this extension. If the
+native build fails in a general-purpose environment, switch to `rt6s` and
+rerun:
 
 ```bash
 pixi run -e rt6s build-6s-native

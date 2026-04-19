@@ -37,12 +37,14 @@ supported native output surface.
 The native backend requires:
 
 - a Fortran compiler such as `gfortran`
-- `meson` and `ninja` for the preferred F2PY Meson build path
+- `meson` and `ninja` for the F2PY Meson build path when that backend is available
 - the normal SIAC Python package environment
 
 The Pixi workspace includes an `rt6s` feature/environment for this toolchain.
-If Meson compilation fails on a platform, SIAC automatically falls back to the
-F2PY `distutils` backend.
+That environment pins Python 3.11 and `setuptools < 60`, which keeps the
+legacy F2PY `distutils` backend available for the native 6S extension. Outside
+that environment, SIAC prefers the Meson backend and only offers `distutils`
+when NumPy and `setuptools` still support it.
 
 ### Pixi Path
 
@@ -54,9 +56,11 @@ pixi run -e rt6s build-6s-native
 ```
 
 That task runs `tools/build_6s_native.py`, which builds the native Python
-extension used by `algorithms.rt.backend = "sixs"`. The builder prefers the
-Meson backend and falls back to `distutils` automatically when Meson cannot
-complete the compile step.
+extension used by `algorithms.rt.backend = "sixs"`. In the repo-managed `rt6s`
+environment, the Linux smoke workflow forces `SIAC_SIXS_F2PY_BACKEND=distutils`
+for deterministic CI coverage. Outside that environment, the builder still
+tries the Meson backend first and only exposes `distutils` when the current
+NumPy and `setuptools` combination supports it.
 
 To remove the native build cache:
 

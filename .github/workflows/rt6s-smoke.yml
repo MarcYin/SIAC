@@ -45,6 +45,19 @@ jobs:
       - name: Install rt6s environment
         run: pixi install -e rt6s
 
+      - name: Inspect rt6s toolchain
+        run: |
+          pixi run -e rt6s python - <<'PY'
+          import sys
+          import numpy
+          import setuptools
+          from numpy.f2py.f2py2e import MESON_ONLY_VER
+          print("python", sys.version)
+          print("numpy", numpy.__version__)
+          print("setuptools", setuptools.__version__)
+          print("MESON_ONLY_VER", MESON_ONLY_VER)
+          PY
+
       - name: Fetch upstream 6S source
         run: |
           set -euo pipefail

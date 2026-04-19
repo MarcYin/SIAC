@@ -77,8 +77,10 @@ the matching layer.
 
 The repository also has a dedicated `Native 6S Smoke` GitHub Actions workflow.
 That workflow validates the compiled `sixs` backend on Linux with the `rt6s`
-Pixi environment, downloads a fresh upstream 6SV2.1 source tree, builds the
-native module, and runs a minimal array-backed correction case. Changes under
+Pixi environment, which pins Python 3.11 and `setuptools < 60` so the workflow
+can force the compatible F2PY `distutils` backend for this legacy extension. It
+downloads a fresh upstream 6SV2.1 source tree, builds the native module, and
+runs a minimal array-backed correction case. Changes under
 `python/siac/algorithms/rt/direct/`, `python/siac/config/schema.py`,
 `python/siac/sixs_outputs.py`, and the native 6S tools/workflow files should be
 validated against that workflow before landing.

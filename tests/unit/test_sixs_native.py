@@ -7,8 +7,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.algorithms.rt.direct import sixs_build as sixs_build_module
 from siac.algorithms.rt.direct.sixs import SixSBackend
 from siac.algorithms.rt.direct.sixs_build import (
+    _distutils_backend_supported,
+    _resolve_f2py_backends,
     patch_aeroso_source,
     patch_discom_source,
     patch_kernelpol_source,
@@ -263,6 +266,46 @@ def test_resolve_build_paths_separates_release_and_parity_roots() -> None:
     assert release_paths.root_dir != parity_paths.root_dir
     assert release_paths.root_dir.name == "release"
     assert parity_paths.root_dir.name == "parity"
+
+
+def test_resolve_f2py_backends_skips_unavailable_distutils(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_distutils_backend_supported",
+        lambda: (False, "setuptools 82 is too new"),
+    )
+    monkeypatch.setattr(sixs_build_module.shutil, "which", lambda tool: "/usr/bin/" + tool)
+
+    assert _resolve_f2py_backends() == ("meson",)
+
+
+def test_distutils_backend_supported_rejects_new_setuptools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("numpy.f2py.f2py2e.MESON_ONLY_VER", False)
+    monkeypatch.setattr(
+        sixs_build_module.importlib.metadata,
+        "version",
+        lambda name: "82.0.1" if name == "setuptools" else "0",
+    )
+
+    supported, reason = _distutils_backend_supported()
+
+    assert supported is False
+    assert reason is not None
+    assert "setuptools 82.0.1 is too new" in reason
+
+
+def test_resolve_f2py_backends_rejects_invalid_distutils_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_distutils_backend_supported",
+        lambda: (False, "NumPy F2PY is Meson-only on Python 3.12+"),
+    )
+    monkeypatch.setenv("SIAC_SIXS_F2PY_BACKEND", "distutils")
+
+    with pytest.raises(RuntimeError, match="distutils backend"):
+        _resolve_f2py_backends()
 
 
 def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:

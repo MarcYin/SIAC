@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.machinery
+import importlib.metadata
 import logging
 import os
 import re
@@ -163,6 +164,7 @@ def _compiler_flags(build_profile: str) -> list[str]:
 
 
 def _resolve_f2py_backends() -> tuple[str, ...]:
+    distutils_supported, distutils_reason = _distutils_backend_supported()
     override = os.environ.get("SIAC_SIXS_F2PY_BACKEND")
     if override:
         requested = tuple(part.strip().lower() for part in override.split(",") if part.strip())
@@ -173,13 +175,50 @@ def _resolve_f2py_backends() -> tuple[str, ...]:
                 "Invalid SIAC_SIXS_F2PY_BACKEND override. "
                 f"Unsupported backends: {', '.join(invalid)}."
             )
+        if "distutils" in requested and not distutils_supported:
+            raise RuntimeError(
+                "SIAC_SIXS_F2PY_BACKEND requested the distutils backend, "
+                f"but it is unavailable: {distutils_reason}"
+            )
         return requested or ("distutils",)
 
     backends: list[str] = []
     if shutil.which("meson") is not None and shutil.which("ninja") is not None:
         backends.append("meson")
-    backends.append("distutils")
+    if distutils_supported:
+        backends.append("distutils")
+    elif distutils_reason is not None:
+        logger.info("Skipping unavailable F2PY distutils backend: %s", distutils_reason)
+    if not backends:
+        raise RuntimeError(
+            "No supported F2PY backends are available. "
+            "Install meson+ninja for the Meson backend, or use Python 3.11 "
+            "with setuptools < 60 to enable the distutils backend."
+        )
     return tuple(backends)
+
+
+def _distutils_backend_supported() -> tuple[bool, str | None]:
+    try:
+        from numpy.f2py.f2py2e import MESON_ONLY_VER
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        return False, f"unable to inspect NumPy F2PY backend support ({exc})"
+
+    if MESON_ONLY_VER:
+        return False, "NumPy F2PY is Meson-only on Python 3.12+"
+
+    try:
+        setuptools_version = importlib.metadata.version("setuptools")
+    except importlib.metadata.PackageNotFoundError:
+        return False, "setuptools is not installed"
+
+    match = re.match(r"(\d+)", setuptools_version)
+    if match is not None and int(match.group(1)) >= 60:
+        return False, (
+            f"setuptools {setuptools_version} is too new for numpy.distutils; "
+            "use setuptools < 60"
+        )
+    return True, None
 
 
 def _is_fixed_form_continuation(line: str) -> bool:

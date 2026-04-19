@@ -88,11 +88,13 @@ backend = "sixs"
 Native 6S requires:
 
 - a Fortran compiler
-- `meson` and `ninja` for the preferred Meson-backed F2PY path
+- `meson` and `ninja` for the Meson-backed F2PY path when that backend is available
 
-The repository provides these through the Pixi `rt6s` environment/feature. If
-Meson compilation fails on a platform, the SIAC builder falls back to the F2PY
-`distutils` backend automatically.
+The repository provides these through the Pixi `rt6s` environment/feature. That
+environment pins Python 3.11 and `setuptools < 60`, which keeps the legacy F2PY
+`distutils` backend available for the native 6S extension. Outside that
+environment, SIAC tries the Meson backend first and only enables `distutils`
+when NumPy and `setuptools` still support it.
 
 ### Recommended Path
 
@@ -104,10 +106,10 @@ pixi run -e rt6s build-6s-native
 This builds the compiled Python extension used by the native backend.
 
 For the closest CI reproduction, run the native smoke script in the same
-environment:
+environment and force the compatibility backend used by the Linux smoke job:
 
 ```bash
-PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+SIAC_SIXS_F2PY_BACKEND=distutils PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
 ```
 
 ### Manual Path
