@@ -1539,6 +1539,8 @@ def _build_f2py_command(
             f"-I{os.fspath(source_dir)}",
         ]
     )
+    if backend == "distutils" and "-fopenmp" in flags:
+        cmd.append("-lgomp")
     cmd.extend(os.fspath(path.resolve()) for path in compile_sources)
     cmd.extend(["only:", "sixs_f2py_run_batch", ":"])
     return cmd

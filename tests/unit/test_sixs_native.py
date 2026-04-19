@@ -10,6 +10,7 @@ import xarray as xr
 from siac.algorithms.rt.direct import sixs_build as sixs_build_module
 from siac.algorithms.rt.direct.sixs import SixSBackend
 from siac.algorithms.rt.direct.sixs_build import (
+    _build_f2py_command,
     _distutils_backend_supported,
     _resolve_f2py_backends,
     patch_aeroso_source,
@@ -306,6 +307,19 @@ def test_resolve_f2py_backends_rejects_invalid_distutils_override(
 
     with pytest.raises(RuntimeError, match="distutils backend"):
         _resolve_f2py_backends()
+
+
+def test_build_f2py_command_links_openmp_runtime_for_distutils(tmp_path: Path) -> None:
+    command = _build_f2py_command(
+        backend="distutils",
+        module_name="_siac_rt6s_native",
+        source_dir=tmp_path,
+        compile_sources=[tmp_path / "main.f"],
+        flags=["-O3", "-fopenmp"],
+        f2py_build_dir=tmp_path / "build",
+    )
+
+    assert "-lgomp" in command
 
 
 def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:
