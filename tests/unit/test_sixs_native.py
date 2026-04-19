@@ -406,6 +406,43 @@ def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
     assert "Backend distutils" in (diagnostics_dir / "build_failure_summary.txt").read_text(encoding="utf-8")
 
 
+def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
+
+    build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
+    env_site = tmp_path / "site-packages"
+    built_module = env_site / f"{build_paths.module_name}.cpython-test.so"
+
+    def _fake_run_distutils_backend(**_kwargs):
+        built_module.parent.mkdir(parents=True, exist_ok=True)
+        built_module.write_text("built", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=["python", "-m", "numpy.f2py"],
+            returncode=1,
+            stdout="running build",
+            stderr='buildmodule: Could not find the body of interfaced routine "sixs_case_core". Skipping.',
+        )
+
+    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
+    monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
+    monkeypatch.setattr(sixs_build_module, "_environment_extension_roots", lambda: (env_site,))
+
+    _compile_f2py_extension(
+        source_dir=source_dir,
+        build_paths=build_paths,
+        compiler="gfortran",
+        build_profile="release",
+    )
+
+    assert built_module.exists()
+
+
 def test_find_built_extension_searches_recent_extra_roots(tmp_path: Path) -> None:
     build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
     extra_root = tmp_path / "workspace"

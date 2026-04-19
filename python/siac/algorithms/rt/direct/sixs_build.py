@@ -11,8 +11,10 @@ import os
 import re
 import shlex
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import time
 import traceback
@@ -1493,6 +1495,7 @@ def _compile_f2py_extension(
     env["F77"] = compiler
     build_started_at = time.time()
     caller_cwd = Path.cwd().resolve()
+    extension_search_roots = (caller_cwd, *_environment_extension_roots())
     failures: list[tuple[str, list[str], subprocess.CompletedProcess[str], str]] = []
     for backend in _resolve_f2py_backends():
         if backend == "distutils":
@@ -1528,7 +1531,7 @@ def _compile_f2py_extension(
 
         built_extension = _find_built_extension(
             build_paths,
-            extra_roots=(caller_cwd,),
+            extra_roots=extension_search_roots,
             min_mtime=build_started_at,
         )
         attempt_status = "success-with-extension"
@@ -1725,6 +1728,30 @@ def _diagnostics_dir(build_paths: SixSBuildPaths) -> Path:
     path = build_paths.root_dir / _DIAGNOSTICS_DIRNAME
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _environment_extension_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(candidate: str | os.PathLike[str] | None) -> None:
+        if not candidate:
+            return
+        path = Path(candidate).expanduser().resolve()
+        if path in seen or not path.exists():
+            return
+        seen.add(path)
+        roots.append(path)
+
+    paths = sysconfig.get_paths()
+    _add(paths.get("platlib"))
+    _add(paths.get("purelib"))
+    with contextlib.suppress(AttributeError):
+        for candidate in site.getsitepackages():
+            _add(candidate)
+    with contextlib.suppress(AttributeError):
+        _add(site.getusersitepackages())
+    return tuple(roots)
 
 
 def _write_backend_diagnostics(
