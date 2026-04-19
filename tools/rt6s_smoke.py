@@ -94,6 +94,31 @@ def _annotation_text(text: str, *, limit: int = 1800) -> str:
     return summary
 
 
+def _extract_key_diagnostics(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    keywords = (
+        "error",
+        "undefined reference",
+        "collect2:",
+        "ld:",
+        "no such file",
+        "failed",
+        "traceback",
+        "fatal",
+    )
+    matches = [line for line in lines if any(keyword in line.lower() for keyword in keywords)]
+    if matches:
+        return "\n".join(matches[:80])
+
+    if len(lines) <= 80:
+        return "\n".join(lines)
+    excerpt = [*lines[:40], "...", *lines[-40:]]
+    return "\n".join(excerpt)
+
+
 def _write_failure_diagnostics(build_dir: Path, exc: BaseException) -> list[Path]:
     diagnostics_dir = build_dir / _DIAGNOSTICS_DIRNAME
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -200,12 +225,16 @@ if __name__ == "__main__":
             log_path = build_dir / _DIAGNOSTICS_DIRNAME / log_name
             if log_path.exists():
                 print(f"===== tail: {log_path} =====")
-                tail = _tail_text(log_path)
-                print(tail)
-                if log_name in {"build_failure_summary.txt", "f2py-distutils.stderr.txt"}:
+                log_text = log_path.read_text(encoding="utf-8", errors="replace")
+                print(_tail_text(log_path))
+                if log_name in {
+                    "build_failure_summary.txt",
+                    "f2py-distutils.stderr.txt",
+                    "f2py-distutils.stdout.txt",
+                }:
                     print(
                         f"::error title=Native 6S {log_name}::"
-                        f"{_annotation_text(tail)}"
+                        f"{_annotation_text(_extract_key_diagnostics(log_text))}"
                     )
         candidates_path = build_dir / _DIAGNOSTICS_DIRNAME / "module_candidates.txt"
         if candidates_path.exists():
@@ -216,10 +245,16 @@ if __name__ == "__main__":
                     f"{_annotation_text(candidates_text)}"
                 )
             else:
-                tree_tail = _tail_text(build_dir / _DIAGNOSTICS_DIRNAME / "build_tree.txt", lines=80)
+                build_tree_path = build_dir / _DIAGNOSTICS_DIRNAME / "build_tree.txt"
+                tree_tail = _tail_text(build_tree_path, lines=80)
+                top_level = "\n".join(
+                    str(path.relative_to(build_dir)) + ("/" if path.is_dir() else "")
+                    for path in sorted(build_dir.iterdir())
+                )
+                tree_excerpt = top_level + ("\n" if top_level else "") + tree_tail
                 print(
                     "::notice title=Native 6S build tree tail::"
-                    f"{_annotation_text(tree_tail)}"
+                    f"{_annotation_text(tree_excerpt)}"
                 )
         traceback.print_exc()
         raise
