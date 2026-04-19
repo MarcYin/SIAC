@@ -1430,8 +1430,10 @@ def _compile_f2py_extension(
         env=env,
     )
     if completed.returncode != 0:
+        log_summary = _summarize_build_output(completed.stdout, completed.stderr)
         raise RuntimeError(
             "6S native Python extension build failed.\n"
+            f"Build output tail: {log_summary}\n"
             f"Command: {' '.join(cmd)}\n"
             f"stdout:\n{completed.stdout}\n"
             f"stderr:\n{completed.stderr}"
@@ -1439,8 +1441,10 @@ def _compile_f2py_extension(
 
     built_extension = find_built_extension(build_paths)
     if built_extension is None:
+        log_summary = _summarize_build_output(completed.stdout, completed.stderr)
         raise RuntimeError(
             "F2PY reported success but no compiled extension was found.\n"
+            f"Build output tail: {log_summary}\n"
             f"stdout:\n{completed.stdout}\n"
             f"stderr:\n{completed.stderr}"
         )
@@ -1457,6 +1461,17 @@ def _replace_once(text: str, old: str, new: str, description: str) -> str:
 
 def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
+
+
+def _summarize_build_output(stdout: str, stderr: str, *, max_chars: int = 1200) -> str:
+    combined = (stderr.strip() or stdout.strip() or "no build output captured").replace("\r", "\n")
+    lines = [line.strip() for line in combined.splitlines() if line.strip()]
+    if not lines:
+        return "no build output captured"
+    summary = " | ".join(lines[-12:])
+    if len(summary) > max_chars:
+        return f"...{summary[-max_chars:]}"
+    return summary
 
 
 __all__ = [
