@@ -79,6 +79,8 @@ pixi run -e rt6s build-6s-native
 ```
 
 That environment provides the required Fortran compiler, `meson`, and `ninja`.
+The builder prefers the Meson F2PY path and falls back to `distutils`
+automatically if Meson cannot complete the native compile.
 To reproduce the Linux native smoke path locally:
 
 ```bash

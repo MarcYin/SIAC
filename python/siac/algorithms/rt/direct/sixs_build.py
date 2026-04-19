@@ -162,6 +162,26 @@ def _compiler_flags(build_profile: str) -> list[str]:
     ]
 
 
+def _resolve_f2py_backends() -> tuple[str, ...]:
+    override = os.environ.get("SIAC_SIXS_F2PY_BACKEND")
+    if override:
+        requested = tuple(part.strip().lower() for part in override.split(",") if part.strip())
+        valid = {"meson", "distutils"}
+        invalid = [backend for backend in requested if backend not in valid]
+        if invalid:
+            raise RuntimeError(
+                "Invalid SIAC_SIXS_F2PY_BACKEND override. "
+                f"Unsupported backends: {', '.join(invalid)}."
+            )
+        return requested or ("distutils",)
+
+    backends: list[str] = []
+    if shutil.which("meson") is not None and shutil.which("ninja") is not None:
+        backends.append("meson")
+    backends.append("distutils")
+    return tuple(backends)
+
+
 def _is_fixed_form_continuation(line: str) -> bool:
     if not line:
         return False
@@ -1267,11 +1287,6 @@ def build_native_sixs_module(config: SixSAlgorithmConfig) -> Path:
             f"Could not resolve {config.compiler!r}. "
             "Use the Pixi `rt6s` environment or set `algorithms.rt.sixs.compiler`."
         )
-    if shutil.which("meson") is None or shutil.which("ninja") is None:
-        raise RuntimeError(
-            "6S native build requires `meson` and `ninja` on PATH. "
-            "Use the Pixi `rt6s` environment or install those tools."
-        )
 
     source_dir = _prepare_source_tree(config, paths)
     _compile_f2py_extension(
@@ -1398,59 +1413,96 @@ def _compile_f2py_extension(
     source_files = parse_makefile_sources(source_dir / "Makefile")
     compile_sources = list(dict.fromkeys([*source_files, source_dir / "main.f", source_dir / _BRIDGE_SOURCE_NAME]))
     flags = _compiler_flags(build_profile)
+
+    env = os.environ.copy()
+    env["FC"] = compiler
+    env["F77"] = compiler
+    failures: list[tuple[str, list[str], subprocess.CompletedProcess[str], str]] = []
+    for backend in _resolve_f2py_backends():
+        cmd = _build_f2py_command(
+            backend=backend,
+            module_name=build_paths.module_name,
+            source_dir=source_dir,
+            compile_sources=compile_sources,
+            flags=flags,
+            f2py_build_dir=f2py_build_dir,
+        )
+        logger.info("Compiling native 6S Python extension with %s backend: %s", backend, " ".join(cmd))
+        completed = subprocess.run(
+            cmd,
+            cwd=build_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        if completed.returncode != 0:
+            log_summary = _summarize_build_output(completed.stdout, completed.stderr)
+            failures.append((backend, cmd, completed, log_summary))
+            logger.warning("F2PY %s backend failed: %s", backend, log_summary)
+            continue
+
+        built_extension = find_built_extension(build_paths)
+        if built_extension is None:
+            log_summary = _summarize_build_output(completed.stdout, completed.stderr)
+            failures.append((backend, cmd, completed, log_summary))
+            logger.warning(
+                "F2PY %s backend reported success but no extension was found: %s",
+                backend,
+                log_summary,
+            )
+            continue
+        if build_paths.module_hint_path is not None and built_extension != build_paths.module_hint_path:
+            build_paths.module_hint_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(os.fspath(built_extension), os.fspath(build_paths.module_hint_path))
+        return
+
+    details = []
+    for backend, cmd, completed, log_summary in failures:
+        details.append(
+            f"Backend {backend}: {log_summary}\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}"
+        )
+    raise RuntimeError("6S native Python extension build failed.\n" + "\n\n".join(details))
+
+
+def _build_f2py_command(
+    *,
+    backend: str,
+    module_name: str,
+    source_dir: Path,
+    compile_sources: list[Path],
+    flags: list[str],
+    f2py_build_dir: Path,
+) -> list[str]:
     cmd = [
         sys.executable,
         "-m",
         "numpy.f2py",
         "-c",
         "--backend",
-        "meson",
-        "--build-dir",
-        os.fspath(f2py_build_dir),
-        "-m",
-        build_paths.module_name,
-        f"--f77flags={' '.join(flags)}",
-        f"--f90flags={' '.join(flags)}",
-        f"-I{os.fspath(source_dir)}",
+        backend,
     ]
+    if backend == "meson":
+        backend_build_dir = f2py_build_dir / backend
+        if backend_build_dir.exists():
+            shutil.rmtree(backend_build_dir)
+        backend_build_dir.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["--build-dir", os.fspath(backend_build_dir)])
+    cmd.extend(
+        [
+            "-m",
+            module_name,
+            f"--f77flags={' '.join(flags)}",
+            f"--f90flags={' '.join(flags)}",
+            f"-I{os.fspath(source_dir)}",
+        ]
+    )
     cmd.extend(os.fspath(path.resolve()) for path in compile_sources)
     cmd.extend(["only:", "sixs_f2py_run_batch", ":"])
-
-    env = os.environ.copy()
-    env["FC"] = compiler
-    env["F77"] = compiler
-
-    logger.info("Compiling native 6S Python extension: %s", " ".join(cmd))
-    completed = subprocess.run(
-        cmd,
-        cwd=build_root,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    if completed.returncode != 0:
-        log_summary = _summarize_build_output(completed.stdout, completed.stderr)
-        raise RuntimeError(
-            "6S native Python extension build failed.\n"
-            f"Build output tail: {log_summary}\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"stdout:\n{completed.stdout}\n"
-            f"stderr:\n{completed.stderr}"
-        )
-
-    built_extension = find_built_extension(build_paths)
-    if built_extension is None:
-        log_summary = _summarize_build_output(completed.stdout, completed.stderr)
-        raise RuntimeError(
-            "F2PY reported success but no compiled extension was found.\n"
-            f"Build output tail: {log_summary}\n"
-            f"stdout:\n{completed.stdout}\n"
-            f"stderr:\n{completed.stderr}"
-        )
-    if build_paths.module_hint_path is not None and built_extension != build_paths.module_hint_path:
-        build_paths.module_hint_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(os.fspath(built_extension), os.fspath(build_paths.module_hint_path))
+    return cmd
 
 
 def _replace_once(text: str, old: str, new: str, description: str) -> str:

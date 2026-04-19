@@ -88,10 +88,11 @@ backend = "sixs"
 Native 6S requires:
 
 - a Fortran compiler
-- `meson`
-- `ninja`
+- `meson` and `ninja` for the preferred Meson-backed F2PY path
 
-The repository provides these through the Pixi `rt6s` environment/feature.
+The repository provides these through the Pixi `rt6s` environment/feature. If
+Meson compilation fails on a platform, the SIAC builder falls back to the F2PY
+`distutils` backend automatically.
 
 ### Recommended Path
 
@@ -149,8 +150,7 @@ Some workflows require extra dependencies or credentials. Install the relevant o
 Check that the active environment has:
 
 - a Fortran compiler on `PATH`
-- `meson`
-- `ninja`
+- `meson` and `ninja` if you want the preferred Meson path
 
 If you want the repo-managed toolchain, switch to the Pixi `rt6s` environment
 and rerun `pixi run -e rt6s build-6s-native`.

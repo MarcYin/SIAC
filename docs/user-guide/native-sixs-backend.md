@@ -37,11 +37,12 @@ supported native output surface.
 The native backend requires:
 
 - a Fortran compiler such as `gfortran`
-- `meson`
-- `ninja`
+- `meson` and `ninja` for the preferred F2PY Meson build path
 - the normal SIAC Python package environment
 
 The Pixi workspace includes an `rt6s` feature/environment for this toolchain.
+If Meson compilation fails on a platform, SIAC automatically falls back to the
+F2PY `distutils` backend.
 
 ### Pixi Path
 
@@ -53,7 +54,9 @@ pixi run -e rt6s build-6s-native
 ```
 
 That task runs `tools/build_6s_native.py`, which builds the native Python
-extension used by `algorithms.rt.backend = "sixs"`.
+extension used by `algorithms.rt.backend = "sixs"`. The builder prefers the
+Meson backend and falls back to `distutils` automatically when Meson cannot
+complete the compile step.
 
 To remove the native build cache:
 
