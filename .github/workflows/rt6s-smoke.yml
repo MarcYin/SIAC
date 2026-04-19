@@ -45,5 +45,16 @@ jobs:
       - name: Install rt6s environment
         run: pixi install -e rt6s
 
+      - name: Fetch upstream 6S source
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            "https://salsa.umd.edu/files/6S/6sV2.1.tar" \
+            --output tmp/6sV2.1.tar
+          rm -rf tmp/6s_upstream
+          mkdir -p tmp/6s_upstream
+          tar -xf tmp/6sV2.1.tar -C tmp/6s_upstream
+
       - name: Build and run native 6S smoke
         run: PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py

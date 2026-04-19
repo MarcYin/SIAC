@@ -52,13 +52,21 @@ def _band() -> SensorBand:
     )
 
 
+def _local_source_dir() -> Path | None:
+    root = Path("tmp/6s_upstream").resolve()
+    if (root / "main.f").exists():
+        return root
+    matches = sorted(path.parent for path in root.rglob("main.f"))
+    return matches[0] if matches else None
+
+
 def main() -> int:
     build_dir = Path("tmp/rt6s_ci_smoke").resolve()
-    local_source_dir = Path("tmp/6s_upstream").resolve()
+    local_source_dir = _local_source_dir()
     requested_outputs = ("xap", "xbp", "xcp", "tgasm", "sutott", "sast")
 
     build_config = SixSAlgorithmConfig(
-        source_dir=local_source_dir if (local_source_dir / "main.f").exists() else None,
+        source_dir=local_source_dir,
         build_dir=build_dir,
         build_profile="release",
         native_threads=2,
