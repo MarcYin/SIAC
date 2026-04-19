@@ -97,9 +97,12 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
+        summary = " ".join(str(exc).split())
+        if len(summary) > 1800:
+            summary = f"{summary[:1800]}..."
         print(
             "::error title=Native 6S smoke failed::"
-            f"{type(exc).__name__}: {exc} [platform={platform.platform()}]"
+            f"{type(exc).__name__}: {summary} [platform={platform.platform()}]"
         )
         traceback.print_exc()
         raise
