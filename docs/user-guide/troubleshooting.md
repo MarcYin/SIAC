@@ -35,12 +35,18 @@ Check the matching credentials for your chosen providers and backend:
 
 The native backend requires a Fortran compiler and a supported F2PY backend.
 The repo-managed `rt6s` environment pins Python 3.11 and `setuptools < 60`,
-which keeps the legacy `distutils` backend available for this extension. If the
-native build fails in a general-purpose environment, switch to `rt6s` and
-rerun:
+which keeps the legacy `distutils` backend available for this extension while
+still preferring the Meson backend first. If the native build fails in a
+general-purpose environment, switch to `rt6s` and rerun:
 
 ```bash
 pixi run -e rt6s build-6s-native
+```
+
+To mirror the hosted Linux smoke workflow exactly:
+
+```bash
+SIAC_SIXS_F2PY_BACKEND=meson,distutils PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
 ```
 
 ### Installed `.[py6s]` but native `sixs` still is not available

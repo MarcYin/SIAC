@@ -217,10 +217,12 @@ if __name__ == "__main__":
             print(f"  - {path}")
         for log_name in (
             "build_failure_summary.txt",
-            "f2py-distutils.summary.txt",
-            "f2py-distutils.stderr.txt",
             "f2py-meson.summary.txt",
             "f2py-meson.stderr.txt",
+            "f2py-meson.stdout.txt",
+            "f2py-distutils.summary.txt",
+            "f2py-distutils.stderr.txt",
+            "f2py-distutils.stdout.txt",
         ):
             log_path = build_dir / _DIAGNOSTICS_DIRNAME / log_name
             if log_path.exists():
@@ -229,6 +231,8 @@ if __name__ == "__main__":
                 print(_tail_text(log_path))
                 if log_name in {
                     "build_failure_summary.txt",
+                    "f2py-meson.stderr.txt",
+                    "f2py-meson.stdout.txt",
                     "f2py-distutils.stderr.txt",
                     "f2py-distutils.stdout.txt",
                 }:

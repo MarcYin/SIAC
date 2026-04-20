@@ -80,7 +80,7 @@ jobs:
       - name: Build and run native 6S smoke
         id: smoke
         continue-on-error: true
-        run: SIAC_SIXS_F2PY_BACKEND=distutils PYTHONUNBUFFERED=1 PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+        run: SIAC_SIXS_F2PY_BACKEND=meson,distutils PYTHONUNBUFFERED=1 PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
 
       - name: Summarize native 6S diagnostics
         if: steps.smoke.outcome == 'failure'
@@ -92,12 +92,12 @@ jobs:
             tmp/rt6s_ci_smoke/diagnostics/smoke_failure_summary.txt \
             tmp/rt6s_ci_smoke/diagnostics/smoke_traceback.txt \
             tmp/rt6s_ci_smoke/diagnostics/build_failure_summary.txt \
-            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.summary.txt \
-            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.stderr.txt \
-            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.stdout.txt \
             tmp/rt6s_ci_smoke/diagnostics/f2py-meson.summary.txt \
             tmp/rt6s_ci_smoke/diagnostics/f2py-meson.stderr.txt \
             tmp/rt6s_ci_smoke/diagnostics/f2py-meson.stdout.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.summary.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.stderr.txt \
+            tmp/rt6s_ci_smoke/diagnostics/f2py-distutils.stdout.txt \
             tmp/rt6s_ci_smoke/diagnostics/build_tree.txt \
             tmp/rt6s_ci_smoke/diagnostics/module_candidates.txt; do
             if [ -f "$file" ]; then

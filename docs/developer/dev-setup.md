@@ -78,14 +78,16 @@ the matching layer.
 The repository also has a dedicated `Native 6S Smoke` GitHub Actions workflow.
 That workflow validates the compiled `sixs` backend on Linux with the `rt6s`
 Pixi environment, which pins Python 3.11 and `setuptools < 60` so the workflow
-can force the compatible F2PY `distutils` backend for this legacy extension. It
+keeps the legacy `distutils` backend available as a fallback. The hosted Linux
+job now runs `SIAC_SIXS_F2PY_BACKEND=meson,distutils`, so it validates the
+Meson backend first and only retries with `distutils` if Meson fails. It
 downloads a fresh upstream 6SV2.1 source tree, builds the native module, and
 runs a minimal array-backed correction case. When the smoke lane fails it now
 persists the build diagnostics under `tmp/rt6s_ci_smoke/diagnostics/`, prints
 the relevant log tails in the workflow output, emits targeted GitHub
-annotations for the stderr tail and discovered module candidates, and uploads the full
-`tmp/rt6s_ci_smoke` tree as a workflow artifact so Linux-only builder failures
-can be inspected after the run. Changes under
+annotations for the Meson or distutils stderr tails plus the aggregated build
+summary, and uploads the full `tmp/rt6s_ci_smoke` tree as a workflow artifact
+so Linux-only builder failures can be inspected after the run. Changes under
 `python/siac/algorithms/rt/direct/`, `python/siac/config/schema.py`,
 `python/siac/sixs_outputs.py`, and the native 6S tools/workflow files should be
 validated against that workflow before landing.

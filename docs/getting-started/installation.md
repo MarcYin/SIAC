@@ -106,10 +106,10 @@ pixi run -e rt6s build-6s-native
 This builds the compiled Python extension used by the native backend.
 
 For the closest CI reproduction, run the native smoke script in the same
-environment and force the compatibility backend used by the Linux smoke job:
+environment and use the same backend order as the Linux smoke job:
 
 ```bash
-SIAC_SIXS_F2PY_BACKEND=distutils PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
+SIAC_SIXS_F2PY_BACKEND=meson,distutils PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
 ```
 
 ### Manual Path

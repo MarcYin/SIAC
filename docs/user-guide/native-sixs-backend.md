@@ -56,17 +56,20 @@ pixi run -e rt6s build-6s-native
 ```
 
 That task runs `tools/build_6s_native.py`, which builds the native Python
-environment, the Linux smoke workflow forces `SIAC_SIXS_F2PY_BACKEND=distutils`
-for deterministic CI coverage. Outside that environment, the builder still
-tries the Meson backend first and only exposes `distutils` when the current
-NumPy and `setuptools` combination supports it.
+extension. In the repo-managed environment, the hosted Linux smoke workflow now
+uses `SIAC_SIXS_F2PY_BACKEND=meson,distutils`, so GitHub Actions validates the
+Meson path first and only falls back to the legacy `distutils` backend if Meson
+fails unexpectedly. Outside that environment, the builder still tries the
+Meson backend first and only exposes `distutils` when the current NumPy and
+`setuptools` combination supports it.
 
 When that dedicated Linux smoke workflow fails, SIAC now writes the native-build
 diagnostics under `tmp/rt6s_ci_smoke/diagnostics/`, prints the key log tails in
-the job output, emits check annotations for the key stderr/module-candidate
-summaries, and uploads the full `tmp/rt6s_ci_smoke` directory as a GitHub
-Actions artifact. Use that artifact first when a failure reproduces only on the
-hosted runner, and use the annotations when you need a quick public summary.
+the job output, emits check annotations for the key Meson or distutils stderr
+tails plus the aggregated build failure summary, and uploads the full
+`tmp/rt6s_ci_smoke` directory as a GitHub Actions artifact. Use that artifact
+first when a failure reproduces only on the hosted runner, and use the
+annotations when you need a quick public summary.
 
 To remove the native build cache:
 
