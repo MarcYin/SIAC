@@ -37,6 +37,7 @@ _PATCHED_DIRNAME = "patched"
 _F2PY_BUILD_DIRNAME = "f2py_build"
 _DIAGNOSTICS_DIRNAME = "diagnostics"
 _MODULE_BASENAME = "_siac_rt6s_native"
+_SIGNATURE_FILENAME = f"{_MODULE_BASENAME}.pyf"
 _PATCHED_MAIN_SENTINEL = "subroutine sixs_case_core"
 _COMMON_BLOCK_RE = re.compile(r"^\s*common\s*/([^/]+)/", re.IGNORECASE)
 
@@ -1489,6 +1490,11 @@ def _compile_f2py_extension(
     source_files = parse_makefile_sources(source_dir / "Makefile")
     compile_sources = list(dict.fromkeys([*source_files, source_dir / "main.f", source_dir / _BRIDGE_SOURCE_NAME]))
     flags = _compiler_flags(build_profile)
+    signature_path = _generate_f2py_signature(
+        source_dir=source_dir,
+        module_name=build_paths.module_name,
+        f2py_build_dir=f2py_build_dir,
+    )
 
     env = os.environ.copy()
     env["FC"] = compiler
@@ -1503,6 +1509,7 @@ def _compile_f2py_extension(
             completed = _run_distutils_backend(
                 module_name=build_paths.module_name,
                 source_dir=source_dir,
+                signature_path=signature_path,
                 compile_sources=compile_sources,
                 flags=flags,
                 f2py_build_dir=f2py_build_dir,
@@ -1515,6 +1522,7 @@ def _compile_f2py_extension(
                 backend=backend,
                 module_name=build_paths.module_name,
                 source_dir=source_dir,
+                signature_path=signature_path,
                 compile_sources=compile_sources,
                 flags=flags,
                 f2py_build_dir=f2py_build_dir,
@@ -1598,6 +1606,7 @@ def _build_f2py_command(
     backend: str,
     module_name: str,
     source_dir: Path,
+    signature_path: Path,
     compile_sources: list[Path],
     flags: list[str],
     f2py_build_dir: Path,
@@ -1625,8 +1634,8 @@ def _build_f2py_command(
             f"-I{os.fspath(source_dir)}",
         ]
     )
+    cmd.append(os.fspath(signature_path.resolve()))
     cmd.extend(os.fspath(path.resolve()) for path in compile_sources)
-    cmd.extend(["only:", "sixs_f2py_run_batch", ":"])
     return cmd
 
 
@@ -1640,6 +1649,7 @@ def _run_distutils_backend(
     *,
     module_name: str,
     source_dir: Path,
+    signature_path: Path,
     compile_sources: list[Path],
     flags: list[str],
     f2py_build_dir: Path,
@@ -1655,9 +1665,8 @@ def _run_distutils_backend(
 
     ext = Extension(
         name=module_name,
-        sources=[os.fspath(path.resolve()) for path in compile_sources],
+        sources=[os.fspath(signature_path.resolve()), *(os.fspath(path.resolve()) for path in compile_sources)],
         include_dirs=[os.fspath(source_dir)],
-        f2py_options=["only:", "sixs_f2py_run_batch", ":"],
         extra_link_args=_distutils_extra_link_args(flags),
     )
 
@@ -1722,6 +1731,45 @@ def _run_distutils_backend(
         stdout=stdout_buffer.getvalue(),
         stderr=stderr_buffer.getvalue(),
     )
+
+
+def _generate_f2py_signature(
+    *,
+    source_dir: Path,
+    module_name: str,
+    f2py_build_dir: Path,
+) -> Path:
+    signature_path = (f2py_build_dir / _SIGNATURE_FILENAME).resolve()
+    bridge_path = (source_dir / _BRIDGE_SOURCE_NAME).resolve()
+    cmd = [
+        sys.executable,
+        "-m",
+        "numpy.f2py",
+        "-h",
+        os.fspath(signature_path),
+        "-m",
+        module_name,
+        os.fspath(bridge_path),
+        "only:",
+        "sixs_f2py_run_batch",
+        ":",
+        "--overwrite-signature",
+    ]
+    logger.info("Generating native 6S F2PY signature: %s", " ".join(cmd))
+    completed = subprocess.run(
+        cmd,
+        cwd=f2py_build_dir.resolve(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0 or not signature_path.exists():
+        details = _summarize_build_output(completed.stdout, completed.stderr)
+        raise RuntimeError(
+            "Failed to generate the 6S F2PY signature. "
+            f"Command: {' '.join(cmd)}. Details: {details}"
+        )
+    return signature_path
 
 
 def _diagnostics_dir(build_paths: SixSBuildPaths) -> Path:

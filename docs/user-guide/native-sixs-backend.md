@@ -116,8 +116,11 @@ The native builder can either:
 - use an existing unpacked source tree from `algorithms.rt.sixs.source_dir`
 
 During build, SIAC patches the copied 6S sources before compiling the Python
-extension. The build path is part of the supported user workflow; you do not
-need to patch 6S manually.
+extension. It also generates an explicit F2PY signature for
+`sixs_f2py_run_batch`, so the compiled Python module only exposes the batched
+array entrypoint rather than auto-wrapping legacy 6S COMMON blocks. The build
+path is part of the supported user workflow; you do not need to patch 6S
+manually.
 
 ## Minimal Configuration
 

@@ -57,7 +57,9 @@ The builder:
 2. downloads or reuses the upstream 6SV2.1 source tree
 3. patches selected upstream files
 4. injects a callable bridge around the 6S case core
-5. compiles an F2PY extension with OpenMP-enabled Fortran flags
+5. generates an explicit F2PY signature that exposes only
+   `sixs_f2py_run_batch`
+6. compiles an F2PY extension with OpenMP-enabled Fortran flags
 
 `build_profile = "release"` uses optimized flags. `build_profile = "parity"`
 switches to lower optimization for parity work against the original executable.
@@ -83,7 +85,9 @@ polarized kernels.
 The native build also carries implementation-level patches to support the Python
 bridge and safe native execution, including widened file-path handling for
 user-supplied aerosol models and OpenMP-related adjustments in the copied
-Fortran tree.
+Fortran tree. The explicit signature step is important because it prevents
+F2PY from auto-generating wrapper glue for legacy COMMON blocks that the native
+OpenMP build marks `THREADPRIVATE`.
 
 ## Execution Paths
 

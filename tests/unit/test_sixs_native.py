@@ -12,6 +12,7 @@ import xarray as xr
 from siac.algorithms.rt.direct import sixs_build as sixs_build_module
 from siac.algorithms.rt.direct.sixs import SixSBackend
 from siac.algorithms.rt.direct.sixs_build import (
+    _build_f2py_command,
     _compile_f2py_extension,
     _distutils_backend_supported,
     _distutils_extra_link_args,
@@ -355,6 +356,11 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
         )
 
     monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_generate_f2py_signature",
+        lambda **_kwargs: source_dir / "_siac_rt6s_native.pyf",
+    )
     monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
     monkeypatch.setattr(sixs_build_module, "find_built_extension", _fake_find_built_extension)
@@ -388,6 +394,11 @@ def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
         )
 
     monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_generate_f2py_signature",
+        lambda **_kwargs: source_dir / "_siac_rt6s_native.pyf",
+    )
     monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
 
@@ -429,6 +440,11 @@ def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
         )
 
     monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_generate_f2py_signature",
+        lambda **_kwargs: source_dir / "_siac_rt6s_native.pyf",
+    )
     monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
     monkeypatch.setattr(sixs_build_module, "_environment_extension_roots", lambda: (env_site,))
@@ -441,6 +457,30 @@ def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
     )
 
     assert built_module.exists()
+
+
+def test_build_f2py_command_uses_signature_file_before_sources(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    signature_path = tmp_path / "_siac_rt6s_native.pyf"
+    first_source = source_dir / "main.f"
+    second_source = source_dir / "siac_rt6s_bridge.f90"
+    first_source.write_text("      end\n", encoding="utf-8")
+    second_source.write_text("end\n", encoding="utf-8")
+
+    command = _build_f2py_command(
+        backend="meson",
+        module_name="_siac_rt6s_native",
+        source_dir=source_dir,
+        signature_path=signature_path,
+        compile_sources=[first_source, second_source],
+        flags=["-O3", "-fopenmp"],
+        f2py_build_dir=tmp_path / "f2py_build",
+    )
+
+    assert str(signature_path.resolve()) in command
+    assert command.index(str(signature_path.resolve())) < command.index(str(first_source.resolve()))
+    assert "only:" not in command
 
 
 def test_find_built_extension_searches_recent_extra_roots(tmp_path: Path) -> None:
