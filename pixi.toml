@@ -78,9 +78,6 @@ pymdown-extensions = ">=10.0.0"
 [feature.gee.pypi-dependencies]
 earthengine-api = ">=0.1.390"
 
-[feature.py6s.pypi-dependencies]
-Py6S = ">=1.9.0"
-
 [feature.rt6s.dependencies]
 python = ">=3.11,<3.12"
 setuptools = ">=59,<60"
@@ -90,7 +87,6 @@ ninja = "*"
 
 [environments]
 default = { features = ["dev", "gee"] }
-py6s = { features = ["dev", "gee", "py6s"] }
 rt6s = { features = ["dev", "gee", "rt6s"] }
 
 [tasks]
@@ -99,7 +95,7 @@ build-6s-native = "python tools/build_6s_native.py"
 clean-6s-native = "python tools/build_6s_native.py --clean"
 test = "pytest tests -v"
 test-no-cov = "pytest tests -v --no-cov"
-test-fast = "pytest tests -m 'not slow and not integration and not regression and not gee and not py6s' -v --no-cov"
+test-fast = "pytest tests -m 'not slow and not integration and not regression and not gee' -v --no-cov"
 test-live-public = "pytest --no-cov tests/integration/test_remote_lut.py tests/integration/test_gcs_sentinel2_real.py -q"
 coverage = "pytest tests -v && python tools/check_coverage_thresholds.py --min-total 95 --min-file 90"
 lint = "ruff check python/siac tests"

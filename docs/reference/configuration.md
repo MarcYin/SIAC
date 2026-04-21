@@ -149,9 +149,7 @@ Supported backends:
 - `lut`
 - `sixs`
 
-`.[py6s]` installs the optional Py6S dependency for the offline
-`create_lut_from_py6s(...)` utility only; the native `sixs` backend uses the
-compiled 6SV2.1 build path documented in
+The native `sixs` backend uses the compiled 6SV2.1 build path documented in
 [Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md).
 
 ### `algorithms.rt.setup`

@@ -1,8 +1,7 @@
 # Native 6SV2.1 Backend
 
 SIAC includes a native 6SV2.1 backend exposed as `algorithms.rt.backend = "sixs"`.
-This backend is separate from the LUT and emulator backends and from the
-optional Py6S LUT-generation utilities:
+This backend is separate from the LUT and emulator backends:
 
 - `sixs`: native compiled 6SV2.1 with batched array execution, OpenMP support,
   scene-LUT routing, and selectable 6S report outputs.
@@ -802,11 +801,6 @@ names listed on this page.
 
 Install a Fortran compiler, `meson`, and `ninja`, or use the Pixi `rt6s`
 environment.
-
-### `.[py6s]` was installed but native 6S still does not work
-
-`.[py6s]` only installs the optional Py6S dependency used by
-`create_lut_from_py6s(...)`. It does not install the native 6S build toolchain.
 
 ### `scene_lut` is slower than `direct`
 

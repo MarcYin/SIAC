@@ -70,11 +70,8 @@ Use this only when you specifically want a non-Pixi environment.
 - `.[dev]` for development tools
 - `.[docs]` for the documentation stack
 - `.[gee]` for Google Earth Engine support
-- `.[py6s]` for Py6S-based LUT-generation utilities
 
 ## Native 6S Backend Setup
-
-The native `sixs` backend is separate from the optional Py6S utility extra.
 
 Use the native backend when you set:
 
@@ -122,12 +119,6 @@ python tools/build_6s_native.py
 
 `tools/build_6s_native.py` supports `--source-dir`, `--build-dir`,
 `--compiler`, and `--build-profile`.
-
-### Important Distinction
-
-`pip install -e ".[py6s]"` only enables the optional Py6S dependency used by
-`create_lut_from_py6s(...)`. It does not install or build the native 6SV2.1
-backend.
 
 ## Common installation issues
 

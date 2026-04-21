@@ -109,7 +109,6 @@ To keep LUT code maintainable, the Zarr LUT backend is separated by concern:
 - `siac.algorithms.rt.lut.backend`: RT interpolation logic (`ZarrLUTBackend`)
 - `siac.algorithms.rt.lut.store`: local/remote/S3/ZIP store resolution
 - `siac.algorithms.rt.lut.http_zip_store`: ReadOnlyZipFileSystem-style ZIP access for local/HTTP/S3 LUT archives
-- `siac.algorithms.rt.lut.create`: LUT generation utilities (`create_lut_from_py6s`)
 - `siac.algorithms.rt.lut.constants`: default public LUT URL and LUT coordinate constants
 
 ### 2.4 Key Design Rule
@@ -714,7 +713,7 @@ CorrectorFn = Callable[[ObservationBundle, SolvedAtmosphere, RTModelBackend], Co
 
 1. **Coefficient-space correction** (current default):
    - Used with RT backends that return `RTCoefficients` directly.
-   - Typical sources: neural-network emulators, compact per-band LUTs, Py6S wrappers that already expose `xap/xbp/xcp`, and spectral LUT backends after bandpass convolution.
+   - Typical sources: neural-network emulators, compact per-band LUTs, and spectral LUT backends after bandpass convolution.
    - Equation family:
      - `y = xap * toa - xbp`
      - `boa = y / (1 + xcp * y)`
@@ -2049,17 +2048,15 @@ Not a data provider — a compute module used by M5 and M6. Implementations:
 | `EmulatorBackend` | Fast | Analytical | `RTCoefficients` | S2, L8 (pre-trained) |
 | `CoefficientLUTBackend` | Medium | Numerical | `RTCoefficients` | Multispectral sensors with pre-banded LUT support |
 | `SpectralLUTBackend` | Medium-Slow | Numerical | `RTCoefficients` after RSRF convolution | Hyperspectral or sensors needing on-the-fly RSRF convolution |
-| `Py6SBackend` | Slow | Numerical | Usually `RTCoefficients` | Any sensor |
 
 Two distinct planning axes must be kept explicit:
 
-1. **RT model family**: emulator, compact LUT, dense spectral LUT, line-by-line / Py6S.
+1. **RT model family**: emulator, compact LUT, dense spectral LUT, line-by-line.
 2. **AC method**: built-in coefficient-space correction, or custom user correction.
 
 These axes are related but not identical:
 - an emulator almost always feeds coefficient correction;
 - a dense spectral LUT may compute `path_ref/T_total/S` internally, then collapse back to coefficients before M6;
-- Py6S may compute coefficients directly or derive them from more detailed intermediate terms, but the public boundary should still be `RTCoefficients`.
 
 Users can provide a custom RT backend by implementing the `RTModelBackend` protocol
 (this is the one place a multi-method protocol is justified — the backend has

@@ -9,7 +9,7 @@ Provides pluggable RT backends:
 
 from siac.algorithms.rt.direct import SixSBackend
 from siac.algorithms.rt.emulator import EmulatorRegistry, TwoLayerNNEmulator
-from siac.algorithms.rt.lut import ZarrLUTBackend, create_lut_from_py6s
+from siac.algorithms.rt.lut import ZarrLUTBackend
 
 __all__ = [
     # Direct backends
@@ -19,5 +19,4 @@ __all__ = [
     "EmulatorRegistry",
     # LUT backend
     "ZarrLUTBackend",
-    "create_lut_from_py6s",
 ]

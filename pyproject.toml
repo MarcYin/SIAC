@@ -88,16 +88,13 @@ dev = [
 gee = [
     "earthengine-api>=0.1.390",
 ]
-py6s = [
-    "Py6S>=1.9.0",
-]
 docs = [
     "mkdocs>=1.6.0,<2.0",
     "mkdocs-material>=9.5.0,<10.0",
     "pymdown-extensions>=10.0.0",
 ]
 all = [
-    "siac[dev,gee,py6s,docs]",
+    "siac[dev,gee,docs]",
 ]
 
 [project.urls]
@@ -140,7 +137,6 @@ markers = [
     "integration: marks tests as integration tests",
     "regression: marks tests as regression tests requiring golden outputs",
     "gee: marks tests requiring Google Earth Engine access",
-    "py6s: marks tests requiring Py6S installation",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
@@ -203,7 +199,6 @@ module = [
     "sklearn.*",
     "h5py.*",
     "zarr.*",
-    "Py6S.*",
     "ee.*",
     "cv2",
     "cv2.*",

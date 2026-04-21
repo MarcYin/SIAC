@@ -49,12 +49,6 @@ To mirror the hosted Linux smoke workflow exactly:
 SIAC_SIXS_F2PY_BACKEND=meson,distutils PYTHONPATH=python pixi run -e rt6s python tools/rt6s_smoke.py
 ```
 
-### Installed `.[py6s]` but native `sixs` still is not available
-
-`.[py6s]` only enables the optional Py6S dependency used by
-`create_lut_from_py6s(...)`. The native `sixs` backend still needs the native
-toolchain and compiled extension.
-
 ## Runtime and configuration
 
 ### Wrong cache or output location

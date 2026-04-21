@@ -69,9 +69,6 @@ maturin develop --release --manifest-path src/siac_rs/Cargo.toml
 The repository also includes a native 6SV2.1 backend selected with
 `algorithms.rt.backend = "sixs"`.
 
-This is separate from the optional Py6S backend. `.[py6s]` installs Py6S for
-`backend = "py6s"` only; it does not build the native backend.
-
 To build native 6S with the repo-managed toolchain:
 
 ```bash
