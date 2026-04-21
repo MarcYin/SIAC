@@ -415,6 +415,14 @@ def _resolve_atmospheric_mode(config: SixSAlgorithmConfig) -> int:
     return mode
 
 
+def _resolve_atmospheric_columns_mode(config: SixSAlgorithmConfig) -> int:
+    if config.atmospheric_columns_mode != "input_columns":
+        return 0
+    if config.atmospheric_profile == "no_gas":
+        return 0
+    return 1
+
+
 def _resolve_aerosol_mode(config: SixSAlgorithmConfig) -> int:
     return _AEROSOL_PROFILE_CODES[config.aerosol_profile]
 
@@ -905,6 +913,7 @@ class _SixSExtensionModule:
         month: int,
         day: int,
         atmospheric_mode: int,
+        atmospheric_columns_mode: int,
         radiosonde_altitude_km: np.ndarray,
         radiosonde_pressure_mb: np.ndarray,
         radiosonde_temperature_k: np.ndarray,
@@ -977,6 +986,7 @@ class _SixSExtensionModule:
             int(month),
             int(day),
             int(atmospheric_mode),
+            int(atmospheric_columns_mode),
             np.asarray(radiosonde_altitude_km, dtype=np.float64),
             np.asarray(radiosonde_pressure_mb, dtype=np.float64),
             np.asarray(radiosonde_temperature_k, dtype=np.float64),
@@ -1224,6 +1234,7 @@ class SixSNativeRunner:
                 "month": month,
                 "day": day,
                 "atmospheric_mode": atmospheric_mode,
+                "atmospheric_columns_mode": _resolve_atmospheric_columns_mode(self._config),
                 "radiosonde_altitude_km": np.ascontiguousarray(radiosonde["altitude_km"], dtype=np.float64),
                 "radiosonde_pressure_mb": np.ascontiguousarray(radiosonde["pressure_mb"], dtype=np.float64),
                 "radiosonde_temperature_k": np.ascontiguousarray(radiosonde["temperature_k"], dtype=np.float64),

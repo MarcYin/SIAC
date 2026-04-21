@@ -185,6 +185,9 @@ Main execution and build fields:
 Atmospheric-profile fields:
 
 - `atmospheric_profile`
+- `atmospheric_columns_mode` — `input_columns` scales the selected profile to
+  the scene `tcwv` and `tco3` inputs while preserving the preset profile shape;
+  `profile_default` keeps the preset profile totals
 - `atmospheric_profile_latitude`
 - `radiosonde_profile.*`
 

@@ -349,9 +349,15 @@ class TestSixSConfig:
         cfg = SixSAlgorithmConfig()
 
         assert cfg.atmospheric_profile == "user_water_ozone"
+        assert cfg.atmospheric_columns_mode == "input_columns"
         assert cfg.build_profile == "release"
         assert cfg.parallel_backend == "openmp"
         assert cfg.output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
+
+    def test_atmospheric_columns_mode_aliases_normalize(self):
+        cfg = SixSAlgorithmConfig(atmospheric_columns_mode="profile")
+
+        assert cfg.atmospheric_columns_mode == "profile_default"
 
     def test_output_variables_normalize_and_deduplicate(self):
         cfg = SixSAlgorithmConfig(output_variables=["xap", "tgasm", "tgasm", "sutott", "rooceaw"])

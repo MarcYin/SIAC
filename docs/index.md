@@ -72,7 +72,7 @@ Trace packages, runtime flow, and extension points inside the repository.
 
 - [Concepts](concepts/overview.md): overview and glossary for the SIAC domain model.
 - [Getting Started](getting-started/installation.md): installation and a first successful run.
-- [User Guide](user-guide/configuration-basics.md): runtime configuration, outputs, troubleshooting, and the native 6SV2.1 backend guide.
+- [User Guide](user-guide/configuration-basics.md): runtime configuration, outputs, troubleshooting, the native 6SV2.1 backend guide, and RT model-difference guidance.
 - [Science](science/theory.md): retrieval framing, priors, and validation context.
 - [Reference](reference/configuration.md): public configuration and API surface.
 - [Architecture](architecture/package-map.md): package boundaries, execution flow, data flow, and the native 6SV2.1 backend architecture.

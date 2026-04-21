@@ -15,6 +15,10 @@ Use the native backend when you want direct access to 6SV2.1 behavior, parity
 validation against upstream 6S, or 6S print-equivalent diagnostics beyond the
 core correction coefficients.
 
+For a measured comparison between native 6S direct, native 6S `scene_lut`, and
+the remote libRadtran ZIP/Zarr LUT, see
+[RT Model Differences](rt-model-differences.md).
+
 ## What The Backend Returns
 
 The native backend always returns the three SIAC correction coefficients:
@@ -29,6 +33,17 @@ result object and can be requested selectively.
 
 By default, `algorithms.rt.sixs.output_variables` includes the full currently
 supported native output surface.
+
+SIAC uses those three coefficients in the BOA correction equation:
+
+```text
+y = xap * toa - xbp
+boa = y / (1 + xcp * y)
+```
+
+That is why cross-backend comparisons in the user guide focus on `xap`, `xbp`,
+and `xcp`: they are the direct interface between the RT backend and the final
+surface-reflectance calculation.
 
 ## Build And Setup
 
@@ -203,6 +218,24 @@ Operational notes:
 - `user_profile` requires `radiosonde_profile`.
 - `user_water_ozone` uses SIAC-provided atmospheric state values rather than a
   built-in profile deck.
+- `atmospheric_columns_mode = "input_columns"` keeps the selected atmospheric
+  profile shape but scales total water vapour and ozone to the scene `tcwv` and
+  `tco3` inputs. This matches the original 6S capability where preset
+  atmospheric profiles can still be combined with user-specified column totals.
+  It is the default behavior for the native 6S backend.
+- `atmospheric_columns_mode = "profile_default"` keeps the selected profile's
+  built-in water-vapour and ozone totals.
+
+In practice, this means you can use:
+
+```toml
+[algorithms.rt.sixs]
+atmospheric_profile = "us_standard_62"
+atmospheric_columns_mode = "input_columns"
+```
+
+and still have SIAC drive the native 6S run with scene-specific `tcwv` and
+`tco3`, while preserving the US62 vertical profile shape.
 
 ### Aerosol Profiles
 

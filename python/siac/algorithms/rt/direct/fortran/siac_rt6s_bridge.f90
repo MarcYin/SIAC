@@ -7,7 +7,7 @@ module siac_rt6s_bridge_mod
 contains
 
   subroutine sixs_run_case_direct( &
-      month, day, atmospheric_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
+      month, day, atmospheric_mode, atmospheric_columns_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
       radiosonde_temperature_k, radiosonde_water_g_m3, radiosonde_ozone_g_m3, &
       aerosol_mode, aerosol_mixture, aerosol_distribution_rmin, aerosol_distribution_rmax, &
       aerosol_distribution_component_count, aerosol_distribution_x1, aerosol_distribution_x2, &
@@ -28,6 +28,7 @@ contains
     integer, intent(in) :: month
     integer, intent(in) :: day
     integer, intent(in) :: atmospheric_mode
+    integer, intent(in) :: atmospheric_columns_mode
     integer, intent(in) :: aerosol_mode
     integer, intent(in) :: aerosol_distribution_component_count
     integer, intent(in) :: aerosol_sun_count
@@ -193,6 +194,7 @@ contains
         month, &
         day, &
         atmospheric_mode, &
+        atmospheric_columns_mode, &
         real(max(tcwv_cm, 0.0d0)), &
         real(max(tco3_atmcm, 0.0d0)), &
         radiosonde_altitude_local, &
@@ -260,7 +262,7 @@ contains
   end subroutine sixs_run_case_direct
 
   subroutine sixs_run_batch_impl( &
-      month, day, atmospheric_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
+      month, day, atmospheric_mode, atmospheric_columns_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
       radiosonde_temperature_k, radiosonde_water_g_m3, radiosonde_ozone_g_m3, &
       aerosol_mode, aerosol_mixture, aerosol_distribution_rmin, aerosol_distribution_rmax, &
       aerosol_distribution_component_count, aerosol_distribution_x1, aerosol_distribution_x2, &
@@ -281,6 +283,7 @@ contains
     integer, intent(in) :: month
     integer, intent(in) :: day
     integer, intent(in) :: atmospheric_mode
+    integer, intent(in) :: atmospheric_columns_mode
     integer, intent(in) :: aerosol_mode
     integer, intent(in) :: aerosol_distribution_component_count
     integer, intent(in) :: aerosol_sun_count
@@ -351,7 +354,7 @@ contains
     !$omp parallel do schedule(static)
     do i = 1, n_cases
       call sixs_run_case_direct( &
-          month, day, atmospheric_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
+          month, day, atmospheric_mode, atmospheric_columns_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
           radiosonde_temperature_k, radiosonde_water_g_m3, radiosonde_ozone_g_m3, &
           aerosol_mode, aerosol_mixture, aerosol_distribution_rmin, aerosol_distribution_rmax, &
           aerosol_distribution_component_count, aerosol_distribution_x1, aerosol_distribution_x2, &
@@ -375,7 +378,7 @@ end module siac_rt6s_bridge_mod
 
 
 subroutine sixs_f2py_run_batch( &
-    month, day, atmospheric_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
+    month, day, atmospheric_mode, atmospheric_columns_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
     radiosonde_temperature_k, radiosonde_water_g_m3, radiosonde_ozone_g_m3, &
     aerosol_mode, aerosol_mixture, aerosol_distribution_rmin, aerosol_distribution_rmax, &
     aerosol_distribution_component_count, aerosol_distribution_x1, aerosol_distribution_x2, &
@@ -396,6 +399,7 @@ subroutine sixs_f2py_run_batch( &
   integer, intent(in) :: month
   integer, intent(in) :: day
   integer, intent(in) :: atmospheric_mode
+  integer, intent(in) :: atmospheric_columns_mode
   integer, intent(in) :: aerosol_mode
   integer, intent(in) :: aerosol_distribution_component_count
   integer, intent(in) :: aerosol_sun_count
@@ -458,7 +462,7 @@ subroutine sixs_f2py_run_batch( &
   integer, intent(inout) :: status_code(n_cases)
 
   call sixs_run_batch_impl( &
-      month, day, atmospheric_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
+      month, day, atmospheric_mode, atmospheric_columns_mode, radiosonde_altitude_km, radiosonde_pressure_mb, &
       radiosonde_temperature_k, radiosonde_water_g_m3, radiosonde_ozone_g_m3, aerosol_mode, &
       aerosol_mixture, aerosol_distribution_rmin, aerosol_distribution_rmax, &
       aerosol_distribution_component_count, aerosol_distribution_x1, aerosol_distribution_x2, &

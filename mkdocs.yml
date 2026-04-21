@@ -97,6 +97,7 @@ nav:
   - User Guide:
       - Configuration Basics: user-guide/configuration-basics.md
       - Native 6SV2.1 Backend: user-guide/native-sixs-backend.md
+      - RT Model Differences: user-guide/rt-model-differences.md
       - Running SIAC: user-guide/running-siac.md
       - Outputs: user-guide/outputs.md
       - Troubleshooting: user-guide/troubleshooting.md

@@ -455,7 +455,8 @@ def patch_main_source(text: str) -> str:
         "\n".join(
             [
                 "      subroutine sixs_case_core(iwr_unit,asol_in,phi0_in,avis_in,",
-                "     s phiv_in,month_in,jday_in,idatm_in,uw_in,uo3_in,",
+                "     s phiv_in,month_in,jday_in,idatm_in,",
+                "     s atmospheric_columns_mode_in,uw_in,uo3_in,",
                 "     s radiosonde_altitude_in,radiosonde_pressure_in,",
                 "     s radiosonde_temperature_in,radiosonde_water_in,",
                 "     s radiosonde_ozone_in,iaer_in,aerosol_mixture_in,",
@@ -498,6 +499,7 @@ def patch_main_source(text: str) -> str:
             [
                 "        integer igrou1,igrou2,isort,irapp,ilut",
                 "        integer iwr_unit,month_in,jday_in,idatm_in,iaer_in",
+                "        integer atmospheric_columns_mode_in,idatm_abstra",
                 "        integer aerosol_dist_icp_in,aerosol_sun_count_in",
                 "        integer aerosol_layer_count_in,surface_inhomo_in",
                 "        integer surface_idirec_in,surface_target_mode_in",
@@ -854,6 +856,43 @@ def patch_main_source(text: str) -> str:
     )
     text = _replace_once(text, "   10 read(iread,*) taer55", "   10 taer55=max(taer55_in,0.)", "aerosol optical thickness input")
     text = _replace_once(text, " 771   read(iread,*) xps", " 771   xps=-max(elevation_km_in,0.)", "target elevation input")
+    text = _replace_once(
+        text,
+        "\n".join(
+            [
+                "         if (idatm.ne.8) then",
+                "         call pressure(uw,uo3,xps)",
+                "        else",
+                "         call pressure(uwus,uo3us,xps)",
+                "        endif",
+            ]
+        ),
+        "\n".join(
+            [
+                "         if (idatm.ne.8) then",
+                "         call pressure(uw,uo3,xps)",
+                "         idatm_abstra=idatm",
+                "         if (atmospheric_columns_mode_in.ne.0) then",
+                "          uwus=max(uw,1.0e-06)",
+                "          uo3us=max(uo3,1.0e-06)",
+                "          uw=max(uw_in,0.)",
+                "          uo3=max(uo3_in,0.)",
+                "          idatm_abstra=8",
+                "         endif",
+                "        else",
+                "         call pressure(uwus,uo3us,xps)",
+                "         idatm_abstra=8",
+                "        endif",
+            ]
+        ),
+        "atmospheric column scaling mode",
+    )
+    text = _replace_once(
+        text,
+        "if (idatm.eq.8) then",
+        "if (idatm_abstra.eq.8) then",
+        "plane atmospheric column scaling mode",
+    )
     text = _replace_once(text, "        read(iread,*) xpp", "        xpp=-1000.", "sensor altitude input")
     text = _replace_once(text, "       s(l)=1.", "       s(l)=0.", "spectral response initialization")
     text = _replace_once(text, "      read(iread,*) iwave", "      iwave=1", "spectral mode input")
@@ -878,6 +917,38 @@ def patch_main_source(text: str) -> str:
     text = _replace_once(text, "      read(iread,*) inhomo", "      inhomo=surface_inhomo_in", "surface homogeneity input")
     text = _replace_once(text, "  30  read(iread,*) idirec", "  30  idirec=surface_idirec_in", "surface directional mode input")
     text = _replace_once(text, " 25   read(iread,*) ibrdf", " 25   ibrdf=surface_brdf_model_in", "surface brdf model input")
+    text = _replace_once(
+        text,
+        "\n".join(
+            [
+                "        call abstra(idatm,wl,xmus,xmuv,uw/2.,uo3,uwus,uo3us,",
+                "     a             idatmp,puw/2.,puo3,puwus,puo3us,",
+                "     a      dtwava,dtozon,dtdica,dtoxyg,dtniox,dtmeth,dtmoca,",
+                "     a      utwava,utozon,utdica,utoxyg,utniox,utmeth,utmoca,",
+                "     a      attwava,ttozon,ttdica,ttoxyg,ttniox,ttmeth,ttmoca )",
+                "        call abstra(idatm,wl,xmus,xmuv,uw,uo3,uwus,uo3us,",
+                "     a             idatmp,puw,puo3,puwus,puo3us,",
+                "     a      dtwava,dtozon,dtdica,dtoxyg,dtniox,dtmeth,dtmoca,",
+                "     a      utwava,utozon,utdica,utoxyg,utniox,utmeth,utmoca,",
+                "     a      ttwava,ttozon,ttdica,ttoxyg,ttniox,ttmeth,ttmoca )",
+            ]
+        ),
+        "\n".join(
+            [
+                "        call abstra(idatm_abstra,wl,xmus,xmuv,uw/2.,uo3,uwus,uo3us,",
+                "     a             idatmp,puw/2.,puo3,puwus,puo3us,",
+                "     a      dtwava,dtozon,dtdica,dtoxyg,dtniox,dtmeth,dtmoca,",
+                "     a      utwava,utozon,utdica,utoxyg,utniox,utmeth,utmoca,",
+                "     a      attwava,ttozon,ttdica,ttoxyg,ttniox,ttmeth,ttmoca )",
+                "        call abstra(idatm_abstra,wl,xmus,xmuv,uw,uo3,uwus,uo3us,",
+                "     a             idatmp,puw,puo3,puwus,puo3us,",
+                "     a      dtwava,dtozon,dtdica,dtoxyg,dtniox,dtmeth,dtmoca,",
+                "     a      utwava,utozon,utdica,utoxyg,utniox,utmeth,utmoca,",
+                "     a      ttwava,ttozon,ttdica,ttoxyg,ttniox,ttmeth,ttmoca )",
+            ]
+        ),
+        "abstra atmospheric mode override",
+    )
     text = _replace_once(
         text,
         "\n".join(

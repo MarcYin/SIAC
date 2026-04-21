@@ -29,6 +29,7 @@ AtmosphericParameterName = Literal["aot", "tcwv", "tco3"]
 SixSMode = Literal["direct", "scene_lut", "auto"]
 SixSParallelBackend = Literal["openmp", "worker_libraries"]
 SixSBuildProfile = Literal["release", "parity"]
+SixSAtmosphericColumnsMode = Literal["input_columns", "profile_default"]
 SixSAtmosphericProfile = Literal[
     "no_gas",
     "tropical",
@@ -621,6 +622,7 @@ class SixSAlgorithmConfig(SIACBaseModel):
     month: int = Field(default=1, ge=1, le=12)
     day: int = Field(default=1, ge=1, le=31)
     atmospheric_profile_latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
+    atmospheric_columns_mode: SixSAtmosphericColumnsMode = "input_columns"
     reference_reflectance: float = Field(default=0.1, gt=0.0, le=1.0)
     atmospheric_profile: SixSAtmosphericProfile = "user_water_ozone"
     radiosonde_profile: SixSRadiosondeProfileConfig | None = None
@@ -659,6 +661,23 @@ class SixSAlgorithmConfig(SIACBaseModel):
             "user_water_and_ozone": "user_water_ozone",
             "radiosonde": "user_profile",
             "radiosonde_profile": "user_profile",
+        }
+        return aliases.get(key, value)
+
+    @field_validator("atmospheric_columns_mode", mode="before")
+    @classmethod
+    def normalize_atmospheric_columns_mode(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        key = str(value).strip().lower()
+        aliases = {
+            "input": "input_columns",
+            "inputs": "input_columns",
+            "scene_inputs": "input_columns",
+            "scene_input_columns": "input_columns",
+            "profile": "profile_default",
+            "profile_defaults": "profile_default",
+            "profile_columns": "profile_default",
         }
         return aliases.get(key, value)
 

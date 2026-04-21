@@ -31,6 +31,7 @@ from siac.algorithms.rt.direct.sixs_native import (
     _build_scene_lut_plan,
     _build_spectral_response,
     _NativeBatchResult,
+    _resolve_atmospheric_columns_mode,
     _resolve_atmospheric_mode,
     _should_use_scene_lut,
 )
@@ -177,6 +178,20 @@ def test_patch_main_source_rewrites_program_entrypoint() -> None:
     assert "return" in patched
 
 
+def test_patch_main_source_supports_profile_column_scaling() -> None:
+    upstream_main = Path("tmp/6s_upstream/main.f")
+    if not upstream_main.exists():
+        pytest.skip("Upstream 6S source tree is not available for main.f transform validation.")
+
+    patched = patch_main_source(upstream_main.read_text())
+
+    assert "atmospheric_columns_mode_in" in patched
+    assert "idatm_abstra=idatm" in patched
+    assert "uwus=max(uw,1.0e-06)" in patched
+    assert "if (idatm_abstra.eq.8) then" in patched
+    assert "call abstra(idatm_abstra,wl,xmus,xmuv,uw,uo3,uwus,uo3us," in patched
+
+
 def test_patch_threadprivate_directives_handles_common_block_styles() -> None:
     original = "\n".join(
         [
@@ -202,6 +217,12 @@ def test_encoded_string_io_reports_utf8_encoding() -> None:
 
 def test_default_native_profile_maps_to_user_water_ozone() -> None:
     assert _resolve_atmospheric_mode(SixSAlgorithmConfig()) == 8
+
+
+def test_default_native_columns_mode_uses_scene_inputs() -> None:
+    assert _resolve_atmospheric_columns_mode(SixSAlgorithmConfig()) == 1
+    assert _resolve_atmospheric_columns_mode(SixSAlgorithmConfig(atmospheric_columns_mode="profile_default")) == 0
+    assert _resolve_atmospheric_columns_mode(SixSAlgorithmConfig(atmospheric_profile="no_gas")) == 0
 
 
 def test_spectral_response_build_uses_band_rsrf_support() -> None:
