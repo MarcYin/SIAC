@@ -352,6 +352,7 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
@@ -360,7 +361,7 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
     built_module = build_paths.root_dir / f"{build_paths.module_name}.cpython-test.so"
     find_calls = {"count": 0}
 
-    def _fake_find_built_extension(_paths):
+    def _fake_find_built_extension(_paths, **_kwargs):
         find_calls["count"] += 1
         if find_calls["count"] < 2:
             return None
@@ -384,7 +385,17 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
     )
     monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
-    monkeypatch.setattr(sixs_build_module, "find_built_extension", _fake_find_built_extension)
+    monkeypatch.setattr(sixs_build_module, "_find_built_extension", _fake_find_built_extension)
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_validate_extension_import",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["python", "-c", "import module"],
+            returncode=0,
+            stdout=str(built_module),
+            stderr="",
+        ),
+    )
 
     _compile_f2py_extension(
         source_dir=source_dir,
@@ -400,6 +411,7 @@ def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
@@ -422,6 +434,7 @@ def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
     )
     monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
+    monkeypatch.setattr(sixs_build_module, "_find_built_extension", lambda *_args, **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="6S native Python extension build failed"):
         _compile_f2py_extension(
@@ -442,6 +455,7 @@ def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
@@ -469,6 +483,16 @@ def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
     monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("distutils",))
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
     monkeypatch.setattr(sixs_build_module, "_environment_extension_roots", lambda: (env_site,))
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_validate_extension_import",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["python", "-c", "import module"],
+            returncode=0,
+            stdout=str(built_module),
+            stderr="",
+        ),
+    )
 
     _compile_f2py_extension(
         source_dir=source_dir,
@@ -484,6 +508,7 @@ def test_compile_f2py_extension_falls_back_after_import_validation_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
@@ -495,7 +520,11 @@ def test_compile_f2py_extension_falls_back_after_import_validation_failure(
 
     def _fake_find_built_extension(_paths, **_kwargs):
         find_calls["count"] += 1
-        return meson_module if find_calls["count"] == 1 else distutils_module
+        if find_calls["count"] == 1:
+            return None
+        if find_calls["count"] == 2:
+            return meson_module
+        return distutils_module
 
     def _fake_subprocess_run(*args, **kwargs):
         meson_module.parent.mkdir(parents=True, exist_ok=True)
@@ -543,6 +572,7 @@ def test_compile_f2py_extension_falls_back_after_import_validation_failure(
     monkeypatch.setattr(sixs_build_module.subprocess, "run", _fake_subprocess_run)
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
     monkeypatch.setattr(sixs_build_module, "_find_built_extension", _fake_find_built_extension)
+    monkeypatch.setattr(sixs_build_module, "_environment_extension_roots", lambda: ())
     monkeypatch.setattr(sixs_build_module, "_validate_extension_import", _fake_validate_extension_import)
 
     _compile_f2py_extension(
