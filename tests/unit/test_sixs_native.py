@@ -480,6 +480,87 @@ def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
     assert built_module.exists()
 
 
+def test_compile_f2py_extension_falls_back_after_import_validation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "main.f").write_text("      end\n", encoding="utf-8")
+
+    build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
+    meson_module = build_paths.root_dir / f"{build_paths.module_name}.cpython-meson.so"
+    distutils_module = build_paths.root_dir / f"{build_paths.module_name}.cpython-distutils.so"
+    find_calls = {"count": 0}
+
+    def _fake_find_built_extension(_paths, **_kwargs):
+        find_calls["count"] += 1
+        return meson_module if find_calls["count"] == 1 else distutils_module
+
+    def _fake_subprocess_run(*args, **kwargs):
+        meson_module.parent.mkdir(parents=True, exist_ok=True)
+        meson_module.write_text("meson", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=["python", "-m", "numpy.f2py", "--backend", "meson"],
+            returncode=0,
+            stdout="meson build ok",
+            stderr="",
+        )
+
+    def _fake_run_distutils_backend(**_kwargs):
+        distutils_module.parent.mkdir(parents=True, exist_ok=True)
+        distutils_module.write_text("distutils", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=["python", "-m", "numpy.f2py", "--backend", "distutils"],
+            returncode=0,
+            stdout="distutils build ok",
+            stderr="",
+        )
+
+    def _fake_validate_extension_import(_module_name, module_path):
+        module_path = Path(module_path)
+        if module_path == meson_module:
+            return subprocess.CompletedProcess(
+                args=["python", "-c", "import module"],
+                returncode=1,
+                stdout="",
+                stderr="ImportError: undefined symbol: GOMP_parallel",
+            )
+        return subprocess.CompletedProcess(
+            args=["python", "-c", "import module"],
+            returncode=0,
+            stdout=str(module_path),
+            stderr="",
+        )
+
+    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module,
+        "_generate_f2py_signature",
+        lambda **_kwargs: source_dir / "_siac_rt6s_native.pyf",
+    )
+    monkeypatch.setattr(sixs_build_module, "_resolve_f2py_backends", lambda: ("meson", "distutils"))
+    monkeypatch.setattr(sixs_build_module.subprocess, "run", _fake_subprocess_run)
+    monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
+    monkeypatch.setattr(sixs_build_module, "_find_built_extension", _fake_find_built_extension)
+    monkeypatch.setattr(sixs_build_module, "_validate_extension_import", _fake_validate_extension_import)
+
+    _compile_f2py_extension(
+        source_dir=source_dir,
+        build_paths=build_paths,
+        compiler="gfortran",
+        build_profile="release",
+    )
+
+    diagnostics_dir = build_paths.root_dir / "diagnostics"
+    meson_summary = (diagnostics_dir / "f2py-meson.summary.txt").read_text(encoding="utf-8")
+    assert "status=import-failed" in meson_summary
+    assert "import_check_returncode=1" in meson_summary
+    assert "GOMP_parallel" in (diagnostics_dir / "f2py-meson.import_check.stderr.txt").read_text(encoding="utf-8")
+    assert not meson_module.exists()
+    assert distutils_module.exists()
+
+
 def test_build_f2py_command_uses_signature_file_before_sources(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)

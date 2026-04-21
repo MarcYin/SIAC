@@ -1627,6 +1627,28 @@ def _compile_f2py_extension(
             built_extension=built_extension,
         )
         if built_extension is not None:
+            validation = _validate_extension_import(build_paths.module_name, built_extension)
+            if validation.returncode != 0:
+                _write_backend_diagnostics(
+                    build_paths=build_paths,
+                    backend=backend,
+                    cmd=cmd,
+                    completed=completed,
+                    status="import-failed",
+                    built_extension=built_extension,
+                    validation=validation,
+                )
+                with contextlib.suppress(OSError):
+                    built_extension.unlink()
+                log_summary = _summarize_build_output(validation.stdout, validation.stderr)
+                failures.append((backend, cmd, validation, f"built extension failed import validation: {log_summary}"))
+                logger.warning(
+                    "F2PY %s backend built extension %s, but import validation failed: %s",
+                    backend,
+                    built_extension,
+                    log_summary,
+                )
+                continue
             if completed.returncode != 0:
                 logger.warning(
                     "F2PY %s backend reported exit code %s but built extension %s was found; "
@@ -1708,6 +1730,31 @@ def _build_f2py_command(
     cmd.append(os.fspath(signature_path.resolve()))
     cmd.extend(os.fspath(path.resolve()) for path in compile_sources)
     return cmd
+
+
+def _validate_extension_import(module_name: str, module_path: Path) -> subprocess.CompletedProcess[str]:
+    validation_code = """
+import importlib.machinery
+import importlib.util
+import pathlib
+import sys
+
+module_name = sys.argv[1]
+module_path = pathlib.Path(sys.argv[2]).resolve()
+loader = importlib.machinery.ExtensionFileLoader(module_name, str(module_path))
+spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
+if spec is None or spec.loader is None:
+    raise ImportError(f"Unable to create import spec for {module_path}")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module_path)
+"""
+    return subprocess.run(
+        [sys.executable, "-c", validation_code, module_name, os.fspath(module_path.resolve())],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _distutils_extra_link_args(flags: list[str]) -> list[str]:
@@ -1881,6 +1928,7 @@ def _write_backend_diagnostics(
     completed: subprocess.CompletedProcess[str],
     status: str,
     built_extension: Path | None,
+    validation: subprocess.CompletedProcess[str] | None = None,
 ) -> None:
     diagnostics_dir = _diagnostics_dir(build_paths)
     prefix = f"f2py-{backend}"
@@ -1895,6 +1943,15 @@ def _write_backend_diagnostics(
         f"command={shlex.join(cmd)}",
         f"summary={_summarize_build_output(completed.stdout, completed.stderr)}",
     ]
+    if validation is not None:
+        _write_text(diagnostics_dir / f"{prefix}.import_check.stdout.txt", validation.stdout or "")
+        _write_text(diagnostics_dir / f"{prefix}.import_check.stderr.txt", validation.stderr or "")
+        summary_lines.extend(
+            [
+                f"import_check_returncode={validation.returncode}",
+                f"import_check_summary={_summarize_build_output(validation.stdout, validation.stderr)}",
+            ]
+        )
     _write_text(diagnostics_dir / f"{prefix}.summary.txt", "\n".join(summary_lines) + "\n")
 
 
