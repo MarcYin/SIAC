@@ -141,7 +141,6 @@ min_valid_bands = 1
 backend = "emulator"
 lut_interpolation = "linear"
 fallback_to_lut = true
-fallback_to_py6s = true
 
 [algorithms.solver]
 aot_gamma = 10.0

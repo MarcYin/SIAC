@@ -151,10 +151,6 @@ def resolve_build_paths(config: SixSAlgorithmConfig) -> SixSBuildPaths:
     root_dir = Path(config.build_dir or default_root).expanduser()
     module_hint_path = None
     configured_module_path = getattr(config, "module_path", None)
-    if configured_module_path is None and getattr(config, "library_path", None) is not None:
-        candidate = Path(config.library_path).expanduser()
-        if candidate.suffix in native_module_suffixes():
-            configured_module_path = candidate
     if configured_module_path is not None:
         module_hint_path = Path(configured_module_path).expanduser()
     return SixSBuildPaths(

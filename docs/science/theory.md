@@ -14,7 +14,7 @@ SIAC combines:
 - solar and viewing geometry
 - atmospheric priors such as AOT and TCWV
 - surface priors derived from BRDF products
-- a radiative transfer representation through an emulator, LUT, or Py6S backend
+- a radiative transfer representation through an emulator, LUT, or native 6S backend
 - spatial smoothness constraints in the atmospheric retrieval stage
 
 Instead of treating atmospheric correction as a purely forward transform, SIAC treats the atmospheric state as something to be estimated under observation and prior constraints.

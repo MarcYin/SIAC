@@ -11,7 +11,7 @@ import xarray as xr
 
 from siac.adapters.rt import build_rt_model
 from siac.algorithms.rt.direct.sixs_build import build_native_sixs_module
-from siac.config import SixSAlgorithmConfig
+from siac.config import RTSetupConfig, SixSAlgorithmConfig
 from siac.domain.sensors import SensorBand
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 from siac.sixs_upstream_parity import default_parity_cases, run_upstream_parity_suite
@@ -27,12 +27,13 @@ def _require_native_6s_stack() -> Path:
     return source_dir
 
 
-def _adapter_config(sixs_config: SixSAlgorithmConfig) -> SimpleNamespace:
+def _adapter_config(sixs_config: SixSAlgorithmConfig, rt_setup: RTSetupConfig) -> SimpleNamespace:
     return SimpleNamespace(
         sensor="auto",
         paths=SimpleNamespace(emulator_dir=None, lut_path=None),
         rt_model=SimpleNamespace(
             backend="sixs",
+            setup=rt_setup,
             sixs=sixs_config,
             emulator_dir=None,
             lut_path=None,
@@ -160,7 +161,7 @@ class TestSixSBackendIntegration:
             "plumet",
             "xpol",
         )
-        sixs_config = case.config.model_copy(
+        sixs_config = case.sixs_config.model_copy(
             update={
                 "source_dir": sixs_source_dir,
                 "module_path": native_module_path,
@@ -169,12 +170,12 @@ class TestSixSBackendIntegration:
                 "output_variables": requested_outputs,
             }
         )
-        backend = build_rt_model(_adapter_config(sixs_config))
+        backend = build_rt_model(_adapter_config(sixs_config, case.rt_setup))
         geometry = _scene_geometry(case.name)
         atmosphere = _scene_atmosphere(case.name)
         bands = _integration_bands()
 
-        backend.set_observation_time(datetime(2025, case.config.month, case.config.day, 10, 30))
+        backend.set_observation_time(datetime(2025, case.sixs_config.month, case.sixs_config.day, 10, 30))
         assert backend.backend_name == "sixs"
         assert backend.preload_scene_subset(geometry, atmosphere, bands) is None
 
@@ -214,7 +215,7 @@ class TestSixSBackendIntegration:
         sixs_source_dir: Path,
     ) -> None:
         case = next(case for case in default_parity_cases() if case.name == "rahman_brdf_biomass_burning")
-        sixs_config = case.config.model_copy(
+        sixs_config = case.sixs_config.model_copy(
             update={
                 "source_dir": sixs_source_dir,
                 "module_path": native_module_path,
@@ -223,7 +224,7 @@ class TestSixSBackendIntegration:
                 "output_variables": ("xap", "xbp", "xcp", "tgasm", "sutott", "sast"),
             }
         )
-        backend = build_rt_model(_adapter_config(sixs_config))
+        backend = build_rt_model(_adapter_config(sixs_config, case.rt_setup))
         geometry = _scene_geometry(case.name)
         atmosphere = _scene_atmosphere(case.name)
         band = _integration_bands()[0]
@@ -264,7 +265,7 @@ class TestSixSBackendIntegration:
         requested_outputs = ("xap", "xbp", "xcp", "tgasm", "sutott", "sast", "rocave")
         direct_backend = build_rt_model(
             _adapter_config(
-                case.config.model_copy(
+                case.sixs_config.model_copy(
                     update={
                         "source_dir": sixs_source_dir,
                         "module_path": native_module_path,
@@ -273,12 +274,13 @@ class TestSixSBackendIntegration:
                         "native_threads": 1,
                         "output_variables": requested_outputs,
                     }
-                )
+                ),
+                case.rt_setup,
             )
         )
         scene_lut_backend = build_rt_model(
             _adapter_config(
-                case.config.model_copy(
+                case.sixs_config.model_copy(
                     update={
                         "source_dir": sixs_source_dir,
                         "module_path": native_module_path,
@@ -289,7 +291,8 @@ class TestSixSBackendIntegration:
                         "scene_lut_max_cases": 16,
                         "output_variables": requested_outputs,
                     }
-                )
+                ),
+                case.rt_setup,
             )
         )
         band = _integration_bands()[0]
@@ -321,18 +324,19 @@ class TestSixSBackendIntegration:
         }
         openmp_backend = build_rt_model(
             _adapter_config(
-                case.config.model_copy(
+                case.sixs_config.model_copy(
                     update={
                         **common_update,
                         "parallel_backend": "openmp",
                         "native_threads": 2,
                     }
-                )
+                ),
+                case.rt_setup,
             )
         )
         worker_backend = build_rt_model(
             _adapter_config(
-                case.config.model_copy(
+                case.sixs_config.model_copy(
                     update={
                         **common_update,
                         "parallel_backend": "worker_libraries",
@@ -340,7 +344,8 @@ class TestSixSBackendIntegration:
                         "worker_libraries": 2,
                         "chunk_size": 2,
                     }
-                )
+                ),
+                case.rt_setup,
             )
         )
         geometry = _scene_geometry(case.name, shape=(3, 3))

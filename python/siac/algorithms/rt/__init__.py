@@ -4,7 +4,7 @@ Radiative transfer model backends.
 Provides pluggable RT backends:
 - emulator: Pre-trained neural network emulators (fast, S2/L8 only)
 - lut: Look-up table interpolation (medium speed, any sensor)
-- direct: Direct native/Python RT backends (slow, any sensor)
+- direct: Direct native RT backends (slow, any sensor)
 """
 
 from siac.algorithms.rt.direct import SixSBackend

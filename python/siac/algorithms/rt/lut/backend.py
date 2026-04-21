@@ -60,6 +60,9 @@ class ZarrLUTBackend:
         lut_path: Path to the Zarr LUT store
         interpolation_method: Interpolation method ("linear" or "nearest")
         chunk_cache_size: Size of chunk cache in bytes
+        rt_setup: Effective generic RT setup used to validate or describe the
+            packaged LUT preset. The current public remote LUT is a fixed
+            libRadtran preset, not a generic configurable RT family.
     """
 
     _COEFFICIENT_VARS = (
@@ -89,6 +92,7 @@ class ZarrLUTBackend:
         interpolation_method: str = "linear",
         chunk_cache_size: int = 128 * 1024 * 1024,  # 128 MB
         storage_options: dict[str, Any] | None = None,
+        rt_setup: Any | None = None,
     ):
         self.lut_path = str(lut_path)
         if interpolation_method not in self._SUPPORTED_INTERPOLATION_METHODS:
@@ -100,6 +104,7 @@ class ZarrLUTBackend:
         self.interpolation_method = interpolation_method
         self.chunk_cache_size = chunk_cache_size
         self.storage_options = dict(storage_options or {})
+        self._rt_setup = rt_setup
         self._scene_subset_logged = False
 
         # Lazy load the LUT
@@ -113,6 +118,10 @@ class ZarrLUTBackend:
             tuple[tuple[float, ...], tuple[str, float, float]],
             tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray],
         ] = {}
+
+    @property
+    def rt_setup(self) -> Any | None:
+        return self._rt_setup
 
     @property
     def lut(self) -> xr.Dataset:

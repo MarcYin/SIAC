@@ -58,10 +58,21 @@ Controls algorithm choices and parameters for:
 - solver behavior
 - cloud masking
 
-`algorithms.rt.backend` supports `emulator`, `lut`, `py6s`, and the native
-`sixs` backend. The native backend has its own nested
-`algorithms.rt.sixs.*` configuration surface for build, routing, atmospheric
-profiles, aerosol profiles, surface modes, and output variables. See
+`algorithms.rt.backend` supports `emulator`, `lut`, and the native `sixs`
+backend. The native backend has its own nested
+`algorithms.rt.sixs.*` configuration surface for build, routing, and output
+selection. The shared RT semantic layer lives under `algorithms.rt.setup.*`;
+backend-specific blocks such as `algorithms.rt.sixs.*` now carry native
+execution/build controls only. See
+[Native 6SV2.1 Backend](native-sixs-backend.md).
+The packaged remote `lut` route is a fixed libRadtran preset within that shared
+framework, not a fully configurable RT family.
+
+The native `sixs` backend can also be used outside the full end-to-end SIAC
+pipeline. If you already have `GeometryAngles`, `AtmosphericState`, and TOA
+reflectance, you can start directly from the RT or correction stage with the
+same `algorithms.rt.setup.*` semantics plus the native `algorithms.rt.sixs.*`
+runtime controls. That direct-start workflow is documented in
 [Native 6SV2.1 Backend](native-sixs-backend.md).
 
 ### `runtime`

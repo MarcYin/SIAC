@@ -86,6 +86,23 @@ SixSAtmosphericCorrectionMode = Literal[
     "brdf_reflectance",
     "brdf_radiance",
 ]
+RTAerosolProfile = Literal[
+    "none",
+    "continental",
+    "continental_average",
+    "maritime",
+    "urban",
+    "desert",
+    "biomass_burning",
+    "stratospheric",
+    "user_mixture",
+    "multimodal_log_normal",
+    "modified_gamma",
+    "junge_power_law",
+    "sun_photometer",
+    "layered_profile",
+    "user_model",
+]
 
 DEFAULT_SIXS_SOURCE_URL = "https://salsa.umd.edu/files/6S/6sV2.1.tar"
 
@@ -154,6 +171,80 @@ def _coerce_float_series_with_broadcast(
     if len(series) == 1:
         return tuple(series[0] for _ in range(target_length))
     return series
+
+
+def _normalize_atmospheric_profile_alias(value: Any) -> Any:
+    if value is None:
+        return value
+    key = str(value).strip().lower()
+    aliases = {
+        "from_latitude_and_date": "auto_latitude_date",
+        "latitude_date": "auto_latitude_date",
+        "user_water_and_ozone": "user_water_ozone",
+        "radiosonde": "user_profile",
+        "radiosonde_profile": "user_profile",
+    }
+    return aliases.get(key, value)
+
+
+def _normalize_atmospheric_columns_mode_alias(value: Any) -> Any:
+    if value is None:
+        return value
+    key = str(value).strip().lower()
+    aliases = {
+        "input": "input_columns",
+        "inputs": "input_columns",
+        "scene_inputs": "input_columns",
+        "scene_input_columns": "input_columns",
+        "profile": "profile_default",
+        "profile_defaults": "profile_default",
+        "profile_columns": "profile_default",
+    }
+    return aliases.get(key, value)
+
+
+def _normalize_aerosol_profile_alias(value: Any) -> Any:
+    if value is None:
+        return value
+    key = str(value).strip().lower()
+    aliases = {
+        "user": "user_mixture",
+        "from_mie_file": "user_model",
+        "mie_file": "user_model",
+        "user_profile": "layered_profile",
+        "multimodal_lognormal": "multimodal_log_normal",
+        "multimodal_log_normal_distribution": "multimodal_log_normal",
+        "modified_gamma_distribution": "modified_gamma",
+        "junge_power_law_distribution": "junge_power_law",
+        "sun_photometer_distribution": "sun_photometer",
+        "continental-average": "continental_average",
+        "continental average": "continental_average",
+    }
+    return aliases.get(key, value)
+
+
+def _normalize_aerosol_mixture_payload(value: Any) -> tuple[float, float, float, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        mapping = {str(key).strip().lower(): float(component) for key, component in value.items()}
+        return (
+            mapping.get("dust", 0.0),
+            mapping.get("water", 0.0),
+            mapping.get("oceanic", 0.0),
+            mapping.get("soot", 0.0),
+        )
+    series = _coerce_float_tuple(value)
+    if series is None:
+        return None
+    if len(series) != 4:
+        raise ValueError("Aerosol mixtures must contain four components: dust, water, oceanic, soot.")
+    return (
+        float(series[0]),
+        float(series[1]),
+        float(series[2]),
+        float(series[3]),
+    )
 
 
 class SIACBaseModel(BaseModel):
@@ -606,7 +697,6 @@ class SixSAlgorithmConfig(SIACBaseModel):
     source_dir: Path | None = None
     build_dir: Path | None = None
     module_path: Path | None = None
-    library_path: Path | None = None
     auto_build: bool = True
     compiler: str = "gfortran"
     build_profile: SixSBuildProfile = "release"
@@ -621,109 +711,12 @@ class SixSAlgorithmConfig(SIACBaseModel):
     scene_lut_required_speedup: float = Field(default=1.5, gt=1.0)
     month: int = Field(default=1, ge=1, le=12)
     day: int = Field(default=1, ge=1, le=31)
-    atmospheric_profile_latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
-    atmospheric_columns_mode: SixSAtmosphericColumnsMode = "input_columns"
-    reference_reflectance: float = Field(default=0.1, gt=0.0, le=1.0)
-    atmospheric_profile: SixSAtmosphericProfile = "user_water_ozone"
-    radiosonde_profile: SixSRadiosondeProfileConfig | None = None
-    aerosol_profile: SixSAerosolProfile = "continental"
-    aerosol_mixture: tuple[float, float, float, float] | None = None
-    aerosol_distribution: SixSAerosolDistributionConfig | None = None
-    sun_photometer_aerosol: SixSSunPhotometerAerosolConfig | None = None
-    aerosol_layer_profile: tuple[SixSAerosolLayerConfig, ...] | None = None
-    aerosol_model_path: Path | None = Field(
-        default=None,
-        validation_alias=AliasChoices("aerosol_model_path", "mie_file_path"),
-    )
-    surface: SixSSurfaceConfig = Field(default_factory=SixSSurfaceConfig)
-    atmospheric_correction: SixSAtmosphericCorrectionConfig = Field(
-        default_factory=lambda: SixSAtmosphericCorrectionConfig(
-            mode="lambertian_reflectance",
-            value=0.1,
-        )
-    )
     output_variables: tuple[str, ...] = SIXS_DEFAULT_OUTPUT_VARIABLES
 
-    @field_validator("source_dir", "build_dir", "module_path", "library_path", "aerosol_model_path", mode="before")
+    @field_validator("source_dir", "build_dir", "module_path", mode="before")
     @classmethod
     def normalize_local_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)
-
-    @field_validator("atmospheric_profile", mode="before")
-    @classmethod
-    def normalize_atmospheric_profile(cls, value: Any) -> Any:
-        if value is None:
-            return value
-        key = str(value).strip().lower()
-        aliases = {
-            "from_latitude_and_date": "auto_latitude_date",
-            "latitude_date": "auto_latitude_date",
-            "user_water_and_ozone": "user_water_ozone",
-            "radiosonde": "user_profile",
-            "radiosonde_profile": "user_profile",
-        }
-        return aliases.get(key, value)
-
-    @field_validator("atmospheric_columns_mode", mode="before")
-    @classmethod
-    def normalize_atmospheric_columns_mode(cls, value: Any) -> Any:
-        if value is None:
-            return value
-        key = str(value).strip().lower()
-        aliases = {
-            "input": "input_columns",
-            "inputs": "input_columns",
-            "scene_inputs": "input_columns",
-            "scene_input_columns": "input_columns",
-            "profile": "profile_default",
-            "profile_defaults": "profile_default",
-            "profile_columns": "profile_default",
-        }
-        return aliases.get(key, value)
-
-    @field_validator("aerosol_profile", mode="before")
-    @classmethod
-    def normalize_aerosol_profile(cls, value: Any) -> Any:
-        if value is None:
-            return value
-        key = str(value).strip().lower()
-        aliases = {
-            "user": "user_mixture",
-            "from_mie_file": "user_model",
-            "mie_file": "user_model",
-            "user_profile": "layered_profile",
-            "multimodal_lognormal": "multimodal_log_normal",
-            "multimodal_log_normal_distribution": "multimodal_log_normal",
-            "modified_gamma_distribution": "modified_gamma",
-            "junge_power_law_distribution": "junge_power_law",
-            "sun_photometer_distribution": "sun_photometer",
-        }
-        return aliases.get(key, value)
-
-    @field_validator("aerosol_mixture", mode="before")
-    @classmethod
-    def normalize_aerosol_mixture(cls, value: Any) -> tuple[float, float, float, float] | None:
-        if value is None:
-            return None
-        if isinstance(value, dict):
-            mapping = {str(key).strip().lower(): float(component) for key, component in value.items()}
-            return (
-                mapping.get("dust", 0.0),
-                mapping.get("water", 0.0),
-                mapping.get("oceanic", 0.0),
-                mapping.get("soot", 0.0),
-            )
-        series = _coerce_float_tuple(value)
-        if series is None:
-            return None
-        if len(series) != 4:
-            raise ValueError("sixs.aerosol_mixture must contain four components: dust, water, oceanic, soot.")
-        return (
-            float(series[0]),
-            float(series[1]),
-            float(series[2]),
-            float(series[3]),
-        )
 
     @field_validator("output_variables", mode="before")
     @classmethod
@@ -747,91 +740,6 @@ class SixSAlgorithmConfig(SIACBaseModel):
 
     @model_validator(mode="after")
     def validate_custom_aerosol(self) -> SixSAlgorithmConfig:
-        if self.atmospheric_profile == "auto_latitude_date" and self.atmospheric_profile_latitude is None:
-            raise ValueError(
-                "sixs.atmospheric_profile_latitude must be provided when atmospheric_profile='auto_latitude_date'."
-            )
-        if self.atmospheric_profile == "user_profile" and self.radiosonde_profile is None:
-            raise ValueError(
-                "sixs.radiosonde_profile must be provided when atmospheric_profile='user_profile'."
-            )
-        if self.atmospheric_profile != "user_profile" and self.radiosonde_profile is not None:
-            raise ValueError(
-                "sixs.radiosonde_profile is only valid when atmospheric_profile='user_profile'."
-            )
-        if self.aerosol_profile == "user_mixture" and self.aerosol_mixture is None:
-            raise ValueError(
-                "sixs.aerosol_mixture must be provided when aerosol_profile='user_mixture'."
-            )
-        if self.aerosol_profile == "user_mixture" and self.aerosol_mixture is not None:
-            mixture_total = sum(float(value) for value in self.aerosol_mixture)
-            if abs(mixture_total - 1.0) > 1e-6:
-                raise ValueError(
-                    "sixs.aerosol_mixture must sum to 1.0 for user_mixture aerosol profiles."
-                )
-        if self.aerosol_profile != "user_mixture" and self.aerosol_mixture is not None:
-            raise ValueError(
-                "sixs.aerosol_mixture is only valid when aerosol_profile='user_mixture'."
-            )
-        if self.aerosol_profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
-            if self.aerosol_distribution is None:
-                raise ValueError(
-                    "sixs.aerosol_distribution must be provided for aerosol distribution profiles."
-                )
-            if (
-                self.aerosol_profile in {"modified_gamma", "junge_power_law"}
-                and len(self.aerosol_distribution.components) != 1
-            ):
-                raise ValueError(
-                    "6S modified_gamma and junge_power_law profiles require exactly one component."
-                )
-        elif self.aerosol_distribution is not None:
-            raise ValueError(
-                "sixs.aerosol_distribution is only valid for multimodal_log_normal, modified_gamma, or junge_power_law."
-            )
-        if self.aerosol_profile == "sun_photometer" and self.sun_photometer_aerosol is None:
-            raise ValueError(
-                "sixs.sun_photometer_aerosol must be provided when aerosol_profile='sun_photometer'."
-            )
-        if self.aerosol_profile != "sun_photometer" and self.sun_photometer_aerosol is not None:
-            raise ValueError(
-                "sixs.sun_photometer_aerosol is only valid when aerosol_profile='sun_photometer'."
-            )
-        if self.aerosol_profile == "layered_profile" and not self.aerosol_layer_profile:
-            raise ValueError(
-                "sixs.aerosol_layer_profile must be provided when aerosol_profile='layered_profile'."
-            )
-        if self.aerosol_profile != "layered_profile" and self.aerosol_layer_profile is not None:
-            raise ValueError(
-                "sixs.aerosol_layer_profile is only valid when aerosol_profile='layered_profile'."
-            )
-        if self.aerosol_profile == "user_model" and self.aerosol_model_path is None:
-            raise ValueError(
-                "sixs.aerosol_model_path must be provided when aerosol_profile='user_model'."
-            )
-        if self.aerosol_profile != "user_model" and self.aerosol_model_path is not None:
-            raise ValueError(
-                "sixs.aerosol_model_path is only valid when aerosol_profile='user_model'."
-            )
-        if self.aerosol_profile == "layered_profile" and self.aerosol_layer_profile is not None:
-            aerosol_types = {layer.aerosol_type for layer in self.aerosol_layer_profile}
-            if len(aerosol_types) > 1:
-                raise ValueError(
-                    "6S layered aerosol profiles require the same aerosol_type for every layer."
-                )
-        if self.surface.mode != "homogeneous_brdf" and self.atmospheric_correction.mode.startswith("brdf_"):
-            raise ValueError(
-                "BRDF atmospheric correction modes require surface.mode='homogeneous_brdf'."
-            )
-        if (
-            self.atmospheric_correction.mode == "lambertian_reflectance"
-            and abs((self.atmospheric_correction.value or -1.0) - 0.1) < 1e-9
-            and abs(self.reference_reflectance - 0.1) > 1e-9
-        ):
-            self.atmospheric_correction = SixSAtmosphericCorrectionConfig(
-                mode="lambertian_reflectance",
-                value=self.reference_reflectance,
-            )
         if self.parallel_backend == "worker_libraries" and self.worker_libraries is not None:
             if self.worker_libraries < 1:
                 raise ValueError("sixs.worker_libraries must be >= 1.")
@@ -844,14 +752,186 @@ class SixSAlgorithmConfig(SIACBaseModel):
         return self
 
 
+class RTAtmosphereSetupConfig(SIACBaseModel):
+    profile: SixSAtmosphericProfile | None = None
+    columns_mode: SixSAtmosphericColumnsMode | None = None
+    profile_latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
+    radiosonde_profile: SixSRadiosondeProfileConfig | None = None
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def normalize_profile(cls, value: Any) -> Any:
+        return _normalize_atmospheric_profile_alias(value)
+
+    @field_validator("columns_mode", mode="before")
+    @classmethod
+    def normalize_columns_mode(cls, value: Any) -> Any:
+        return _normalize_atmospheric_columns_mode_alias(value)
+
+    @model_validator(mode="after")
+    def validate_profile_constraints(self) -> RTAtmosphereSetupConfig:
+        if self.profile == "auto_latitude_date" and self.profile_latitude is None:
+            raise ValueError(
+                "rt.setup.atmosphere.profile_latitude is required when profile='auto_latitude_date'."
+            )
+        if self.profile == "user_profile" and self.radiosonde_profile is None:
+            raise ValueError(
+                "rt.setup.atmosphere.radiosonde_profile is required when profile='user_profile'."
+            )
+        if self.profile not in {None, "user_profile"} and self.radiosonde_profile is not None:
+            raise ValueError(
+                "rt.setup.atmosphere.radiosonde_profile is only valid when profile='user_profile'."
+            )
+        return self
+
+
+class RTAerosolSetupConfig(SIACBaseModel):
+    profile: RTAerosolProfile | None = None
+    mixture: tuple[float, float, float, float] | None = None
+    distribution: SixSAerosolDistributionConfig | None = None
+    sun_photometer_aerosol: SixSSunPhotometerAerosolConfig | None = None
+    layer_profile: tuple[SixSAerosolLayerConfig, ...] | None = None
+    model_path: Path | None = None
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def normalize_profile(cls, value: Any) -> Any:
+        return _normalize_aerosol_profile_alias(value)
+
+    @field_validator("mixture", mode="before")
+    @classmethod
+    def normalize_mixture(cls, value: Any) -> tuple[float, float, float, float] | None:
+        return _normalize_aerosol_mixture_payload(value)
+
+    @field_validator("model_path", mode="before")
+    @classmethod
+    def normalize_model_path(cls, value: Any) -> Path | None:
+        return _coerce_pathlike(value)
+
+    @model_validator(mode="after")
+    def validate_aerosol_constraints(self) -> RTAerosolSetupConfig:
+        if self.profile == "user_mixture" and self.mixture is None:
+            raise ValueError(
+                "rt.setup.aerosol.mixture must be provided when profile='user_mixture'."
+            )
+        if self.profile == "user_mixture" and self.mixture is not None:
+            mixture_total = sum(float(value) for value in self.mixture)
+            if abs(mixture_total - 1.0) > 1e-6:
+                raise ValueError(
+                    "rt.setup.aerosol.mixture must sum to 1.0 for user_mixture aerosol profiles."
+                )
+        if self.profile != "user_mixture" and self.mixture is not None:
+            raise ValueError(
+                "rt.setup.aerosol.mixture is only valid when profile='user_mixture'."
+            )
+        if self.profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
+            if self.distribution is None:
+                raise ValueError(
+                    "rt.setup.aerosol.distribution must be provided for aerosol distribution profiles."
+                )
+        elif self.distribution is not None:
+            raise ValueError(
+                "rt.setup.aerosol.distribution is only valid for multimodal_log_normal, modified_gamma, or junge_power_law."
+            )
+        if self.profile == "sun_photometer" and self.sun_photometer_aerosol is None:
+            raise ValueError(
+                "rt.setup.aerosol.sun_photometer_aerosol must be provided when profile='sun_photometer'."
+            )
+        if self.profile != "sun_photometer" and self.sun_photometer_aerosol is not None:
+            raise ValueError(
+                "rt.setup.aerosol.sun_photometer_aerosol is only valid when profile='sun_photometer'."
+            )
+        if self.profile == "layered_profile" and not self.layer_profile:
+            raise ValueError(
+                "rt.setup.aerosol.layer_profile must be provided when profile='layered_profile'."
+            )
+        if self.profile != "layered_profile" and self.layer_profile is not None:
+            raise ValueError(
+                "rt.setup.aerosol.layer_profile is only valid when profile='layered_profile'."
+            )
+        if self.profile == "user_model" and self.model_path is None:
+            raise ValueError(
+                "rt.setup.aerosol.model_path must be provided when profile='user_model'."
+            )
+        if self.profile != "user_model" and self.model_path is not None:
+            raise ValueError(
+                "rt.setup.aerosol.model_path is only valid when profile='user_model'."
+            )
+        return self
+
+
+class RTSurfaceSetupConfig(SIACBaseModel):
+    mode: SixSSurfaceMode | None = None
+    target: SixSSpectralReflectanceConfig | None = None
+    environment: SixSSpectralReflectanceConfig | None = None
+    radius_km: float | None = Field(
+        default=None,
+        gt=0.0,
+        validation_alias=AliasChoices("radius_km", "radius"),
+    )
+    brdf: SixSBRDFConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_surface(self) -> RTSurfaceSetupConfig:
+        if self.mode == "heterogeneous_lambertian" and self.environment is None:
+            raise ValueError("Heterogeneous Lambertian surfaces require an `environment` reflectance.")
+        if self.mode == "homogeneous_brdf" and self.brdf is None:
+            raise ValueError("BRDF surfaces require a `brdf` configuration.")
+        return self
+
+
+class RTAtmosphericCorrectionSetupConfig(SIACBaseModel):
+    mode: SixSAtmosphericCorrectionMode | None = None
+    value: float | None = None
+
+    @model_validator(mode="after")
+    def validate_correction(self) -> RTAtmosphericCorrectionSetupConfig:
+        if self.mode not in {None, "none"} and self.value is None:
+            raise ValueError("Atmospheric correction modes other than `none` require a `value`.")
+        return self
+
+
+class RTSetupConfig(SIACBaseModel):
+    atmosphere: RTAtmosphereSetupConfig | None = None
+    aerosol: RTAerosolSetupConfig | None = None
+    surface: RTSurfaceSetupConfig | None = None
+    atmospheric_correction: RTAtmosphericCorrectionSetupConfig | None = None
+    reference_reflectance: float | None = Field(default=None, gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_setup_consistency(self) -> RTSetupConfig:
+        if (
+            self.surface is not None
+            and self.atmospheric_correction is not None
+            and self.surface.mode != "homogeneous_brdf"
+            and self.atmospheric_correction.mode is not None
+            and self.atmospheric_correction.mode.startswith("brdf_")
+        ):
+            raise ValueError(
+                "BRDF atmospheric correction modes require rt.setup.surface.mode='homogeneous_brdf'."
+            )
+        return self
+
+    def has_overrides(self) -> bool:
+        return any(
+            value is not None
+            for value in (
+                self.atmosphere,
+                self.aerosol,
+                self.surface,
+                self.atmospheric_correction,
+                self.reference_reflectance,
+            )
+        )
+
+
 class RTAlgorithmConfig(SIACBaseModel):
-    backend: Literal["emulator", "lut", "py6s", "sixs"] = "emulator"
+    backend: Literal["emulator", "lut", "sixs"] = "emulator"
     lut_interpolation: Literal["linear", "nearest", "cubic"] = "linear"
     lut_storage_options: dict[str, Any] = Field(default_factory=dict)
-    py6s_aero_profile: str = "Continental"
+    setup: RTSetupConfig = Field(default_factory=RTSetupConfig)
     sixs: SixSAlgorithmConfig = Field(default_factory=SixSAlgorithmConfig)
     fallback_to_lut: bool = True
-    fallback_to_py6s: bool = True
 
 
 class SolverBoundsConfig(SIACBaseModel):

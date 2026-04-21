@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from siac.rt_setup import resolve_effective_rt_setup
+
 if TYPE_CHECKING:
     from siac.adapters.auth import CredentialManager
     from siac.domain.sensors import SensorConfig
@@ -81,6 +83,7 @@ def build_rt_model(
             lut_path,
             interpolation_method=rt_config.lut_interpolation,
             storage_options=storage_options,
+            rt_setup=resolve_effective_rt_setup(rt_config, "lut"),
         )
 
     if backend == "sixs":
@@ -91,6 +94,7 @@ def build_rt_model(
         return sixs_backend_cls(
             sixs_config=rt_config.sixs,
             sensor_config=sensor_config,
+            rt_setup=resolve_effective_rt_setup(rt_config, "sixs"),
         )
 
     raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")

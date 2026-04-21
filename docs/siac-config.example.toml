@@ -70,7 +70,6 @@ knn_backend = "scipy_ckdtree"
 [algorithms.rt]
 backend = "lut"
 fallback_to_lut = true
-fallback_to_py6s = false
 
 [algorithms.solver]
 aerosol_resolution = 60.0

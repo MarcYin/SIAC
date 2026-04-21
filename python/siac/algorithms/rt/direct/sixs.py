@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from siac.algorithms.rt.direct.sixs_native import SixSNativeRunner
+from siac.rt_setup import resolve_backend_rt_setup
 from siac.runtime import RTCoefficients
 
 if TYPE_CHECKING:
@@ -25,13 +26,16 @@ class SixSBackend:
         *,
         sixs_config: Any,
         sensor_config: SensorConfig | None = None,
+        rt_setup: Any | None = None,
         runner: SixSNativeRunner | None = None,
     ) -> None:
         self._config = sixs_config
         self._sensor_config = sensor_config
+        self._rt_setup = resolve_backend_rt_setup("sixs", rt_setup)
         self._runner = runner or SixSNativeRunner(
             sixs_config=sixs_config,
             sensor_config=sensor_config,
+            rt_setup=self._rt_setup,
         )
 
     @property
@@ -41,6 +45,10 @@ class SixSBackend:
     @property
     def requested_output_variables(self) -> tuple[str, ...]:
         return tuple(getattr(self._config, "output_variables", ("xap", "xbp", "xcp")))
+
+    @property
+    def rt_setup(self) -> Any | None:
+        return self._rt_setup
 
     def supports_jacobian(self) -> bool:
         return False

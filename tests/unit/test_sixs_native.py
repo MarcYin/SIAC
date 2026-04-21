@@ -35,7 +35,7 @@ from siac.algorithms.rt.direct.sixs_native import (
     _resolve_atmospheric_mode,
     _should_use_scene_lut,
 )
-from siac.config import SixSAlgorithmConfig
+from siac.config import RTSetupConfig, SixSAlgorithmConfig
 from siac.domain.sensors import SensorBand
 from siac.runtime import AtmosphericState, GeometryAngles
 from siac.sixs_outputs import SIXS_CORE_OUTPUT_SPECS
@@ -215,14 +215,23 @@ def test_encoded_string_io_reports_utf8_encoding() -> None:
     assert stream.encoding == "utf-8"
 
 
-def test_default_native_profile_maps_to_user_water_ozone() -> None:
-    assert _resolve_atmospheric_mode(SixSAlgorithmConfig()) == 8
+def test_default_native_profile_maps_to_us_standard_62() -> None:
+    assert _resolve_atmospheric_mode(
+        RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"}),
+        month=1,
+    ) == 6
 
 
 def test_default_native_columns_mode_uses_scene_inputs() -> None:
-    assert _resolve_atmospheric_columns_mode(SixSAlgorithmConfig()) == 1
-    assert _resolve_atmospheric_columns_mode(SixSAlgorithmConfig(atmospheric_columns_mode="profile_default")) == 0
-    assert _resolve_atmospheric_columns_mode(SixSAlgorithmConfig(atmospheric_profile="no_gas")) == 0
+    assert _resolve_atmospheric_columns_mode(
+        RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"})
+    ) == 1
+    assert _resolve_atmospheric_columns_mode(
+        RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "profile_default"})
+    ) == 0
+    assert _resolve_atmospheric_columns_mode(
+        RTSetupConfig(atmosphere={"profile": "no_gas", "columns_mode": "input_columns"})
+    ) == 0
 
 
 def test_spectral_response_build_uses_band_rsrf_support() -> None:
@@ -291,6 +300,57 @@ def test_backend_propagates_observation_time_to_runner() -> None:
 
     assert runner.observation_time == obs_time
     assert "tgasm" in coeffs.extras
+
+
+def test_backend_merges_partial_rt_setup_with_native_defaults() -> None:
+    class _FakeRunner:
+        def set_observation_time(self, observation_time: datetime | None) -> None:
+            _ = observation_time
+
+        def compute_coefficients(self, **kwargs):
+            _ = kwargs
+            template = _sample_atmo().aot
+            return {
+                "xap": xr.ones_like(template),
+                "xbp": xr.zeros_like(template),
+                "xcp": xr.zeros_like(template),
+            }
+
+        def compute_coefficients_multi(self, **kwargs):
+            return [self.compute_coefficients(**kwargs) for _ in kwargs["bands"]]
+
+        def preload_scene_subset(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(),
+        rt_setup=RTSetupConfig(
+            surface={
+                "mode": "homogeneous_brdf",
+                "brdf": {
+                    "model": "rahman",
+                    "parameters": {
+                        "intensity": 0.12,
+                        "asymmetry_factor": 0.03,
+                        "structural_parameter": 0.45,
+                    },
+                },
+            },
+            atmospheric_correction={"mode": "brdf_reflectance", "value": 0.2},
+            reference_reflectance=0.2,
+        ),
+        runner=_FakeRunner(),
+    )
+
+    assert backend.rt_setup.atmosphere is not None
+    assert backend.rt_setup.atmosphere.profile == "us_standard_62"
+    assert backend.rt_setup.aerosol is not None
+    assert backend.rt_setup.aerosol.profile == "continental"
+    assert backend.rt_setup.surface is not None
+    assert backend.rt_setup.surface.mode == "homogeneous_brdf"
+    assert backend.rt_setup.atmospheric_correction is not None
+    assert backend.rt_setup.atmospheric_correction.mode == "brdf_reflectance"
 
 
 def test_resolve_build_paths_separates_release_and_parity_roots() -> None:

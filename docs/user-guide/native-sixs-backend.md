@@ -1,13 +1,11 @@
 # Native 6SV2.1 Backend
 
 SIAC includes a native 6SV2.1 backend exposed as `algorithms.rt.backend = "sixs"`.
-This backend is separate from the legacy `py6s` adapter and from the LUT and
-emulator backends:
+This backend is separate from the LUT and emulator backends and from the
+optional Py6S LUT-generation utilities:
 
 - `sixs`: native compiled 6SV2.1 with batched array execution, OpenMP support,
   scene-LUT routing, and selectable 6S report outputs.
-- `py6s`: Python wrapper around Py6S. Install with `.[py6s]` if you need that
-  separate backend.
 - `lut` and `emulator`: alternative SIAC RT backends that do not require a
   native 6S build.
 
@@ -18,6 +16,8 @@ core correction coefficients.
 For a measured comparison between native 6S direct, native 6S `scene_lut`, and
 the remote libRadtran ZIP/Zarr LUT, see
 [RT Model Differences](rt-model-differences.md).
+That remote LUT route is now modeled explicitly as a fixed libRadtran preset,
+not as a configurable semantic peer of native 6S.
 
 ## What The Backend Returns
 
@@ -162,8 +162,281 @@ auto_build = false
 module_path = "/opt/siac/_siac_rt6s_native.so"
 ```
 
-`library_path` is still accepted for compatibility, but `module_path` is the
-current field name for the compiled Python extension path.
+## Shared RT Setup Layer
+
+The native 6S backend now sits under a generic RT setup layer:
+
+- `algorithms.rt.setup.*` describes the requested RT semantics
+- `algorithms.rt.sixs.*` carries native execution/build controls
+
+This is now the only supported semantic split. Atmosphere, aerosol, surface,
+and correction setup belong under `algorithms.rt.setup.*`; runtime choices
+such as build path, route mode, and thread count belong under
+`algorithms.rt.sixs.*`.
+
+### Example: Generic RT Semantics Plus Native 6S Runtime Controls
+
+```toml
+[algorithms.rt]
+backend = "sixs"
+
+[algorithms.rt.setup.atmosphere]
+profile = "us_standard_62"
+columns_mode = "input_columns"
+
+[algorithms.rt.setup.aerosol]
+profile = "continental"
+
+[algorithms.rt.setup.surface]
+mode = "homogeneous_lambertian"
+
+[algorithms.rt.setup.surface.target]
+kind = "constant"
+constant = 0.1
+
+[algorithms.rt.setup.atmospheric_correction]
+mode = "lambertian_reflectance"
+value = 0.1
+
+[algorithms.rt.sixs]
+mode = "auto"
+parallel_backend = "openmp"
+native_threads = 8
+build_profile = "release"
+```
+
+This split is deliberate:
+
+- the RT setup can be shared conceptually across backends
+- native 6S still needs its own build/runtime controls
+- advanced 6S modes such as radiosonde atmospheres, layered aerosols, and
+  custom Mie-model files are expressed through the shared `rt.setup.*` layer
+
+## Starting From User Atmospheric State
+
+The full SIAC pipeline is retrieval-first: it derives an atmospheric state and
+then applies correction. The native 6S backend does **not** require you to use
+that full path.
+
+If you already have:
+
+- TOA reflectance
+- viewing and illumination geometry
+- atmospheric state fields such as AOT, TCWV, TCO3, and elevation
+- a native 6S surface and atmospheric-correction configuration
+
+you can start directly from the RT/correction stage and bypass M1 to M5.
+
+That is the right entrypoint when:
+
+- you trust an external atmospheric-state source
+- you want to compare SIAC's correction contract against another retrieval
+  system
+- you want to run native 6S with custom BRDF or heterogeneous-Lambertian
+  surface settings without running the full SIAC retrieval workflow
+
+### Coefficients-Only Entry Point
+
+Use this path when you want `xap`, `xbp`, `xcp`, or other selected 6S outputs
+but you do not want SIAC to apply BOA correction for you yet.
+
+For direct programmatic use, construct `SixSBackend` with both:
+
+- a `SixSAlgorithmConfig` for native runtime controls
+- an `RTSetupConfig` for the RT semantics
+
+```python
+from datetime import datetime
+
+import numpy as np
+import xarray as xr
+
+from siac.algorithms.rt.direct.sixs import SixSBackend
+from siac.config import RTSetupConfig, SixSAlgorithmConfig
+from siac.domain.sensors import SensorBand
+from siac.runtime import AtmosphericState, GeometryAngles
+
+shape = (256, 256)
+
+geometry = GeometryAngles.from_degrees(
+    xr.DataArray(np.full(shape, 30.0, dtype=np.float32), dims=("y", "x")),
+    xr.DataArray(np.full(shape, 150.0, dtype=np.float32), dims=("y", "x")),
+    xr.DataArray(np.full(shape, 5.0, dtype=np.float32), dims=("y", "x")),
+    xr.DataArray(np.full(shape, 110.0, dtype=np.float32), dims=("y", "x")),
+)
+
+atmo = AtmosphericState(
+    aot=xr.DataArray(np.full(shape, 0.15, dtype=np.float32), dims=("y", "x")),
+    tcwv=xr.DataArray(np.full(shape, 2.0, dtype=np.float32), dims=("y", "x")),
+    tco3=xr.DataArray(np.full(shape, 0.30, dtype=np.float32), dims=("y", "x")),
+    aot_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=("y", "x")),
+    tcwv_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=("y", "x")),
+    tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=("y", "x")),
+    elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=("y", "x")),
+)
+
+band = SensorBand(
+    name="B04",
+    center_wavelength=665.0,
+    bandwidth=30.0,
+    resolution=10.0,
+    band_index=3,
+)
+
+backend = SixSBackend(
+    sixs_config=SixSAlgorithmConfig(
+        source_dir="tmp/6s_upstream",
+        build_profile="release",
+        mode="direct",
+        output_variables=("xap", "xbp", "xcp", "tgasm", "sutott", "sast"),
+    ),
+    rt_setup=RTSetupConfig(
+        atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"},
+        aerosol={"profile": "continental"},
+        surface={
+            "mode": "homogeneous_lambertian",
+            "target": {"kind": "constant", "constant": 0.1},
+        },
+        atmospheric_correction={"mode": "lambertian_reflectance", "value": 0.1},
+        reference_reflectance=0.1,
+    ),
+)
+backend.set_observation_time(datetime(2025, 7, 12, 10, 30))
+
+coeffs = backend.compute_coefficients(geometry, atmo, band)
+
+xap = coeffs.xap
+xbp = coeffs.xbp
+xcp = coeffs.xcp
+tgasm = coeffs.get_output("tgasm")
+```
+
+This path uses your provided `AtmosphericState` directly. No atmospheric
+retrieval is run.
+
+### Direct TOA-To-BOA Entry Point
+
+If you already have TOA reflectance on the same grid, you can apply correction
+immediately with the returned coefficients:
+
+```python
+toa_b04 = xr.DataArray(
+    np.full(shape, 0.12, dtype=np.float32),
+    dims=("y", "x"),
+)
+
+boa_b04 = coeffs.apply_correction(toa_b04)
+```
+
+For multiple bands, compute a coefficient object per band and apply the same
+pattern:
+
+```python
+coeff_list = backend.compute_coefficients_multi(geometry, atmo, [band1, band2, band3])
+boa_band1 = coeff_list[0].apply_correction(toa_band1)
+```
+
+This is the simplest way to start “early” from user-provided atmospheric state:
+you use native 6S as the forward RT engine and SIAC's `RTCoefficients` object
+as the correction contract.
+
+### Using The M6 Corrector With Your Own Atmospheric State
+
+If you already have a multi-band TOA dataset and a matching `SensorConfig`, you
+can also call the correction stage directly:
+
+```python
+from siac.algorithms.correction.atmospheric import AtmosphericCorrector
+
+corrector = AtmosphericCorrector(
+    rt_model=backend,
+    sensor_config=sensor_config,
+    correction_workers=4,
+)
+
+result = corrector.correct(
+    toa=toa_dataset,
+    geometry=geometry,
+    atmo_state=atmo,
+    cloud_mask=cloud_mask,
+)
+
+boa_dataset = result.boa
+```
+
+This still bypasses the full retrieval workflow. The difference is only that
+the M6 corrector handles the band loop, coefficient resampling, BOA masking,
+and `CorrectionResult` assembly for you.
+
+### What You Must Provide
+
+When you bypass M1 to M5, SIAC no longer estimates the atmosphere for you. You
+must provide:
+
+- geometry arrays on the grid you want to correct
+- `AtmosphericState` arrays with finite `aot`, `tcwv`, `tco3`, and `elevation`
+- TOA reflectance on a compatible grid if you want BOA output
+- any native 6S surface/BRDF configuration required by your chosen correction
+  mode
+
+The native 6S backend will still validate combinations such as:
+
+- BRDF correction modes requiring `surface.mode = "homogeneous_brdf"`
+- heterogeneous Lambertian surfaces requiring `setup.surface.environment`
+- aerosol/user-profile modes requiring their companion config blocks
+
+## Surface Configuration For Early-Start Use
+
+The native 6S surface configuration is available whether you use the full SIAC
+pipeline or start directly from a user-provided atmospheric state.
+
+### Heterogeneous Lambertian Example
+
+```toml
+[algorithms.rt.setup.surface]
+mode = "heterogeneous_lambertian"
+radius_km = 0.5
+
+[algorithms.rt.setup.surface.target]
+kind = "constant"
+constant = 0.12
+
+[algorithms.rt.setup.surface.environment]
+kind = "built_in"
+built_in = "green_vegetation"
+
+[algorithms.rt.setup.atmospheric_correction]
+mode = "lambertian_reflectance"
+value = 0.12
+```
+
+### BRDF Example
+
+```toml
+[algorithms.rt.setup.surface]
+mode = "homogeneous_brdf"
+
+[algorithms.rt.setup.surface.target]
+kind = "constant"
+constant = 0.15
+
+[algorithms.rt.setup.surface.brdf]
+model = "rahman"
+
+[algorithms.rt.setup.surface.brdf.parameters]
+intensity = 0.12
+asymmetry_factor = 0.03
+structural_parameter = 0.45
+
+[algorithms.rt.setup.atmospheric_correction]
+mode = "brdf_reflectance"
+value = 0.1
+```
+
+In both cases, the same configuration can be used for:
+
+- end-to-end SIAC runs, or
+- manual direct-correction flows where you supply `AtmosphericState` yourself
 
 ## Configuration Surface
 
@@ -177,7 +450,6 @@ Key `algorithms.rt.sixs` fields for native execution:
 | `source_dir` | Existing unpacked 6SV2.1 source tree |
 | `build_dir` | Override the native build root |
 | `module_path` | Use a specific compiled Python extension path |
-| `library_path` | Compatibility alias for native module override |
 | `auto_build` | Build automatically on first use when the module is missing |
 | `compiler` | Fortran compiler executable name or path |
 | `build_profile` | `release` or `parity` |
@@ -196,9 +468,11 @@ Key `algorithms.rt.sixs` fields for native execution:
 | `scene_lut_max_cases` | Hard cap on scene-LUT cases after axis reduction |
 | `scene_lut_required_speedup` | Minimum `direct_case_count / lut_case_count` ratio for `auto` to switch to scene-LUT |
 
-### Atmospheric Profiles
+### Generic RT Semantics
 
-Supported `atmospheric_profile` values:
+The following semantic inputs are configured under `algorithms.rt.setup.*`.
+
+Supported `setup.atmosphere.profile` values:
 
 - `no_gas`
 - `tropical`
@@ -213,25 +487,25 @@ Supported `atmospheric_profile` values:
 
 Operational notes:
 
-- `auto_latitude_date` requires `atmospheric_profile_latitude`. The backend
+- `auto_latitude_date` requires `setup.atmosphere.profile_latitude`. The backend
   selects a built-in 6S atmosphere from latitude and month.
-- `user_profile` requires `radiosonde_profile`.
+- `user_profile` requires `setup.atmosphere.radiosonde_profile`.
 - `user_water_ozone` uses SIAC-provided atmospheric state values rather than a
   built-in profile deck.
-- `atmospheric_columns_mode = "input_columns"` keeps the selected atmospheric
+- `setup.atmosphere.columns_mode = "input_columns"` keeps the selected atmospheric
   profile shape but scales total water vapour and ozone to the scene `tcwv` and
   `tco3` inputs. This matches the original 6S capability where preset
   atmospheric profiles can still be combined with user-specified column totals.
   It is the default behavior for the native 6S backend.
-- `atmospheric_columns_mode = "profile_default"` keeps the selected profile's
+- `setup.atmosphere.columns_mode = "profile_default"` keeps the selected profile's
   built-in water-vapour and ozone totals.
 
 In practice, this means you can use:
 
 ```toml
-[algorithms.rt.sixs]
-atmospheric_profile = "us_standard_62"
-atmospheric_columns_mode = "input_columns"
+[algorithms.rt.setup.atmosphere]
+profile = "us_standard_62"
+columns_mode = "input_columns"
 ```
 
 and still have SIAC drive the native 6S run with scene-specific `tcwv` and
@@ -239,7 +513,7 @@ and still have SIAC drive the native 6S run with scene-specific `tcwv` and
 
 ### Aerosol Profiles
 
-Supported `aerosol_profile` values:
+Supported `setup.aerosol.profile` values:
 
 - `none`
 - `continental`
@@ -258,14 +532,14 @@ Supported `aerosol_profile` values:
 
 Required companion fields:
 
-- `user_mixture` requires `aerosol_mixture`, which must sum to `1.0`
+- `user_mixture` requires `setup.aerosol.mixture`, which must sum to `1.0`
   in dust, water, oceanic, soot order.
 - `multimodal_log_normal`, `modified_gamma`, and `junge_power_law` require
-  `aerosol_distribution`.
-- `sun_photometer` requires `sun_photometer_aerosol`.
-- `layered_profile` requires `aerosol_layer_profile`. All layers must use the
+  `setup.aerosol.distribution`.
+- `sun_photometer` requires `setup.aerosol.sun_photometer_aerosol`.
+- `layered_profile` requires `setup.aerosol.layer_profile`. All layers must use the
   same `aerosol_type`.
-- `user_model` requires `aerosol_model_path`.
+- `user_model` requires `setup.aerosol.model_path`.
 
 ### Surface And Atmospheric-Correction Modes
 
@@ -282,7 +556,7 @@ Surface reflectance targets use:
   or `lake_water`
 - `kind = "spectrum"` with `values` and optional `wavelengths_um`
 
-Supported BRDF models under `surface.brdf.model`:
+Supported BRDF models under `setup.surface.brdf.model`:
 
 - `user_defined`
 - `hapke`
@@ -299,9 +573,10 @@ Supported BRDF models under `surface.brdf.model`:
 
 Operational rules enforced by the schema:
 
-- `heterogeneous_lambertian` requires `surface.environment`.
-- `homogeneous_brdf` requires `surface.brdf`.
-- BRDF atmospheric-correction modes require `surface.mode = "homogeneous_brdf"`.
+- `heterogeneous_lambertian` requires `setup.surface.environment`.
+- `homogeneous_brdf` requires `setup.surface.brdf`.
+- BRDF atmospheric-correction modes require
+  `setup.surface.mode = "homogeneous_brdf"`.
 
 Supported atmospheric-correction modes:
 
@@ -323,22 +598,22 @@ backend = "sixs"
 [algorithms.rt.sixs]
 mode = "auto"
 
-[algorithms.rt.sixs.surface]
+[algorithms.rt.setup.surface]
 mode = "homogeneous_brdf"
 
-[algorithms.rt.sixs.surface.target]
+[algorithms.rt.setup.surface.target]
 kind = "constant"
 constant = 0.15
 
-[algorithms.rt.sixs.surface.brdf]
+[algorithms.rt.setup.surface.brdf]
 model = "rahman"
 
-[algorithms.rt.sixs.surface.brdf.parameters]
+[algorithms.rt.setup.surface.brdf.parameters]
 intensity = 0.12
 asymmetry_factor = 0.03
 structural_parameter = 0.45
 
-[algorithms.rt.sixs.atmospheric_correction]
+[algorithms.rt.setup.atmospheric_correction]
 mode = "brdf_reflectance"
 value = 0.1
 ```
@@ -530,8 +805,8 @@ environment.
 
 ### `.[py6s]` was installed but native 6S still does not work
 
-`.[py6s]` only installs the Py6S dependency for the separate `py6s` backend. It
-does not install the native 6S build toolchain.
+`.[py6s]` only installs the optional Py6S dependency used by
+`create_lut_from_py6s(...)`. It does not install the native 6S build toolchain.
 
 ### `scene_lut` is slower than `direct`
 

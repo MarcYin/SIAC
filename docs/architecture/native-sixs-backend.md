@@ -7,6 +7,15 @@ For user-facing setup and configuration, start with
 [Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md). This page
 focuses on the backend architecture and runtime contract.
 
+The important architectural split is now:
+
+- scene-varying numeric atmospheric state:
+  `GeometryAngles` + `AtmosphericState`
+- backend-agnostic RT semantics:
+  `algorithms.rt.setup.*`
+- native 6S execution/build controls:
+  `algorithms.rt.sixs.*`
+
 ## Current Scope
 
 The native backend is implemented and production-facing within the current SIAC
@@ -30,7 +39,10 @@ The backend entry points are:
 
 ```mermaid
 flowchart LR
-    Config["algorithms.rt.backend = sixs"] --> Runner["SixSBackend / SixSNativeRunner"]
+    Config["algorithms.rt.backend = sixs"] --> Setup["algorithms.rt.setup.*"]
+    Config --> NativeCfg["algorithms.rt.sixs.*"]
+    Setup --> Runner["SixSBackend / SixSNativeRunner"]
+    NativeCfg --> Runner
     Runner --> Build["ensure_native_sixs_module(...)"]
     Build --> Source["fetch or reuse 6SV2.1 source"]
     Source --> Patch["patch upstream Fortran"]
@@ -42,13 +54,28 @@ flowchart LR
     SceneLUT --> Outputs
 ```
 
+## Shared RT Setup Boundary
+
+The generic RT setup layer is the abstraction that lets SIAC describe RT
+semantics without hard-coding them into one backend family.
+
+Today that means:
+
+- native `sixs` resolves the full shared setup into a concrete 6S case
+- the packaged remote libRadtran LUT is a fixed preset within the shared setup
+  model and rejects user semantic overrides outside that preset
+- the emulator backend still operates only on the shared scene-state numerics
+
+This is the direction that makes the RT framework broader than “6S inputs plus
+some other backends”. It lets SIAC treat the remote LUT as a specific preset
+inside a more generic RT setup space.
+
 ## Build Model
 
 At runtime, the backend resolves a native Python extension module. The resolved
 module may come from:
 
 - `algorithms.rt.sixs.module_path`
-- the deprecated compatibility alias `algorithms.rt.sixs.library_path`
 - an automatic build in the configured or default build root
 
 The builder:
@@ -177,5 +204,5 @@ These cover:
 - the native backend does not expose Jacobians yet
 - route quality still depends strongly on scene compressibility; `scene_lut` is
   not universally faster
-- the public user workflow should treat `module_path` as the current module
-  override field and `library_path` as compatibility input
+- the public user workflow should treat `module_path` as the single explicit
+  native-module override field

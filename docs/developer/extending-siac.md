@@ -65,7 +65,7 @@ protocol defined in `python/siac/domain/protocols.py`. The protocol declares:
 - `compute_coefficients(geometry, atmo_state, bands)` — linearized RT coefficients
 - `supported_parameters` — parameter names the backend can vary
 
-Existing backends (`emulator`, `lut`, `py6s`) all implement this protocol.
+Existing backends (`emulator`, `lut`, `sixs`) all implement this protocol.
 When adding a new RT backend, ensure it satisfies `RTModelBackend` and passes
 an `isinstance` check at solver and corrector initialization.
 

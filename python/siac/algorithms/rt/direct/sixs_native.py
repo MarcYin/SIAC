@@ -30,7 +30,7 @@ from siac.sixs_outputs import (
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from siac.config.schema import SixSAlgorithmConfig
+    from siac.config.schema import RTSetupConfig, SixSAlgorithmConfig
     from siac.domain.sensors import SensorBand, SensorConfig
     from siac.runtime import AtmosphericState, GeometryAngles
 
@@ -385,75 +385,87 @@ def _auto_atmospheric_profile_from_latitude_and_month(latitude: float, month: in
     return lookup[rounded_lat]
 
 
-def _resolve_atmospheric_inputs(config: SixSAlgorithmConfig, *, month: int) -> tuple[int, dict[str, np.ndarray]]:
-    profile = config.atmospheric_profile
+def _resolve_atmospheric_inputs(rt_setup: RTSetupConfig, *, month: int) -> tuple[int, dict[str, np.ndarray]]:
+    atmosphere = rt_setup.atmosphere
+    if atmosphere is None or atmosphere.profile is None:
+        raise ValueError("Native 6S requires rt_setup.atmosphere.profile to be resolved before execution.")
+    profile = atmosphere.profile
     radiosonde = _empty_radiosonde_profile()
     if profile == "auto_latitude_date":
-        if config.atmospheric_profile_latitude is None:
+        if atmosphere.profile_latitude is None:
             raise ValueError(
-                "sixs.atmospheric_profile_latitude is required when atmospheric_profile='auto_latitude_date'."
+                "rt.setup.atmosphere.profile_latitude is required when profile='auto_latitude_date'."
             )
         profile = _auto_atmospheric_profile_from_latitude_and_month(
-            float(config.atmospheric_profile_latitude),
+            float(atmosphere.profile_latitude),
             int(month),
         )
     if profile == "user_profile":
-        if config.radiosonde_profile is None:
-            raise ValueError("sixs.radiosonde_profile is required for user_profile atmospheric mode.")
+        if atmosphere.radiosonde_profile is None:
+            raise ValueError("rt.setup.atmosphere.radiosonde_profile is required for profile='user_profile'.")
         radiosonde = {
-            "altitude_km": np.asarray(config.radiosonde_profile.altitude_km, dtype=np.float64),
-            "pressure_mb": np.asarray(config.radiosonde_profile.pressure_mb, dtype=np.float64),
-            "temperature_k": np.asarray(config.radiosonde_profile.temperature_k, dtype=np.float64),
-            "water_g_m3": np.asarray(config.radiosonde_profile.water_g_m3, dtype=np.float64),
-            "ozone_g_m3": np.asarray(config.radiosonde_profile.ozone_g_m3, dtype=np.float64),
+            "altitude_km": np.asarray(atmosphere.radiosonde_profile.altitude_km, dtype=np.float64),
+            "pressure_mb": np.asarray(atmosphere.radiosonde_profile.pressure_mb, dtype=np.float64),
+            "temperature_k": np.asarray(atmosphere.radiosonde_profile.temperature_k, dtype=np.float64),
+            "water_g_m3": np.asarray(atmosphere.radiosonde_profile.water_g_m3, dtype=np.float64),
+            "ozone_g_m3": np.asarray(atmosphere.radiosonde_profile.ozone_g_m3, dtype=np.float64),
         }
     return _ATMOSPHERIC_PROFILE_CODES[profile], radiosonde
 
 
-def _resolve_atmospheric_mode(config: SixSAlgorithmConfig) -> int:
-    mode, _ = _resolve_atmospheric_inputs(config, month=int(config.month))
+def _resolve_atmospheric_mode(rt_setup: RTSetupConfig, *, month: int) -> int:
+    mode, _ = _resolve_atmospheric_inputs(rt_setup, month=month)
     return mode
 
 
-def _resolve_atmospheric_columns_mode(config: SixSAlgorithmConfig) -> int:
-    if config.atmospheric_columns_mode != "input_columns":
+def _resolve_atmospheric_columns_mode(rt_setup: RTSetupConfig) -> int:
+    atmosphere = rt_setup.atmosphere
+    if atmosphere is None or atmosphere.profile is None:
+        raise ValueError("Native 6S requires rt_setup.atmosphere to be resolved before execution.")
+    if atmosphere.columns_mode != "input_columns":
         return 0
-    if config.atmospheric_profile == "no_gas":
+    if atmosphere.profile == "no_gas":
         return 0
     return 1
 
 
-def _resolve_aerosol_mode(config: SixSAlgorithmConfig) -> int:
-    return _AEROSOL_PROFILE_CODES[config.aerosol_profile]
+def _resolve_aerosol_mode(rt_setup: RTSetupConfig) -> int:
+    aerosol = rt_setup.aerosol
+    if aerosol is None or aerosol.profile is None:
+        raise ValueError("Native 6S requires rt_setup.aerosol.profile to be resolved before execution.")
+    return _AEROSOL_PROFILE_CODES[aerosol.profile]
 
 
-def _resolve_aerosol_inputs(config: SixSAlgorithmConfig) -> tuple[int, dict[str, np.ndarray | float | int]]:
-    mode = _resolve_aerosol_mode(config)
+def _resolve_aerosol_inputs(rt_setup: RTSetupConfig) -> tuple[int, dict[str, np.ndarray | float | int]]:
+    aerosol = rt_setup.aerosol
+    if aerosol is None or aerosol.profile is None:
+        raise ValueError("Native 6S requires rt_setup.aerosol to be resolved before execution.")
+    mode = _resolve_aerosol_mode(rt_setup)
     payload = _empty_aerosol_inputs()
-    if config.aerosol_profile == "user_mixture":
-        payload["mixture"] = np.asarray(config.aerosol_mixture or (0.0, 0.0, 0.0, 0.0), dtype=np.float64)
-    elif config.aerosol_profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
-        if config.aerosol_distribution is None:
-            raise ValueError("sixs.aerosol_distribution is required for aerosol distributions.")
-        payload["dist_rmin"] = float(config.aerosol_distribution.rmin)
-        payload["dist_rmax"] = float(config.aerosol_distribution.rmax)
-        payload["dist_component_count"] = len(config.aerosol_distribution.components)
+    if aerosol.profile == "user_mixture":
+        payload["mixture"] = np.asarray(aerosol.mixture or (0.0, 0.0, 0.0, 0.0), dtype=np.float64)
+    elif aerosol.profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
+        if aerosol.distribution is None:
+            raise ValueError("rt.setup.aerosol.distribution is required for aerosol distributions.")
+        payload["dist_rmin"] = float(aerosol.distribution.rmin)
+        payload["dist_rmax"] = float(aerosol.distribution.rmax)
+        payload["dist_component_count"] = len(aerosol.distribution.components)
         x1 = np.zeros(4, dtype=np.float64)
         x2 = np.zeros(4, dtype=np.float64)
         x3 = np.zeros(4, dtype=np.float64)
         cij = np.zeros(4, dtype=np.float64)
         rn = np.zeros((20, 4), dtype=np.float64)
         ri = np.zeros((20, 4), dtype=np.float64)
-        for idx, component in enumerate(config.aerosol_distribution.components):
+        for idx, component in enumerate(aerosol.distribution.components):
             x1[idx] = float(component.rmean)
             x2[idx] = float(component.sigma)
             rn[:, idx] = np.asarray(component.refr_real, dtype=np.float64)
             ri[:, idx] = np.asarray(component.refr_imag, dtype=np.float64)
-        if config.aerosol_profile == "multimodal_log_normal":
-            for idx, component in enumerate(config.aerosol_distribution.components):
+        if aerosol.profile == "multimodal_log_normal":
+            for idx, component in enumerate(aerosol.distribution.components):
                 cij[idx] = float(component.percentage_density)
-        elif config.aerosol_profile == "modified_gamma":
-            x3[0] = float(config.aerosol_distribution.components[0].percentage_density)
+        elif aerosol.profile == "modified_gamma":
+            x3[0] = float(aerosol.distribution.components[0].percentage_density)
             cij[0] = 1.0
         else:
             cij[0] = 1.0
@@ -463,31 +475,31 @@ def _resolve_aerosol_inputs(config: SixSAlgorithmConfig) -> tuple[int, dict[str,
         payload["dist_cij"] = cij
         payload["dist_rn"] = rn
         payload["dist_ri"] = ri
-    elif config.aerosol_profile == "sun_photometer":
-        if config.sun_photometer_aerosol is None:
-            raise ValueError("sixs.sun_photometer_aerosol is required for sun-photometer aerosols.")
-        count = len(config.sun_photometer_aerosol.radii_um)
+    elif aerosol.profile == "sun_photometer":
+        if aerosol.sun_photometer_aerosol is None:
+            raise ValueError("rt.setup.aerosol.sun_photometer_aerosol is required for sun-photometer aerosols.")
+        count = len(aerosol.sun_photometer_aerosol.radii_um)
         radius = np.zeros(50, dtype=np.float64)
         dvlogr = np.zeros(50, dtype=np.float64)
-        radius[:count] = np.asarray(config.sun_photometer_aerosol.radii_um, dtype=np.float64)
-        dvlogr[:count] = np.asarray(config.sun_photometer_aerosol.dv_dlogr, dtype=np.float64)
+        radius[:count] = np.asarray(aerosol.sun_photometer_aerosol.radii_um, dtype=np.float64)
+        dvlogr[:count] = np.asarray(aerosol.sun_photometer_aerosol.dv_dlogr, dtype=np.float64)
         rn = np.zeros((20, 4), dtype=np.float64)
         ri = np.zeros((20, 4), dtype=np.float64)
-        rn[:, 0] = np.asarray(config.sun_photometer_aerosol.refr_real, dtype=np.float64)
-        ri[:, 0] = np.asarray(config.sun_photometer_aerosol.refr_imag, dtype=np.float64)
+        rn[:, 0] = np.asarray(aerosol.sun_photometer_aerosol.refr_real, dtype=np.float64)
+        ri[:, 0] = np.asarray(aerosol.sun_photometer_aerosol.refr_imag, dtype=np.float64)
         payload["sun_count"] = count
         payload["sun_radius"] = radius
         payload["sun_dvlogr"] = dvlogr
         payload["dist_rn"] = rn
         payload["dist_ri"] = ri
-    elif config.aerosol_profile == "layered_profile":
-        if not config.aerosol_layer_profile:
-            raise ValueError("sixs.aerosol_layer_profile is required for layered aerosol profiles.")
-        count = len(config.aerosol_layer_profile)
+    elif aerosol.profile == "layered_profile":
+        if not aerosol.layer_profile:
+            raise ValueError("rt.setup.aerosol.layer_profile is required for layered aerosol profiles.")
+        count = len(aerosol.layer_profile)
         height = np.zeros(50, dtype=np.float64)
         aot = np.zeros(50, dtype=np.float64)
         layer_type = np.zeros(50, dtype=np.int32)
-        for idx, layer in enumerate(config.aerosol_layer_profile):
+        for idx, layer in enumerate(aerosol.layer_profile):
             height[idx] = float(layer.height_km)
             aot[idx] = float(layer.optical_thickness)
             layer_type[idx] = _AEROSOL_LAYER_TYPE_CODES[layer.aerosol_type]
@@ -542,9 +554,11 @@ def _prepare_brdf_table(table: tuple[tuple[float, ...], ...] | None) -> np.ndarr
     return np.ascontiguousarray(prepared, dtype=np.float64)
 
 
-def _resolve_surface_inputs(config: SixSAlgorithmConfig) -> dict[str, np.ndarray | float | int]:
+def _resolve_surface_inputs(rt_setup: RTSetupConfig) -> dict[str, np.ndarray | float | int]:
     payload = _empty_surface_inputs()
-    surface = config.surface
+    surface = rt_setup.surface
+    if surface is None:
+        raise ValueError("Native 6S requires rt_setup.surface to be resolved before execution.")
     target_mode, target_constant, target_spectrum = _resolve_surface_reflectance(surface.target)
     payload["target_mode"] = target_mode
     payload["target_constant"] = target_constant
@@ -661,9 +675,11 @@ def _resolve_surface_inputs(config: SixSAlgorithmConfig) -> dict[str, np.ndarray
     return payload
 
 
-def _resolve_atmospheric_correction_inputs(config: SixSAlgorithmConfig) -> tuple[int, float]:
-    correction = config.atmospheric_correction
-    value = float(correction.value if correction.value is not None else config.reference_reflectance)
+def _resolve_atmospheric_correction_inputs(rt_setup: RTSetupConfig) -> tuple[int, float]:
+    correction = rt_setup.atmospheric_correction
+    correction_mode = correction.mode if correction is not None and correction.mode is not None else "none"
+    reference_reflectance = rt_setup.reference_reflectance if rt_setup.reference_reflectance is not None else 0.1
+    value = float(correction.value if correction is not None and correction.value is not None else reference_reflectance)
     mapping = {
         "none": (-1, 0.0),
         "lambertian_reflectance": (0, -value),
@@ -671,7 +687,7 @@ def _resolve_atmospheric_correction_inputs(config: SixSAlgorithmConfig) -> tuple
         "brdf_reflectance": (1, -value),
         "brdf_radiance": (1, value),
     }
-    return mapping[correction.mode]
+    return mapping[correction_mode]
 
 
 def _encode_aerosol_model_path(path: Path | None) -> str:
@@ -1066,9 +1082,11 @@ class SixSNativeRunner:
         self,
         *,
         sixs_config: SixSAlgorithmConfig,
+        rt_setup: RTSetupConfig,
         sensor_config: SensorConfig | None = None,
     ) -> None:
         self._config = sixs_config
+        self._rt_setup = rt_setup
         self._sensor_config = sensor_config
         self._module_path = ensure_native_sixs_module(sixs_config)
         self._native_threads = int(sixs_config.native_threads or _default_native_threads())
@@ -1220,12 +1238,20 @@ class SixSNativeRunner:
         )
         month = self._observation_time.month if self._observation_time is not None else self._config.month
         day = self._observation_time.day if self._observation_time is not None else self._config.day
-        atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(self._config, month=month)
-        aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(self._config)
-        surface_inputs = _resolve_surface_inputs(self._config)
+        atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(self._rt_setup, month=month)
+        aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(self._rt_setup)
+        surface_inputs = _resolve_surface_inputs(self._rt_setup)
         atmospheric_correction_mode, atmospheric_correction_value = _resolve_atmospheric_correction_inputs(
-            self._config
+            self._rt_setup
         )
+        reference_reflectance = (
+            float(self._rt_setup.reference_reflectance)
+            if self._rt_setup.reference_reflectance is not None
+            else 0.1
+        )
+        aerosol_model_path = ""
+        if self._rt_setup.aerosol is not None and self._rt_setup.aerosol.model_path is not None:
+            aerosol_model_path = _encode_aerosol_model_path(self._rt_setup.aerosol.model_path)
         return _PreparedSceneInputs(
             template=template,
             valid_mask=valid,
@@ -1234,7 +1260,7 @@ class SixSNativeRunner:
                 "month": month,
                 "day": day,
                 "atmospheric_mode": atmospheric_mode,
-                "atmospheric_columns_mode": _resolve_atmospheric_columns_mode(self._config),
+                "atmospheric_columns_mode": _resolve_atmospheric_columns_mode(self._rt_setup),
                 "radiosonde_altitude_km": np.ascontiguousarray(radiosonde["altitude_km"], dtype=np.float64),
                 "radiosonde_pressure_mb": np.ascontiguousarray(radiosonde["pressure_mb"], dtype=np.float64),
                 "radiosonde_temperature_k": np.ascontiguousarray(radiosonde["temperature_k"], dtype=np.float64),
@@ -1258,8 +1284,8 @@ class SixSNativeRunner:
                 "aerosol_layer_height": np.ascontiguousarray(aerosol_inputs["layer_height"], dtype=np.float64),
                 "aerosol_layer_aot": np.ascontiguousarray(aerosol_inputs["layer_aot"], dtype=np.float64),
                 "aerosol_layer_type": np.ascontiguousarray(aerosol_inputs["layer_type"], dtype=np.int32),
-                "reference_reflectance": float(self._config.reference_reflectance),
-                "aerosol_model_path": _encode_aerosol_model_path(self._config.aerosol_model_path),
+                "reference_reflectance": reference_reflectance,
+                "aerosol_model_path": aerosol_model_path,
                 "surface_inhomo": int(surface_inputs["inhomo"]),
                 "surface_idirec": int(surface_inputs["idirec"]),
                 "surface_target_mode": int(surface_inputs["target_mode"]),

@@ -51,8 +51,9 @@ SIAC_SIXS_F2PY_BACKEND=meson,distutils PYTHONPATH=python pixi run -e rt6s python
 
 ### Installed `.[py6s]` but native `sixs` still is not available
 
-`.[py6s]` only enables the separate `py6s` backend. The native `sixs` backend
-still needs the native toolchain and compiled extension.
+`.[py6s]` only enables the optional Py6S dependency used by
+`create_lut_from_py6s(...)`. The native `sixs` backend still needs the native
+toolchain and compiled extension.
 
 ## Runtime and configuration
 
@@ -88,6 +89,19 @@ Check:
 - `algorithms.rt.backend`
 - backend fallbacks such as `fallback_to_lut`
 
+### Remote ZIP/Zarr LUT rejects the requested RT setup
+
+That is expected when `algorithms.rt.backend = "lut"` and the config tries to
+customize atmosphere, aerosol, surface, or correction semantics. The packaged
+remote LUT is a fixed libRadtran preset:
+
+- atmosphere profile: `us_standard_62`
+- aerosol family: `continental_average`
+- surface mode: `homogeneous_lambertian`
+
+Use `backend = "sixs"` if you need configurable atmosphere profiles, aerosol
+families, BRDFs, or surface reflectance targets.
+
 ### Native `sixs` route is unexpectedly slow
 
 If `algorithms.rt.sixs.mode = "scene_lut"` is slower than expected, the scene
@@ -122,12 +136,14 @@ chunk_size = 4096
 
 Common validation failures:
 
-- `atmospheric_profile = "auto_latitude_date"` without
-  `atmospheric_profile_latitude`
-- `atmospheric_profile = "user_profile"` without `radiosonde_profile`
-- `aerosol_profile = "user_mixture"` without `aerosol_mixture`
-- `aerosol_profile = "user_model"` without `aerosol_model_path`
-- BRDF atmospheric-correction mode without `surface.mode = "homogeneous_brdf"`
+- `setup.atmosphere.profile = "auto_latitude_date"` without
+  `setup.atmosphere.profile_latitude`
+- `setup.atmosphere.profile = "user_profile"` without
+  `setup.atmosphere.radiosonde_profile`
+- `setup.aerosol.profile = "user_mixture"` without `setup.aerosol.mixture`
+- `setup.aerosol.profile = "user_model"` without `setup.aerosol.model_path`
+- BRDF atmospheric-correction mode without
+  `setup.surface.mode = "homogeneous_brdf"`
 
 ### Unexpected remote fetch behavior
 

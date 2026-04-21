@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 try:
     import tomllib
@@ -18,6 +19,8 @@ from siac.config import (
     CloudMaskConfig,
     ExecutionConfig,
     OutputConfig,
+    RTAerosolSetupConfig,
+    RTSetupConfig,
     RunRequest,
     S2DataAccessConfig,
     SIACConfig,
@@ -345,79 +348,81 @@ class TestCloudMaskConfig:
 
 
 class TestSixSConfig:
-    def test_default_profile_uses_user_water_ozone(self):
+    def test_runtime_config_defaults_cover_execution_only(self):
         cfg = SixSAlgorithmConfig()
 
-        assert cfg.atmospheric_profile == "user_water_ozone"
-        assert cfg.atmospheric_columns_mode == "input_columns"
         assert cfg.build_profile == "release"
         assert cfg.parallel_backend == "openmp"
         assert cfg.output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
-
-    def test_atmospheric_columns_mode_aliases_normalize(self):
-        cfg = SixSAlgorithmConfig(atmospheric_columns_mode="profile")
-
-        assert cfg.atmospheric_columns_mode == "profile_default"
+        assert not hasattr(cfg, "atmospheric_profile")
 
     def test_output_variables_normalize_and_deduplicate(self):
         cfg = SixSAlgorithmConfig(output_variables=["xap", "tgasm", "tgasm", "sutott", "rooceaw"])
 
         assert cfg.output_variables == ("xap", "tgasm", "sutott", "rooceaw")
 
-    def test_custom_aerosol_requires_mixture(self):
-        with pytest.raises(ValueError, match="aerosol_mixture must be provided"):
-            SixSAlgorithmConfig(aerosol_profile="user_mixture")
-
-    def test_py6s_aliases_normalize_profiles_and_components(self, tmp_path):
-        cfg = SixSAlgorithmConfig(
-            atmospheric_profile="from_latitude_and_date",
-            atmospheric_profile_latitude=51.5,
-            aerosol_profile="user",
-            aerosol_mixture={"dust": 0.55, "water": 0.3, "oceanic": 0.05, "soot": 0.1},
-        )
-
-        assert cfg.atmospheric_profile == "auto_latitude_date"
-        assert cfg.aerosol_profile == "user_mixture"
-        assert cfg.aerosol_mixture == (0.55, 0.3, 0.05, 0.1)
-
-        mie_cfg = SixSAlgorithmConfig(
-            aerosol_profile="from_mie_file",
-            mie_file_path=tmp_path / "sample.mie",
-        )
-
-        assert mie_cfg.aerosol_profile == "user_model"
-        assert mie_cfg.aerosol_model_path == tmp_path / "sample.mie"
-
-    def test_radiosonde_alias_fields_are_accepted(self):
-        levels = tuple(float(index) for index in range(34))
-        cfg = SixSAlgorithmConfig(
-            atmospheric_profile="radiosonde",
-            radiosonde_profile={
-                "altitude": levels,
-                "pressure": levels,
-                "temperature": levels,
-                "water": levels,
-                "ozone": levels,
+    def test_rt_setup_aliases_normalize_profiles_and_components(self):
+        cfg = RTSetupConfig(
+            atmosphere={"profile": "from_latitude_and_date", "profile_latitude": 51.5},
+            aerosol={
+                "profile": "user",
+                "mixture": {"dust": 0.55, "water": 0.3, "oceanic": 0.05, "soot": 0.1},
             },
         )
 
-        assert cfg.atmospheric_profile == "user_profile"
-        assert cfg.radiosonde_profile is not None
-        assert cfg.radiosonde_profile.altitude_km == levels
+        assert cfg.atmosphere is not None
+        assert cfg.atmosphere.profile == "auto_latitude_date"
+        assert cfg.aerosol is not None
+        assert cfg.aerosol.profile == "user_mixture"
+        assert cfg.aerosol.mixture == (0.55, 0.3, 0.05, 0.1)
+
+        mie_cfg = RTAerosolSetupConfig(
+            profile="from_mie_file",
+            model_path=Path("/tmp/sample.mie"),
+        )
+
+        assert mie_cfg.profile == "user_model"
+        assert mie_cfg.model_path == Path("/tmp/sample.mie")
+
+    def test_radiosonde_alias_fields_are_accepted(self):
+        levels = tuple(float(index) for index in range(34))
+        cfg = RTSetupConfig(
+            atmosphere={
+                "profile": "radiosonde",
+                "radiosonde_profile": {
+                    "altitude": levels,
+                    "pressure": levels,
+                    "temperature": levels,
+                    "water": levels,
+                    "ozone": levels,
+                },
+            }
+        )
+
+        assert cfg.atmosphere is not None
+        assert cfg.atmosphere.profile == "user_profile"
+        assert cfg.atmosphere.radiosonde_profile is not None
+        assert cfg.atmosphere.radiosonde_profile.altitude_km == levels
+
+    def test_custom_aerosol_requires_mixture(self):
+        with pytest.raises(ValueError, match="rt.setup.aerosol.mixture must be provided"):
+            RTAerosolSetupConfig(profile="user_mixture")
 
     def test_user_aerosol_model_requires_path(self):
-        with pytest.raises(ValueError, match="aerosol_model_path must be provided"):
-            SixSAlgorithmConfig(aerosol_profile="user_model")
+        with pytest.raises(ValueError, match="rt.setup.aerosol.model_path must be provided"):
+            RTAerosolSetupConfig(profile="user_model")
 
     def test_siac_config_accepts_native_sixs_backend(self):
         cfg = SIACConfig(
             algorithms={
                 "rt": {
                     "backend": "sixs",
+                    "setup": {
+                        "atmosphere": {"profile": "tropical", "columns_mode": "input_columns"},
+                        "aerosol": {"profile": "continental"},
+                    },
                     "sixs": {
                         "mode": "direct",
-                        "atmospheric_profile": "tropical",
-                        "aerosol_profile": "continental",
                         "output_variables": ["xap", "xbp", "xcp", "tgasm", "sutott"],
                     },
                 }
@@ -426,8 +431,13 @@ class TestSixSConfig:
 
         assert cfg.rt_model.backend == "sixs"
         assert cfg.rt_model.sixs.mode == "direct"
-        assert cfg.rt_model.sixs.atmospheric_profile == "tropical"
+        assert cfg.rt_model.setup.atmosphere is not None
+        assert cfg.rt_model.setup.atmosphere.profile == "tropical"
         assert cfg.rt_model.sixs.output_variables == ("xap", "xbp", "xcp", "tgasm", "sutott")
+
+    def test_py6s_backend_is_no_longer_supported(self):
+        with pytest.raises(ValidationError, match="backend"):
+            SIACConfig(algorithms={"rt": {"backend": "py6s"}})
 
 
 class TestExecutionConfig:

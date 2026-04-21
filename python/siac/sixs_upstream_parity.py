@@ -27,7 +27,7 @@ from siac.algorithms.rt.direct.sixs_native import (
     _resolve_atmospheric_inputs,
     _resolve_surface_inputs,
 )
-from siac.config import SixSAlgorithmConfig
+from siac.config import RTSetupConfig, SixSAlgorithmConfig
 from siac.domain.sensors import SensorBand
 from siac.runtime import AtmosphericState, GeometryAngles
 from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES
@@ -42,7 +42,8 @@ class SixSParityCase:
 
     name: str
     description: str
-    config: SixSAlgorithmConfig
+    sixs_config: SixSAlgorithmConfig
+    rt_setup: RTSetupConfig
     band: SensorBand
     sza_deg: float
     saa_deg: float
@@ -389,7 +390,7 @@ def _scalar_array(value: float) -> xr.DataArray:
 
 
 def _native_case_scalars(case: SixSParityCase, module_path: Path, source_dir: Path) -> dict[str, float]:
-    config = case.config.model_copy(
+    config = case.sixs_config.model_copy(
         update={
             "source_dir": source_dir,
             "module_path": module_path,
@@ -398,7 +399,7 @@ def _native_case_scalars(case: SixSParityCase, module_path: Path, source_dir: Pa
             "output_variables": SIXS_DEFAULT_OUTPUT_VARIABLES,
         }
     )
-    runner = SixSNativeRunner(sixs_config=config)
+    runner = SixSNativeRunner(sixs_config=config, rt_setup=case.rt_setup)
     geometry = GeometryAngles.from_degrees(
         _scalar_array(case.sza_deg),
         _scalar_array(case.saa_deg),
@@ -501,12 +502,12 @@ def _render_surface_reflectance_lines(mode: int, constant: float, spectrum: np.n
 
 def render_original_sixs_input(case: SixSParityCase) -> str:
     """Render an original 6S stdin deck using the same resolved inputs as the native bridge."""
-    config = case.config
+    config = case.sixs_config
     response, wlinf, wlsup = _build_spectral_response(case.band)
-    atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(config, month=int(config.month))
-    aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(config)
-    surface_inputs = _resolve_surface_inputs(config)
-    atmospheric_correction_mode, atmospheric_correction_value = _resolve_atmospheric_correction_inputs(config)
+    atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(case.rt_setup, month=int(config.month))
+    aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(case.rt_setup)
+    surface_inputs = _resolve_surface_inputs(case.rt_setup)
+    atmospheric_correction_mode, atmospheric_correction_value = _resolve_atmospheric_correction_inputs(case.rt_setup)
 
     iinf = int((wlinf - 0.25) / 0.0025 + 1.5)
     isup = int((wlsup - 0.25) / 0.0025 + 1.5)
@@ -609,7 +610,7 @@ def render_original_sixs_input(case: SixSParityCase) -> str:
                 )
             )
     elif aerosol_mode == 12:
-        aerosol_path = Path(config.aerosol_model_path or "")
+        aerosol_path = Path(case.rt_setup.aerosol.model_path or "")
         if not aerosol_path:
             raise ValueError("user_model parity cases require `aerosol_model_path`.")
         lines.append(str(aerosol_path))
@@ -798,13 +799,16 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
         SixSParityCase(
             name="lambertian_user_water_ozone_continental",
             description="Homogeneous Lambertian surface with user water/ozone and continental aerosol.",
-            config=SixSAlgorithmConfig(
+            sixs_config=SixSAlgorithmConfig(
                 month=7,
                 day=12,
-                atmospheric_profile="user_water_ozone",
-                aerosol_profile="continental",
+            ),
+            rt_setup=RTSetupConfig(
+                atmosphere={"profile": "user_water_ozone", "columns_mode": "input_columns"},
+                aerosol={"profile": "continental"},
                 surface={"mode": "homogeneous_lambertian", "target": {"kind": "constant", "constant": 0.0}},
                 atmospheric_correction={"mode": "lambertian_reflectance", "value": 0.1},
+                reference_reflectance=0.1,
             ),
             band=uniform_band,
             sza_deg=30.0,
@@ -819,17 +823,22 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
         SixSParityCase(
             name="lambertian_builtin_surface_user_mixture",
             description="Homogeneous Lambertian built-in vegetation surface with user aerosol mixture.",
-            config=SixSAlgorithmConfig(
+            sixs_config=SixSAlgorithmConfig(
                 month=5,
                 day=20,
-                atmospheric_profile="midlatitude_summer",
-                aerosol_profile="user_mixture",
-                aerosol_mixture={"dust": 0.3, "water": 0.4, "oceanic": 0.2, "soot": 0.1},
+            ),
+            rt_setup=RTSetupConfig(
+                atmosphere={"profile": "midlatitude_summer", "columns_mode": "input_columns"},
+                aerosol={
+                    "profile": "user_mixture",
+                    "mixture": {"dust": 0.3, "water": 0.4, "oceanic": 0.2, "soot": 0.1},
+                },
                 surface={
                     "mode": "homogeneous_lambertian",
                     "target": {"kind": "built_in", "built_in": "green_vegetation"},
                 },
                 atmospheric_correction={"mode": "lambertian_reflectance", "value": 0.12},
+                reference_reflectance=0.12,
             ),
             band=uniform_band,
             sza_deg=24.0,
@@ -844,13 +853,16 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
         SixSParityCase(
             name="rahman_brdf_biomass_burning",
             description="Rahman BRDF surface with biomass-burning aerosol.",
-            config=SixSAlgorithmConfig(
+            sixs_config=SixSAlgorithmConfig(
                 month=7,
                 day=12,
-                atmospheric_profile="user_water_ozone",
-                aerosol_profile="biomass_burning",
+            ),
+            rt_setup=RTSetupConfig(
+                atmosphere={"profile": "user_water_ozone", "columns_mode": "input_columns"},
+                aerosol={"profile": "biomass_burning"},
                 surface={
                     "mode": "homogeneous_brdf",
+                    "target": {"kind": "constant", "constant": 0.0},
                     "brdf": {
                         "model": "rahman",
                         "parameters": {
@@ -861,6 +873,7 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
                     },
                 },
                 atmospheric_correction={"mode": "brdf_reflectance", "value": 0.1},
+                reference_reflectance=0.1,
             ),
             band=uniform_band,
             sza_deg=30.0,
@@ -875,13 +888,16 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
         SixSParityCase(
             name="ocean_brdf_maritime",
             description="Ocean BRDF surface with maritime aerosol, including ocean-only outputs.",
-            config=SixSAlgorithmConfig(
+            sixs_config=SixSAlgorithmConfig(
                 month=7,
                 day=12,
-                atmospheric_profile="user_water_ozone",
-                aerosol_profile="maritime",
+            ),
+            rt_setup=RTSetupConfig(
+                atmosphere={"profile": "user_water_ozone", "columns_mode": "input_columns"},
+                aerosol={"profile": "maritime"},
                 surface={
                     "mode": "homogeneous_brdf",
+                    "target": {"kind": "constant", "constant": 0.0},
                     "brdf": {
                         "model": "ocean",
                         "parameters": {
@@ -893,6 +909,7 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
                     },
                 },
                 atmospheric_correction={"mode": "brdf_reflectance", "value": 0.1},
+                reference_reflectance=0.1,
             ),
             band=uniform_band,
             sza_deg=30.0,

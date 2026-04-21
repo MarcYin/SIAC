@@ -56,6 +56,19 @@ current public setup, that LUT is libRadtran-derived and packaged as ZIP/Zarr.
 It is therefore best understood as a different RT backend with the same SIAC
 coefficient interface, not as a remote cache of 6S outputs.
 
+With the generic `algorithms.rt.setup.*` layer, this route should now be read
+as a fixed preset inside the broader RT framework rather than as a fully
+generic RT backend. The current packaged preset is:
+
+- atmosphere profile shape: `us_standard_62`
+- aerosol family: `continental_average`
+- surface structure: `homogeneous_lambertian`
+
+When `backend = "lut"` is selected, SIAC treats those semantics as fixed. The
+generic setup can still be used to assert that same preset explicitly, but any
+attempt to change atmosphere shape, aerosol family, surface target, BRDF, or
+atmospheric-correction semantics is rejected during configuration.
+
 ## Why `xap`, `xbp`, and `xcp` Matter
 
 SIAC applies the atmospheric-correction coefficients through the BOA formula:
@@ -94,9 +107,9 @@ The current checked results were produced from:
 
 For the native-versus-remote comparison, the local 6S side was configured as:
 
-- `atmospheric_profile = "us_standard_62"`
-- `atmospheric_columns_mode = "input_columns"`
-- `aerosol_profile = "continental"`
+- `setup.atmosphere.profile = "us_standard_62"`
+- `setup.atmosphere.columns_mode = "input_columns"`
+- `setup.aerosol.profile = "continental"`
 - homogeneous Lambertian surface reflectance `0.1`
 
 That setup is deliberate:

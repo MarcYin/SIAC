@@ -70,7 +70,7 @@
 : Relative Azimuth Angle, computed as `|VAA − SAA| mod 2π`. Used by RT models and BRDF kernels to parameterize the scattering geometry.
 
 **RTModelBackend**
-: The structural protocol (`domain.protocols.RTModelBackend`) that all radiative transfer backends must satisfy. Declares `simulate_toa`, `compute_coefficients`, and `supported_parameters`. Backends include the emulator, LUT, and Py6S adapters.
+: The structural protocol (`domain.protocols.RTModelBackend`) that all radiative transfer backends must satisfy. Declares `simulate_toa`, `compute_coefficients`, and `supported_parameters`. Backends include the emulator, LUT, and native 6S adapters.
 
 **SolverInputBundle**
 : The typed payload consumed by the solver, containing resampled TOA, geometry, cloud mask, priors, RT model, and band metadata assembled onto the solver grid.

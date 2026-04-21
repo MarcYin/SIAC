@@ -137,61 +137,77 @@ Supported methods:
 Main fields:
 
 - `backend`
+- `setup.*`
 - `lut_interpolation`
 - `lut_storage_options`
-- `py6s_aero_profile`
 - `sixs.*`
 - `fallback_to_lut`
-- `fallback_to_py6s`
 
 Supported backends:
 
 - `emulator`
 - `lut`
-- `py6s`
 - `sixs`
 
-`py6s` and `sixs` are separate backends. `.[py6s]` installs the optional Py6S
-dependency for the `py6s` backend only; the native `sixs` backend uses the
+`.[py6s]` installs the optional Py6S dependency for the offline
+`create_lut_from_py6s(...)` utility only; the native `sixs` backend uses the
 compiled 6SV2.1 build path documented in
 [Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md).
 
-### `algorithms.rt.sixs`
+### `algorithms.rt.setup`
 
-Main execution and build fields:
+This is the generic RT semantic layer. It describes the requested RT setup
+independently of a specific backend implementation.
 
-- `source_url`
-- `source_dir`
-- `build_dir`
-- `module_path`
-- `library_path` — compatibility alias for native module override
-- `auto_build`
-- `compiler`
-- `build_profile` — `release` or `parity`
-- `mode` — `direct`, `scene_lut`, or `auto`
-- `parallel_backend` — `openmp` or `worker_libraries`
-- `native_threads`
-- `worker_libraries`
-- `chunk_size`
-- `scene_lut_min_pixels`
-- `scene_lut_max_nodes_per_axis`
-- `scene_lut_max_cases`
-- `scene_lut_required_speedup`
-- `month`
-- `day`
-- `reference_reflectance`
-- `output_variables`
+Main fields:
 
-Atmospheric-profile fields:
+- `setup.atmosphere.profile`
+- `setup.atmosphere.columns_mode`
+- `setup.atmosphere.profile_latitude`
+- `setup.atmosphere.radiosonde_profile.*`
+- `setup.aerosol.profile`
+- `setup.aerosol.mixture`
+- `setup.aerosol.distribution.*`
+- `setup.aerosol.sun_photometer_aerosol.*`
+- `setup.aerosol.layer_profile.*`
+- `setup.aerosol.model_path`
+- `setup.surface.mode`
+- `setup.surface.target.*`
+- `setup.surface.environment.*`
+- `setup.surface.radius_km`
+- `setup.surface.brdf.*`
+- `setup.atmospheric_correction.mode`
+- `setup.atmospheric_correction.value`
+- `setup.reference_reflectance`
 
-- `atmospheric_profile`
-- `atmospheric_columns_mode` — `input_columns` scales the selected profile to
-  the scene `tcwv` and `tco3` inputs while preserving the preset profile shape;
-  `profile_default` keeps the preset profile totals
-- `atmospheric_profile_latitude`
-- `radiosonde_profile.*`
+Current backend behavior:
 
-Supported atmospheric profiles:
+- native `sixs` resolves the full generic setup and uses it as its only RT
+  semantic source
+- the packaged remote ZIP/Zarr LUT is a fixed libRadtran preset inside the
+  generic RT framework and rejects user semantic overrides
+- `emulator` currently ignores the generic setup and continues to use only the
+  shared scene-state fields
+
+Default native `sixs` setup:
+
+- atmosphere profile: `us_standard_62`
+- atmosphere columns mode: `input_columns`
+- aerosol profile: `continental`
+- surface mode: `homogeneous_lambertian`
+- surface target: constant `0.0`
+- atmospheric correction: `lambertian_reflectance` with value `0.1`
+- reference reflectance: `0.1`
+
+Packaged remote LUT preset:
+
+- atmosphere profile: `us_standard_62`
+- aerosol profile: `continental_average`
+- surface mode: `homogeneous_lambertian`
+- no configurable surface target, BRDF, atmospheric-correction override, or
+  reference-reflectance override
+
+Supported atmosphere profiles:
 
 - `no_gas`
 - `tropical`
@@ -204,19 +220,11 @@ Supported atmospheric profiles:
 - `user_water_ozone`
 - `user_profile`
 
-Aerosol-profile fields:
-
-- `aerosol_profile`
-- `aerosol_mixture`
-- `aerosol_distribution.*`
-- `sun_photometer_aerosol.*`
-- `aerosol_layer_profile.*`
-- `aerosol_model_path`
-
 Supported aerosol profiles:
 
 - `none`
 - `continental`
+- `continental_average` — remote packaged LUT preset only
 - `maritime`
 - `urban`
 - `desert`
@@ -229,16 +237,6 @@ Supported aerosol profiles:
 - `sun_photometer`
 - `layered_profile`
 - `user_model`
-
-Surface and correction fields:
-
-- `surface.mode`
-- `surface.target.*`
-- `surface.environment.*`
-- `surface.radius_km`
-- `surface.brdf.*`
-- `atmospheric_correction.mode`
-- `atmospheric_correction.value`
 
 Supported surface modes:
 
@@ -284,18 +282,49 @@ Supported atmospheric-correction modes:
 
 Important validation rules:
 
-- `atmospheric_profile = "auto_latitude_date"` requires
-  `atmospheric_profile_latitude`
-- `atmospheric_profile = "user_profile"` requires `radiosonde_profile`
-- `aerosol_profile = "user_mixture"` requires `aerosol_mixture`, which must sum
-  to `1.0`
-- `aerosol_profile = "user_model"` requires `aerosol_model_path`
-- BRDF atmospheric-correction modes require `surface.mode = "homogeneous_brdf"`
+- `setup.atmosphere.profile = "auto_latitude_date"` requires
+  `setup.atmosphere.profile_latitude`
+- `setup.atmosphere.profile = "user_profile"` requires
+  `setup.atmosphere.radiosonde_profile`
+- `setup.aerosol.profile = "user_mixture"` requires `setup.aerosol.mixture`,
+  which must sum to `1.0`
+- `setup.aerosol.profile = "user_model"` requires `setup.aerosol.model_path`
+- BRDF atmospheric-correction modes require
+  `setup.surface.mode = "homogeneous_brdf"`
 - `output_variables` accepts the native 6S output names documented in
   [Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md)
 
+### `algorithms.rt.sixs`
+
+This block now carries native build, routing, and execution controls only.
+It no longer defines atmospheric, aerosol, surface, or correction semantics.
+
+Main fields:
+
+- `source_url`
+- `source_dir`
+- `build_dir`
+- `module_path`
+- `auto_build`
+- `compiler`
+- `build_profile` — `release` or `parity`
+- `mode` — `direct`, `scene_lut`, or `auto`
+- `parallel_backend` — `openmp` or `worker_libraries`
+- `native_threads`
+- `worker_libraries`
+- `chunk_size`
+- `scene_lut_min_pixels`
+- `scene_lut_max_nodes_per_axis`
+- `scene_lut_max_cases`
+- `scene_lut_required_speedup`
+- `month`
+- `day`
+- `output_variables`
+
 For examples and route-selection guidance, see
 [Native 6SV2.1 Backend](../user-guide/native-sixs-backend.md).
+That guide now covers both the end-to-end SIAC path and the direct-start path
+where users provide `AtmosphericState` and call native 6S correction directly.
 
 ### `algorithms.solver`
 
@@ -431,7 +460,7 @@ output_variables = ["xap", "xbp", "xcp", "tgasm", "sutott", "sast"]
 | GCS-backed Sentinel-2 | `providers.s2.backend = "gcs"` plus cloud access setup |
 | emulator RT | `algorithms.rt.backend = "emulator"` |
 | LUT RT | `algorithms.rt.backend = "lut"` plus `paths.lut_path` |
-| native 6S RT | `algorithms.rt.backend = "sixs"` plus `algorithms.rt.sixs.*` |
+| native 6S RT | `algorithms.rt.backend = "sixs"` plus `algorithms.rt.setup.*` and `algorithms.rt.sixs.*` |
 | Whittaker surface prior | `algorithms.surface_prior.method = "whittaker"` |
 
 ## Public configuration APIs

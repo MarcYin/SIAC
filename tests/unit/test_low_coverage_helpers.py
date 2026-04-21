@@ -17,6 +17,7 @@ from siac.config.load import (
     write_default_system_config,
 )
 from siac.config.public import get_default_config
+from siac.config.schema import RTSetupConfig
 from siac.config.snapshot import (
     _normalize,
     snapshot_resolved_config,
@@ -281,21 +282,23 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.
     class _FakeLUT:
         instances: list[dict[str, object]] = []
 
-        def __init__(self, lut_path, interpolation_method, storage_options):  # noqa: ANN001
+        def __init__(self, lut_path, interpolation_method, storage_options, rt_setup=None):  # noqa: ANN001
             self.kwargs = {
                 "lut_path": lut_path,
                 "interpolation_method": interpolation_method,
                 "storage_options": storage_options,
+                "rt_setup": rt_setup,
             }
             _FakeLUT.instances.append(self.kwargs)
 
     class _FakeSixS:
         instances: list[dict[str, object | None]] = []
 
-        def __init__(self, *, sixs_config=None, sensor_config=None, runner=None):  # noqa: ANN001
+        def __init__(self, *, sixs_config=None, sensor_config=None, rt_setup=None, runner=None):  # noqa: ANN001
             self.kwargs = {
                 "sixs_config": sixs_config,
                 "sensor_config": sensor_config,
+                "rt_setup": rt_setup,
                 "runner": runner,
             }
             _FakeSixS.instances.append(self.kwargs)
@@ -352,15 +355,20 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.
     assert lut.kwargs["lut_path"] == "s3://bucket/lut.zarr"
     assert lut.kwargs["interpolation_method"] == "nearest"
     assert lut.kwargs["storage_options"] == {"anon": True, "key": "abc", "secret": "def"}
+    assert lut.kwargs["rt_setup"].atmosphere.profile == "us_standard_62"
+    assert lut.kwargs["rt_setup"].aerosol.profile == "continental_average"
+    assert lut.kwargs["rt_setup"].surface.mode == "homogeneous_lambertian"
 
     sixs_config = SimpleNamespace(
         sensor="auto",
         rt_model=SimpleNamespace(
             backend="sixs",
+            setup=RTSetupConfig(
+                atmosphere={"profile": "tropical", "columns_mode": "input_columns"},
+                aerosol={"profile": "continental"},
+            ),
             sixs=SimpleNamespace(
                 mode="direct",
-                atmospheric_profile="tropical",
-                aerosol_profile="continental",
                 output_variables=("xap", "xbp", "xcp", "tgasm"),
             ),
             fallback_to_lut=False,
@@ -373,6 +381,8 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.
     sixs = build_rt_model(sixs_config, sensor_config=sensor_config)
     assert sixs.kwargs["sensor_config"] is sensor_config
     assert sixs.kwargs["sixs_config"].output_variables == ("xap", "xbp", "xcp", "tgasm")
+    assert sixs.kwargs["rt_setup"].atmosphere.profile == "tropical"
+    assert sixs.kwargs["rt_setup"].aerosol.profile == "continental"
 
     no_fallback_config = SimpleNamespace(
         sensor="l8",

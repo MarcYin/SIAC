@@ -81,5 +81,5 @@ Trace packages, runtime flow, and extension points inside the repository.
 ## Key Operational Guides
 
 - [Native 6SV2.1 Backend](user-guide/native-sixs-backend.md): build, configuration, route selection, outputs, parity validation, benchmarking, and troubleshooting.
-- [Configuration Reference](reference/configuration.md): field-by-field public configuration surface, including `algorithms.rt.sixs.*`.
+- [Configuration Reference](reference/configuration.md): field-by-field public configuration surface, including `algorithms.rt.setup.*` and `algorithms.rt.sixs.*`.
 - [Installation](getting-started/installation.md): environment setup, optional extras, and native 6S prerequisites.
