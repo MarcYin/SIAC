@@ -129,9 +129,11 @@ class TestReadersExtra:
         seen = {}
         orig = m.read_raster
         try:
+
             def _fake(path, **kwargs):
                 seen["path"] = path
                 return _make_da((4, 4))
+
             m.read_raster = _fake  # type: ignore[assignment]
             out = read_hdf_subdataset("f.hdf", "SUB")
             assert out.shape == (4, 4)
@@ -197,13 +199,15 @@ class TestReprojectionExtra:
 
         geom = {
             "type": "Polygon",
-            "coordinates": [[
-                [b[0], b[1]],
-                [b[0] + 70.0, b[1]],
-                [b[0] + 70.0, b[1] + 70.0],
-                [b[0], b[1] + 70.0],
-                [b[0], b[1]],
-            ]],
+            "coordinates": [
+                [
+                    [b[0], b[1]],
+                    [b[0] + 70.0, b[1]],
+                    [b[0] + 70.0, b[1] + 70.0],
+                    [b[0], b[1] + 70.0],
+                    [b[0], b[1]],
+                ]
+            ],
         }
         clipped_geom = clip_to_geometry(da, geom)
         assert clipped_geom.size > 0
@@ -301,7 +305,8 @@ class TestWritersExtra:
             atmosphere_asset=atmosphere_path,
             qa_assets=qa_assets,
             summary_asset=summary_path,
-            input_href=tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
+            input_href=tmp_path
+            / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
         )
 
         assert item["stac_version"] == "1.1.0"
@@ -331,7 +336,8 @@ class TestWritersExtra:
             atmosphere_asset=atmosphere_path,
             qa_assets=qa_assets,
             summary_asset=summary_path,
-            input_href=tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
+            input_href=tmp_path
+            / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
         )
         assert item_path.exists()
         written = json.loads(item_path.read_text(encoding="utf-8"))
@@ -377,9 +383,7 @@ class TestWritersExtra:
 
     def test_write_rgb_quicklook(self, tmp_path: Path):
         da = _make_da((64, 64))
-        boa = xr.Dataset(
-            {"B02": da / 10000.0, "B03": da / 10000.0, "B04": da / 10000.0}
-        )
+        boa = xr.Dataset({"B02": da / 10000.0, "B03": da / 10000.0, "B04": da / 10000.0})
         out = tmp_path / "quicklook.tif"
         p = write_rgb_quicklook(boa, out, target_resolution=40.0)
         assert p.exists()
@@ -517,7 +521,12 @@ class TestWritersExtra:
             xr.Dataset,
             "to_netcdf",
             lambda _self, path, encoding=None, **kwargs: captures.append(  # noqa: ANN001
-                {"path": path, "encoding": encoding, "kwargs": kwargs, "attrs": dict(_self["cloud_mask"].attrs)}
+                {
+                    "path": path,
+                    "encoding": encoding,
+                    "kwargs": kwargs,
+                    "attrs": dict(_self["cloud_mask"].attrs),
+                }
             ),
         )
 

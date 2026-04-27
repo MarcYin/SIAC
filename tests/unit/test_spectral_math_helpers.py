@@ -42,7 +42,10 @@ def test_build_spectral_integration_weights_supports_gaussian_and_rsrf_paths() -
     wavelengths = np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32)
     lut = xr.Dataset(
         {
-            "solar_irradiance": ("wavelength", np.linspace(1.0, 2.0, wavelengths.size, dtype=np.float32)),
+            "solar_irradiance": (
+                "wavelength",
+                np.linspace(1.0, 2.0, wavelengths.size, dtype=np.float32),
+            ),
         },
         coords={"wavelength": wavelengths},
     )
@@ -83,7 +86,9 @@ def test_build_spectral_integration_weights_supports_gaussian_and_rsrf_paths() -
         ),
     )
     assert float(rsrf_weights.sel(wavelength=430.0).values) == pytest.approx(0.0)
-    assert float(rsrf_weights.sel(wavelength=460.0).values) > float(rsrf_weights.sel(wavelength=450.0).values)
+    assert float(rsrf_weights.sel(wavelength=460.0).values) > float(
+        rsrf_weights.sel(wavelength=450.0).values
+    )
 
 
 def test_weighted_spectral_mean_handles_single_sample_and_coordinate_alignment() -> None:
@@ -102,12 +107,20 @@ def test_weighted_spectral_mean_handles_single_sample_and_coordinate_alignment()
     data = xr.DataArray(
         np.array([10.0, 1.0, 2.0, 4.0, 2.0, 1.0, 9.0], dtype=np.float32),
         dims=("wavelength",),
-        coords={"wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32)},
+        coords={
+            "wavelength": np.array(
+                [430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32
+            )
+        },
     )
     weights = xr.DataArray(
         np.array([0.0, 0.0, 0.25, 0.5, 0.25, 0.0, 0.0], dtype=np.float32),
         dims=("wavelength",),
-        coords={"wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32)},
+        coords={
+            "wavelength": np.array(
+                [430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32
+            )
+        },
     )
     assert float(weighted_spectral_mean(data, weights).values) == pytest.approx(3.0)
 
@@ -128,8 +141,13 @@ def test_coefficient_and_scene_summary_helpers_return_stable_values() -> None:
     assert np.all(np.isfinite(xbp))
     assert np.all(np.isfinite(xcp))
 
-    assert finite_range(np.array([np.nan, 1.5, 3.5], dtype=np.float32), fallback=(0.0, 0.0)) == (1.5, 3.5)
-    assert finite_mean(np.array([np.nan, 1.0, 3.0], dtype=np.float32), fallback=0.0) == pytest.approx(2.0)
+    assert finite_range(np.array([np.nan, 1.5, 3.5], dtype=np.float32), fallback=(0.0, 0.0)) == (
+        1.5,
+        3.5,
+    )
+    assert finite_mean(
+        np.array([np.nan, 1.0, 3.0], dtype=np.float32), fallback=0.0
+    ) == pytest.approx(2.0)
 
     summary = summarize_spectral_scene(
         sza=np.array([10.1111, 10.2222], dtype=np.float32),

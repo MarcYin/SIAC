@@ -73,9 +73,7 @@ def _get_toa_band(toa: xr.Dataset, band_name: str) -> xr.DataArray:
 
     loaded = band_loader(band_name)
     if not isinstance(loaded, xr.DataArray):
-        raise TypeError(
-            f"TOA band loader must return an xarray.DataArray for {band_name!r}"
-        )
+        raise TypeError(f"TOA band loader must return an xarray.DataArray for {band_name!r}")
     cache[band_name] = loaded
     return _extract_band(loaded)
 
@@ -102,7 +100,12 @@ def _resample_continuous(
     if not hasattr(da, "rio") or da.rio.crs is None:
         return da
     current = abs(float(da.rio.resolution()[0]))
-    if not should_resample_for_policy(current, target_resolution_m, policy=resolution_policy, allow_upsample=allow_upsample_to_target):
+    if not should_resample_for_policy(
+        current,
+        target_resolution_m,
+        policy=resolution_policy,
+        allow_upsample=allow_upsample_to_target,
+    ):
         return da
     return resample(da, target_resolution=target_resolution_m, resampling="bilinear")
 
@@ -119,7 +122,12 @@ def _resample_classes(
     if not hasattr(classes, "rio") or classes.rio.crs is None:
         return classes
     current = abs(float(classes.rio.resolution()[0]))
-    if not should_resample_for_policy(current, target_resolution_m, policy=resolution_policy, allow_upsample=allow_upsample_to_target):
+    if not should_resample_for_policy(
+        current,
+        target_resolution_m,
+        policy=resolution_policy,
+        allow_upsample=allow_upsample_to_target,
+    ):
         return classes
     return resample(classes, target_resolution=target_resolution_m, resampling="nearest")
 
@@ -154,8 +162,7 @@ def _group_band_names(
 
     if not names:
         raise ValueError(
-            f"Could not find any {color_name} band in TOA data within "
-            f"{wl_min:.0f}-{wl_max:.0f} nm"
+            f"Could not find any {color_name} band in TOA data within {wl_min:.0f}-{wl_max:.0f} nm"
         )
 
     return names

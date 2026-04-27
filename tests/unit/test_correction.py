@@ -25,11 +25,13 @@ class TestAtmosphericCorrector:
         shape = (50, 50)
 
         # TOA dataset
-        toa = xr.Dataset({
-            "B02": xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
-            "B03": xr.DataArray(np.full(shape, 0.12), dims=["y", "x"]),
-            "B04": xr.DataArray(np.full(shape, 0.10), dims=["y", "x"]),
-        })
+        toa = xr.Dataset(
+            {
+                "B02": xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
+                "B03": xr.DataArray(np.full(shape, 0.12), dims=["y", "x"]),
+                "B04": xr.DataArray(np.full(shape, 0.10), dims=["y", "x"]),
+            }
+        )
 
         # Geometry
         geometry = GeometryAngles(
@@ -83,9 +85,7 @@ class TestAtmosphericCorrector:
         # BOA = 0.1225 / (1 + 0.1 * 0.1225) = 0.1225 / 1.01225 ≈ 0.121
         expected_boa = 0.1225 / (1 + 0.1 * 0.1225)
 
-        np.testing.assert_allclose(
-            result.boa["B02"].values.mean(), expected_boa, rtol=1e-3
-        )
+        np.testing.assert_allclose(result.boa["B02"].values.mean(), expected_boa, rtol=1e-3)
 
     def test_correct_with_cloud_mask(self, sample_inputs, mock_rt_model):
         """Correction should respect cloud mask."""
@@ -101,7 +101,9 @@ class TestAtmosphericCorrector:
         # cloud_mask contract: True = cloudy (consistent with ObservationBundle)
         assert result.cloud_mask.values[10:20, 10:20].all()
 
-    def test_correct_merges_invalid_boa_into_supplied_cloud_mask(self, sample_inputs, mock_rt_model):
+    def test_correct_merges_invalid_boa_into_supplied_cloud_mask(
+        self, sample_inputs, mock_rt_model
+    ):
         """Invalid corrected BOA pixels should be marked even when a mask is already supplied."""
         toa, geometry, atmo_state = sample_inputs
         toa["B02"].values[0, 0] = np.nan
@@ -123,7 +125,9 @@ class TestAtmosphericCorrector:
             "y": np.arange(50, dtype=np.float32) + 0.25,
             "x": np.arange(50, dtype=np.float32) + 0.25,
         }
-        cloud_mask = xr.DataArray(np.zeros((50, 50), dtype=bool), dims=["y", "x"], coords=shifted_coords)
+        cloud_mask = xr.DataArray(
+            np.zeros((50, 50), dtype=bool), dims=["y", "x"], coords=shifted_coords
+        )
         cloud_mask.values[10, 10] = True
 
         corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
@@ -133,7 +137,9 @@ class TestAtmosphericCorrector:
         assert bool(result.cloud_mask.values[0, 0])
         assert bool(result.cloud_mask.values[10, 10])
 
-    def test_correct_keeps_valid_sibling_bands_when_one_band_is_invalid(self, sample_inputs, mock_rt_model):
+    def test_correct_keeps_valid_sibling_bands_when_one_band_is_invalid(
+        self, sample_inputs, mock_rt_model
+    ):
         """A one-band failure should not erase valid BOA values from other bands."""
         toa, geometry, atmo_state = sample_inputs
         toa["B02"].values[0, 0] = np.nan
@@ -183,9 +189,7 @@ class TestAtmosphericCorrector:
         # Filter to valid range like the corrector does
         expected = expected.where((expected > 0) & (expected < 1.5))
 
-        np.testing.assert_allclose(
-            result.boa["B02"].values, expected.values, rtol=1e-6
-        )
+        np.testing.assert_allclose(result.boa["B02"].values, expected.values, rtol=1e-6)
 
     def test_correct_late_loads_missing_bands_from_toa_attrs(self, sample_inputs, mock_rt_model):
         """Correction should request missing bands on demand instead of requiring full TOA upfront."""
@@ -205,10 +209,7 @@ class TestAtmosphericCorrector:
         sensor_config = SensorConfig(
             sensor_id="MSI",
             satellite_id="S2A",
-            bands=tuple(
-                SENTINEL2A_CONFIG.get_band(name)
-                for name in ("B02", "B03", "B04")
-            ),
+            bands=tuple(SENTINEL2A_CONFIG.get_band(name) for name in ("B02", "B03", "B04")),
         )
         corrector = AtmosphericCorrector(mock_rt_model, sensor_config)
 
@@ -217,7 +218,9 @@ class TestAtmosphericCorrector:
         assert set(result.boa.data_vars) == {"B02", "B03", "B04"}
         assert late_calls == ["B03", "B04"]
 
-    def test_parallel_correction_matches_serial_and_preserves_writer_order(self, sample_inputs, mock_rt_model):
+    def test_parallel_correction_matches_serial_and_preserves_writer_order(
+        self, sample_inputs, mock_rt_model
+    ):
         """Parallel band correction should remain numerically stable and deterministic in output ordering."""
         toa, geometry, atmo_state = sample_inputs
 
@@ -235,7 +238,9 @@ class TestAtmosphericCorrector:
 
         assert set(serial_result.boa.data_vars) == set(parallel_result.boa.data_vars)
         for name in serial_result.boa.data_vars:
-            np.testing.assert_allclose(serial_result.boa[name].values, parallel_result.boa[name].values, rtol=1e-6)
+            np.testing.assert_allclose(
+                serial_result.boa[name].values, parallel_result.boa[name].values, rtol=1e-6
+            )
         assert writer_calls == ["B02", "B03", "B04"]
 
     def test_correct_resamples_coefficients_to_band_grid(self):
@@ -251,19 +256,41 @@ class TestAtmosphericCorrector:
         )
         coarse_coords = {"y": [3.0, 1.0], "x": [0.0, 2.0]}
         geometry = GeometryAngles(
-            sza=xr.DataArray(np.full((2, 2), 0.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            saa=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            vza=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            vaa=xr.DataArray(np.full((2, 2), 1.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            sza=xr.DataArray(
+                np.full((2, 2), 0.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            saa=xr.DataArray(
+                np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            vza=xr.DataArray(
+                np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            vaa=xr.DataArray(
+                np.full((2, 2), 1.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
         )
         atmo_state = AtmosphericState(
-            aot=xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            tcwv=xr.DataArray(np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            tco3=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            aot_unc=xr.DataArray(np.full((2, 2), 0.05, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            tcwv_unc=xr.DataArray(np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-            elevation=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+            aot=xr.DataArray(
+                np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            tcwv=xr.DataArray(
+                np.full((2, 2), 2.5, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            tco3=xr.DataArray(
+                np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            aot_unc=xr.DataArray(
+                np.full((2, 2), 0.05, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            tcwv_unc=xr.DataArray(
+                np.full((2, 2), 0.3, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            tco3_unc=xr.DataArray(
+                np.full((2, 2), 0.01, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
+            elevation=xr.DataArray(
+                np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+            ),
         )
 
         class _CoarseRTModel:
@@ -280,9 +307,15 @@ class TestAtmosphericCorrector:
                 _ = (geometry, atmo_state, band, compute_jacobian)
                 coords = coarse_coords
                 return RTCoefficients(
-                    xap=xr.DataArray(np.full((2, 2), 0.95, dtype=np.float32), dims=["y", "x"], coords=coords),
-                    xbp=xr.DataArray(np.full((2, 2), 0.02, dtype=np.float32), dims=["y", "x"], coords=coords),
-                    xcp=xr.DataArray(np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coords),
+                    xap=xr.DataArray(
+                        np.full((2, 2), 0.95, dtype=np.float32), dims=["y", "x"], coords=coords
+                    ),
+                    xbp=xr.DataArray(
+                        np.full((2, 2), 0.02, dtype=np.float32), dims=["y", "x"], coords=coords
+                    ),
+                    xcp=xr.DataArray(
+                        np.full((2, 2), 0.1, dtype=np.float32), dims=["y", "x"], coords=coords
+                    ),
                 )
 
         corrector = AtmosphericCorrector(_CoarseRTModel(), SENTINEL2A_CONFIG)

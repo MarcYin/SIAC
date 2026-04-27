@@ -24,6 +24,7 @@ from siac.errors import AuthenticationError
 
 # ── 1. set/get roundtrip ────────────────────────────────────────────
 
+
 class TestCredentialSetGet:
     def test_roundtrip(self):
         mgr = CredentialManager()
@@ -48,6 +49,7 @@ class TestCredentialSetGet:
 
 
 # ── 2. from_config with auth config ──────────────────────────────────
+
 
 class TestFromConfig:
     def test_reads_credential_config_fields(self):
@@ -124,6 +126,7 @@ class TestFromConfig:
 
 # ── 3. CDSE token caching ───────────────────────────────────────────
 
+
 class TestCDSEToken:
     def _make_mgr_with_cdse_creds(self):
         mgr = CredentialManager()
@@ -147,12 +150,14 @@ class TestCDSEToken:
     @patch("siac.adapters.auth.time")
     def test_refreshes_expired_token(self, mock_time, mock_exchange):
         """Expired token triggers a new exchange."""
-        mock_time.monotonic = MagicMock(side_effect=[
-            0.0,    # first get_cdse_token: check cache
-            0.0,    # first get_cdse_token: set expires_at = 0 + 300 = 300
-            400.0,  # second get_cdse_token: check cache (expired)
-            400.0,  # second get_cdse_token: set expires_at = 400 + 300 = 700
-        ])
+        mock_time.monotonic = MagicMock(
+            side_effect=[
+                0.0,  # first get_cdse_token: check cache
+                0.0,  # first get_cdse_token: set expires_at = 0 + 300 = 300
+                400.0,  # second get_cdse_token: check cache (expired)
+                400.0,  # second get_cdse_token: set expires_at = 400 + 300 = 700
+            ]
+        )
         mock_exchange.side_effect = [("tok1", 300), ("tok2", 300)]
 
         mgr = self._make_mgr_with_cdse_creds()
@@ -213,6 +218,7 @@ class TestCDSEToken:
 
 # ── 4. storage adapter helpers ───────────────────────────────────────
 
+
 class TestStorageOptions:
     def test_aws_storage_options(self):
         mgr = CredentialManager()
@@ -233,6 +239,7 @@ class TestStorageOptions:
 
 
 # ── 5. CredentialSpec immutability ───────────────────────────────────
+
 
 class TestCredentialSpec:
     def test_frozen(self):
@@ -277,7 +284,9 @@ class TestProviderAdapters:
 
     @patch("siac.adapters.auth.requests.delete")
     @patch("siac.adapters.auth.requests.post")
-    def test_cdse_temporary_s3_context_verifies_with_retry(self, mock_post, mock_delete, monkeypatch):
+    def test_cdse_temporary_s3_context_verifies_with_retry(
+        self, mock_post, mock_delete, monkeypatch
+    ):
         class _Resp:
             def __init__(self, body):
                 self._body = body
@@ -375,6 +384,7 @@ class TestProviderAdapters:
 
 # ── 6. CDSE backend integration (mock) ──────────────────────────────
 
+
 class TestCDSEBackendWithAuth:
     @patch("siac.adapters.auth._cdse_token_exchange")
     def test_backend_uses_auth_manager_token(self, mock_exchange):
@@ -396,7 +406,8 @@ class TestCDSEBackendWithAuth:
 
         mgr = CredentialManager()  # no CDSE creds
         backend = CopernicusDataspaceBackend(
-            access_key="direct_token", auth=mgr,
+            access_key="direct_token",
+            auth=mgr,
         )
         header = backend._get_auth_header()
         assert header == {"Authorization": "Bearer direct_token"}

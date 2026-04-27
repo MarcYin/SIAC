@@ -65,7 +65,9 @@ def _merge_rt_setup(base: RTSetupConfig, override: RTSetupConfig | None) -> RTSe
         return base.model_copy(deep=True)
     payload = base.model_dump(mode="python")
     if override.atmosphere is not None:
-        payload["atmosphere"] = _merge_model_payload(payload.get("atmosphere") or {}, override.atmosphere)
+        payload["atmosphere"] = _merge_model_payload(
+            payload.get("atmosphere") or {}, override.atmosphere
+        )
     if override.aerosol is not None:
         payload["aerosol"] = _merge_model_payload(payload.get("aerosol") or {}, override.aerosol)
     if override.surface is not None:
@@ -127,9 +129,13 @@ def validate_lut_requested_setup(requested: RTSetupConfig) -> None:
                 "the remote libRadtran LUT already uses the scene atmospheric-state columns directly"
             )
         if atmosphere.profile_latitude is not None:
-            mismatches.append("atmosphere.profile_latitude is not supported by the packaged LUT preset")
+            mismatches.append(
+                "atmosphere.profile_latitude is not supported by the packaged LUT preset"
+            )
         if atmosphere.radiosonde_profile is not None:
-            mismatches.append("atmosphere.radiosonde_profile is not supported by the packaged LUT preset")
+            mismatches.append(
+                "atmosphere.radiosonde_profile is not supported by the packaged LUT preset"
+            )
 
     if aerosol is not None:
         if aerosol.profile not in {None, "continental_average"}:
@@ -145,7 +151,9 @@ def validate_lut_requested_setup(requested: RTSetupConfig) -> None:
             "model_path",
         ):
             if getattr(aerosol, field_name) is not None:
-                mismatches.append(f"aerosol.{field_name} is not supported by the packaged LUT preset")
+                mismatches.append(
+                    f"aerosol.{field_name} is not supported by the packaged LUT preset"
+                )
 
     if surface is not None:
         if surface.mode not in {None, "homogeneous_lambertian"}:
@@ -171,9 +179,7 @@ def validate_lut_requested_setup(requested: RTSetupConfig) -> None:
         )
 
     if requested.reference_reflectance is not None:
-        mismatches.append(
-            "reference_reflectance cannot be configured for the packaged LUT preset"
-        )
+        mismatches.append("reference_reflectance cannot be configured for the packaged LUT preset")
 
     if mismatches:
         detail = "; ".join(mismatches)

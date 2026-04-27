@@ -491,9 +491,12 @@ class ZarrLUTBackend:
         ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
         # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
         finite_ozone = ozone[np.isfinite(ozone)]
-        if ozone_axis.size and finite_ozone.size and np.nanmax(np.abs(ozone_axis)) > 20 and np.nanmax(
-            np.abs(finite_ozone)
-        ) < 10:
+        if (
+            ozone_axis.size
+            and finite_ozone.size
+            and np.nanmax(np.abs(ozone_axis)) > 20
+            and np.nanmax(np.abs(finite_ozone)) < 10
+        ):
             return cast("np.ndarray", ozone * 1000.0)
         return cast("np.ndarray", ozone)
 
@@ -616,7 +619,9 @@ class ZarrLUTBackend:
         expected_shape = tuple(template.shape)
         arrays = ZarrLUTBackend._grid_arrays(geometry, atmo_state)
         mismatches = ZarrLUTBackend._grid_shape_mismatches(arrays, expected_shape=expected_shape)
-        dim_mismatches, coord_mismatches = ZarrLUTBackend._grid_alignment_mismatches(template, arrays)
+        dim_mismatches, coord_mismatches = ZarrLUTBackend._grid_alignment_mismatches(
+            template, arrays
+        )
         if mismatches:
             details = ", ".join(mismatches)
             raise ValueError(
@@ -706,24 +711,30 @@ class ZarrLUTBackend:
             return np.asarray(var.values, dtype=np.float32)  # type: ignore[no-any-return]
 
         grid_axes = tuple(
-            np.asarray(var.coords[name].values, dtype=np.float64)
-            for name in applicable_names
+            np.asarray(var.coords[name].values, dtype=np.float64) for name in applicable_names
         )
         values = np.asarray(var.values, dtype=np.float64)
 
         if method == "linear":
             interp = RegularGridInterpolator(
-                grid_axes, values, method="linear", bounds_error=False, fill_value=np.nan,
+                grid_axes,
+                values,
+                method="linear",
+                bounds_error=False,
+                fill_value=np.nan,
             )
         else:
             interp = RegularGridInterpolator(
-                grid_axes, values, method="nearest", bounds_error=False, fill_value=np.nan,
+                grid_axes,
+                values,
+                method="nearest",
+                bounds_error=False,
+                fill_value=np.nan,
             )
 
-        query_points = np.column_stack([
-            np.asarray(coords[name].values, dtype=np.float64)
-            for name in applicable_names
-        ])
+        query_points = np.column_stack(
+            [np.asarray(coords[name].values, dtype=np.float64) for name in applicable_names]
+        )
         result: np.ndarray = interp(query_points).astype(np.float32)
         return result
 
@@ -829,10 +840,12 @@ class ZarrLUTBackend:
             aot=aot,
             tcwv=tcwv,
         )
-        toa_rho1_grid, toa_rho2_grid, eg_rho1_grid, eg_rho2_grid = self._get_or_build_spectral_band_grids(
-            scene_key,
-            lut_scene,
-            band,
+        toa_rho1_grid, toa_rho2_grid, eg_rho1_grid, eg_rho2_grid = (
+            self._get_or_build_spectral_band_grids(
+                scene_key,
+                lut_scene,
+                band,
+            )
         )
         return (
             self._interpolate_variable_fast(toa_rho1_grid, coords, self.interpolation_method),
@@ -958,10 +971,7 @@ class ZarrLUTBackend:
 
         # Fast path: already cached.
         with self._cache_lock:
-            if (
-                self._spectral_scene_key == scene_key
-                and self._spectral_scene_subset is not None
-            ):
+            if self._spectral_scene_key == scene_key and self._spectral_scene_subset is not None:
                 return scene_key, self._spectral_scene_subset
 
         # Slow path: hold the build lock so only one thread downloads.
@@ -986,7 +996,9 @@ class ZarrLUTBackend:
                 tco3=tco3,
                 elevation=elevation,
             )
-            logger.info("_subset_spectral_lut_for_scene (lazy graph) %.3f s", time.perf_counter() - _t0)
+            logger.info(
+                "_subset_spectral_lut_for_scene (lazy graph) %.3f s", time.perf_counter() - _t0
+            )
 
             # Eagerly materialise the scene subset into memory.  Without this,
             # downstream band-grid operations (.integrate, .values) each trigger
@@ -1032,7 +1044,9 @@ class ZarrLUTBackend:
             self._weighted_spectral_mean(lut_band["Eg_rho1"], weights),
             self._weighted_spectral_mean(lut_band["Eg_rho2"], weights),
         )
-        logger.info("_get_or_build_spectral_band_grids(%s) %.3f s", band.name, time.perf_counter() - _t0)
+        logger.info(
+            "_get_or_build_spectral_band_grids(%s) %.3f s", band.name, time.perf_counter() - _t0
+        )
 
         with self._cache_lock:
             self._spectral_band_grid_cache[cache_key] = grids
@@ -1189,10 +1203,14 @@ class ZarrLUTBackend:
             return lut
 
         del sigma_factor
-        rsrf_band = self._band_rsrf(band) if band.has_rsrf else coerce_band_rsrf(
-            band,
-            sensor_id="UNKNOWN",
-            satellite_id="UNKNOWN",
+        rsrf_band = (
+            self._band_rsrf(band)
+            if band.has_rsrf
+            else coerce_band_rsrf(
+                band,
+                sensor_id="UNKNOWN",
+                satellite_id="UNKNOWN",
+            )
         )
         kernel = build_aligned_rsrf_kernel(
             rsrf_band,
@@ -1202,7 +1220,9 @@ class ZarrLUTBackend:
         )
         return lut.isel(wavelength=slice(kernel.start_index, kernel.end_index))
 
-    def _spectral_integration_weights(self, band: SensorBand, lut: xr.Dataset | None = None) -> xr.DataArray:
+    def _spectral_integration_weights(
+        self, band: SensorBand, lut: xr.Dataset | None = None
+    ) -> xr.DataArray:
         """Build wavelength weights for spectral convolution (bandpass * optional solar spectrum)."""
         source = lut if lut is not None else self.lut
         return build_spectral_integration_weights(
@@ -1234,8 +1254,12 @@ class ZarrLUTBackend:
     def _spectral_reference_reflectances(self) -> tuple[float, float]:
         """Return reference surface reflectances used by dense spectral LUT variables."""
         attrs = self.lut.attrs
-        rho1 = float(attrs.get("rho1", attrs.get("reference_reflectance_1", self._DEFAULT_SURFACE_RHO1)))
-        rho2 = float(attrs.get("rho2", attrs.get("reference_reflectance_2", self._DEFAULT_SURFACE_RHO2)))
+        rho1 = float(
+            attrs.get("rho1", attrs.get("reference_reflectance_1", self._DEFAULT_SURFACE_RHO1))
+        )
+        rho2 = float(
+            attrs.get("rho2", attrs.get("reference_reflectance_2", self._DEFAULT_SURFACE_RHO2))
+        )
         return rho1, rho2
 
     def _reload_lut(self) -> None:
@@ -1290,7 +1314,9 @@ class ZarrLUTBackend:
 
     def _coefficient_lut_has_altitude_axis(self) -> bool:
         """Return True when coefficient LUT variables already model altitude explicitly."""
-        return all("altitude" in self.lut[name].dims for name in self._COEFFICIENT_VARS if name in self.lut)
+        return all(
+            "altitude" in self.lut[name].dims for name in self._COEFFICIENT_VARS if name in self.lut
+        )
 
     def _apply_elevation_correction(
         self,

@@ -33,14 +33,23 @@ CDSE_ODATA_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1"
 CDSE_STAC_URL = "https://stac.dataspace.copernicus.eu/v1"
 CDSE_S2_COLLECTION = "sentinel-2-l1c"
 CDSE_TOKEN_URL = (
-    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
-    "protocol/openid-connect/token"
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 )
 
 _RE_TILE = re.compile(r"_T(\d{2}[A-Z]{3})_")
 _RE_BASELINE = re.compile(r"_N(\d{4})_")
 _RE_ORBIT = re.compile(r"_R(\d{3})_")
 _RE_SAT = re.compile(r"^(S2[A-Z])_")
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extract a ZIP archive after rejecting paths outside ``dest``."""
+    root = dest.resolve()
+    for info in zf.infolist():
+        target = (root / info.filename).resolve()
+        if not target.is_relative_to(root):
+            raise DataNotFoundError(f"Downloaded archive contains unsafe path {info.filename!r}.")
+    zf.extractall(root)
 
 
 def _iso_datetime(dt: datetime) -> str:
@@ -196,16 +205,20 @@ def _search_payload(query: S2Query, limit: int = 100) -> dict[str, Any]:
 
     filters: list[dict[str, Any]] = []
     if query.mgrs_tile:
-        filters.append({
-            "op": "=",
-            "args": [{"property": "grid:code"}, f"MGRS-{query.mgrs_tile.lstrip('T').upper()}"],
-        })
+        filters.append(
+            {
+                "op": "=",
+                "args": [{"property": "grid:code"}, f"MGRS-{query.mgrs_tile.lstrip('T').upper()}"],
+            }
+        )
 
     if query.max_cloud_cover < 100.0:
-        filters.append({
-            "op": "<=",
-            "args": [{"property": "eo:cloud_cover"}, float(query.max_cloud_cover)],
-        })
+        filters.append(
+            {
+                "op": "<=",
+                "args": [{"property": "eo:cloud_cover"}, float(query.max_cloud_cover)],
+            }
+        )
 
     if filters:
         payload["filter-lang"] = "cql2-json"
@@ -356,20 +369,24 @@ def download_cdse(
         return safe_dir
 
     headers = _resolve_auth_header(access_key=access_key, secret_key=secret_key)
-    resp = requests.get(product.source_url, headers=headers, stream=True, timeout=300)
-    resp.raise_for_status()
-
-    with tempfile.NamedTemporaryFile(prefix="cdse_", suffix=".zip", delete=False, dir=dest) as tmp:
-        tmp_path = Path(tmp.name)
-        for chunk in resp.iter_content(chunk_size=1024 * 1024):
-            if chunk:
-                tmp.write(chunk)
-
+    tmp_path: Path | None = None
     try:
+        resp = requests.get(product.source_url, headers=headers, stream=True, timeout=300)
+        resp.raise_for_status()
+
+        with tempfile.NamedTemporaryFile(
+            prefix="cdse_", suffix=".zip", delete=False, dir=dest
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    tmp.write(chunk)
+
         with zipfile.ZipFile(tmp_path) as zf:
-            zf.extractall(dest)
+            _safe_extract_zip(zf, dest)
     finally:
-        tmp_path.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
     if safe_dir.exists():
         return safe_dir

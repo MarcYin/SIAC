@@ -81,7 +81,9 @@ def test_search_sentinel2_builds_request(monkeypatch):
 
     monkeypatch.setattr("siac.api.public.app_search_sentinel2", _fake_search)
 
-    out = search_sentinel2(tile="50QLD", start_date="2026-01-02", end_date="2026-01-03", backend="gcs")
+    out = search_sentinel2(
+        tile="50QLD", start_date="2026-01-02", end_date="2026-01-03", backend="gcs"
+    )
     assert out == ["ok"]
     request = captured["request"]
     assert isinstance(request, Sentinel2SearchRequest)
@@ -101,7 +103,9 @@ def test_siac_process_s2_builds_request(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr("siac.api.public.workflow_process_s2", _fake_process)
 
-    out = siac_process_s2(cfg, "T31UDQ_20240101", output_path=tmp_path / "out", aoi="/tmp/aoi.geojson")
+    out = siac_process_s2(
+        cfg, "T31UDQ_20240101", output_path=tmp_path / "out", aoi="/tmp/aoi.geojson"
+    )
     assert out == "ok"
     request = captured["request"]
     assert isinstance(request, Sentinel2ProcessRequest)

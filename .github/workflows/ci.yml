@@ -33,8 +33,20 @@ jobs:
       - name: Lint
         run: pixi run lint
 
+      - name: Format check
+        run: pixi run format-check
+
       - name: Scoped type check
         run: pixi run typecheck-scoped
+
+      - name: Rust tests
+        run: pixi run rust-test
+
+      - name: Install Rust clippy
+        run: rustup component add clippy
+
+      - name: Rust clippy
+        run: pixi run rust-clippy
 
       - name: Unit tests
         run: pixi run test-no-cov

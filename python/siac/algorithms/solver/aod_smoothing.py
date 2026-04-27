@@ -86,7 +86,11 @@ def build_trusted_aod_seed_mask(
     cloud = _as_bool_mask(cloud_mask, shape=shape)
     exclusions |= cloud
 
-    qa_lookup = {} if qa_masks is None else {name: _as_bool_mask(mask, shape=shape) for name, mask in qa_masks.items()}
+    qa_lookup = (
+        {}
+        if qa_masks is None
+        else {name: _as_bool_mask(mask, shape=shape) for name, mask in qa_masks.items()}
+    )
     for name in SEED_EXCLUSION_QA_NAMES:
         exclusions |= qa_lookup.get(name, np.zeros(shape, dtype=bool))
 
@@ -98,7 +102,9 @@ def build_trusted_aod_seed_mask(
     if cloud_buffer_pixels > 0:
         exclusions |= binary_dilation(cloud, iterations=int(cloud_buffer_pixels))
     if sharp_transition_buffer_pixels > 0:
-        exclusions |= binary_dilation(sharp_transition, iterations=int(sharp_transition_buffer_pixels))
+        exclusions |= binary_dilation(
+            sharp_transition, iterations=int(sharp_transition_buffer_pixels)
+        )
 
     if border_pixels > 0:
         buffer = int(border_pixels)
@@ -290,7 +296,9 @@ def harmonic_surface(
     return np.asarray(filled, dtype=np.float32)
 
 
-def preserve_seed_values(surface: np.ndarray, original: np.ndarray, seed_mask: np.ndarray) -> FloatArray:
+def preserve_seed_values(
+    surface: np.ndarray, original: np.ndarray, seed_mask: np.ndarray
+) -> FloatArray:
     """Overwrite trusted seed locations with the original retrieved values."""
 
     out = np.asarray(surface, dtype=np.float32).copy()
@@ -318,13 +326,21 @@ def _whittaker_smooth_axis(
 
     if axis == 1:
         cube_values = np.ascontiguousarray(source.T[:, np.newaxis, :, np.newaxis], dtype=np.float32)
-        cube_weights = np.ascontiguousarray(weight_array.T[:, np.newaxis, :, np.newaxis], dtype=np.float32)
-        smoothed = np.asarray(whittaker_smooth_cube(cube_values, cube_weights, float(lambda_)), dtype=np.float32)
+        cube_weights = np.ascontiguousarray(
+            weight_array.T[:, np.newaxis, :, np.newaxis], dtype=np.float32
+        )
+        smoothed = np.asarray(
+            whittaker_smooth_cube(cube_values, cube_weights, float(lambda_)), dtype=np.float32
+        )
         return np.asarray(smoothed[:, 0, :, 0].T, dtype=np.float32)
     if axis == 0:
         cube_values = np.ascontiguousarray(source[:, np.newaxis, np.newaxis, :], dtype=np.float32)
-        cube_weights = np.ascontiguousarray(weight_array[:, np.newaxis, np.newaxis, :], dtype=np.float32)
-        smoothed = np.asarray(whittaker_smooth_cube(cube_values, cube_weights, float(lambda_)), dtype=np.float32)
+        cube_weights = np.ascontiguousarray(
+            weight_array[:, np.newaxis, np.newaxis, :], dtype=np.float32
+        )
+        smoothed = np.asarray(
+            whittaker_smooth_cube(cube_values, cube_weights, float(lambda_)), dtype=np.float32
+        )
         return np.asarray(smoothed[:, 0, 0, :], dtype=np.float32)
     raise ValueError(f"axis must be 0 or 1, got {axis}")
 
@@ -453,7 +469,9 @@ def sample_holdout_mask(
     return holdout.astype(bool, copy=False)
 
 
-def score_holdout(surface: np.ndarray, truth: np.ndarray, holdout_mask: np.ndarray) -> HoldoutMetrics:
+def score_holdout(
+    surface: np.ndarray, truth: np.ndarray, holdout_mask: np.ndarray
+) -> HoldoutMetrics:
     """Score predictions on a held-out subset of trusted pixels."""
 
     predicted = np.asarray(surface, dtype=np.float32)
@@ -465,13 +483,19 @@ def score_holdout(surface: np.ndarray, truth: np.ndarray, holdout_mask: np.ndarr
     valid = holdout & np.isfinite(predicted) & np.isfinite(expected)
     count = int(np.count_nonzero(valid))
     if count == 0:
-        return HoldoutMetrics(valid_count=0, mae=float("nan"), rmse=float("nan"), bias=float("nan"), corr=float("nan"))
+        return HoldoutMetrics(
+            valid_count=0, mae=float("nan"), rmse=float("nan"), bias=float("nan"), corr=float("nan")
+        )
 
     pred_values = np.asarray(predicted[valid], dtype=np.float64)
     truth_values = np.asarray(expected[valid], dtype=np.float64)
     delta = pred_values - truth_values
 
-    if pred_values.size > 1 and not np.allclose(pred_values, pred_values[0]) and not np.allclose(truth_values, truth_values[0]):
+    if (
+        pred_values.size > 1
+        and not np.allclose(pred_values, pred_values[0])
+        and not np.allclose(truth_values, truth_values[0])
+    ):
         corr = float(np.corrcoef(pred_values, truth_values)[0, 1])
     else:
         corr = float("nan")

@@ -181,8 +181,7 @@ class BaseSatellitePreprocessor(ABC):
         band_names = self._preprocess_toa_band_names(input_path, metadata=metadata)
         params = signature(self.load_toa).parameters.values()
         accepts_band_names = any(
-            p.name == "band_names" or p.kind == Parameter.VAR_KEYWORD
-            for p in params
+            p.name == "band_names" or p.kind == Parameter.VAR_KEYWORD for p in params
         )
         if band_names is not None and accepts_band_names:
             return self.load_toa(input_path, band_names=band_names)  # type: ignore[call-arg]
@@ -195,10 +194,7 @@ class BaseSatellitePreprocessor(ABC):
     ) -> xr.DataArray:
         """Call extract_cloud_mask with TOA when the implementation supports it."""
         params = signature(self.extract_cloud_mask).parameters.values()
-        accepts_toa = any(
-            p.name == "toa" or p.kind == Parameter.VAR_KEYWORD
-            for p in params
-        )
+        accepts_toa = any(p.name == "toa" or p.kind == Parameter.VAR_KEYWORD for p in params)
         if accepts_toa:
             return self.extract_cloud_mask(input_path, toa=toa)
         return self.extract_cloud_mask(input_path)
@@ -379,10 +375,7 @@ def get_preprocessor(sensor_id: str, **kwargs) -> BaseSatellitePreprocessor:
     """
     sensor_id = sensor_id.lower()
     if sensor_id not in _SENSOR_REGISTRY:
-        raise KeyError(
-            f"Unknown sensor: {sensor_id}. "
-            f"Available: {list(_SENSOR_REGISTRY.keys())}"
-        )
+        raise KeyError(f"Unknown sensor: {sensor_id}. Available: {list(_SENSOR_REGISTRY.keys())}")
 
     return _SENSOR_REGISTRY[sensor_id](**kwargs)
 

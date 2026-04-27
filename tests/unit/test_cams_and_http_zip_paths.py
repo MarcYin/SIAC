@@ -54,7 +54,9 @@ class _SessionLastResortLength:
     def get(self, path, headers=None, timeout=None):  # noqa: ARG002
         if headers and "Range" in headers:
             return _Resp(ok=False, status_code=416, headers={}, content=b"")
-        return _Resp(ok=True, status_code=200, headers={"Content-Length": "9"}, content=b"abcdefghi")
+        return _Resp(
+            ok=True, status_code=200, headers={"Content-Length": "9"}, content=b"abcdefghi"
+        )
 
     def close(self):
         pass
@@ -81,10 +83,13 @@ class _BytesFS:
         self.data = data
 
     async def _cat_file(self, path, start=None, end=None, **kwargs):  # noqa: ARG002
-        s = len(self.data) + start if start is not None and start < 0 else (0 if start is None else start)
+        s = (
+            len(self.data) + start
+            if start is not None and start < 0
+            else (0 if start is None else start)
+        )
         e = len(self.data) if end is None else end
         return self.data[s:e]
-
 
 
 def test_cams_source_and_load_branch_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -94,7 +99,9 @@ def test_cams_source_and_load_branch_paths(monkeypatch: pytest.MonkeyPatch, tmp_
     assert p_missing._load_cams_data(datetime(2024, 1, 1)) is None
 
     p = CAMSProvider(tmp_path)
-    tif_ds = xr.Dataset({"aod550": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
+    tif_ds = xr.Dataset(
+        {"aod550": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}
+    )
     monkeypatch.setattr(p, "_complete_cams_dataset", lambda dataset, _obs_time: dataset)
     monkeypatch.setattr(p, "_load_cams_tif_group", lambda _d, _i: tif_ds)
     loaded = p._load_cams_data(datetime(2024, 1, 1))
@@ -134,7 +141,9 @@ def test_cams_remote_base_and_remote_file_paths(
         raise FileNotFoundError(url)
 
     monkeypatch.setattr(remote_base, "_cache_remote_file", _cache_for_base)
-    monkeypatch.setattr(remote_base, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name)
+    monkeypatch.setattr(
+        remote_base, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name
+    )
     loaded = remote_base._load_cams_data(datetime(2024, 1, 1))
     assert loaded == "2024-01-01.nc"
     assert seen == ["https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/2024-01-01.nc"]
@@ -144,11 +153,14 @@ def test_cams_remote_base_and_remote_file_paths(
         cache_dir=tmp_path / "cache",
     )
     monkeypatch.setattr(remote_file, "_complete_cams_dataset", lambda dataset, _obs_time: dataset)
+
     def _cache_remote_file(_url, storage_options=None):  # noqa: ARG001
         return cached
 
     monkeypatch.setattr(remote_file, "_cache_remote_file", _cache_remote_file)
-    monkeypatch.setattr(remote_file, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name)
+    monkeypatch.setattr(
+        remote_file, "_load_from_local_explicit_path", lambda _path, source_name=None: source_name
+    )
     assert remote_file._load_cams_data(datetime(2024, 1, 2)) == "2024-01-02.nc"
     assert remote_file._is_remote_source("s3://eodata/CAMS/GLOBAL") is True
 
@@ -270,10 +282,7 @@ def test_cams_select_cdse_s3_files_coerces_listing_entries_to_strings(
 
     class _Entry:
         def __str__(self) -> str:
-            return (
-                "eodata/CAMS/GLOBAL/2024/01/01/"
-                "z_cams_c_ecmf_20240101000000_prod_an_sfc_000_tcwv"
-            )
+            return "eodata/CAMS/GLOBAL/2024/01/01/z_cams_c_ecmf_20240101000000_prod_an_sfc_000_tcwv"
 
     class _FakeFS:
         def ls(self, path, detail=False):  # noqa: ARG002
@@ -293,7 +302,9 @@ def test_cams_select_cdse_s3_files_coerces_listing_entries_to_strings(
     ]
 
 
-def test_cams_remote_s3_base_merges_selected_datasets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cams_remote_s3_base_merges_selected_datasets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", cache_dir=tmp_path / "cache")
 
     @contextmanager
@@ -309,9 +320,22 @@ def test_cams_remote_s3_base_merges_selected_datasets(monkeypatch: pytest.Monkey
 
     def _load(url, *, missing_ok=False, storage_options=None):  # noqa: ARG001
         if url.endswith("aod550.nc"):
-            return xr.Dataset({"aod550": xr.DataArray(np.ones((1, 2, 2), dtype=np.float32), dims=["time", "latitude", "longitude"])})
+            return xr.Dataset(
+                {
+                    "aod550": xr.DataArray(
+                        np.ones((1, 2, 2), dtype=np.float32), dims=["time", "latitude", "longitude"]
+                    )
+                }
+            )
         if url.endswith("gtco3.nc"):
-            return xr.Dataset({"gtco3": xr.DataArray(np.full((1, 2, 2), 0.5, dtype=np.float32), dims=["time", "latitude", "longitude"])})
+            return xr.Dataset(
+                {
+                    "gtco3": xr.DataArray(
+                        np.full((1, 2, 2), 0.5, dtype=np.float32),
+                        dims=["time", "latitude", "longitude"],
+                    )
+                }
+            )
         return None
 
     monkeypatch.setattr(provider, "_load_from_remote_url", _load)
@@ -326,16 +350,24 @@ def test_cams_partial_cdse_dataset_is_supplemented_from_jasmin(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache")
+    provider = CAMSProvider(
+        "s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache"
+    )
     primary = xr.Dataset(
         {
-            "aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]),
-            "gtco3": xr.DataArray(np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]),
+            "aod550": xr.DataArray(
+                np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]
+            ),
+            "gtco3": xr.DataArray(
+                np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]
+            ),
         }
     )
     jasmin = xr.Dataset(
         {
-            "tcwv": xr.DataArray(np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]),
+            "tcwv": xr.DataArray(
+                np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]
+            ),
         }
     )
     calls: list[str] = []
@@ -363,12 +395,20 @@ def test_cams_missing_cdse_day_falls_back_to_jasmin(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache")
+    provider = CAMSProvider(
+        "s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache"
+    )
     jasmin = xr.Dataset(
         {
-            "aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]),
-            "tcwv": xr.DataArray(np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]),
-            "gtco3": xr.DataArray(np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]),
+            "aod550": xr.DataArray(
+                np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]
+            ),
+            "tcwv": xr.DataArray(
+                np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]
+            ),
+            "gtco3": xr.DataArray(
+                np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]
+            ),
         }
     )
     calls: list[str] = []
@@ -394,16 +434,24 @@ def test_cams_missing_variables_can_fall_back_to_cds_download(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    provider = CAMSProvider("s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache")
+    provider = CAMSProvider(
+        "s3://eodata/CAMS/GLOBAL", download_missing=True, cache_dir=tmp_path / "cache"
+    )
     primary = xr.Dataset(
         {
-            "aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]),
+            "aod550": xr.DataArray(
+                np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"]
+            ),
         }
     )
     cds = xr.Dataset(
         {
-            "tcwv": xr.DataArray(np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]),
-            "gtco3": xr.DataArray(np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]),
+            "tcwv": xr.DataArray(
+                np.full((1, 1), 2.5, dtype=np.float32), dims=["latitude", "longitude"]
+            ),
+            "gtco3": xr.DataArray(
+                np.full((1, 1), 0.5, dtype=np.float32), dims=["latitude", "longitude"]
+            ),
         }
     )
 
@@ -496,10 +544,12 @@ def test_cams_extract_supports_forecast_style_time_axes(tmp_path: Path) -> None:
                     "valid_time": (
                         ("forecast_reference_time", "forecast_period"),
                         np.array(
-                            [[
-                                np.datetime64("2024-01-01T00:00:00"),
-                                np.datetime64("2024-01-01T03:00:00"),
-                            ]],
+                            [
+                                [
+                                    np.datetime64("2024-01-01T00:00:00"),
+                                    np.datetime64("2024-01-01T03:00:00"),
+                                ]
+                            ],
                         ),
                     ),
                     "latitude": [1.0, 0.0, -1.0],
@@ -562,7 +612,6 @@ def test_cams_extract_transforms_projected_bounds(tmp_path: Path) -> None:
     assert float(out.values[1, 1]) == pytest.approx(0.5)
 
 
-
 def test_cams_extract_wraps_0360_longitudes(tmp_path: Path) -> None:
     provider = CAMSProvider(tmp_path)
     ds = xr.Dataset(
@@ -587,7 +636,9 @@ def test_cams_extract_wraps_0360_longitudes(tmp_path: Path) -> None:
         datetime(2024, 1, 1),
     )
 
-    np.testing.assert_allclose(out.coords["longitude"].values, np.array([350.0, 355.0, 0.0, 5.0, 10.0]))
+    np.testing.assert_allclose(
+        out.coords["longitude"].values, np.array([350.0, 355.0, 0.0, 5.0, 10.0])
+    )
     np.testing.assert_allclose(out.values[0], np.array([4.0, 5.0, 1.0, 2.0, 3.0], dtype=np.float32))
 
 
@@ -600,7 +651,10 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
                 np.array([[[[0.2], [0.2], [0.2]]], [[[0.4], [0.4], [0.4]]]], dtype=np.float32),
                 dims=["time", "band", "latitude", "longitude"],
                 coords={
-                    "time": [np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T02:00:00")],
+                    "time": [
+                        np.datetime64("2024-01-01T00:00:00"),
+                        np.datetime64("2024-01-01T02:00:00"),
+                    ],
                     "band": [1],
                     "latitude": [1.0, 0.0, -1.0],
                     "longitude": [0.0],
@@ -608,14 +662,18 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
             )
         }
     )
-    out = p._extract_variable(ds, "aod550", (0.0, -1.0, 1.0, 1.0), "EPSG:4326", 1.0, datetime(2024, 1, 1, 1))
+    out = p._extract_variable(
+        ds, "aod550", (0.0, -1.0, 1.0, 1.0), "EPSG:4326", 1.0, datetime(2024, 1, 1, 1)
+    )
     assert "band" not in out.dims
     assert out.ndim == 2
     assert out.sizes["latitude"] > 0
 
     nc = tmp_path / "cams_bad.nc"
     nc.write_text("x")
-    monkeypatch.setattr(xr, "open_dataset", lambda _path: (_ for _ in ()).throw(RuntimeError("bad nc")))
+    monkeypatch.setattr(
+        xr, "open_dataset", lambda _path: (_ for _ in ()).throw(RuntimeError("bad nc"))
+    )
     assert p._load_from_explicit_path(nc) is None
 
     f1 = tmp_path / "cams_20240101_a.tif"
@@ -640,7 +698,9 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
     monkeypatch.setattr(
         p,
         "_merge_tif_files",
-        lambda _files: xr.Dataset({"aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}),
+        lambda _files: xr.Dataset(
+            {"aod550": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
+        ),
     )
     grouped = p._load_cams_tif_group("20240101", "2024-01-01")
     assert grouped is not None
@@ -648,6 +708,7 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
     p2 = CAMSProvider(tmp_path)
     tif = tmp_path / "cams.tif"
     tif.write_text("x")
+
     def _raise_bad_tif(_path, engine=None):  # noqa: ANN001
         _ = engine
         raise RuntimeError("bad tif")
@@ -655,7 +716,10 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
     monkeypatch.setattr(xr, "open_dataarray", _raise_bad_tif)
     assert p2._load_tif_dataset(tif) is None
 
-    da_single = xr.DataArray(np.ones((1, 2, 2), dtype=np.float32), dims=["band", "y", "x"], coords={"band": [1]})
+    da_single = xr.DataArray(
+        np.ones((1, 2, 2), dtype=np.float32), dims=["band", "y", "x"], coords={"band": [1]}
+    )
+
     def _return_single(_path, engine=None):  # noqa: ANN001
         _ = engine
         return da_single
@@ -685,12 +749,19 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
     ds_fallback = p2._dataset_from_multiband_tif(da_no_labels)
     assert set(ds_fallback.data_vars) == {"aod550", "tcwv", "gtco3"}
 
-    assert p2._extract_band_labels(xr.DataArray(np.ones((1, 1, 1), dtype=np.float32), dims=["band", "y", "x"], attrs={"long_name": "aod550"})) == ["aod550"]
+    assert p2._extract_band_labels(
+        xr.DataArray(
+            np.ones((1, 1, 1), dtype=np.float32),
+            dims=["band", "y", "x"],
+            attrs={"long_name": "aod550"},
+        )
+    ) == ["aod550"]
     assert p2._normalize_variable_name("unrelated-name") is None
 
 
-
-def test_cams_download_auth_key_missing_branch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cams_download_auth_key_missing_branch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     class _FakeReq:
@@ -715,8 +786,9 @@ def test_cams_download_auth_key_missing_branch(monkeypatch: pytest.MonkeyPatch, 
     assert captured["kwargs"] == {}
 
 
-
-def test_http_zip_store_additional_branches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_http_zip_store_additional_branches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import requests
 
     monkeypatch.setattr(requests, "Session", lambda: _SessionProbeContentLength())
@@ -762,6 +834,7 @@ def test_http_zip_store_additional_branches(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setattr(zip_store, "_HTTPRangeFileSystem", _FakeHTTPFS)
     monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
     monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda _zfs: "")
+
     def _fake_fsmap(root, fs, check=False, create=False):  # noqa: ANN001
         _ = (check, create)
         return {"root": root, "fs": fs}

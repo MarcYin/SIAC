@@ -24,6 +24,7 @@ from siac.runtime import (
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
+
 def _build_large_obs(n: int = 256) -> ObservationBundle:
     """Build a large ObservationBundle (n×n)."""
     from datetime import datetime
@@ -40,10 +41,12 @@ def _build_large_obs(n: int = 256) -> ObservationBundle:
             SensorBand("B04", 665.0, 30.0, 10.0, 3),
         ),
     )
-    toa = xr.Dataset({
-        b.name: xr.DataArray(rng.uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"])
-        for b in config.bands
-    })
+    toa = xr.Dataset(
+        {
+            b.name: xr.DataArray(rng.uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"])
+            for b in config.bands
+        }
+    )
     geometry = GeometryAngles(
         sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
         saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
@@ -94,6 +97,7 @@ def _build_large_surface(n: int = 256) -> SurfacePrior:
 
 
 # ── Benchmark tests ──────────────────────────────────────────────────
+
 
 @pytest.mark.slow
 class TestGridAssemblerPerf:

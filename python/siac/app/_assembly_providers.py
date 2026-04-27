@@ -43,11 +43,11 @@ def _build_cams_provider(
     return cast(
         "AtmosphericPriorProvider",
         CAMSProvider(
-        config.atmo_prior.data_path,
-        temporal_interp=config.atmo_prior.temporal_interpolation == "linear",
-        download_missing=config.atmo_prior.download_missing,
-        auth=auth,
-        cache_dir=config.atmo_prior.cache_dir,
+            config.atmo_prior.data_path,
+            temporal_interp=config.atmo_prior.temporal_interpolation == "linear",
+            download_missing=config.atmo_prior.download_missing,
+            auth=auth,
+            cache_dir=config.atmo_prior.cache_dir,
         ),
     )
 
@@ -183,7 +183,9 @@ def _build_user_callable_monthly_composite_provider(
 ) -> Any:
     provider = getattr(config.monthly_composites, "user_callable", None)
     if provider is None:
-        raise ValueError("monthly_composites.user_callable must be provided when kind='user_callable'")
+        raise ValueError(
+            "monthly_composites.user_callable must be provided when kind='user_callable'"
+        )
     if hasattr(provider, "get_monthly_composites"):
         return provider
     if not callable(provider):
@@ -224,7 +226,9 @@ def _build_prepared_store_monthly_composite_provider(
 
     store_path = getattr(config.monthly_composites, "store_path", None)
     if store_path is None:
-        raise ValueError("monthly_composites.store_path must be provided when kind='prepared_store'")
+        raise ValueError(
+            "monthly_composites.store_path must be provided when kind='prepared_store'"
+        )
     resolved_store_path = cast("str | Path", store_path)
     strict_coverage = bool(getattr(config.monthly_composites, "strict_coverage", True))
 
@@ -318,7 +322,9 @@ def _assert_matching_store_grid(
             f"but the observation requires {expected.resolution} or finer."
         )
     resolution_ratio = expected_resolution / grid_resolution
-    if resolution_ratio < (1.0 - 1e-6) or not np.isclose(resolution_ratio, round(resolution_ratio), rtol=0.0, atol=1e-6):
+    if resolution_ratio < (1.0 - 1e-6) or not np.isclose(
+        resolution_ratio, round(resolution_ratio), rtol=0.0, atol=1e-6
+    ):
         raise ValueError(
             f"Prepared monthly composite store {store_path} uses resolution {grid.resolution}, "
             f"which is not an integer finer subdivision of the observation resolution {expected.resolution}."
@@ -344,7 +350,9 @@ def resolve_monthly_composite_provider(
     provider_name = getattr(provider_config, "provider", "generated_brdf")
     return cast(
         "MonthlyCompositeProvider",
-        _build_registered_component(MONTHLY_COMPOSITE_PROVIDER_REGISTRY, provider_name, config, auth),
+        _build_registered_component(
+            MONTHLY_COMPOSITE_PROVIDER_REGISTRY, provider_name, config, auth
+        ),
     )
 
 

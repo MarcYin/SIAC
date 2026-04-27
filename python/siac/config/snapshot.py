@@ -36,7 +36,10 @@ def _path_state(value: Any) -> dict[str, Any]:
     if normalized is None:
         return {"value": None, "kind": "unset", "exists": None}
     if isinstance(normalized, str):
-        if normalized.startswith("/vsi") or urlparse(normalized).scheme.lower() in _REMOTE_URI_SCHEMES:
+        if (
+            normalized.startswith("/vsi")
+            or urlparse(normalized).scheme.lower() in _REMOTE_URI_SCHEMES
+        ):
             return {"value": normalized, "kind": "remote", "exists": None}
         path = Path(normalized).expanduser().resolve(strict=False)
     else:

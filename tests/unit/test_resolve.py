@@ -257,7 +257,9 @@ class TestResolveSurfacePriorProvider:
         mock_observation_bundle,
         mock_surface_prior,
     ):
-        source_bands = list(mock_observation_bundle.sensor_config.select_bands_in_range(400.0, 520.0))
+        source_bands = list(
+            mock_observation_bundle.sensor_config.select_bands_in_range(400.0, 520.0)
+        )
         captured: dict[str, object] = {}
 
         class _SpectralMapping:
@@ -312,7 +314,9 @@ class TestResolveSurfacePriorProvider:
 
         assert result is mock_surface_prior
         assert captured["brdf_kwargs"]["bands"] == source_bands
-        assert captured["compute"]["obs_time"] == mock_observation_bundle.metadata["observation_time"]
+        assert (
+            captured["compute"]["obs_time"] == mock_observation_bundle.metadata["observation_time"]
+        )
         assert captured["compute"]["source_bands"] == source_bands
 
     def test_kernel_builder_uses_single_time_brdf_fetch(
@@ -321,7 +325,9 @@ class TestResolveSurfacePriorProvider:
         mock_observation_bundle,
         mock_surface_prior,
     ):
-        source_bands = list(mock_observation_bundle.sensor_config.select_bands_in_range(400.0, 520.0))
+        source_bands = list(
+            mock_observation_bundle.sensor_config.select_bands_in_range(400.0, 520.0)
+        )
         captured: dict[str, object] = {}
 
         class _SpectralMapping:
@@ -373,12 +379,19 @@ class TestResolveSurfacePriorProvider:
         fn = _build_kernel_surface_prior(_Config(), brdf_provider)
         result = fn(mock_observation_bundle, None, object(), 500.0)
 
-        target_bands = list(mock_observation_bundle.sensor_config.select_bands_in_range(400.0, 520.0))
+        target_bands = list(
+            mock_observation_bundle.sensor_config.select_bands_in_range(400.0, 520.0)
+        )
         assert result is mock_surface_prior
         assert captured["brdf_kwargs"]["bands"] == source_bands
-        assert captured["brdf_kwargs"]["obs_time"] == mock_observation_bundle.metadata["observation_time"]
+        assert (
+            captured["brdf_kwargs"]["obs_time"]
+            == mock_observation_bundle.metadata["observation_time"]
+        )
         assert captured["compute"]["source_bands"] == source_bands
-        assert [band.name for band in captured["compute"]["target_bands"]] == [band.name for band in target_bands]
+        assert [band.name for band in captured["compute"]["target_bands"]] == [
+            band.name for band in target_bands
+        ]
 
     def test_monthly_database_fallback_preserves_geometry_and_visible_bands(
         self,
@@ -424,28 +437,51 @@ class TestResolveSurfacePriorProvider:
             return invalid_prior
 
         monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FakeKernelDeriver)
-        monkeypatch.setattr(assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry)
-        monkeypatch.setattr(assembly_mod, "build_monthly_surface_prior_database", _fake_build_database)
-        monkeypatch.setattr(assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database)
+        monkeypatch.setattr(
+            assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry
+        )
+        monkeypatch.setattr(
+            assembly_mod, "build_monthly_surface_prior_database", _fake_build_database
+        )
+        monkeypatch.setattr(
+            assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database
+        )
 
         fn = _build_monthly_surface_prior(config, _FakeBRDFProvider())
         result = fn(mock_observation_bundle, mock_atmospheric_state, object(), 500.0)
 
-        visible_bands = [band for band in mock_observation_bundle.sensor_config.bands if 400.0 <= band.center_wavelength < 700.0]
+        visible_bands = [
+            band
+            for band in mock_observation_bundle.sensor_config.bands
+            if 400.0 <= band.center_wavelength < 700.0
+        ]
         query_bands = list(captured["database"]["query_bands"])
 
         assert result is mock_surface_prior
         assert captured["database"]["geometry"] is fallback_geometry
-        assert [band.name for band in captured["database"]["visible_bands"]] == [band.name for band in visible_bands]
+        assert [band.name for band in captured["database"]["visible_bands"]] == [
+            band.name for band in visible_bands
+        ]
         assert captured["query"]["database"] == "db"
         assert captured["query"]["visible_band_names"] == tuple(band.name for band in visible_bands)
         assert captured["query"]["query_band_names"] == tuple(band.name for band in query_bands)
         assert captured["fallback_compute"]["geometry"] is fallback_geometry
-        assert [band.name for band in captured["fallback_compute"]["target_bands"]] == [band.name for band in visible_bands]
-        assert captured["fallback_compute"]["spectral_library"] is captured["database"]["spectral_library"]
-        assert captured["fallback_compute"]["spectral_k_neighbors"] == captured["database"]["spectral_k_neighbors"]
+        assert [band.name for band in captured["fallback_compute"]["target_bands"]] == [
+            band.name for band in visible_bands
+        ]
+        assert (
+            captured["fallback_compute"]["spectral_library"]
+            is captured["database"]["spectral_library"]
+        )
+        assert (
+            captured["fallback_compute"]["spectral_k_neighbors"]
+            == captured["database"]["spectral_k_neighbors"]
+        )
         assert captured["fallback_brdf_kwargs"]["target_resolution"] == 500.0
-        assert captured["fallback_brdf_kwargs"]["obs_time"] == mock_observation_bundle.metadata["observation_time"]
+        assert (
+            captured["fallback_brdf_kwargs"]["obs_time"]
+            == mock_observation_bundle.metadata["observation_time"]
+        )
 
     def test_monthly_database_success_path_skips_fallback_deriver(
         self,
@@ -463,14 +499,18 @@ class TestResolveSurfacePriorProvider:
             source_bands = list(mock_observation_bundle.sensor_config.bands)
 
             def get_brdf_parameters(self, **_kwargs):
-                raise AssertionError("monthly success path should not fall back to kernel BRDF fetches")
+                raise AssertionError(
+                    "monthly success path should not fall back to kernel BRDF fetches"
+                )
 
         class _FailKernelDeriver:
             def __init__(self, *args, **kwargs):
                 _ = (args, kwargs)
 
             def compute_surface_prior(self, *args, **kwargs):
-                raise AssertionError("monthly success path should not invoke fallback kernel deriver")
+                raise AssertionError(
+                    "monthly success path should not invoke fallback kernel deriver"
+                )
 
         def _fake_resample_geometry(observation, *, resolution):
             captured["resample"] = {"observation": observation, "resolution": resolution}
@@ -485,9 +525,15 @@ class TestResolveSurfacePriorProvider:
             return valid_prior
 
         monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FailKernelDeriver)
-        monkeypatch.setattr(assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry)
-        monkeypatch.setattr(assembly_mod, "build_monthly_surface_prior_database", _fake_build_database)
-        monkeypatch.setattr(assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database)
+        monkeypatch.setattr(
+            assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry
+        )
+        monkeypatch.setattr(
+            assembly_mod, "build_monthly_surface_prior_database", _fake_build_database
+        )
+        monkeypatch.setattr(
+            assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database
+        )
 
         fn = _build_monthly_surface_prior(config, _FakeBRDFProvider())
         result = fn(mock_observation_bundle, mock_atmospheric_state, object(), 500.0)
@@ -552,9 +598,15 @@ class TestResolveSurfacePriorProvider:
             return valid_prior
 
         monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FailKernelDeriver)
-        monkeypatch.setattr(assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry)
-        monkeypatch.setattr(assembly_mod, "build_monthly_surface_prior_database", _fake_build_database)
-        monkeypatch.setattr(assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database)
+        monkeypatch.setattr(
+            assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry
+        )
+        monkeypatch.setattr(
+            assembly_mod, "build_monthly_surface_prior_database", _fake_build_database
+        )
+        monkeypatch.setattr(
+            assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database
+        )
 
         report_path = tmp_path / "execution_profile.json"
         observer = ExecutionObserver(

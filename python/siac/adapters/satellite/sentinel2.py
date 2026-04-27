@@ -417,8 +417,12 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         # Every downstream consumer resamples to its own target grid, so
         # upsampling to 10980×10980 here would be wasted work.
         sza, saa, vza, vaa = self._georeference_angle_grids(
-            [sun_angles["zenith"], sun_angles["azimuth"],
-             view_angles["zenith"], view_angles["azimuth"]],
+            [
+                sun_angles["zenith"],
+                sun_angles["azimuth"],
+                view_angles["zenith"],
+                view_angles["azimuth"],
+            ],
             ref_da,
         )
 
@@ -605,7 +609,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             if band_id and offset_elem.text is not None:
                 band_name = self._band_name_for_offset_id(band_id)
                 if band_name is None:
-                    logger.warning("Ignoring unknown Sentinel-2 RADIO_ADD_OFFSET band_id=%r", band_id)
+                    logger.warning(
+                        "Ignoring unknown Sentinel-2 RADIO_ADD_OFFSET band_id=%r", band_id
+                    )
                     continue
                 offsets[band_name] = float(offset_elem.text)
         if offsets:
@@ -626,7 +632,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 metadata["observation_time"] = datetime.strptime(time_text, "%Y-%m-%dT%H:%M:%S.%fZ")
             except ValueError:
                 try:
-                    metadata["observation_time"] = datetime.fromisoformat(time_text.replace("Z", "+00:00"))
+                    metadata["observation_time"] = datetime.fromisoformat(
+                        time_text.replace("Z", "+00:00")
+                    )
                 except ValueError:
                     logger.warning("Could not parse Sentinel-2 sensing time %r", time_text)
 
@@ -712,7 +720,12 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             zenith = mean_elem.find(f"{ns}ZENITH_ANGLE")
             azimuth = mean_elem.find(f"{ns}AZIMUTH_ANGLE")
 
-            if zenith is not None and azimuth is not None and zenith.text is not None and azimuth.text is not None:
+            if (
+                zenith is not None
+                and azimuth is not None
+                and zenith.text is not None
+                and azimuth.text is not None
+            ):
                 if mean_vza is None:
                     mean_vza = float(zenith.text)
                     mean_vaa = float(azimuth.text)
@@ -831,7 +844,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         resampling (``resample_field_to_template``, ``_resample_da``, etc.)
         can correctly interpolate them to any target grid.
         """
-        bounds = ref_da.rio.bounds()          # (left, bottom, right, top)
+        bounds = ref_da.rio.bounds()  # (left, bottom, right, top)
         crs = ref_da.rio.crs
 
         results: list[xr.DataArray] = []
@@ -864,7 +877,9 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             "allow_upsample_to_target": False,
             "unmapped_to_missing": True,
         }
-        cloud_mask_config = self.config.get("cloud_mask", {}) if isinstance(self.config, dict) else {}
+        cloud_mask_config = (
+            self.config.get("cloud_mask", {}) if isinstance(self.config, dict) else {}
+        )
         if isinstance(cloud_mask_config, dict):
             defaults.update(cloud_mask_config)
         # Resolve external file path relative to SAFE directory when needed.
@@ -881,14 +896,14 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         raw = metadata.get("quantification_value", 10000.0)
         quantification = float(raw)
         if not np.isfinite(quantification) or quantification <= 0.0:
-            raise ValueError(
-                f"Sentinel-2 quantification_value must be finite and > 0, got {raw!r}"
-            )
+            raise ValueError(f"Sentinel-2 quantification_value must be finite and > 0, got {raw!r}")
         return quantification
 
     def _require_granule_path(self) -> Path:
         if self._granule_path is None:
-            raise RuntimeError("Sentinel-2 granule path is not resolved; call _resolve_paths() first.")
+            raise RuntimeError(
+                "Sentinel-2 granule path is not resolved; call _resolve_paths() first."
+            )
         return self._granule_path
 
     @staticmethod

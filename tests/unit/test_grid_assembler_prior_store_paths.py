@@ -146,7 +146,9 @@ def test_cloud_mask_center_mapping_preserves_exact_target_cells() -> None:
     np.testing.assert_array_equal(cloud.values, expected)
 
 
-def test_resample_da_same_shape_shifted_grid_still_resamples(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resample_da_same_shape_shifted_grid_still_resamples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = xr.DataArray(
         np.arange(4, dtype=np.float32).reshape(2, 2),
         dims=["y", "x"],
@@ -249,7 +251,9 @@ def test_assemble_grids_fallback_band_selection_and_toa_fallback() -> None:
         "B11": xr.DataArray(np.ones(shape, dtype=np.float32) * 2, dims=["y", "x"]),
     }
     obs = _make_obs(config_no_aerosol, toa)
-    sib = asm.assemble_grids(obs, _make_atmo(shape), _make_surface(shape), rt_model=object(), aux_resolution_m=10.0)
+    sib = asm.assemble_grids(
+        obs, _make_atmo(shape), _make_surface(shape), rt_model=object(), aux_resolution_m=10.0
+    )
     assert [b.name for b in sib.bands] == ["B10", "B11"]
 
     # Selected band names missing in TOA dataset -> fallback to first available variable.
@@ -272,7 +276,9 @@ def test_assemble_grids_fallback_band_selection_and_toa_fallback() -> None:
 
 
 def test_prior_store_wraparound_crop_and_select_edge_cases(tmp_path) -> None:
-    data = xr.DataArray(np.array([[0.0], [1.0]], dtype=np.float32), dims=["doy", "x"], coords={"doy": [100, 200]})
+    data = xr.DataArray(
+        np.array([[0.0], [1.0]], dtype=np.float32), dims=["doy", "x"], coords={"doy": [100, 200]}
+    )
 
     before_first = ps._interpolate_doy(data, np.array([100, 200]), 50)
     after_last = ps._interpolate_doy(data, np.array([100, 200]), 250)
@@ -311,7 +317,9 @@ def test_prior_store_wraparound_crop_and_select_edge_cases(tmp_path) -> None:
     assert unchanged is da4
 
 
-def test_prior_store_projection_out_of_range_and_default_wavelengths(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_prior_store_projection_out_of_range_and_default_wavelengths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     sensor = _make_sensor_config(SensorBand("B1", 900.0, 20.0, 10.0, 0))
 
     reflectance = np.ones((1, 2, 2), dtype=np.float32)

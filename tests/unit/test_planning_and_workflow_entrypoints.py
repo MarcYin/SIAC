@@ -121,7 +121,12 @@ def test_build_execution_plan_uses_auth_fallback_and_skips_output_writer_when_un
         resolve_grid_assembler_fn=lambda: "grid",
         resolve_solver_fn=lambda config: ("solver", config),
         resolve_corrector_fn=lambda config: ("corrector", config),
-        resolve_rt_model_fn=lambda config, auth=None, sensor_config=None: ("rt", config, auth, sensor_config),
+        resolve_rt_model_fn=lambda config, auth=None, sensor_config=None: (
+            "rt",
+            config,
+            auth,
+            sensor_config,
+        ),
         resolve_output_writer_fn=lambda config: ("writer", config),
         aoi_resolver=lambda toa: ("aoi", tuple(toa.data_vars)),
     )
@@ -147,10 +152,7 @@ def test_app_and_workflows_lazy_submodule_access_imports_modules() -> None:
         "siac.workflows",
         "siac.workflows.scene",
     )
-    original_modules = {
-        module_name: sys.modules.get(module_name)
-        for module_name in module_names
-    }
+    original_modules = {module_name: sys.modules.get(module_name) for module_name in module_names}
 
     try:
         _purge_modules(*module_names)
@@ -234,6 +236,7 @@ def test_process_scene_only_writes_when_output_path_and_writer_are_present(
         "build_execution_plan",
         lambda _request, **kwargs: plan if kwargs["preprocessor"] == "pre" else plan_without_writer,
     )
+
     def _fake_execute_plan(_built_plan, execution=None):  # noqa: ANN001
         _ = execution
         return next(results)
@@ -254,7 +257,9 @@ def test_process_scene_only_writes_when_output_path_and_writer_are_present(
     monkeypatch.setitem(
         scene_mod.process_scene.__globals__,
         "write_output",
-        lambda result, output_path, *, output_writer: write_calls.append((result, output_path, output_writer)),
+        lambda result, output_path, *, output_writer: write_calls.append(
+            (result, output_path, output_writer)
+        ),
     )
 
     result_written = process_scene(request, preprocessor="pre")
@@ -291,7 +296,9 @@ def test_process_scene_skips_post_write_when_pipeline_streamed_outputs(
     monkeypatch.setitem(
         scene_mod.process_scene.__globals__,
         "write_output",
-        lambda result, output_path, *, output_writer: write_calls.append((result, output_path, output_writer)),
+        lambda result, output_path, *, output_writer: write_calls.append(
+            (result, output_path, output_writer)
+        ),
     )
 
     result = process_scene(request, preprocessor="pre")

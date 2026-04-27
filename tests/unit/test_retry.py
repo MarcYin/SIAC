@@ -81,6 +81,7 @@ def test_retry_with_custom_transient_exceptions():
 
 def test_retry_passes_args_and_kwargs():
     """Arguments should be forwarded to the target function."""
+
     def add(a, b, c=0):
         return a + b + c
 

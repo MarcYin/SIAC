@@ -228,8 +228,7 @@ def _distutils_backend_supported() -> tuple[bool, str | None]:
     match = re.match(r"(\d+)", setuptools_version)
     if match is not None and int(match.group(1)) >= 60:
         return False, (
-            f"setuptools {setuptools_version} is too new for numpy.distutils; "
-            "use setuptools < 60"
+            f"setuptools {setuptools_version} is too new for numpy.distutils; use setuptools < 60"
         )
     return True, None
 
@@ -308,7 +307,9 @@ def patch_aeroso_source(text: str) -> str:
         ]
     )
     if save_new not in patched:
-        patched = _replace_once(patched, save_old, save_new, "AEROSO.f optional Mie-file output guard")
+        patched = _replace_once(
+            patched, save_old, save_new, "AEROSO.f optional Mie-file output guard"
+        )
     return patched
 
 
@@ -591,7 +592,9 @@ def patch_main_source(text: str) -> str:
         ),
         "geometry scalar input",
     )
-    text = _replace_once(text, "      read(iread,*) idatm", "      idatm=idatm_in", "atmosphere mode input")
+    text = _replace_once(
+        text, "      read(iread,*) idatm", "      idatm=idatm_in", "atmosphere mode input"
+    )
     text = _replace_once(
         text,
         "      if(idatm.eq.8) read(iread,*) uw,uo3",
@@ -627,7 +630,9 @@ def patch_main_source(text: str) -> str:
         ),
         "user_profile atmospheric input",
     )
-    text = _replace_once(text, "      read(iread,*) iaer", "      iaer=iaer_in", "aerosol mode input")
+    text = _replace_once(
+        text, "      read(iread,*) iaer", "      iaer=iaer_in", "aerosol mode input"
+    )
     text = _replace_once(
         text,
         "      read(5,*) num_z",
@@ -850,8 +855,18 @@ def patch_main_source(text: str) -> str:
         ),
         "aerosol optical thickness mode input",
     )
-    text = _replace_once(text, "   10 read(iread,*) taer55", "   10 taer55=max(taer55_in,0.)", "aerosol optical thickness input")
-    text = _replace_once(text, " 771   read(iread,*) xps", " 771   xps=-max(elevation_km_in,0.)", "target elevation input")
+    text = _replace_once(
+        text,
+        "   10 read(iread,*) taer55",
+        "   10 taer55=max(taer55_in,0.)",
+        "aerosol optical thickness input",
+    )
+    text = _replace_once(
+        text,
+        " 771   read(iread,*) xps",
+        " 771   xps=-max(elevation_km_in,0.)",
+        "target elevation input",
+    )
     text = _replace_once(
         text,
         "\n".join(
@@ -889,8 +904,12 @@ def patch_main_source(text: str) -> str:
         "if (idatm_abstra.eq.8) then",
         "plane atmospheric column scaling mode",
     )
-    text = _replace_once(text, "        read(iread,*) xpp", "        xpp=-1000.", "sensor altitude input")
-    text = _replace_once(text, "       s(l)=1.", "       s(l)=0.", "spectral response initialization")
+    text = _replace_once(
+        text, "        read(iread,*) xpp", "        xpp=-1000.", "sensor altitude input"
+    )
+    text = _replace_once(
+        text, "       s(l)=1.", "       s(l)=0.", "spectral response initialization"
+    )
     text = _replace_once(text, "      read(iread,*) iwave", "      iwave=1", "spectral mode input")
     text = _replace_once(
         text,
@@ -910,9 +929,24 @@ def patch_main_source(text: str) -> str:
         ),
         "spectral response input",
     )
-    text = _replace_once(text, "      read(iread,*) inhomo", "      inhomo=surface_inhomo_in", "surface homogeneity input")
-    text = _replace_once(text, "  30  read(iread,*) idirec", "  30  idirec=surface_idirec_in", "surface directional mode input")
-    text = _replace_once(text, " 25   read(iread,*) ibrdf", " 25   ibrdf=surface_brdf_model_in", "surface brdf model input")
+    text = _replace_once(
+        text,
+        "      read(iread,*) inhomo",
+        "      inhomo=surface_inhomo_in",
+        "surface homogeneity input",
+    )
+    text = _replace_once(
+        text,
+        "  30  read(iread,*) idirec",
+        "  30  idirec=surface_idirec_in",
+        "surface directional mode input",
+    )
+    text = _replace_once(
+        text,
+        " 25   read(iread,*) ibrdf",
+        " 25   ibrdf=surface_brdf_model_in",
+        "surface brdf model input",
+    )
     text = _replace_once(
         text,
         "\n".join(
@@ -1148,7 +1182,12 @@ def patch_main_source(text: str) -> str:
         ),
         "ross-li-maignan brdf input",
     )
-    text = _replace_once(text, "  21  read(iread,*) igroun", "  21  igroun=surface_target_mode_in", "surface group input")
+    text = _replace_once(
+        text,
+        "  21  read(iread,*) igroun",
+        "  21  igroun=surface_target_mode_in",
+        "surface group input",
+    )
     text = _replace_once(
         text,
         "\n".join(
@@ -1168,7 +1207,12 @@ def patch_main_source(text: str) -> str:
         ),
         "target spectral reflectance input",
     )
-    text = _replace_once(text, "  32  read(iread,*) ro", "  32  ro=surface_target_constant_in", "target constant reflectance input")
+    text = _replace_once(
+        text,
+        "  32  read(iread,*) ro",
+        "  32  ro=surface_target_constant_in",
+        "target constant reflectance input",
+    )
     text = _replace_once(
         text,
         " 31   read(iread,*) igrou1,igrou2,rad",
@@ -1193,7 +1237,12 @@ def patch_main_source(text: str) -> str:
         ),
         "heterogeneous target spectral reflectance input",
     )
-    text = _replace_once(text, "  60  read(iread,*) roc", "  60  roc=surface_target_constant_in", "heterogeneous target constant reflectance input")
+    text = _replace_once(
+        text,
+        "  60  read(iread,*) roc",
+        "  60  roc=surface_target_constant_in",
+        "heterogeneous target constant reflectance input",
+    )
     text = _replace_once(
         text,
         "  66  read(iread,*) (roel(i),i=iinf,isup)",
@@ -1206,8 +1255,18 @@ def patch_main_source(text: str) -> str:
         ),
         "heterogeneous environment spectral reflectance input",
     )
-    text = _replace_once(text, "  62  read(iread,*) roe", "  62  roe=surface_env_constant_in", "heterogeneous environment constant reflectance input")
-    text = _replace_once(text, "      read(iread,*) irapp", "      irapp=irapp_in", "atmospheric correction mode input")
+    text = _replace_once(
+        text,
+        "  62  read(iread,*) roe",
+        "  62  roe=surface_env_constant_in",
+        "heterogeneous environment constant reflectance input",
+    )
+    text = _replace_once(
+        text,
+        "      read(iread,*) irapp",
+        "      irapp=irapp_in",
+        "atmospheric correction mode input",
+    )
     text = _replace_once(
         text,
         "\n".join(
@@ -1471,7 +1530,9 @@ def _find_built_extension(
 def _prepare_source_tree(config: SixSAlgorithmConfig, paths: SixSBuildPaths) -> Path:
     source_dir = Path(config.source_dir).expanduser() if config.source_dir else None
     if source_dir is None:
-        source_dir = _fetch_and_unpack_source(config.source_url, paths.archive_path, paths.upstream_dir)
+        source_dir = _fetch_and_unpack_source(
+            config.source_url, paths.archive_path, paths.upstream_dir
+        )
     else:
         if not source_dir.exists():
             raise RuntimeError(f"Configured 6S source_dir does not exist: {source_dir}")
@@ -1525,15 +1586,33 @@ def _fetch_and_unpack_source(source_url: str, archive_path: Path, upstream_dir: 
         shutil.rmtree(upstream_dir)
     upstream_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive_path) as archive:
-        archive.extractall(path=upstream_dir)
+        _safe_extract_tar(archive, upstream_dir)
 
     if (upstream_dir / "main.f").exists():
         return upstream_dir
 
-    candidates = [path for path in upstream_dir.iterdir() if path.is_dir() and (path / "main.f").exists()]
+    candidates = [
+        path for path in upstream_dir.iterdir() if path.is_dir() and (path / "main.f").exists()
+    ]
     if len(candidates) == 1:
         return candidates[0]
     raise RuntimeError(f"Unable to locate unpacked 6S source tree under {upstream_dir}.")
+
+
+def _safe_extract_tar(archive: tarfile.TarFile, dest: Path) -> None:
+    """Extract a tar archive only if every member stays under ``dest``."""
+    root = dest.resolve()
+    for member in archive.getmembers():
+        target = (root / member.name).resolve()
+        if target != root and root not in target.parents:
+            raise RuntimeError(
+                f"Refusing to extract unsafe 6S source archive member: {member.name!r}"
+            )
+        if member.islnk() or member.issym():
+            raise RuntimeError(
+                f"Refusing to extract linked 6S source archive member: {member.name!r}"
+            )
+    archive.extractall(path=root)
 
 
 def _compile_f2py_extension(
@@ -1555,7 +1634,9 @@ def _compile_f2py_extension(
         existing.unlink()
 
     source_files = parse_makefile_sources(source_dir / "Makefile")
-    compile_sources = list(dict.fromkeys([*source_files, source_dir / "main.f", source_dir / _BRIDGE_SOURCE_NAME]))
+    compile_sources = list(
+        dict.fromkeys([*source_files, source_dir / "main.f", source_dir / _BRIDGE_SOURCE_NAME])
+    )
     flags = _compiler_flags(build_profile)
     signature_path = _generate_f2py_signature(
         source_dir=source_dir,
@@ -1594,7 +1675,9 @@ def _compile_f2py_extension(
                 flags=flags,
                 f2py_build_dir=f2py_build_dir,
             )
-            logger.info("Compiling native 6S Python extension with %s backend: %s", backend, " ".join(cmd))
+            logger.info(
+                "Compiling native 6S Python extension with %s backend: %s", backend, " ".join(cmd)
+            )
             completed = subprocess.run(
                 cmd,
                 cwd=build_root,
@@ -1637,7 +1720,14 @@ def _compile_f2py_extension(
                 with contextlib.suppress(OSError):
                     built_extension.unlink()
                 log_summary = _summarize_build_output(validation.stdout, validation.stderr)
-                failures.append((backend, cmd, validation, f"built extension failed import validation: {log_summary}"))
+                failures.append(
+                    (
+                        backend,
+                        cmd,
+                        validation,
+                        f"built extension failed import validation: {log_summary}",
+                    )
+                )
                 logger.warning(
                     "F2PY %s backend built extension %s, but import validation failed: %s",
                     backend,
@@ -1654,7 +1744,10 @@ def _compile_f2py_extension(
                     built_extension,
                     _summarize_build_output(completed.stdout, completed.stderr),
                 )
-            if build_paths.module_hint_path is not None and built_extension != build_paths.module_hint_path:
+            if (
+                build_paths.module_hint_path is not None
+                and built_extension != build_paths.module_hint_path
+            ):
                 build_paths.module_hint_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(os.fspath(built_extension), os.fspath(build_paths.module_hint_path))
             return
@@ -1728,7 +1821,9 @@ def _build_f2py_command(
     return cmd
 
 
-def _validate_extension_import(module_name: str, module_path: Path) -> subprocess.CompletedProcess[str]:
+def _validate_extension_import(
+    module_name: str, module_path: Path
+) -> subprocess.CompletedProcess[str]:
     validation_code = """
 import importlib.machinery
 import importlib.util
@@ -1779,7 +1874,10 @@ def _run_distutils_backend(
 
     ext = Extension(
         name=module_name,
-        sources=[os.fspath(signature_path.resolve()), *(os.fspath(path.resolve()) for path in compile_sources)],
+        sources=[
+            os.fspath(signature_path.resolve()),
+            *(os.fspath(path.resolve()) for path in compile_sources),
+        ],
         include_dirs=[os.fspath(source_dir)],
         extra_link_args=_distutils_extra_link_args(flags),
     )

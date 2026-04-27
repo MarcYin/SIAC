@@ -62,7 +62,8 @@ Check:
 
 ### Dask backend fails
 
-If you configure `execution.backend = "dask"` without the required runtime support, switch back to `thread` or install the missing Dask dependencies in your environment.
+If you configure `execution.backend = "dask"` without the required runtime
+support, switch back to `thread` or install `siac[dask]` in your environment.
 
 ## Data and workflow behavior
 

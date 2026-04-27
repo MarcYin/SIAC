@@ -187,7 +187,10 @@ def build_monthly_surface_prior_database(
         target_bands=target_bands,
         spectral_mapper=spectral_mapper,
     )
-    logger.info("Monthly surface-prior database: assembling final database from %d composite(s)", len(composites))
+    logger.info(
+        "Monthly surface-prior database: assembling final database from %d composite(s)",
+        len(composites),
+    )
     database = build_monthly_composite_database(
         composites,
         query_bands=tuple(band.name for band in query_bands),
@@ -249,7 +252,7 @@ def build_monthly_composites_from_brdf(
 
     composites: list[MonthlyKernelWeightComposite] = []
     month_batches = [
-        (batch_start, month_specs[batch_start: batch_start + _BRDF_BATCH_MONTHS])
+        (batch_start, month_specs[batch_start : batch_start + _BRDF_BATCH_MONTHS])
         for batch_start in range(0, len(month_specs), _BRDF_BATCH_MONTHS)
     ]
     for batch_start, month_batch in month_batches:
@@ -277,7 +280,9 @@ def build_monthly_composites_from_brdf(
                 month=spec.month,
             )
             quality = _quality_from_temporal_weights(monthly_weights)
-            monthly_weights, quality, collapsed = _collapse_repeated_temporal_weights(monthly_weights, quality)
+            monthly_weights, quality, collapsed = _collapse_repeated_temporal_weights(
+                monthly_weights, quality
+            )
             if collapsed:
                 logger.info(
                     "Monthly composite generation month %04d-%02d: collapsed identical sampled days to %d sample",
@@ -492,7 +497,9 @@ def query_surface_prior_from_monthly_database(
         coarse_atmo,
         cloud_mask=coarse_invalid,
     )
-    logger.info("M3 timing: AtmosphericCorrector.correct (first-pass) %.3f s", time.perf_counter() - _t0)
+    logger.info(
+        "M3 timing: AtmosphericCorrector.correct (first-pass) %.3f s", time.perf_counter() - _t0
+    )
     corrected_query_mask = _resample_cloud_mask_to_target_shape(correction.cloud_mask, target_shape)
     corrected_query = _apply_invalid_mask_to_dataset(
         _resample_dataset(
@@ -535,8 +542,12 @@ def query_surface_prior_from_monthly_database(
 
     _tree_pool.shutdown(wait=True)
     spatial_reference = cast("xr.DataArray", predicted_visible.isel(band=0, drop=True))
-    predicted_source_fit = copy_spatial_metadata_like(predicted_source_fit.astype(np.float32), spatial_reference)
-    predicted_distance = copy_spatial_metadata_like(predicted_distance.astype(np.float32), spatial_reference)
+    predicted_source_fit = copy_spatial_metadata_like(
+        predicted_source_fit.astype(np.float32), spatial_reference
+    )
+    predicted_distance = copy_spatial_metadata_like(
+        predicted_distance.astype(np.float32), spatial_reference
+    )
 
     _write_distance_metric_diagnostics(
         diagnostic_cache_dir,
@@ -565,7 +576,9 @@ def query_surface_prior_from_monthly_database(
         quality_ok = cast("BoolArray", predicted_quality.values <= float(max_composite_quality))
     distance_ok: BoolArray = np.ones(target_shape, dtype=bool)
     if max_knn_feature_distance is not None:
-        distance_ok = cast("BoolArray", predicted_distance.values <= float(max_knn_feature_distance))
+        distance_ok = cast(
+            "BoolArray", predicted_distance.values <= float(max_knn_feature_distance)
+        )
     valid = (
         np.all(np.isfinite(predicted_visible.values), axis=0)
         & np.all(np.isfinite(predicted_unc.values), axis=0)
@@ -602,10 +615,18 @@ def resample_geometry_for_surface_prior(
         int(target_template.shape[1]),
     )
     return GeometryAngles(
-        sza=_resample_da(observation.geometry.sza, target_shape, "bilinear", template=target_template),
-        saa=_resample_da(observation.geometry.saa, target_shape, "bilinear", template=target_template),
-        vza=_resample_da(observation.geometry.vza, target_shape, "bilinear", template=target_template),
-        vaa=_resample_da(observation.geometry.vaa, target_shape, "bilinear", template=target_template),
+        sza=_resample_da(
+            observation.geometry.sza, target_shape, "bilinear", template=target_template
+        ),
+        saa=_resample_da(
+            observation.geometry.saa, target_shape, "bilinear", template=target_template
+        ),
+        vza=_resample_da(
+            observation.geometry.vza, target_shape, "bilinear", template=target_template
+        ),
+        vaa=_resample_da(
+            observation.geometry.vaa, target_shape, "bilinear", template=target_template
+        ),
     )
 
 
@@ -703,7 +724,9 @@ def _forward_model_monthly_reflectance(
         cast("xr.DataArray", k_geo),
     ).transpose("time", "band", "y", "x")
 
-    month_mask = _select_month_mask(temporal_weights.f0.coords["time"].values, year=year, month=month)
+    month_mask = _select_month_mask(
+        temporal_weights.f0.coords["time"].values, year=year, month=month
+    )
     if month_mask.any():
         reflectance = reflectance.isel(time=month_mask)
         reflectance_unc = reflectance_unc.isel(time=month_mask)
@@ -856,14 +879,20 @@ def _normalize_monthly_composite_to_target_basis(
         template,
         downsample_method,
     )
-    sample_index = _resample_spatial_field_to_template(
-        composite.sample_index.astype(np.float32),
-        template,
-        "nearest",
-    ).round().astype(np.int16)
+    sample_index = (
+        _resample_spatial_field_to_template(
+            composite.sample_index.astype(np.float32),
+            template,
+            "nearest",
+        )
+        .round()
+        .astype(np.int16)
+    )
 
     if isinstance(composite, MonthlyKernelWeightComposite):
-        weights = _resample_brdf_weights_to_template(composite.kernels, template, method=downsample_method)
+        weights = _resample_brdf_weights_to_template(
+            composite.kernels, template, method=downsample_method
+        )
         reflectance, reflectance_unc = _reflectance_from_kernel_weights(weights, geometry)
     else:
         reflectance = _resample_band_cube_to_template(
@@ -906,7 +935,9 @@ def _normalize_monthly_composites_to_target_basis(
     if spectral_mapper is None:
         return [
             MonthlyBestPixelComposite(
-                reflectance=prepared_composite.reflectance.sel(band=[band.name for band in target_bands]).astype(np.float32),
+                reflectance=prepared_composite.reflectance.sel(
+                    band=[band.name for band in target_bands]
+                ).astype(np.float32),
                 quality=prepared_composite.quality.astype(np.float32),
                 sample_index=prepared_composite.sample_index.astype(np.int16),
                 year=prepared_composite.year,
@@ -939,9 +970,15 @@ def _normalize_monthly_composites_to_target_basis(
             source_uncertainty=stacked_uncertainty,
         )
         for time_index, (result_index, entry) in enumerate(group):
-            mapped_reflectance_entry = mapped_reflectance.isel(time=time_index, drop=True).astype(np.float32)
-            mapped_uncertainty_entry = mapped_uncertainty.isel(time=time_index, drop=True).astype(np.float32)
-            mapped_source_fit_entry = mapped_source_fit_rmse.isel(time=time_index, drop=True).astype(np.float32)
+            mapped_reflectance_entry = mapped_reflectance.isel(time=time_index, drop=True).astype(
+                np.float32
+            )
+            mapped_uncertainty_entry = mapped_uncertainty.isel(time=time_index, drop=True).astype(
+                np.float32
+            )
+            mapped_source_fit_entry = mapped_source_fit_rmse.isel(
+                time=time_index, drop=True
+            ).astype(np.float32)
             remapped[result_index] = MonthlyBestPixelComposite(
                 reflectance=mapped_reflectance_entry,
                 quality=_combine_composite_quality_with_mapping_uncertainty(
@@ -985,7 +1022,9 @@ def _select_temporal_weights_for_month(
     year: int,
     month: int,
 ) -> BRDFKernelWeights:
-    month_mask = _select_month_mask(temporal_weights.f0.coords["time"].values, year=year, month=month)
+    month_mask = _select_month_mask(
+        temporal_weights.f0.coords["time"].values, year=year, month=month
+    )
     if not month_mask.any():
         return temporal_weights
     return _select_temporal_weight_indexer(temporal_weights, month_mask)
@@ -1021,7 +1060,9 @@ def _collapse_repeated_temporal_weights(
         return temporal_weights, quality, False
     if not _all_time_slices_identical(temporal_weights.f2_unc):
         return temporal_weights, quality, False
-    if temporal_weights.reflectance_unc is not None and not _all_time_slices_identical(temporal_weights.reflectance_unc):
+    if temporal_weights.reflectance_unc is not None and not _all_time_slices_identical(
+        temporal_weights.reflectance_unc
+    ):
         return temporal_weights, quality, False
     if not _all_time_slices_identical(quality):
         return temporal_weights, quality, False
@@ -1089,7 +1130,10 @@ def _resample_geometry_to_target_shape(
         return geometry
     fields = {"sza": geometry.sza, "saa": geometry.saa, "vza": geometry.vza, "vaa": geometry.vaa}
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {name: pool.submit(_resample_da, da, target_shape, "bilinear") for name, da in fields.items()}
+        futures = {
+            name: pool.submit(_resample_da, da, target_shape, "bilinear")
+            for name, da in fields.items()
+        }
         results = {name: fut.result() for name, fut in futures.items()}
     return GeometryAngles(**results)
 
@@ -1103,12 +1147,19 @@ def _resample_atmo_to_target_shape(
     if atmo_prior.aot.shape == target_shape:
         return atmo_prior
     fields = {
-        "aot": atmo_prior.aot, "tcwv": atmo_prior.tcwv, "tco3": atmo_prior.tco3,
-        "aot_unc": atmo_prior.aot_unc, "tcwv_unc": atmo_prior.tcwv_unc,
-        "tco3_unc": atmo_prior.tco3_unc, "elevation": atmo_prior.elevation,
+        "aot": atmo_prior.aot,
+        "tcwv": atmo_prior.tcwv,
+        "tco3": atmo_prior.tco3,
+        "aot_unc": atmo_prior.aot_unc,
+        "tcwv_unc": atmo_prior.tcwv_unc,
+        "tco3_unc": atmo_prior.tco3_unc,
+        "elevation": atmo_prior.elevation,
     }
     with ThreadPoolExecutor(max_workers=7) as pool:
-        futures = {name: pool.submit(_resample_da, da, target_shape, "bilinear") for name, da in fields.items()}
+        futures = {
+            name: pool.submit(_resample_da, da, target_shape, "bilinear")
+            for name, da in fields.items()
+        }
         results = {name: fut.result() for name, fut in futures.items()}
     return AtmosphericState(**results)
 
@@ -1169,7 +1220,9 @@ def _resample_dataset_with_validity(
     """
     from concurrent.futures import Future, ThreadPoolExecutor
 
-    valid_fraction = _resample_da(valid_mask.astype(np.float32), target_shape, "area", template=template)
+    valid_fraction = _resample_da(
+        valid_mask.astype(np.float32), target_shape, "area", template=template
+    )
     valid_support = valid_fraction > 0.0
     valid_denominator = valid_fraction.where(valid_support)
 
@@ -1200,20 +1253,28 @@ def _resample_dataset_with_validity(
         band_vals = band_da.values
         band_finite = np.isfinite(band_vals) & (band_vals > 0.0) & (band_vals < 1.0)
         if cloud_mask is not None:
-            cm_at_band_res = _resample_da(
-                cloud_mask.astype(np.float32), band_da.shape, "nearest",
-            ).values > 0.5
+            cm_at_band_res = (
+                _resample_da(
+                    cloud_mask.astype(np.float32),
+                    band_da.shape,
+                    "nearest",
+                ).values
+                > 0.5
+            )
             band_valid = band_finite & ~cm_at_band_res
         else:
             band_valid = band_finite
         band_valid_da = xr.DataArray(
-            band_valid.astype(np.float32), dims=band_da.dims, coords=band_da.coords,
+            band_valid.astype(np.float32),
+            dims=band_da.dims,
+            coords=band_da.coords,
         )
         band_valid_frac = _resample_da(band_valid_da, target_shape, "area", template=template)
         band_valid_sup = band_valid_frac > 0.0
         band_valid_denom = band_valid_frac.where(band_valid_sup)
         masked_band = band_da.where(
-            xr.DataArray(band_valid, dims=band_da.dims, coords=band_da.coords), 0.0,
+            xr.DataArray(band_valid, dims=band_da.dims, coords=band_da.coords),
+            0.0,
         )
         masked_mean = _resample_da(masked_band, target_shape, "area", template=template)
         return name, masked_mean / band_valid_denom, band_valid_sup
@@ -1269,9 +1330,7 @@ def _apply_invalid_mask_to_dataset(
 ) -> xr.Dataset:
     invalid = invalid_mask.astype(bool)
     data_vars = {
-        name: dataset[name].where(~invalid)
-        for name in band_names
-        if name in dataset.data_vars
+        name: dataset[name].where(~invalid) for name in band_names if name in dataset.data_vars
     }
     if not data_vars:
         raise ValueError("No query bands were available in the corrected reflectance dataset")
@@ -1297,7 +1356,9 @@ def _resolve_provider_source_bands(
     try:
         source_bands = list(raw_source_bands)
     except TypeError as exc:
-        raise TypeError("brdf_provider.source_bands must be a sequence of SensorBand objects") from exc
+        raise TypeError(
+            "brdf_provider.source_bands must be a sequence of SensorBand objects"
+        ) from exc
     if not all(isinstance(band, SensorBand) for band in source_bands):
         raise TypeError("brdf_provider.source_bands must contain only SensorBand objects")
     return _deduplicate_bands(source_bands)

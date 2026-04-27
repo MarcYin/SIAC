@@ -109,8 +109,24 @@ def test_spectral_band_grid_cache_reuses_existing_grids(monkeypatch: pytest.Monk
     band = SensorBand("B03", 560.0, 35.0, 10.0, 0)
     calls = {"subset": 0, "weights": 0, "weighted_mean": 0}
 
-    monkeypatch.setattr(backend, "_subset_wavelength_for_band", lambda dataset, _band: calls.__setitem__("subset", calls["subset"] + 1) or dataset)
-    monkeypatch.setattr(backend, "_spectral_integration_weights", lambda _band, _lut: calls.__setitem__("weights", calls["weights"] + 1) or xr.DataArray(np.ones(4, dtype=np.float32), dims=("wavelength",), coords={"wavelength": lut.coords["wavelength"].values}))
+    monkeypatch.setattr(
+        backend,
+        "_subset_wavelength_for_band",
+        lambda dataset, _band: calls.__setitem__("subset", calls["subset"] + 1) or dataset,
+    )
+    monkeypatch.setattr(
+        backend,
+        "_spectral_integration_weights",
+        lambda _band, _lut: (
+            calls.__setitem__("weights", calls["weights"] + 1)
+            or xr.DataArray(
+                np.ones(4, dtype=np.float32),
+                dims=("wavelength",),
+                coords={"wavelength": lut.coords["wavelength"].values},
+            )
+        ),
+    )
+
     def _record_weighted_mean(data: xr.DataArray, _weights: xr.DataArray) -> xr.DataArray:
         calls["weighted_mean"] += 1
         return data.mean("wavelength")
@@ -134,7 +150,9 @@ def test_run_with_transient_lut_io_retry_failure_paths(monkeypatch: pytest.Monke
     monkeypatch.setattr("siac.algorithms.rt.lut.backend.time.sleep", lambda _seconds: None)
 
     reloads = {"count": 0}
-    monkeypatch.setattr(backend, "_reload_lut", lambda: reloads.__setitem__("count", reloads["count"] + 1))
+    monkeypatch.setattr(
+        backend, "_reload_lut", lambda: reloads.__setitem__("count", reloads["count"] + 1)
+    )
 
     def _not_transient(_exc: Exception) -> bool:
         return False
@@ -144,12 +162,16 @@ def test_run_with_transient_lut_io_retry_failure_paths(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(backend, "_is_transient_lut_io_error", _not_transient)
     with pytest.raises(RuntimeError, match="hard failure"):
-        backend._run_with_transient_lut_io_retry(lambda: (_ for _ in ()).throw(RuntimeError("hard failure")), operation="read")
+        backend._run_with_transient_lut_io_retry(
+            lambda: (_ for _ in ()).throw(RuntimeError("hard failure")), operation="read"
+        )
     assert reloads["count"] == 0
 
     monkeypatch.setattr(backend, "_is_transient_lut_io_error", _transient)
     with pytest.raises(RuntimeError, match="still failing"):
-        backend._run_with_transient_lut_io_retry(lambda: (_ for _ in ()).throw(RuntimeError("still failing")), operation="read")
+        backend._run_with_transient_lut_io_retry(
+            lambda: (_ for _ in ()).throw(RuntimeError("still failing")), operation="read"
+        )
     assert reloads["count"] == 1
 
 
@@ -194,7 +216,12 @@ def test_band_rsrf_and_weighted_mean_edge_paths() -> None:
         backend._band_rsrf(SensorBand("B03", 560.0, 35.0, 10.0, 0))
 
     passthrough = xr.DataArray(np.array([1.0, 2.0], dtype=np.float32), dims=("point",))
-    same = backend._weighted_spectral_mean(passthrough, xr.DataArray(np.array([1.0], dtype=np.float32), dims=("wavelength",), coords={"wavelength": [550.0]}))
+    same = backend._weighted_spectral_mean(
+        passthrough,
+        xr.DataArray(
+            np.array([1.0], dtype=np.float32), dims=("wavelength",), coords={"wavelength": [550.0]}
+        ),
+    )
     assert same.identical(passthrough)
 
     single = xr.DataArray(
@@ -211,8 +238,12 @@ def test_band_rsrf_and_weighted_mean_edge_paths() -> None:
     assert np.isfinite(float(result.values))
 
 
-def test_preload_scene_subset_once_short_circuits_without_spectral_support(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _unexpected_grid_validation(_geometry: GeometryAngles, _atmo_state: AtmosphericState) -> None:
+def test_preload_scene_subset_once_short_circuits_without_spectral_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _unexpected_grid_validation(
+        _geometry: GeometryAngles, _atmo_state: AtmosphericState
+    ) -> None:
         raise AssertionError("should not validate")
 
     backend = ZarrLUTBackend("dummy")

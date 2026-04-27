@@ -157,7 +157,9 @@ def _match_line(line: str, label: str, count: int) -> list[float] | None:
     return [_parse_float(item) for item in match.groups()]
 
 
-def _store_metric(metrics: dict[str, ParsedMetric], name: str, value: float, digits: int, source: str) -> None:
+def _store_metric(
+    metrics: dict[str, ParsedMetric], name: str, value: float, digits: int, source: str
+) -> None:
     metric = ParsedMetric(
         value=value,
         tolerance=_print_step_for_digits(digits),
@@ -389,7 +391,9 @@ def _scalar_array(value: float) -> xr.DataArray:
     return xr.DataArray(np.array([[value]], dtype=np.float64), dims=("y", "x"))
 
 
-def _native_case_scalars(case: SixSParityCase, module_path: Path, source_dir: Path) -> dict[str, float]:
+def _native_case_scalars(
+    case: SixSParityCase, module_path: Path, source_dir: Path
+) -> dict[str, float]:
     config = case.sixs_config.model_copy(
         update={
             "source_dir": source_dir,
@@ -427,7 +431,9 @@ def _native_case_scalars(case: SixSParityCase, module_path: Path, source_dir: Pa
     }
 
 
-def _native_case_scalars_subprocess(case: SixSParityCase, module_path: Path, source_dir: Path) -> dict[str, float]:
+def _native_case_scalars_subprocess(
+    case: SixSParityCase, module_path: Path, source_dir: Path
+) -> dict[str, float]:
     payload = base64.b64encode(
         pickle.dumps(
             {
@@ -468,7 +474,10 @@ print(json.dumps(metrics, sort_keys=True, allow_nan=True))
             f"stdout:\n{completed.stdout}\n"
             f"stderr:\n{completed.stderr}"
         )
-    json_line = next((line for line in reversed(completed.stdout.splitlines()) if line.strip().startswith("{")), None)
+    json_line = next(
+        (line for line in reversed(completed.stdout.splitlines()) if line.strip().startswith("{")),
+        None,
+    )
     if json_line is None:
         raise RuntimeError(
             f"Native parity subprocess for case {case.name} did not emit JSON.\n"
@@ -484,7 +493,9 @@ def _format_number(value: float) -> str:
     return f"{value:.12g}"
 
 
-def _render_surface_reflectance_lines(mode: int, constant: float, spectrum: np.ndarray, wlinf: float, wlsup: float) -> list[str]:
+def _render_surface_reflectance_lines(
+    mode: int, constant: float, spectrum: np.ndarray, wlinf: float, wlsup: float
+) -> list[str]:
     if mode == 0:
         return [_format_number(constant)]
     if mode > 0:
@@ -504,10 +515,14 @@ def render_original_sixs_input(case: SixSParityCase) -> str:
     """Render an original 6S stdin deck using the same resolved inputs as the native bridge."""
     config = case.sixs_config
     response, wlinf, wlsup = _build_spectral_response(case.band)
-    atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(case.rt_setup, month=int(config.month))
+    atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(
+        case.rt_setup, month=int(config.month)
+    )
     aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(case.rt_setup)
     surface_inputs = _resolve_surface_inputs(case.rt_setup)
-    atmospheric_correction_mode, atmospheric_correction_value = _resolve_atmospheric_correction_inputs(case.rt_setup)
+    atmospheric_correction_mode, atmospheric_correction_value = (
+        _resolve_atmospheric_correction_inputs(case.rt_setup)
+    )
 
     iinf = int((wlinf - 0.25) / 0.0025 + 1.5)
     isup = int((wlsup - 0.25) / 0.0025 + 1.5)
@@ -564,7 +579,9 @@ def render_original_sixs_input(case: SixSParityCase) -> str:
             x3 = float(aerosol_inputs["dist_x3"][component_index])
             cij = float(aerosol_inputs["dist_cij"][component_index])
             if aerosol_mode == 8:
-                lines.append(" ".join([_format_number(x1), _format_number(x2), _format_number(cij)]))
+                lines.append(
+                    " ".join([_format_number(x1), _format_number(x2), _format_number(cij)])
+                )
             elif aerosol_mode == 9:
                 lines.append(" ".join([_format_number(x1), _format_number(x2), _format_number(x3)]))
             else:
@@ -593,8 +610,12 @@ def render_original_sixs_input(case: SixSParityCase) -> str:
                     ]
                 )
             )
-        lines.append(" ".join(_format_number(float(item)) for item in aerosol_inputs["dist_rn"][:, 0]))
-        lines.append(" ".join(_format_number(float(item)) for item in aerosol_inputs["dist_ri"][:, 0]))
+        lines.append(
+            " ".join(_format_number(float(item)) for item in aerosol_inputs["dist_rn"][:, 0])
+        )
+        lines.append(
+            " ".join(_format_number(float(item)) for item in aerosol_inputs["dist_ri"][:, 0])
+        )
     elif aerosol_mode == -1:
         count = int(aerosol_inputs["layer_count"])
         lines.append(str(count))
@@ -737,7 +758,9 @@ def render_original_sixs_input(case: SixSParityCase) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_original_sixs_executable(source_dir: Path, build_dir: Path, compiler: str = "gfortran") -> Path:
+def build_original_sixs_executable(
+    source_dir: Path, build_dir: Path, compiler: str = "gfortran"
+) -> Path:
     """Build the untouched upstream 6SV2.1 executable in an isolated copy."""
     source_dir = source_dir.expanduser().resolve()
     build_dir = build_dir.expanduser().resolve()
@@ -761,7 +784,9 @@ def build_original_sixs_executable(source_dir: Path, build_dir: Path, compiler: 
         check=False,
     )
     if clean.returncode != 0:
-        raise RuntimeError(f"Upstream 6S clean failed:\nstdout:\n{clean.stdout}\nstderr:\n{clean.stderr}")
+        raise RuntimeError(
+            f"Upstream 6S clean failed:\nstdout:\n{clean.stdout}\nstderr:\n{clean.stderr}"
+        )
 
     build = subprocess.run(
         [
@@ -776,7 +801,9 @@ def build_original_sixs_executable(source_dir: Path, build_dir: Path, compiler: 
         check=False,
     )
     if build.returncode != 0:
-        raise RuntimeError(f"Upstream 6S build failed:\nstdout:\n{build.stdout}\nstderr:\n{build.stderr}")
+        raise RuntimeError(
+            f"Upstream 6S build failed:\nstdout:\n{build.stdout}\nstderr:\n{build.stderr}"
+        )
 
     executable = build_dir / "sixsV2.1"
     if not executable.exists():
@@ -806,7 +833,10 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
             rt_setup=RTSetupConfig(
                 atmosphere={"profile": "user_water_ozone", "columns_mode": "input_columns"},
                 aerosol={"profile": "continental"},
-                surface={"mode": "homogeneous_lambertian", "target": {"kind": "constant", "constant": 0.0}},
+                surface={
+                    "mode": "homogeneous_lambertian",
+                    "target": {"kind": "constant", "constant": 0.0},
+                },
                 atmospheric_correction={"mode": "lambertian_reflectance", "value": 0.1},
                 reference_reflectance=0.1,
             ),
@@ -924,7 +954,9 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
     )
 
 
-def _compare_metrics(original: dict[str, ParsedMetric], native: dict[str, float]) -> tuple[ComparedMetric, ...]:
+def _compare_metrics(
+    original: dict[str, ParsedMetric], native: dict[str, float]
+) -> tuple[ComparedMetric, ...]:
     compared: list[ComparedMetric] = []
     for name in sorted(original):
         native_value = native.get(name)
@@ -954,7 +986,9 @@ def _compare_metrics(original: dict[str, ParsedMetric], native: dict[str, float]
     return tuple(compared)
 
 
-def _run_original_case(case: SixSParityCase, executable: Path, case_dir: Path) -> tuple[dict[str, ParsedMetric], Path, Path, Path]:
+def _run_original_case(
+    case: SixSParityCase, executable: Path, case_dir: Path
+) -> tuple[dict[str, ParsedMetric], Path, Path, Path]:
     case_dir.mkdir(parents=True, exist_ok=True)
     input_path = case_dir / f"{case.name}.in"
     stdout_path = case_dir / f"{case.name}.stdout.txt"
@@ -1010,7 +1044,9 @@ def run_upstream_parity_suite(
     case_reports: list[CaseReport] = []
     for case in active_cases:
         case_dir = output_dir / case.name
-        original_metrics, input_path, stdout_path, stderr_path = _run_original_case(case, executable, case_dir)
+        original_metrics, input_path, stdout_path, stderr_path = _run_original_case(
+            case, executable, case_dir
+        )
         native_metrics = _native_case_scalars_subprocess(case, native_module_path, source_dir)
         compared = _compare_metrics(original_metrics, native_metrics)
         mismatches = tuple(item for item in compared if not item.matched)

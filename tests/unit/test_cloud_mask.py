@@ -77,7 +77,6 @@ def test_validate_class_mapping_allows_many_to_one_and_rejects_one_to_many():
         validate_class_mapping({2: [8], 3: [8]})
 
 
-
 def test_apply_class_mapping_identity_and_unmapped_behaviour():
     src = xr.DataArray(np.array([[0, 1, 2, 3, 9]], dtype=np.int16), dims=["y", "x"])
 
@@ -89,7 +88,6 @@ def test_apply_class_mapping_identity_and_unmapped_behaviour():
         apply_class_mapping(src, None, unmapped_to_missing=False)
 
 
-
 def test_apply_class_mapping_explicit_mapping():
     src = xr.DataArray(np.array([[255, 1, 2, 10, 3]], dtype=np.int16), dims=["y", "x"])
     mapping = {0: [255], 1: [1], 2: [2, 10], 3: [3]}
@@ -97,12 +95,10 @@ def test_apply_class_mapping_explicit_mapping():
     np.testing.assert_array_equal(out.values, np.array([[0, 1, 2, 2, 3]], dtype=np.uint8))
 
 
-
 def test_classes_to_bool_mask():
     classes = xr.DataArray(np.array([[0, 1, 2, 3]], dtype=np.uint8), dims=["y", "x"])
     mask = classes_to_bool_mask(classes)
     np.testing.assert_array_equal(mask.values, np.array([[True, False, True, True]], dtype=bool))
-
 
 
 def test_prepare_rgbnir_averages_multiple_red_bands():
@@ -121,7 +117,6 @@ def test_prepare_rgbnir_averages_multiple_red_bands():
     assert float(red.mean()) == pytest.approx(0.4)
 
 
-
 def test_group_band_names_raises_when_missing_color():
     cfg = _sensor_config_with_duplicate_red()
     toa = xr.Dataset({"R1": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
@@ -131,9 +126,7 @@ def test_group_band_names_raises_when_missing_color():
 
 
 def test_group_band_names_prefers_b08_for_msi_nir_without_loading_other_nir_bands():
-    toa = xr.Dataset(
-        {"B08": xr.DataArray(np.full((2, 2), 0.6, dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B08": xr.DataArray(np.full((2, 2), 0.6, dtype=np.float32), dims=["y", "x"])})
     load_calls: list[str] = []
 
     def _load_band(name: str) -> xr.DataArray:
@@ -146,7 +139,6 @@ def test_group_band_names_prefers_b08_for_msi_nir_without_loading_other_nir_band
 
     assert nir_names == ["B08"]
     assert load_calls == []
-
 
 
 def test_resample_policy_branches(monkeypatch: pytest.MonkeyPatch):
@@ -179,7 +171,6 @@ def test_resample_policy_branches(monkeypatch: pytest.MonkeyPatch):
     assert calls and calls[-1] == ("nearest", 15.0)
 
 
-
 def test_build_cloud_classes_none_and_user_callable_modes():
     toa = _toa_hs((2, 2))
     cfg = _sensor_config_with_duplicate_red()
@@ -201,7 +192,6 @@ def test_build_cloud_classes_none_and_user_callable_modes():
     np.testing.assert_array_equal(mapped.values, np.array([[2, 2], [3, 1]], dtype=np.uint8))
 
 
-
 def test_build_cloud_classes_external_file_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     toa = _toa_hs((2, 2))
     cfg = _sensor_config_with_duplicate_red()
@@ -221,7 +211,6 @@ def test_build_cloud_classes_external_file_mode(monkeypatch: pytest.MonkeyPatch,
         unmapped_to_missing=False,
     )
     np.testing.assert_array_equal(out.values, np.array([[2, 3], [1, 0]], dtype=np.uint8))
-
 
 
 def test_build_cloud_classes_auto_mode_uses_provider(monkeypatch: pytest.MonkeyPatch):
@@ -298,23 +287,18 @@ def test_build_cloud_classes_auto_fails_when_loader_cannot_supply_green_band():
     assert load_calls == ["G1"]
 
 
-
 def test_omnicloud_provider_predictor_paths():
     red = xr.DataArray(np.array([[0.1, 0.5]], dtype=np.float32), dims=["y", "x"])
     green = xr.DataArray(np.array([[0.1, 0.5]], dtype=np.float32), dims=["y", "x"])
     nir = xr.DataArray(np.array([[0.1, 0.5]], dtype=np.float32), dims=["y", "x"])
 
     # Official OmniCloudMask labels: 0=clear, 1/2=cloud, 3=shadow.
-    p_binary = OmniCloudMaskProvider(
-        predictor=lambda arr: (arr[0] > 0.2).astype(np.uint8)
-    )
+    p_binary = OmniCloudMaskProvider(predictor=lambda arr: (arr[0] > 0.2).astype(np.uint8))
     out_binary = p_binary.predict(red, green, nir)
     np.testing.assert_array_equal(out_binary.values, np.array([[1, 2]], dtype=np.uint8))
 
     # Predictor with custom labels requiring mapping.
-    p_custom = OmniCloudMaskProvider(
-        predictor=lambda _arr: np.array([[4, 9]], dtype=np.int16)
-    )
+    p_custom = OmniCloudMaskProvider(predictor=lambda _arr: np.array([[4, 9]], dtype=np.int16))
     out_custom = p_custom.predict(
         red,
         green,
@@ -324,13 +308,10 @@ def test_omnicloud_provider_predictor_paths():
     )
     np.testing.assert_array_equal(out_custom.values, np.array([[1, 2]], dtype=np.uint8))
 
-    with_missing = OmniCloudMaskProvider(
-        predictor=lambda _arr: np.array([[0, 3]], dtype=np.uint8)
-    )
+    with_missing = OmniCloudMaskProvider(predictor=lambda _arr: np.array([[0, 3]], dtype=np.uint8))
     red_missing = xr.DataArray(np.array([[np.nan, 0.5]], dtype=np.float32), dims=["y", "x"])
     out_missing = with_missing.predict(red_missing, green, nir)
     np.testing.assert_array_equal(out_missing.values, np.array([[0, 3]], dtype=np.uint8))
-
 
 
 def test_build_cloud_classes_input_validation_errors():
@@ -383,14 +364,26 @@ def test_ensure_expected_classes_empty_and_invalid():
 
 
 def test_extract_band_and_resample_error_paths(monkeypatch: pytest.MonkeyPatch):
-    stacked = xr.DataArray(np.arange(18, dtype=np.float32).reshape(2, 3, 3), dims=["band", "y", "x"])
+    stacked = xr.DataArray(
+        np.arange(18, dtype=np.float32).reshape(2, 3, 3), dims=["band", "y", "x"]
+    )
     assert _extract_band(stacked).shape == (3, 3)
     assert _extract_band(stacked.isel(band=slice(0, 1))).shape == (3, 3)
 
     with pytest.raises(ValueError, match="must be > 0"):
-        _resample_continuous(stacked.isel(band=0), target_resolution_m=0, resolution_policy="auto", allow_upsample_to_target=False)
+        _resample_continuous(
+            stacked.isel(band=0),
+            target_resolution_m=0,
+            resolution_policy="auto",
+            allow_upsample_to_target=False,
+        )
     with pytest.raises(ValueError, match="must be > 0"):
-        _resample_classes(stacked.isel(band=0), target_resolution_m=0, resolution_policy="auto", allow_upsample_to_target=False)
+        _resample_classes(
+            stacked.isel(band=0),
+            target_resolution_m=0,
+            resolution_policy="auto",
+            allow_upsample_to_target=False,
+        )
 
     calls: list[tuple[str, float]] = []
 
@@ -430,9 +423,19 @@ def test_extract_band_and_resample_error_paths(monkeypatch: pytest.MonkeyPatch):
     assert calls and calls[-1] == ("nearest", 10.0)
 
     with pytest.raises(ValueError, match="resolution_policy"):
-        _resample_continuous(coarse, target_resolution_m=10.0, resolution_policy="bad", allow_upsample_to_target=False)
+        _resample_continuous(
+            coarse,
+            target_resolution_m=10.0,
+            resolution_policy="bad",
+            allow_upsample_to_target=False,
+        )
     with pytest.raises(ValueError, match="resolution_policy"):
-        _resample_classes(coarse, target_resolution_m=10.0, resolution_policy="bad", allow_upsample_to_target=False)
+        _resample_classes(
+            coarse,
+            target_resolution_m=10.0,
+            resolution_policy="bad",
+            allow_upsample_to_target=False,
+        )
 
 
 def test_mean_group_alignment_reproject_and_interp(monkeypatch: pytest.MonkeyPatch):
@@ -483,7 +486,9 @@ def test_prepare_rgbnir_alignment_branches(monkeypatch: pytest.MonkeyPatch):
     cfg = _sensor_config_with_duplicate_red()
     toa = _toa_hs((3, 3))
 
-    monkeypatch.setattr("siac.algorithms.cloud.mask._group_band_names", lambda *_args, **_kwargs: ["R1"])  # noqa: ARG005
+    monkeypatch.setattr(
+        "siac.algorithms.cloud.mask._group_band_names", lambda *_args, **_kwargs: ["R1"]
+    )  # noqa: ARG005
     monkeypatch.setattr(
         "siac.algorithms.cloud.mask._mean_group",
         lambda *_args, **_kwargs: _spatial_da(0.2, shape=(3, 3)).assign_coords(
@@ -526,7 +531,9 @@ def test_prepare_rgbnir_alignment_branches(monkeypatch: pytest.MonkeyPatch):
             ),
         ]
     )
-    monkeypatch.setattr("siac.algorithms.cloud.mask._mean_group", lambda *_args, **_kwargs: next(seq))
+    monkeypatch.setattr(
+        "siac.algorithms.cloud.mask._mean_group", lambda *_args, **_kwargs: next(seq)
+    )
     red, green, nir = _prepare_rgbnir(
         toa,
         cfg,
@@ -539,7 +546,9 @@ def test_prepare_rgbnir_alignment_branches(monkeypatch: pytest.MonkeyPatch):
     assert nir.shape == red.shape
 
 
-def test_external_classes_and_user_callable_fallbacks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_external_classes_and_user_callable_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     raw = _spatial_da(8.0, shape=(2, 2)).astype(np.int16)
     ref = _spatial_da(0.2, shape=(2, 2))
     calls = {"reproject": 0}
@@ -577,9 +586,17 @@ def test_external_classes_and_user_callable_fallbacks(monkeypatch: pytest.Monkey
 
     sample = _toa_hs((2, 2))
     cfg = _sensor_config_with_duplicate_red()
-    assert _call_user_callable(_kw_only, toa=sample, sensor_config=cfg, input_path=None).shape == (1, 1)
-    assert _call_user_callable(_positional, toa=sample, sensor_config=cfg, input_path=None).shape == (1, 1)
-    assert _call_user_callable(_single, toa=sample, sensor_config=cfg, input_path=None).shape == (1, 1)
+    assert _call_user_callable(_kw_only, toa=sample, sensor_config=cfg, input_path=None).shape == (
+        1,
+        1,
+    )
+    assert _call_user_callable(
+        _positional, toa=sample, sensor_config=cfg, input_path=None
+    ).shape == (1, 1)
+    assert _call_user_callable(_single, toa=sample, sensor_config=cfg, input_path=None).shape == (
+        1,
+        1,
+    )
 
 
 def test_build_cloud_classes_user_callable_shape_reproject_and_provider_error(
@@ -629,7 +646,9 @@ def test_omnicloud_default_predictor_and_normalize_paths(monkeypatch: pytest.Mon
 
     # Shape mismatch in predict
     with pytest.raises(ValueError, match="identical shape"):
-        provider.predict(red, green, xr.DataArray(np.array([[0.1], [0.2]], dtype=np.float32), dims=["y", "x"]))
+        provider.predict(
+            red, green, xr.DataArray(np.array([[0.1], [0.2]], dtype=np.float32), dims=["y", "x"])
+        )
 
     # 3D logits/probabilities branch and shape mismatch error
     norm = OmniCloudMaskProvider._normalize_raw_output(
@@ -661,7 +680,9 @@ def test_build_cloud_classes_negative_resolution():
 def test_build_cloud_classes_nan_reflectance():
     """All-NaN TOA data should still produce a valid cloud mask (mode=none)."""
     cfg = _sensor_config_with_duplicate_red()
-    toa = xr.Dataset({"R1": xr.DataArray(np.full((4, 4), np.nan, dtype=np.float32), dims=["y", "x"])})
+    toa = xr.Dataset(
+        {"R1": xr.DataArray(np.full((4, 4), np.nan, dtype=np.float32), dims=["y", "x"])}
+    )
     result = build_cloud_classes(toa, cfg, mode="none")
     assert result.shape == (4, 4)
     # NaN pixels should be classified as clear (0) since isfinite returns False

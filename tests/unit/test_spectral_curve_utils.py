@@ -37,6 +37,7 @@ def test_primary_nir_band_index_prefers_band_closest_to_865nm() -> None:
 
     assert primary_nir_band_index(bands) == 2
 
+
 def test_spectral_mapping_module_keeps_private_curve_helpers_available() -> None:
     wavelengths, response = spectral_mapping_mod._canonicalize_curve(
         np.array([500.0, 490.0, 490.0, 510.0], dtype=np.float32),

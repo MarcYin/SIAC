@@ -18,6 +18,7 @@ from siac.domain import SensorBand
 
 # ── SensorBand behavior ───────────────────────────────────────────────
 
+
 class TestSensorBand:
     def test_gaussian_only_construction(self):
         """Center/FWHM-only construction keeps band metadata but no sampled RSRF."""
@@ -96,6 +97,7 @@ class TestSensorBand:
 
 # ── Reference RSRF loading ────────────────────────────────────────────
 
+
 class TestLoadReferenceRSRF:
     def test_load_modis(self):
         """MODIS should return 7 bands with non-empty arrays."""
@@ -121,6 +123,7 @@ class TestLoadReferenceRSRF:
 
 # ── Spectral convolution functions ────────────────────────────────────
 
+
 def _make_test_sensor_bands():
     """3-band sensor: Blue (490nm), Green (560nm), Red (665nm)."""
     return [
@@ -135,10 +138,7 @@ class TestSensorToReference:
         """Flat reflectance = 0.5 -> all reference bands should be ~0.5."""
         bands = _make_test_sensor_bands()
         shape = (4, 4)
-        ds = xr.Dataset({
-            b.name: xr.DataArray(np.full(shape, 0.5), dims=["y", "x"])
-            for b in bands
-        })
+        ds = xr.Dataset({b.name: xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]) for b in bands})
         result = sensor_to_reference(ds, bands)
         assert result.shape[0] == 7  # 7 MODIS reference bands
         # Bands that overlap with sensor should be ~0.5
@@ -149,10 +149,9 @@ class TestSensorToReference:
         """Output should have 7 MODIS reference bands."""
         bands = _make_test_sensor_bands()
         shape = (2, 2)
-        ds = xr.Dataset({
-            b.name: xr.DataArray(np.ones(shape) * 0.3, dims=["y", "x"])
-            for b in bands
-        })
+        ds = xr.Dataset(
+            {b.name: xr.DataArray(np.ones(shape) * 0.3, dims=["y", "x"]) for b in bands}
+        )
         result = sensor_to_reference(ds, bands)
         assert result.shape[0] == 7
 
@@ -160,10 +159,9 @@ class TestSensorToReference:
         """Reference bands that overlap with sensor bands should be non-zero."""
         bands = _make_test_sensor_bands()
         shape = (2, 2)
-        ds = xr.Dataset({
-            b.name: xr.DataArray(np.ones(shape) * 0.3, dims=["y", "x"])
-            for b in bands
-        })
+        ds = xr.Dataset(
+            {b.name: xr.DataArray(np.ones(shape) * 0.3, dims=["y", "x"]) for b in bands}
+        )
         result = sensor_to_reference(ds, bands)
         # At least some reference bands should be non-zero
         assert np.any(result > 0)
@@ -174,10 +172,7 @@ class TestReferenceToSensor:
         """sensor -> reference -> sensor should approximately recover original."""
         bands = _make_test_sensor_bands()
         shape = (4, 4)
-        ds = xr.Dataset({
-            b.name: xr.DataArray(np.full(shape, 0.3), dims=["y", "x"])
-            for b in bands
-        })
+        ds = xr.Dataset({b.name: xr.DataArray(np.full(shape, 0.3), dims=["y", "x"]) for b in bands})
         ref_vals = sensor_to_reference(ds, bands)
         recovered = reference_to_sensor(ref_vals, bands)
         assert recovered.shape[0] == len(bands)

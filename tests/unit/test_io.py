@@ -291,9 +291,7 @@ class TestReprojectionUtils:
         assert bounds[0] < bounds[2]  # xmin < xmax
         assert bounds[1] < bounds[3]  # ymin < ymax
 
-    def test_compute_common_bounds_intersection(
-        self, sample_dataarray: xr.DataArray
-    ):
+    def test_compute_common_bounds_intersection(self, sample_dataarray: xr.DataArray):
         """compute_common_bounds should find intersection."""
         # Create two overlapping arrays
         da1 = sample_dataarray
@@ -340,9 +338,7 @@ class TestReprojectionUtils:
 class TestReadWriteRoundtrip:
     """Integration tests for read/write operations."""
 
-    def test_write_read_geotiff(
-        self, sample_dataarray: xr.DataArray, tmp_path: Path
-    ):
+    def test_write_read_geotiff(self, sample_dataarray: xr.DataArray, tmp_path: Path):
         """Write and read GeoTIFF should preserve data."""
         from siac.storage.raster_writers import write_raster
         from siac.storage.readers import read_raster
@@ -367,9 +363,7 @@ class TestReadWriteRoundtrip:
             rtol=1e-5,
         )
 
-    def test_write_read_cog(
-        self, sample_dataarray: xr.DataArray, tmp_path: Path
-    ):
+    def test_write_read_cog(self, sample_dataarray: xr.DataArray, tmp_path: Path):
         """Write and read COG should preserve data."""
         from siac.storage.raster_writers import write_cog
         from siac.storage.readers import read_raster
@@ -405,9 +399,7 @@ class TestReadWriteRoundtrip:
             assert path.exists()
             assert var_name in str(path)
 
-    def test_write_zarr_roundtrip(
-        self, sample_dataarray: xr.DataArray, tmp_path: Path
-    ):
+    def test_write_zarr_roundtrip(self, sample_dataarray: xr.DataArray, tmp_path: Path):
         """Write and read Zarr should preserve data."""
         from siac.storage.raster_writers import write_zarr
         from siac.storage.readers import read_zarr_array

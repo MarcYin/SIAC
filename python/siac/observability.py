@@ -153,14 +153,15 @@ class ExecutionObserver:
         configured_report_path: Path | None = None,
     ) -> None:
         self.run_id = (
-            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-            f"-{uuid.uuid4().hex[:8]}"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
         )
         self.backend = str(backend)
         self.input_path = str(input_path)
         self.summary_path = summary_path
         self.events_path = _events_path_for(summary_path)
-        self.configured_report_path = str(configured_report_path) if configured_report_path else None
+        self.configured_report_path = (
+            str(configured_report_path) if configured_report_path else None
+        )
         self.show_progress = bool(show_progress)
         self.sample_interval_s = float(sample_interval_s)
         self.heartbeat_interval_s = float(heartbeat_interval_s)
@@ -515,8 +516,12 @@ class ExecutionObserver:
             )
             self._resource_summary["cpu_user_s"] = float(cpu.user)
             self._resource_summary["cpu_system_s"] = float(cpu.system)
-            self._resource_summary["read_bytes"] = getattr(io, "read_bytes", None) if io is not None else None
-            self._resource_summary["write_bytes"] = getattr(io, "write_bytes", None) if io is not None else None
+            self._resource_summary["read_bytes"] = (
+                getattr(io, "read_bytes", None) if io is not None else None
+            )
+            self._resource_summary["write_bytes"] = (
+                getattr(io, "write_bytes", None) if io is not None else None
+            )
             if self.summary_path is not None:
                 self._resource_samples.append(sample)
                 self._append_event_locked(

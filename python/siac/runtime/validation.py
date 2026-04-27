@@ -63,8 +63,7 @@ def validate_observation_bundle(obs: ObservationBundle) -> None:
         angle = getattr(obs.geometry, angle_name)
         if angle.ndim != 2 or angle.size == 0:
             raise ValidationError(
-                f"geometry.{angle_name} must be a non-empty 2-D array, "
-                f"got shape {angle.shape}"
+                f"geometry.{angle_name} must be a non-empty 2-D array, got shape {angle.shape}"
             )
 
 
@@ -98,9 +97,7 @@ def validate_solver_input_bundle(sib: SolverInputBundle) -> None:
     config_bands = {b.name for b in sib.sensor_config.bands}
     solver_bands = {b.name for b in sib.bands}
     if not solver_bands <= config_bands:
-        raise ValidationError(
-            f"Solver bands {solver_bands - config_bands} not in sensor_config"
-        )
+        raise ValidationError(f"Solver bands {solver_bands - config_bands} not in sensor_config")
 
     if sib.aux_resolution_m <= 0:
         raise ValidationError("aux_resolution_m must be positive")

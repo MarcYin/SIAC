@@ -81,7 +81,7 @@ def build_spectral_integration_weights(
         if rsrf_weights is None:
             rsrf_weights = kernel.response_on_lut
         full_weights = np.zeros_like(wl_axis, dtype=np.float32)
-        full_weights[kernel.start_index:kernel.end_index] = rsrf_weights
+        full_weights[kernel.start_index : kernel.end_index] = rsrf_weights
         return xr.DataArray(
             full_weights,
             dims=["wavelength"],

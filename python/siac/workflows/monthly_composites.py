@@ -58,16 +58,14 @@ def prepare_monthly_composites(
     )
     materialized_collection = filter_materialized_monthly_composite_collection(collection)
     requested_periods = {
-        (int(year), int(month))
-        for year, month in sorted((int(y), int(m)) for y, m in year_months)
+        (int(year), int(month)) for year, month in sorted((int(y), int(m)) for y, m in year_months)
     }
     written_periods = {
         (int(composite.year), int(composite.month))
         for composite in materialized_collection.composites
     }
     skipped_periods = tuple(
-        f"{year:04d}-{month:02d}"
-        for year, month in sorted(requested_periods - written_periods)
+        f"{year:04d}-{month:02d}" for year, month in sorted(requested_periods - written_periods)
     )
     if skipped_periods:
         logger.info(
@@ -96,7 +94,10 @@ def prepare_monthly_composites(
     )
     representation = (
         "kernel_weights"
-        if all(isinstance(composite, MonthlyKernelWeightComposite) for composite in materialized_collection.composites)
+        if all(
+            isinstance(composite, MonthlyKernelWeightComposite)
+            for composite in materialized_collection.composites
+        )
         else "reflectance"
     )
     return PreparedMonthlyCompositeBuildResult(
@@ -137,7 +138,9 @@ def _resolve_requested_resolution(
                 band_resolution,
             )
             return band_resolution
-    raise ValueError("resolution must be provided when the BRDF provider does not expose a positive source resolution")
+    raise ValueError(
+        "resolution must be provided when the BRDF provider does not expose a positive source resolution"
+    )
 
 
 __all__ = [

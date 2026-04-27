@@ -148,6 +148,7 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
             max_workers=2,
             retries=1,
             stage_timeout_s="15",
+            stage_timeouts={"M2.atmospheric_prior": "8"},
             dashboard=1,
             dashboard_address=":8787",
             performance_report_path=str(tmp_path / "reports" / "perf.html"),
@@ -159,7 +160,7 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
 
     settings = pipeline._resolve_execution_settings(
         cfg,
-        execution={"retries": 3},
+        execution={"retries": 3, "stage_timeouts": {"M3.surface_prior": "7"}},
         max_workers=6,
     )
 
@@ -167,6 +168,7 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
     assert settings["max_workers"] == 6
     assert settings["retries"] == 3
     assert settings["stage_timeout_s"] == 15.0
+    assert settings["stage_timeouts"] == {"M3.surface_prior": 7.0}
     assert settings["dashboard"] is True
     assert settings["show_progress"] is True
     assert isinstance(settings["performance_report_path"], Path)
@@ -181,6 +183,8 @@ def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Pa
         ({"max_workers": 0}, "max_workers must be >= 1"),
         ({"retries": -1}, "retries must be >= 0"),
         ({"stage_timeout_s": 0}, "stage_timeout_s must be > 0"),
+        ({"stage_timeouts": []}, "stage_timeouts must be a mapping"),
+        ({"stage_timeouts": {"M2": 0}}, "stage_timeouts values must be > 0"),
         ({"profiling_sample_interval_s": 0}, "profiling_sample_interval_s must be > 0"),
         ({"progress_heartbeat_s": 0}, "progress_heartbeat_s must be > 0"),
     ],
@@ -190,7 +194,9 @@ def test_resolve_execution_settings_rejects_invalid_values(
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        pipeline._resolve_execution_settings(SimpleNamespace(), execution=execution, max_workers=None)
+        pipeline._resolve_execution_settings(
+            SimpleNamespace(), execution=execution, max_workers=None
+        )
 
 
 def test_aerosol_resolution_reads_solver_config() -> None:
@@ -318,11 +324,21 @@ def test_run_pipeline_lut_preload_includes_stage_requested_bands(
 
     def _coarse_atmo(bounds: Any, crs: str, obs_time: Any, res: float) -> AtmosphericState:
         _ = (bounds, crs, obs_time, res)
-        aot = xr.DataArray(np.full((4, 4), 0.2, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        tcwv = xr.DataArray(np.full((4, 4), 2.0, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        tco3 = xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        unc = xr.DataArray(np.full((4, 4), 0.01, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        elevation = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        aot = xr.DataArray(
+            np.full((4, 4), 0.2, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        tcwv = xr.DataArray(
+            np.full((4, 4), 2.0, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        tco3 = xr.DataArray(
+            np.full((4, 4), 0.3, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        unc = xr.DataArray(
+            np.full((4, 4), 0.01, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        elevation = xr.DataArray(
+            np.zeros((4, 4), dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
         return AtmosphericState(
             aot=aot,
             tcwv=tcwv,
@@ -336,7 +352,9 @@ def test_run_pipeline_lut_preload_includes_stage_requested_bands(
     captured: dict[str, Any] = {}
 
     class _PreloadRTModel:
-        def preload_scene_subset(self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]) -> None:
+        def preload_scene_subset(
+            self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]
+        ) -> None:
             captured["geometry_shape"] = tuple(geometry.sza.shape)
             captured["atmo_shape"] = tuple(atmo_state.aot.shape)
             captured["bands"] = [band.name for band in bands]
@@ -382,8 +400,12 @@ def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
             dims=["band", "y", "x"],
             coords={"band": ["B02"]},
         ),
-        quality=xr.DataArray(np.full(mock_surface_prior.boa.shape, 0.5, dtype=np.float32), dims=["y", "x"]),
-        sample_index=xr.DataArray(np.full(mock_surface_prior.boa.shape, 2, dtype=np.int16), dims=["y", "x"]),
+        quality=xr.DataArray(
+            np.full(mock_surface_prior.boa.shape, 0.5, dtype=np.float32), dims=["y", "x"]
+        ),
+        sample_index=xr.DataArray(
+            np.full(mock_surface_prior.boa.shape, 2, dtype=np.int16), dims=["y", "x"]
+        ),
     )
     surface_with_monthly = dataclasses.replace(
         mock_surface_prior,
@@ -433,7 +455,11 @@ def test_run_tail_attaches_aot_scatter_diagnostics(
     scatter = result.diagnostics.aot_scatter_plots[0]
     assert scatter.band_name == "B02"
     assert scatter.total_valid_count > 0
-    assert scatter.surface_reflectance.shape == scatter.observed_toa.shape == scatter.simulated_toa.shape
+    assert (
+        scatter.surface_reflectance.shape
+        == scatter.observed_toa.shape
+        == scatter.simulated_toa.shape
+    )
 
 
 def test_aot_scatter_diagnostics_fill_nan_atmo_for_lut_call(
@@ -488,6 +514,86 @@ def test_call_with_retries_raises_after_exhaustion() -> None:
 
     with pytest.raises(ValueError, match="permanent"):
         pipeline._call_with_retries(always_fail, (), retries=0, stage_name="M3")
+
+
+def test_call_with_retries_does_not_retry_deterministic_errors(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls = {"n": 0}
+
+    def invalid() -> None:
+        calls["n"] += 1
+        raise ValueError("invalid input")
+
+    with caplog.at_level("WARNING"), pytest.raises(ValueError, match="invalid input"):
+        pipeline._call_with_retries(invalid, (), retries=3, stage_name="M3")
+
+    assert calls["n"] == 1
+    assert "retrying" not in caplog.text
+
+
+def test_fetch_priors_uses_stage_specific_timeouts(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+) -> None:
+    class _Future:
+        def __init__(self, value: Any):
+            self.value = value
+            self.timeouts: list[float | None] = []
+            self.canceled = False
+
+        def result(self, timeout: float | None = None) -> Any:
+            self.timeouts.append(timeout)
+            return self.value
+
+        def cancel(self) -> None:
+            self.canceled = True
+
+    futures: dict[str, _Future] = {}
+
+    def _submit(fn: Any, *args: Any, **kwargs: Any) -> _Future:  # noqa: ARG001
+        stage_name = kwargs["stage_name"]
+        value = {
+            "M2.atmospheric_prior": mock_atmospheric_state,
+            "M3.surface_prior": mock_surface_prior,
+            "LUT.preload": None,
+        }[stage_name]
+        future = _Future(value)
+        futures[stage_name] = future
+        return future
+
+    class _RTModel:
+        def preload_scene_subset(
+            self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]
+        ) -> None:
+            _ = (geometry, atmo_state, bands)
+
+    atmo, surface = pipeline._fetch_priors(
+        submit_fn=_submit,
+        lut_submit_fn=_submit,
+        obs=mock_observation_bundle,
+        config=SimpleNamespace(),
+        atmo_provider=lambda *_args: mock_atmospheric_state,
+        surface_prior_provider=lambda *_args: mock_surface_prior,
+        rt_model=_RTModel(),
+        settings={
+            "retries": 0,
+            "stage_timeout_s": 99.0,
+            "stage_timeouts": {
+                "M2.atmospheric_prior": 1.5,
+                "M3.surface_prior": 2.5,
+                "LUT.preload": 3.5,
+            },
+        },
+        backend_label="thread",
+    )
+
+    assert atmo is mock_atmospheric_state
+    assert surface is mock_surface_prior
+    assert futures["M2.atmospheric_prior"].timeouts == [1.5]
+    assert futures["M3.surface_prior"].timeouts == [2.5]
+    assert futures["LUT.preload"].timeouts == [3.5]
 
 
 def test_run_pipeline_thread_timeout_raises(
@@ -779,11 +885,21 @@ def test_run_pipeline_thread_preloads_lut_on_atmo_grid(
 
     def _coarse_atmo(bounds: Any, crs: str, obs_time: Any, res: float) -> AtmosphericState:
         _ = (bounds, crs, obs_time, res)
-        aot = xr.DataArray(np.full((4, 4), 0.2, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        tcwv = xr.DataArray(np.full((4, 4), 2.0, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        tco3 = xr.DataArray(np.full((4, 4), 0.3, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        unc = xr.DataArray(np.full((4, 4), 0.01, dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
-        elevation = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"), coords=coarse_coords)
+        aot = xr.DataArray(
+            np.full((4, 4), 0.2, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        tcwv = xr.DataArray(
+            np.full((4, 4), 2.0, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        tco3 = xr.DataArray(
+            np.full((4, 4), 0.3, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        unc = xr.DataArray(
+            np.full((4, 4), 0.01, dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
+        elevation = xr.DataArray(
+            np.zeros((4, 4), dtype=np.float32), dims=("y", "x"), coords=coarse_coords
+        )
         return AtmosphericState(
             aot=aot,
             tcwv=tcwv,
@@ -797,7 +913,9 @@ def test_run_pipeline_thread_preloads_lut_on_atmo_grid(
     captured: dict[str, Any] = {}
 
     class _PreloadRTModel:
-        def preload_scene_subset(self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]) -> None:
+        def preload_scene_subset(
+            self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]
+        ) -> None:
             captured["geometry_shape"] = tuple(geometry.sza.shape)
             captured["atmo_shape"] = tuple(atmo_state.aot.shape)
             captured["bands"] = [band.name for band in bands]
@@ -874,7 +992,9 @@ def test_run_pipeline_thread_preloads_lut_on_atmo_grid_with_nonstandard_dims(
     captured: dict[str, Any] = {}
 
     class _PreloadRTModel:
-        def preload_scene_subset(self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]) -> None:
+        def preload_scene_subset(
+            self, geometry: Any, atmo_state: AtmosphericState, bands: list[Any]
+        ) -> None:
             captured["geometry_shape"] = tuple(geometry.sza.shape)
             captured["geometry_dims"] = tuple(geometry.sza.dims)
             captured["atmo_dims"] = tuple(atmo_state.aot.dims)
@@ -979,9 +1099,7 @@ def test_run_tail_skip_correction_preserves_monthly_composites(
             np.full(mock_surface_prior.boa.shape, 2, dtype=np.int16), dims=["y", "x"]
         ),
     )
-    surface_with_monthly = dataclasses.replace(
-        mock_surface_prior, monthly_composites=(composite,)
-    )
+    surface_with_monthly = dataclasses.replace(mock_surface_prior, monthly_composites=(composite,))
 
     cfg = SimpleNamespace(
         solver=SimpleNamespace(aerosol_resolution=1000.0),

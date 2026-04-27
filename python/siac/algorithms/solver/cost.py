@@ -103,8 +103,7 @@ class CostFunction:
         """
         if not isinstance(rt_model, RTModelBackend):
             raise TypeError(
-                f"rt_model must implement RTModelBackend protocol, "
-                f"got {type(rt_model).__name__}"
+                f"rt_model must implement RTModelBackend protocol, got {type(rt_model).__name__}"
             )
         self.toa = toa
         self.surface_prior = surface_prior
@@ -149,30 +148,20 @@ class CostFunction:
         self.tcwv_prior = self.atmo_prior.tcwv.values.copy()
 
         # Prior uncertainties (with minimum floor)
-        self.aot_unc = np.maximum(
-            self.atmo_prior.aot_unc.values, self.config.min_aot_unc
-        )
-        self.tcwv_unc = np.maximum(
-            self.atmo_prior.tcwv_unc.values, self.config.min_tcwv_unc
-        )
+        self.aot_unc = np.maximum(self.atmo_prior.aot_unc.values, self.config.min_aot_unc)
+        self.tcwv_unc = np.maximum(self.atmo_prior.tcwv_unc.values, self.config.min_tcwv_unc)
 
         # BOA prior and uncertainty
         self.boa_prior = self.surface_prior.boa.values
-        self.boa_unc = np.maximum(
-            self.surface_prior.boa_unc.values, self.config.min_boa_unc
-        )
+        self.boa_unc = np.maximum(self.surface_prior.boa_unc.values, self.config.min_boa_unc)
 
         # Ensure finite values – fall back to the configured minimum uncertainty
         # rather than an arbitrary 1.0 which is far too large for AOT/TCWV.
-        self.aot_unc = np.where(
-            np.isfinite(self.aot_unc), self.aot_unc, self.config.min_aot_unc
-        )
+        self.aot_unc = np.where(np.isfinite(self.aot_unc), self.aot_unc, self.config.min_aot_unc)
         self.tcwv_unc = np.where(
             np.isfinite(self.tcwv_unc), self.tcwv_unc, self.config.min_tcwv_unc
         )
-        self.boa_unc = np.where(
-            np.isfinite(self.boa_unc), self.boa_unc, self.config.min_boa_unc
-        )
+        self.boa_unc = np.where(np.isfinite(self.boa_unc), self.boa_unc, self.config.min_boa_unc)
 
     def _setup_band_weights(self) -> None:
         """Setup wavelength-based band weights."""
@@ -181,7 +170,7 @@ class CostFunction:
         wl_um = wavelengths / 1000.0
 
         # Power-law weighting (shorter wavelengths weighted more for AOT)
-        weights = wl_um ** self.config.band_weight_power
+        weights = wl_um**self.config.band_weight_power
         self.band_weights = weights / weights.sum()
 
     def _setup_smoothness(self) -> None:
@@ -236,7 +225,7 @@ class CostFunction:
         """Unpack parameter vector into AOT and TCWV arrays."""
         n = self.n_pixels
         aot = p[:n].reshape(self.shape)
-        tcwv = p[n:2*n].reshape(self.shape)
+        tcwv = p[n : 2 * n].reshape(self.shape)
 
         # Apply bounds
         aot = np.clip(aot, self.config.aot_min, self.config.aot_max)
@@ -272,20 +261,25 @@ class CostFunction:
         )
 
         # Compute RT coefficients for all bands (batch if supported)
-        if hasattr(self.rt_model, 'compute_coefficients_multi'):
+        if hasattr(self.rt_model, "compute_coefficients_multi"):
             all_coeffs = self.rt_model.compute_coefficients_multi(
-                self.geometry, atmo_state, self.bands, compute_jacobian=True,
+                self.geometry,
+                atmo_state,
+                self.bands,
+                compute_jacobian=True,
             )
         else:
             all_coeffs = [
                 self.rt_model.compute_coefficients(
-                    self.geometry, atmo_state, band, compute_jacobian=True,
+                    self.geometry,
+                    atmo_state,
+                    band,
+                    compute_jacobian=True,
                 )
                 for band in self.bands
             ]
 
         for i, (_band, coeffs) in enumerate(zip(self.bands, all_coeffs)):
-
             # Apply correction to get modeled BOA
             toa_band_da = self.toa.isel(band=i) if "band" in self.toa.dims else self.toa
             boa_model = coeffs.apply_correction(toa_band_da).values
@@ -306,21 +300,19 @@ class CostFunction:
 
             # Residual
             diff = boa_model - boa_prior_band
-            weight = self.band_weights[i] / (boa_unc_band ** 2)
+            weight = self.band_weights[i] / (boa_unc_band**2)
 
             # Mask invalid pixels
             valid = self.mask & np.isfinite(diff) & np.isfinite(weight)
             weight = np.where(valid, weight, 0.0)
 
             # Cost contribution
-            j_band = 0.5 * np.sum(weight * diff ** 2)
+            j_band = 0.5 * np.sum(weight * diff**2)
             j_obs += j_band
 
             # Gradient via chain rule
             if coeffs.has_jacobian:
-                d_boa_aot, d_boa_tcwv = coeffs.compute_boa_jacobian(
-                    toa_band_da
-                )
+                d_boa_aot, d_boa_tcwv = coeffs.compute_boa_jacobian(toa_band_da)
 
                 dj_aot += weight * diff * d_boa_aot.values
                 dj_tcwv += weight * diff * d_boa_tcwv.values
@@ -344,20 +336,20 @@ class CostFunction:
         diff_aot = aot - self.aot_prior
         weight_aot = np.where(
             valid & np.isfinite(diff_aot) & np.isfinite(self.aot_unc),
-            1.0 / (self.aot_unc ** 2),
+            1.0 / (self.aot_unc**2),
             0.0,
         )
-        j_aot = 0.5 * np.sum(weight_aot * diff_aot ** 2)
+        j_aot = 0.5 * np.sum(weight_aot * diff_aot**2)
         dj_aot = weight_aot * diff_aot
 
         # TCWV prior cost
         diff_tcwv = tcwv - self.tcwv_prior
         weight_tcwv = np.where(
             valid & np.isfinite(diff_tcwv) & np.isfinite(self.tcwv_unc),
-            1.0 / (self.tcwv_unc ** 2),
+            1.0 / (self.tcwv_unc**2),
             0.0,
         )
-        j_tcwv = 0.5 * np.sum(weight_tcwv * diff_tcwv ** 2)
+        j_tcwv = 0.5 * np.sum(weight_tcwv * diff_tcwv**2)
         dj_tcwv = weight_tcwv * diff_tcwv
 
         j_prior = j_aot + j_tcwv
@@ -404,10 +396,10 @@ class CostFunction:
         # Adjoint of forward-difference → gradient w.r.t. field.
         # ∂/∂f[i] Σ φ(f[i+1]-f[i]) = -φ'(f[i+1]-f[i]) + φ'(f[i]-f[i-1])
         grad = np.zeros_like(field)
-        grad[:-1, :] -= dphi_dy   # -φ'(dy[i]) at source i
-        grad[1:, :] += dphi_dy    # +φ'(dy[i]) at target i+1
-        grad[:, :-1] -= dphi_dx   # -φ'(dx[j]) at source j
-        grad[:, 1:] += dphi_dx    # +φ'(dx[j]) at target j+1
+        grad[:-1, :] -= dphi_dy  # -φ'(dy[i]) at source i
+        grad[1:, :] += dphi_dy  # +φ'(dy[i]) at target i+1
+        grad[:, :-1] -= dphi_dx  # -φ'(dx[j]) at source j
+        grad[:, 1:] += dphi_dx  # +φ'(dx[j]) at target j+1
 
         grad *= gamma * gamma
 
@@ -436,9 +428,14 @@ class CostFunction:
         r_dy = np.sqrt(1.0 + (dy * dy) / delta2)
         r_dx = np.sqrt(1.0 + (dx * dx) / delta2)
 
-        cost = gamma * gamma * delta2 * (
-            np.sum(np.where(valid_dy, r_dy - 1.0, 0.0))
-            + np.sum(np.where(valid_dx, r_dx - 1.0, 0.0))
+        cost = (
+            gamma
+            * gamma
+            * delta2
+            * (
+                np.sum(np.where(valid_dy, r_dy - 1.0, 0.0))
+                + np.sum(np.where(valid_dx, r_dx - 1.0, 0.0))
+            )
         )
 
         dphi_dy = np.where(valid_dy, dy / r_dy, 0.0)
@@ -470,31 +467,31 @@ class CostFunction:
         valid = np.asarray(self.mask, dtype=bool)
 
         j_aot, dj_aot = self._masked_pseudo_huber_cost_grad(
-            aot, valid, self.config.aot_gamma, delta,
+            aot,
+            valid,
+            self.config.aot_gamma,
+            delta,
         )
         j_tcwv, dj_tcwv = self._masked_pseudo_huber_cost_grad(
-            tcwv, valid, self.config.tcwv_gamma, delta,
+            tcwv,
+            valid,
+            self.config.tcwv_gamma,
+            delta,
         )
 
         return j_aot + j_tcwv, dj_aot, dj_tcwv
 
-    def observation_cost_only(
-        self, aot: np.ndarray, tcwv: np.ndarray
-    ) -> tuple[float, np.ndarray]:
+    def observation_cost_only(self, aot: np.ndarray, tcwv: np.ndarray) -> tuple[float, np.ndarray]:
         """Compute only observation cost (for diagnostics)."""
         j_obs, dj_aot, dj_tcwv = self._observation_cost(aot, tcwv)
         return j_obs, self._pack_params(dj_aot, dj_tcwv)
 
-    def prior_cost_only(
-        self, aot: np.ndarray, tcwv: np.ndarray
-    ) -> tuple[float, np.ndarray]:
+    def prior_cost_only(self, aot: np.ndarray, tcwv: np.ndarray) -> tuple[float, np.ndarray]:
         """Compute only prior cost (for diagnostics)."""
         j_prior, dj_aot, dj_tcwv = self._prior_cost(aot, tcwv)
         return j_prior, self._pack_params(dj_aot, dj_tcwv)
 
-    def smoothness_cost_only(
-        self, aot: np.ndarray, tcwv: np.ndarray
-    ) -> tuple[float, np.ndarray]:
+    def smoothness_cost_only(self, aot: np.ndarray, tcwv: np.ndarray) -> tuple[float, np.ndarray]:
         """Compute only smoothness cost (for diagnostics)."""
         j_smooth, dj_aot, dj_tcwv = self._smoothness_cost(aot, tcwv)
         return j_smooth, self._pack_params(dj_aot, dj_tcwv)

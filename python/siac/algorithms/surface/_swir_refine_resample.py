@@ -40,17 +40,24 @@ def _resample_da_indirect(
     to avoid a circular import (swir_refine -> this module -> swir_refine).
     """
     from siac.algorithms.surface import swir_refine
+
     return swir_refine._resample_da(data, target_shape, method, template=template)
 
 
 def _shares_spatial_grid(data: xr.DataArray, template: xr.DataArray) -> bool:
     """Return True when *data* already lives on the same x/y grid as *template*."""
-    if data.sizes.get("y") != template.sizes.get("y") or data.sizes.get("x") != template.sizes.get("x"):
+    if data.sizes.get("y") != template.sizes.get("y") or data.sizes.get("x") != template.sizes.get(
+        "x"
+    ):
         return False
     for axis in ("y", "x"):
-        if axis in data.coords and axis in template.coords and not np.array_equal(
-            np.asarray(data.coords[axis].values),
-            np.asarray(template.coords[axis].values),
+        if (
+            axis in data.coords
+            and axis in template.coords
+            and not np.array_equal(
+                np.asarray(data.coords[axis].values),
+                np.asarray(template.coords[axis].values),
+            )
         ):
             return False
     return True
@@ -75,7 +82,12 @@ def _monthly_composite_downsample_method(
     """Pick 'area' for downsampling and 'bilinear' for up/equal-sampling."""
     # Local import to avoid a circular dependency at module-import time.
     from siac.algorithms.surface.brdf_monthly_composite import MonthlyKernelWeightComposite
-    source = composite.kernels.f0 if isinstance(composite, MonthlyKernelWeightComposite) else composite.reflectance
+
+    source = (
+        composite.kernels.f0
+        if isinstance(composite, MonthlyKernelWeightComposite)
+        else composite.reflectance
+    )
     if _is_coarser_target_grid(source, template):
         return "area"
     return "bilinear"
@@ -91,10 +103,14 @@ def _resample_band_cube_to_template(
         return copy_spatial_metadata_like(data.astype(np.float32), template)
 
     target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
-    band_coords = data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
+    band_coords = (
+        data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
+    )
     resampled = xr.concat(
         [
-            _resample_da_indirect(data.sel(band=band, drop=True), target_shape, method, template=template)
+            _resample_da_indirect(
+                data.sel(band=band, drop=True), target_shape, method, template=template
+            )
             for band in band_coords
         ],
         dim=xr.IndexVariable("band", band_coords),
@@ -104,7 +120,9 @@ def _resample_band_cube_to_template(
         coords["y"] = template.coords["y"]
     if "x" in template.coords:
         coords["x"] = template.coords["x"]
-    return copy_spatial_metadata_like(resampled.assign_coords(**coords).astype(np.float32), template)
+    return copy_spatial_metadata_like(
+        resampled.assign_coords(**coords).astype(np.float32), template
+    )
 
 
 def _resample_spatial_field_to_template(
@@ -122,7 +140,9 @@ def _resample_spatial_field_to_template(
         coords["y"] = template.coords["y"]
     if "x" in template.coords:
         coords["x"] = template.coords["x"]
-    return copy_spatial_metadata_like(resampled.assign_coords(**coords).astype(np.float32), template)
+    return copy_spatial_metadata_like(
+        resampled.assign_coords(**coords).astype(np.float32), template
+    )
 
 
 def _resample_brdf_weights_to_template(

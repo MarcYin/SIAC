@@ -124,7 +124,7 @@ def _prefix_exists(prefix: str) -> bool:
     page_token: str | None = None
     while True:
         payload = _list_api(prefix=prefix, page_token=page_token, max_results=1)
-        if (payload.get("items") or []):
+        if payload.get("items") or []:
             return True
         page_token = payload.get("nextPageToken")
         if page_token is None:
@@ -441,7 +441,9 @@ def download_gcs(product: S2Product, dest_dir: Path) -> Path:
     downloaded = len(jobs)
 
     if not any(safe_dir.rglob("*")):
-        raise DataNotFoundError(f"Downloaded {downloaded} objects but SAFE directory is empty: {safe_dir}")
+        raise DataNotFoundError(
+            f"Downloaded {downloaded} objects but SAFE directory is empty: {safe_dir}"
+        )
 
     logger.info("Downloaded %d objects for %s to %s", downloaded, product_id, safe_dir)
     return safe_dir

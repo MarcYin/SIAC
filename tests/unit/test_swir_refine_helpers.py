@@ -179,6 +179,7 @@ def test_query_surface_prior_combines_cloud_mask_resampling_and_invalid_pixels(
             coords={"band": ["B08", "B11"], "y": [0], "x": [0]},
         ),
     )
+
     def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
         return correction
 
@@ -292,9 +293,17 @@ def test_query_surface_prior_excludes_invalid_native_query_pixels_before_resampl
             seen["query_b11"] = float(corrected_query["B11"].values[0, 0])
             coords = {"band": ["B02"], "y": [0], "x": [0]}
             return (
-                xr.DataArray(np.array([[[0.2]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords),
-                xr.DataArray(np.array([[[0.05]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords),
-                xr.DataArray(np.array([[0.02]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0]}),
+                xr.DataArray(
+                    np.array([[[0.2]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords
+                ),
+                xr.DataArray(
+                    np.array([[[0.05]]], dtype=np.float32), dims=["band", "y", "x"], coords=coords
+                ),
+                xr.DataArray(
+                    np.array([[0.02]], dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0], "x": [0]},
+                ),
             )
 
     def fake_correct(self, toa, geometry, aligned_atmo, cloud_mask=None):  # type: ignore[no-untyped-def]
@@ -308,7 +317,11 @@ def test_query_surface_prior_excludes_invalid_native_query_pixels_before_resampl
             return data
         mean_value = float(np.nanmean(np.asarray(data.values, dtype=np.float32)))
         dims = tuple(template.dims) if template is not None else ("y", "x")
-        coords = {dim: template.coords[dim] for dim in dims if template is not None and dim in template.coords}
+        coords = {
+            dim: template.coords[dim]
+            for dim in dims
+            if template is not None and dim in template.coords
+        }
         return xr.DataArray(np.array([[mean_value]], dtype=np.float32), dims=dims, coords=coords)
 
     monkeypatch.setattr(swir_refine.AtmosphericCorrector, "correct", fake_correct)
@@ -378,7 +391,11 @@ def test_query_surface_prior_uses_database_grid_for_knn_query(
             self.median_summary = xr.DataArray(
                 np.zeros((2, 4, 4), dtype=np.float32),
                 dims=["feature", "y", "x"],
-                coords={"feature": ["median_query_0", "median_query_1"], "y": np.arange(4), "x": np.arange(4)},
+                coords={
+                    "feature": ["median_query_0", "median_query_1"],
+                    "y": np.arange(4),
+                    "x": np.arange(4),
+                },
             )
 
         def predict_visible(
@@ -469,7 +486,9 @@ def test_history_month_helpers_cover_wraparound_and_month_end_logic() -> None:
 
     assert january_months[:3] == [(2022, 12), (2023, 1), (2023, 2)]
     assert december_months[:3] == [(2023, 11), (2023, 12), (2024, 1)]
-    assert _month_center_datetime(2024, 2, datetime(2024, 7, 1, 9, 45)) == datetime(2024, 2, 15, 9, 45)
+    assert _month_center_datetime(2024, 2, datetime(2024, 7, 1, 9, 45)) == datetime(
+        2024, 2, 15, 9, 45
+    )
     assert [dt.day for dt in _weekly_sample_dates(2023, 2)] == [1, 8, 15, 22, 28]
 
 
@@ -532,7 +551,9 @@ def test_swir_refine_helper_functions_cover_error_and_fallback_paths() -> None:
     with pytest.raises(TypeError, match="sequence"):
         _resolve_provider_source_bands(SimpleNamespace(source_bands=object()), duplicate_bands)
     with pytest.raises(TypeError, match="SensorBand"):
-        _resolve_provider_source_bands(SimpleNamespace(source_bands=[sensor_config.get_band("B02"), "bad"]), duplicate_bands)
+        _resolve_provider_source_bands(
+            SimpleNamespace(source_bands=[sensor_config.get_band("B02"), "bad"]), duplicate_bands
+        )
 
     class _Provider:
         def get_temporal_brdf_parameters_batch(self, **kwargs):  # type: ignore[no-untyped-def]

@@ -55,9 +55,7 @@ def _as_data_array(value: object) -> xr.DataArray:
     if not isinstance(value, xr.DataArray):
         if isinstance(value, (np.ndarray, np.generic, int, float)):
             return xr.DataArray(np.asarray(value))
-        raise TypeError(
-            f"Expected xr.DataArray, got {type(value).__name__}"
-        )
+        raise TypeError(f"Expected xr.DataArray, got {type(value).__name__}")
     return value
 
 
@@ -80,7 +78,10 @@ def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> x
     coord_updates = {
         dim: reference.coords[dim]
         for dim in (x_dim, y_dim)
-        if dim is not None and dim in out.dims and dim in reference.coords and out.sizes[dim] == reference.sizes[dim]
+        if dim is not None
+        and dim in out.dims
+        and dim in reference.coords
+        and out.sizes[dim] == reference.sizes[dim]
     }
     if coord_updates:
         out = out.assign_coords(coord_updates)
@@ -132,8 +133,7 @@ class GeometryAngles:
             val = getattr(self, name)
             if not isinstance(val, xr.DataArray):
                 raise TypeError(
-                    f"GeometryAngles.{name} must be xr.DataArray, "
-                    f"got {type(val).__name__}"
+                    f"GeometryAngles.{name} must be xr.DataArray, got {type(val).__name__}"
                 )
 
     @property
@@ -206,8 +206,7 @@ class AtmosphericState:
             val = getattr(self, name)
             if not isinstance(val, xr.DataArray):
                 raise TypeError(
-                    f"AtmosphericState.{name} must be xr.DataArray, "
-                    f"got {type(val).__name__}"
+                    f"AtmosphericState.{name} must be xr.DataArray, got {type(val).__name__}"
                 )
 
     def to_emulator_input(self, geometry: GeometryAngles) -> xr.Dataset:
@@ -320,7 +319,9 @@ class RTCoefficients:
             if not key:
                 raise ValueError("RTCoefficients extras keys must be non-empty strings")
             if key in reserved:
-                raise ValueError(f"RTCoefficients extras key {key!r} conflicts with a reserved field")
+                raise ValueError(
+                    f"RTCoefficients extras key {key!r} conflicts with a reserved field"
+                )
             normalized_extras[key] = _as_data_array(value)
         object.__setattr__(self, "extras", MappingProxyType(normalized_extras))
 
@@ -362,7 +363,9 @@ class RTCoefficients:
     def simulate_toa(self, boa: xr.DataArray) -> xr.DataArray:
         """Forward-simulate dimensionless TOA reflectance from BOA reflectance."""
         denom = _as_data_array(1.0 - self.xcp * boa)
-        stable = _as_data_array(np.isfinite(denom) & (np.abs(denom) > 1.0e-6) & (np.abs(self.xap) > 1.0e-12))
+        stable = _as_data_array(
+            np.isfinite(denom) & (np.abs(denom) > 1.0e-6) & (np.abs(self.xap) > 1.0e-12)
+        )
         y = _as_data_array(boa / denom)
         toa = _as_data_array((y + self.xbp) / self.xap)
         return _as_data_array(toa.where(stable))
@@ -374,20 +377,16 @@ class RTCoefficients:
         if not self.has_jacobian:
             raise ValueError("RTCoefficients does not have Jacobian information")
         if self.d_xap is None or self.d_xbp is None or self.d_xcp is None:
-            raise ValueError(
-                "Jacobian arrays (d_xap, d_xbp, d_xcp) must all be non-None"
-            )
+            raise ValueError("Jacobian arrays (d_xap, d_xbp, d_xcp) must all be non-None")
 
         y = _as_data_array(self.xap * toa - self.xbp)
         denom = _as_data_array(1.0 + self.xcp * y)
 
         d_y_aot = _as_data_array(self.d_xap.sel(param="aot") * toa - self.d_xbp.sel(param="aot"))
-        d_y_tcwv = _as_data_array(
-            self.d_xap.sel(param="tcwv") * toa - self.d_xbp.sel(param="tcwv")
-        )
+        d_y_tcwv = _as_data_array(self.d_xap.sel(param="tcwv") * toa - self.d_xbp.sel(param="tcwv"))
 
-        d_denom_aot = _as_data_array(self.d_xcp.sel(param="aot") * y)
-        d_denom_tcwv = _as_data_array(self.d_xcp.sel(param="tcwv") * y)
+        d_denom_aot = _as_data_array(self.d_xcp.sel(param="aot") * y + self.xcp * d_y_aot)
+        d_denom_tcwv = _as_data_array(self.d_xcp.sel(param="tcwv") * y + self.xcp * d_y_tcwv)
 
         d_boa_aot = _as_data_array((d_y_aot * denom - y * d_denom_aot) / (denom**2))
         d_boa_tcwv = _as_data_array((d_y_tcwv * denom - y * d_denom_tcwv) / (denom**2))

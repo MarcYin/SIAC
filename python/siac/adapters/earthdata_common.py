@@ -17,6 +17,7 @@ import xarray as xr
 try:
     from pyhdf.SD import SD, SDC  # type: ignore[import-untyped]
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
+
     class _MissingSDC:
         READ = 0
 
@@ -32,9 +33,7 @@ from siac.geo.reprojection import transform_bounds
 if TYPE_CHECKING:
     from rasterio.enums import Resampling
 
-MODLAND_SINUSOIDAL_CRS = (
-    "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
-)
+MODLAND_SINUSOIDAL_CRS = "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
 _MODLAND_TILE_SIZE_M = 1111950.5196666666
 _MODLAND_X_MIN_M = -20015109.354
 _MODLAND_Y_MAX_M = 10007554.677
@@ -86,7 +85,9 @@ def decode_attr(value: Any) -> Any:
     return value
 
 
-def attr_scalar(attrs: dict[str, Any], key: str, default: float | int | None = None) -> float | int | None:
+def attr_scalar(
+    attrs: dict[str, Any], key: str, default: float | int | None = None
+) -> float | int | None:
     """Return a numeric scalar attribute value."""
     if key not in attrs:
         return default
@@ -97,7 +98,13 @@ def attr_scalar(attrs: dict[str, Any], key: str, default: float | int | None = N
         value = value[0]
     if value is None:
         return default
-    return float(value) if isinstance(value, float) else int(value) if isinstance(value, int) else float(value)
+    return (
+        float(value)
+        if isinstance(value, float)
+        else int(value)
+        if isinstance(value, int)
+        else float(value)
+    )
 
 
 def parse_tile_indices(path: str | Path) -> tuple[int, int]:
@@ -159,9 +166,7 @@ def _parse_hdf5_grid_metadata(path: str) -> dict[str, dict[str, Any]]:
     for match in _GRID_METADATA_RE.finditer(metadata):
         name = match.group("name")
         projparams = [
-            float(value.strip())
-            for value in match.group("projparams").split(",")
-            if value.strip()
+            float(value.strip()) for value in match.group("projparams").split(",") if value.strip()
         ]
         radius = float(projparams[0]) if projparams else 6371007.181
         central_meridian = 0.0
@@ -477,7 +482,9 @@ def read_hdf4_dataset(path: str | Path, dataset_name: str) -> tuple[np.ndarray, 
     """Read an HDF4 SDS plus decoded attributes."""
     sd = SD(str(path), SDC.READ)
     sds = sd.select(dataset_name)
-    return np.asarray(sds.get()), {key: decode_attr(value) for key, value in sds.attributes().items()}
+    return np.asarray(sds.get()), {
+        key: decode_attr(value) for key, value in sds.attributes().items()
+    }
 
 
 def read_hdf4_dataset_attrs(path: str | Path, dataset_name: str) -> dict[str, Any]:
@@ -535,7 +542,9 @@ def read_hdf5_dataset(path: str | Path, dataset_name: str) -> tuple[np.ndarray, 
     """Read an HDF5 dataset plus decoded attributes."""
     with h5py.File(path, "r") as handle:
         dataset = handle[dataset_name]
-        return np.asarray(dataset[...]), {key: decode_attr(value) for key, value in dataset.attrs.items()}
+        return np.asarray(dataset[...]), {
+            key: decode_attr(value) for key, value in dataset.attrs.items()
+        }
 
 
 def read_hdf5_dataset_attrs(path: str | Path, dataset_name: str) -> dict[str, Any]:

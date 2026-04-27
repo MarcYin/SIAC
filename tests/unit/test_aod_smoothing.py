@@ -93,7 +93,9 @@ def test_smoothers_fill_gaps_and_holdout_scoring_is_finite() -> None:
     assert np.all(np.isfinite(nearest))
     np.testing.assert_array_equal(preserved[seed_mask], aot[seed_mask])
 
-    holdout = sample_holdout_mask(seed_mask, rng_seed=3, holdout_fraction=0.25, min_holdout=1, max_holdout=2)
+    holdout = sample_holdout_mask(
+        seed_mask, rng_seed=3, holdout_fraction=0.25, min_holdout=1, max_holdout=2
+    )
     metrics = score_holdout(harmonic, aot, holdout)
     assert metrics.valid_count >= 1
     assert np.isfinite(metrics.mae)

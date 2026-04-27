@@ -39,12 +39,17 @@ def _feature_names_for_query_bands(query_bands: Sequence[str]) -> tuple[str, ...
     return query_names + median_names
 
 
-def _dataset_to_cube(dataset_or_array: xr.Dataset | xr.DataArray, band_names: Sequence[str]) -> xr.DataArray:
+def _dataset_to_cube(
+    dataset_or_array: xr.Dataset | xr.DataArray, band_names: Sequence[str]
+) -> xr.DataArray:
     if isinstance(dataset_or_array, xr.DataArray):
         if "band" not in dataset_or_array.dims:
             raise ValueError("DataArray inputs must have a 'band' dimension")
         return dataset_or_array.sel(band=list(band_names))
-    return xr.concat([dataset_or_array[name] for name in band_names], dim=xr.IndexVariable("band", list(band_names)))
+    return xr.concat(
+        [dataset_or_array[name] for name in band_names],
+        dim=xr.IndexVariable("band", list(band_names)),
+    )
 
 
 def _resample_summary_to_query_grid(
@@ -120,7 +125,9 @@ class MonthlyCompositeDatabase:
         if k_neighbors < 1:
             raise ValueError("k_neighbors must be >= 1")
 
-        query_cube = _dataset_to_cube(corrected_reflectance, self.query_band_names).astype(np.float32)
+        query_cube = _dataset_to_cube(corrected_reflectance, self.query_band_names).astype(
+            np.float32
+        )
         query_summary = _resample_summary_to_query_grid(self.median_summary, query_cube)
 
         query_values = np.asarray(query_cube.values, dtype=np.float32)
@@ -143,7 +150,9 @@ class MonthlyCompositeDatabase:
             coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
             predicted_da = xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords)
             uncertainty_da = xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords)
-            quality_da = xr.DataArray(quality, dims=["y", "x"], coords={"y": y_coords, "x": x_coords})
+            quality_da = xr.DataArray(
+                quality, dims=["y", "x"], coords={"y": y_coords, "x": x_coords}
+            )
             source_fit_da = xr.DataArray(
                 source_fit_rmse,
                 dims=["y", "x"],
@@ -157,9 +166,15 @@ class MonthlyCompositeDatabase:
             return _MonthlyPredictionDiagnostics(
                 copy_spatial_metadata_like(predicted_da, query_cube),
                 copy_spatial_metadata_like(uncertainty_da, query_cube),
-                copy_spatial_metadata_like(quality_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))),
-                copy_spatial_metadata_like(source_fit_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))),
-                copy_spatial_metadata_like(distance_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))),
+                copy_spatial_metadata_like(
+                    quality_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))
+                ),
+                copy_spatial_metadata_like(
+                    source_fit_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))
+                ),
+                copy_spatial_metadata_like(
+                    distance_da, cast("xr.DataArray", query_cube.isel(band=0, drop=True))
+                ),
             )
 
         features_flat = np.empty((n_pixels, n_query + median_values.shape[0]), dtype=np.float32)
@@ -224,8 +239,7 @@ class MonthlyCompositeDatabase:
             estimate = np.sum(nz_visible * weights[..., np.newaxis], axis=1)
             spread = np.sqrt(
                 np.sum(
-                    ((nz_visible - estimate[:, np.newaxis, :]) ** 2)
-                    * weights[..., np.newaxis],
+                    ((nz_visible - estimate[:, np.newaxis, :]) ** 2) * weights[..., np.newaxis],
                     axis=1,
                 )
             )
@@ -299,8 +313,12 @@ def build_monthly_composite_database(
     for index, composite in enumerate(composites):
         if composite.reflectance.sizes.get("y") != ny or composite.reflectance.sizes.get("x") != nx:
             raise ValueError("All monthly composites must share the same spatial shape")
-        query_values[index] = composite.reflectance.sel(band=list(query_names)).values.astype(np.float32)
-        visible_values = composite.reflectance.sel(band=list(visible_names)).values.astype(np.float32)
+        query_values[index] = composite.reflectance.sel(band=list(query_names)).values.astype(
+            np.float32
+        )
+        visible_values = composite.reflectance.sel(band=list(visible_names)).values.astype(
+            np.float32
+        )
         quality_values = composite.quality.values.astype(np.float32)
         source_fit_rmse = getattr(composite, "source_fit_rmse", None)
         source_fit_values = (
@@ -347,7 +365,7 @@ def build_monthly_composite_database(
             median_summary,
             dims=["feature", "y", "x"],
             coords={
-                "feature": list(_feature_names_for_query_bands(query_names)[len(query_names):]),
+                "feature": list(_feature_names_for_query_bands(query_names)[len(query_names) :]),
                 "y": first.coords["y"],
                 "x": first.coords["x"],
             },

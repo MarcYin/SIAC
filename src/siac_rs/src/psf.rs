@@ -82,10 +82,10 @@ impl PSFConvolver {
             for j in 0..width {
                 let mut sum = 0.0_f64;
                 let mut wsum = 0.0_f64;
-                let j_lo = if j >= radius_x { j - radius_x } else { 0 };
+                let j_lo = j.saturating_sub(radius_x);
                 let j_hi = (j + radius_x).min(width - 1);
                 for jj in j_lo..=j_hi {
-                    let d = if jj >= j { jj - j } else { j - jj };
+                    let d = jj.abs_diff(j);
                     let w = weights_x[d];
                     let v = image[[i, jj]];
                     if v.is_finite() {
@@ -103,10 +103,10 @@ impl PSFConvolver {
             for i in 0..height {
                 let mut sum = 0.0_f64;
                 let mut wsum = 0.0_f64;
-                let i_lo = if i >= radius_y { i - radius_y } else { 0 };
+                let i_lo = i.saturating_sub(radius_y);
                 let i_hi = (i + radius_y).min(height - 1);
                 for ii in i_lo..=i_hi {
-                    let d = if ii >= i { ii - i } else { i - ii };
+                    let d = ii.abs_diff(i);
                     let w = weights_y[d];
                     let v = tmp[[ii, j]];
                     if v.is_finite() {

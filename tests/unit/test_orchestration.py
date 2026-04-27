@@ -34,8 +34,12 @@ def _empty_auth():
 
 def test_siac_from_helpers(monkeypatch):
     cfg = SIACConfig(sensor="s2")
-    monkeypatch.setattr("siac.api.public.CredentialManager.from_config", lambda _config: _empty_auth())
-    monkeypatch.setattr("siac.api.public.SIACConfig.from_file", classmethod(lambda _cls, _path: cfg))
+    monkeypatch.setattr(
+        "siac.api.public.CredentialManager.from_config", lambda _config: _empty_auth()
+    )
+    monkeypatch.setattr(
+        "siac.api.public.SIACConfig.from_file", classmethod(lambda _cls, _path: cfg)
+    )
 
     siac_from_file = SIAC.from_config("dummy.toml")
     siac_default = SIAC.from_defaults(sensor="l8")
@@ -47,7 +51,9 @@ def test_siac_from_helpers(monkeypatch):
 
 def test_siac_process_delegates_with_scene_request(monkeypatch, tmp_path):
     cfg = SIACConfig(sensor="s2")
-    monkeypatch.setattr("siac.api.public.CredentialManager.from_config", lambda _config: _empty_auth())
+    monkeypatch.setattr(
+        "siac.api.public.CredentialManager.from_config", lambda _config: _empty_auth()
+    )
 
     captured: dict[str, object] = {}
 
@@ -58,7 +64,9 @@ def test_siac_process_delegates_with_scene_request(monkeypatch, tmp_path):
     monkeypatch.setattr("siac.api.public.workflow_process_scene", _fake_process_scene)
 
     siac_obj = SIAC(cfg)
-    result = siac_obj.process(tmp_path / "in.SAFE", output_path=tmp_path / "out", aoi=[1.0, 2.0, 3.0, 4.0])
+    result = siac_obj.process(
+        tmp_path / "in.SAFE", output_path=tmp_path / "out", aoi=[1.0, 2.0, 3.0, 4.0]
+    )
 
     assert result.metadata["ok"] is True
     request = captured["request"]
@@ -95,7 +103,9 @@ def test_sensor_wrappers_delegate(monkeypatch):
             calls.append((input_path, output_path, kwargs))
             return "ok"
 
-    monkeypatch.setattr("siac.api.public.SIAC.from_defaults", lambda sensor: calls.append(sensor) or _Runner())
+    monkeypatch.setattr(
+        "siac.api.public.SIAC.from_defaults", lambda sensor: calls.append(sensor) or _Runner()
+    )
 
     assert process_sentinel2("in1", "out1", aoi="a.geojson") == "ok"
     assert process_landsat8("in2", "out2") == "ok"

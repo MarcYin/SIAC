@@ -45,10 +45,9 @@ class TestPipelineSmoke:
 
         toa_vals = np.random.RandomState(42).uniform(0.05, 0.35, (3, *shape)).astype(np.float32)
         toa_da = xr.DataArray(toa_vals, dims=["band", "y", "x"])
-        toa_ds = xr.Dataset({
-            b.name: xr.DataArray(toa_vals[i], dims=["y", "x"])
-            for i, b in enumerate(bands_list)
-        })
+        toa_ds = xr.Dataset(
+            {b.name: xr.DataArray(toa_vals[i], dims=["y", "x"]) for i, b in enumerate(bands_list)}
+        )
 
         # Geometry
         geometry = GeometryAngles(
@@ -129,9 +128,7 @@ class TestPipelineSmoke:
 
         # Run corrector
         corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
-        correction_result = corrector.correct(
-            scene["toa_ds"], scene["geometry"], solved_atmo
-        )
+        correction_result = corrector.correct(scene["toa_ds"], scene["geometry"], solved_atmo)
 
         # BOA should be in physically valid range
         for band_name in ["B02", "B03", "B04"]:
@@ -146,9 +143,7 @@ class TestPipelineSmoke:
         scene = synthetic_scene
 
         corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
-        result = corrector.correct(
-            scene["toa_ds"], scene["geometry"], scene["atmo_prior"]
-        )
+        result = corrector.correct(scene["toa_ds"], scene["geometry"], scene["atmo_prior"])
 
         assert len(result.boa.data_vars) == 3
         for band_name in result.boa.data_vars:
@@ -160,6 +155,7 @@ class TestPipelineSmoke:
 # =====================================================================
 # Layer 4 — Pipeline orchestration (run_pipeline)
 # =====================================================================
+
 
 @pytest.mark.integration
 class TestRunPipeline:
@@ -225,15 +221,25 @@ class TestRunPipeline:
         def correct(obs, solved, rt):
             call_counts["m6"] += 1
             return CorrectionResult(
-                boa=obs.toa, boa_unc=None, aot=solved.aot,
-                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+                boa=obs.toa,
+                boa_unc=None,
+                aot=solved.aot,
+                tcwv=solved.tcwv,
+                cloud_mask=obs.cloud_mask,
+                metadata={},
             )
 
         run_pipeline(
-            Path("/fake"), None, None,
-            preprocessor=pp, atmo_provider=atmo,
-            surface_prior_provider=surf, grid_assembler=assemble,
-            solver=solve, corrector=correct, rt_model=mock_rt_model,
+            Path("/fake"),
+            None,
+            None,
+            preprocessor=pp,
+            atmo_provider=atmo,
+            surface_prior_provider=surf,
+            grid_assembler=assemble,
+            solver=solve,
+            corrector=correct,
+            rt_model=mock_rt_model,
         )
         assert all(v == 1 for v in call_counts.values()), call_counts
 
@@ -273,15 +279,25 @@ class TestRunPipeline:
         def correct(obs, solved, rt):
             order.append("m6")
             return CorrectionResult(
-                boa=obs.toa, boa_unc=None, aot=solved.aot,
-                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+                boa=obs.toa,
+                boa_unc=None,
+                aot=solved.aot,
+                tcwv=solved.tcwv,
+                cloud_mask=obs.cloud_mask,
+                metadata={},
             )
 
         run_pipeline(
-            Path("/fake"), None, None,
-            preprocessor=pp, atmo_provider=atmo,
-            surface_prior_provider=surf, grid_assembler=assemble,
-            solver=solve, corrector=correct, rt_model=mock_rt_model,
+            Path("/fake"),
+            None,
+            None,
+            preprocessor=pp,
+            atmo_provider=atmo,
+            surface_prior_provider=surf,
+            grid_assembler=assemble,
+            solver=solve,
+            corrector=correct,
+            rt_model=mock_rt_model,
         )
         assert order.index("m1") < order.index("m4")
         assert order.index("m4") < order.index("m5")
@@ -298,7 +314,9 @@ class TestRunPipeline:
         mock_rt_model,
     ):
         result = run_pipeline(
-            Path("/fake"), None, None,
+            Path("/fake"),
+            None,
+            None,
             preprocessor=mock_preprocessor,
             atmo_provider=mock_atmo_provider,
             surface_prior_provider=mock_surface_prior_provider,
@@ -325,8 +343,9 @@ class TestPipelineValidation:
         mock_corrector_fn,
         mock_rt_model,
     ):
-        bad_meta = {k: v for k, v in mock_observation_bundle.metadata.items()
-                    if k != "observation_time"}
+        bad_meta = {
+            k: v for k, v in mock_observation_bundle.metadata.items() if k != "observation_time"
+        }
         bad_obs = dataclasses.replace(mock_observation_bundle, metadata=bad_meta)
 
         def bad_pp(path, aoi=None):
@@ -334,7 +353,9 @@ class TestPipelineValidation:
 
         with pytest.raises(ValidationError, match="observation_time"):
             run_pipeline(
-                Path("/fake"), None, None,
+                Path("/fake"),
+                None,
+                None,
                 preprocessor=bad_pp,
                 atmo_provider=mock_atmo_provider,
                 surface_prior_provider=mock_surface_prior_provider,
@@ -367,7 +388,9 @@ class TestPipelineValidation:
 
         with pytest.raises(ValidationError, match="non-negative"):
             run_pipeline(
-                Path("/fake"), None, None,
+                Path("/fake"),
+                None,
+                None,
                 preprocessor=mock_preprocessor,
                 atmo_provider=bad_m2,
                 surface_prior_provider=mock_surface_prior_provider,
@@ -391,7 +414,9 @@ class TestPipelineValidation:
 
         with pytest.raises(FileNotFoundError, match="SAFE dir missing"):
             run_pipeline(
-                Path("/fake"), None, None,
+                Path("/fake"),
+                None,
+                None,
                 preprocessor=bad_pp,
                 atmo_provider=mock_atmo_provider,
                 surface_prior_provider=mock_surface_prior_provider,
@@ -435,16 +460,26 @@ class TestConcurrency:
 
         def correct(obs, solved, rt):
             return CorrectionResult(
-                boa=obs.toa, boa_unc=None, aot=solved.aot,
-                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+                boa=obs.toa,
+                boa_unc=None,
+                aot=solved.aot,
+                tcwv=solved.tcwv,
+                cloud_mask=obs.cloud_mask,
+                metadata={},
             )
 
         t0 = time.monotonic()
         run_pipeline(
-            Path("/fake"), None, None,
-            preprocessor=pp, atmo_provider=slow_m2,
-            surface_prior_provider=slow_m3, grid_assembler=assemble,
-            solver=solve, corrector=correct, rt_model=mock_rt_model,
+            Path("/fake"),
+            None,
+            None,
+            preprocessor=pp,
+            atmo_provider=slow_m2,
+            surface_prior_provider=slow_m3,
+            grid_assembler=assemble,
+            solver=solve,
+            corrector=correct,
+            rt_model=mock_rt_model,
         )
         elapsed = time.monotonic() - t0
         # If truly concurrent, should take ~0.3s not ~0.6s
@@ -478,8 +513,12 @@ class TestConcurrency:
 
         def correct(obs, solved, rt):
             return CorrectionResult(
-                boa=obs.toa, boa_unc=None, aot=solved.aot,
-                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+                boa=obs.toa,
+                boa_unc=None,
+                aot=solved.aot,
+                tcwv=solved.tcwv,
+                cloud_mask=obs.cloud_mask,
+                metadata={},
             )
 
         calls: dict[str, object] = {"started": False, "n_bands": 0}
@@ -492,10 +531,16 @@ class TestConcurrency:
 
         t0 = time.monotonic()
         run_pipeline(
-            Path("/fake"), None, None,
-            preprocessor=pp, atmo_provider=slow_m2,
-            surface_prior_provider=slow_m3, grid_assembler=assemble,
-            solver=solve, corrector=correct, rt_model=_RTWithPreload(),
+            Path("/fake"),
+            None,
+            None,
+            preprocessor=pp,
+            atmo_provider=slow_m2,
+            surface_prior_provider=slow_m3,
+            grid_assembler=assemble,
+            solver=solve,
+            corrector=correct,
+            rt_model=_RTWithPreload(),
         )
         elapsed = time.monotonic() - t0
 
@@ -543,8 +588,12 @@ class TestConcurrency:
         def correct(obs, solved, rt):
             _ = (rt,)
             return CorrectionResult(
-                boa=obs.toa, boa_unc=None, aot=solved.aot,
-                tcwv=solved.tcwv, cloud_mask=obs.cloud_mask, metadata={},
+                boa=obs.toa,
+                boa_unc=None,
+                aot=solved.aot,
+                tcwv=solved.tcwv,
+                cloud_mask=obs.cloud_mask,
+                metadata={},
             )
 
         class _RTWithPreload:
@@ -555,16 +604,24 @@ class TestConcurrency:
 
         t0 = time.monotonic()
         run_pipeline(
-            Path("/fake"), None, None,
-            preprocessor=pp, atmo_provider=slow_m2,
-            surface_prior_provider=route_b_surface, grid_assembler=assemble,
-            solver=solve, corrector=correct, rt_model=_RTWithPreload(),
+            Path("/fake"),
+            None,
+            None,
+            preprocessor=pp,
+            atmo_provider=slow_m2,
+            surface_prior_provider=route_b_surface,
+            grid_assembler=assemble,
+            solver=solve,
+            corrector=correct,
+            rt_model=_RTWithPreload(),
         )
         elapsed = time.monotonic() - t0
 
         assert calls["atmo_seen"] is mock_atmospheric_state
         assert calls["started"] is True
-        assert elapsed < 0.72, f"Elapsed {elapsed:.2f}s suggests Route-B M3 did not overlap LUT preload."
+        assert elapsed < 0.72, (
+            f"Elapsed {elapsed:.2f}s suggests Route-B M3 did not overlap LUT preload."
+        )
 
     def test_run_pipeline_dispatches_backend(self, monkeypatch):
         calls = {}

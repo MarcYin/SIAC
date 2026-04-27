@@ -90,14 +90,22 @@ def _weights(
         return out.rio.write_crs("EPSG:32615").rio.write_transform(transform)
 
     if times is None:
-        coords = {"band": ["B02"], "y": np.arange(f0_values.shape[1]), "x": np.arange(f0_values.shape[2])}
+        coords = {
+            "band": ["B02"],
+            "y": np.arange(f0_values.shape[1]),
+            "x": np.arange(f0_values.shape[2]),
+        }
         arrays = {
             "f0": xr.DataArray(f0_values, dims=["band", "y", "x"], coords=coords),
             "f1": xr.DataArray(np.zeros_like(f0_values), dims=["band", "y", "x"], coords=coords),
             "f2": xr.DataArray(np.zeros_like(f0_values), dims=["band", "y", "x"], coords=coords),
             "f0_unc": xr.DataArray(f0_unc_values, dims=["band", "y", "x"], coords=coords),
-            "f1_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords=coords),
-            "f2_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords=coords),
+            "f1_unc": xr.DataArray(
+                np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords=coords
+            ),
+            "f2_unc": xr.DataArray(
+                np.full_like(f0_unc_values, 0.01), dims=["band", "y", "x"], coords=coords
+            ),
         }
         if georeferenced:
             arrays = {name: _with_geo(data) for name, data in arrays.items()}
@@ -115,8 +123,12 @@ def _weights(
         "f1": xr.DataArray(zeros, dims=["time", "band", "y", "x"], coords=coords),
         "f2": xr.DataArray(zeros, dims=["time", "band", "y", "x"], coords=coords),
         "f0_unc": xr.DataArray(f0_unc_values, dims=["time", "band", "y", "x"], coords=coords),
-        "f1_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords),
-        "f2_unc": xr.DataArray(np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords),
+        "f1_unc": xr.DataArray(
+            np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords
+        ),
+        "f2_unc": xr.DataArray(
+            np.full_like(f0_unc_values, 0.01), dims=["time", "band", "y", "x"], coords=coords
+        ),
     }
     if georeferenced:
         arrays = {name: _with_geo(data) for name, data in arrays.items()}
@@ -125,7 +137,10 @@ def _weights(
 
 def test_whittaker_deriver_fills_center_gap_and_returns_surface_prior() -> None:
     times = np.array(
-        [(datetime(2024, 7, 15) + timedelta(days=offset)).date().isoformat() for offset in (-2, -1, 0, 1, 2)],
+        [
+            (datetime(2024, 7, 15) + timedelta(days=offset)).date().isoformat()
+            for offset in (-2, -1, 0, 1, 2)
+        ],
         dtype="datetime64[D]",
     )
     f0 = np.array([0.10, 0.12, np.nan, 0.16, 0.18], dtype=np.float32).reshape(5, 1, 1, 1)
@@ -152,7 +167,10 @@ def test_whittaker_deriver_fills_center_gap_and_returns_surface_prior() -> None:
 
 def test_whittaker_deriver_defaults_when_all_temporal_samples_missing() -> None:
     times = np.array(
-        [(datetime(2024, 7, 15) + timedelta(days=offset)).date().isoformat() for offset in (-1, 0, 1)],
+        [
+            (datetime(2024, 7, 15) + timedelta(days=offset)).date().isoformat()
+            for offset in (-1, 0, 1)
+        ],
         dtype="datetime64[D]",
     )
     shape = (3, 1, 1, 1)

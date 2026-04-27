@@ -182,11 +182,17 @@ def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
             crs=cast("str | None", getattr(args, "aoi_crs", None)),
         )
     if getattr(args, "aoi_file", None) is not None:
-        return AOI.from_geojson(args.aoi_file, crs=cast("str | None", getattr(args, "aoi_crs", None)))
+        return AOI.from_geojson(
+            args.aoi_file, crs=cast("str | None", getattr(args, "aoi_crs", None))
+        )
     if getattr(args, "aoi_wkt", None) is not None:
-        return AOI.from_geojson(args.aoi_wkt, crs=cast("str | None", getattr(args, "aoi_crs", None)))
+        return AOI.from_geojson(
+            args.aoi_wkt, crs=cast("str | None", getattr(args, "aoi_crs", None))
+        )
     if getattr(args, "aoi", None) is not None:
-        return AOI.from_geojson(Path(args.aoi), crs=cast("str | None", getattr(args, "aoi_crs", None)))
+        return AOI.from_geojson(
+            Path(args.aoi), crs=cast("str | None", getattr(args, "aoi_crs", None))
+        )
     return None
 
 

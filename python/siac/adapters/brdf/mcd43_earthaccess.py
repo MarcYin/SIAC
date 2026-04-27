@@ -71,7 +71,13 @@ except (ImportError, AttributeError):  # pragma: no cover
 
 # Combined tuple used in except clauses throughout this module.
 _DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
-    OSError, KeyError, ValueError, TypeError, RuntimeError, _HDF4Error, _HDF5Error,
+    OSError,
+    KeyError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    _HDF4Error,
+    _HDF5Error,
 )
 
 _BEST_QA_REFLECTANCE_UNCERTAINTY = 0.015
@@ -286,7 +292,11 @@ class _EarthAccessBRDFProvider:
             raise ValueError("bands must be a non-empty sequence")
 
         requested = self._resolve_requested_bands(list(bands))
-        time_axis = self._coerce_sample_time_axis(sample_dates) if sample_dates is not None else self._time_axis(obs_time, temporal_window)
+        time_axis = (
+            self._coerce_sample_time_axis(sample_dates)
+            if sample_dates is not None
+            else self._time_axis(obs_time, temporal_window)
+        )
         logger.info(
             "%s temporal BRDF request: obs_time=%s sample_days=%d resolved_bands=%d",
             self._source_name,
@@ -351,12 +361,16 @@ class _EarthAccessBRDFProvider:
         if not bands:
             raise ValueError("bands must be a non-empty sequence")
         if not (len(obs_times) == len(temporal_windows) == len(sample_date_sets)):
-            raise ValueError("obs_times, temporal_windows, and sample_date_sets must have the same length")
+            raise ValueError(
+                "obs_times, temporal_windows, and sample_date_sets must have the same length"
+            )
 
         requested = self._resolve_requested_bands(list(bands))
         requested_coords = [coord for coord, _band in requested]
         request_specs: list[tuple[datetime, np.ndarray]] = []
-        for obs_time, temporal_window, sample_dates in zip(obs_times, temporal_windows, sample_date_sets, strict=True):
+        for obs_time, temporal_window, sample_dates in zip(
+            obs_times, temporal_windows, sample_date_sets, strict=True
+        ):
             time_axis = (
                 self._coerce_sample_time_axis(sample_dates)
                 if sample_dates is not None
@@ -607,7 +621,9 @@ class _EarthAccessBRDFProvider:
     ) -> list[Path]:
         short_name = self._resolved_short_name()
         unique_granules: dict[str, object] = {}
-        for start_day, end_day, sample_dates in self._merge_search_batches(request_specs, temporal_windows):
+        for start_day, end_day, sample_dates in self._merge_search_batches(
+            request_specs, temporal_windows
+        ):
             temporal = (
                 f"{str(start_day)}T00:00:00Z",
                 f"{str(end_day)}T23:59:59Z",
@@ -632,7 +648,9 @@ class _EarthAccessBRDFProvider:
             )
             return []
 
-        return self._download_granules_to_cache(list(unique_granules.values()), short_name=short_name)
+        return self._download_granules_to_cache(
+            list(unique_granules.values()), short_name=short_name
+        )
 
     def _resolved_short_name(self) -> str:
         return self.short_name or self.catalog.resolve_short_name(self.product_key)
@@ -705,7 +723,8 @@ class _EarthAccessBRDFProvider:
             if not resolved.is_relative_to(cache_root):
                 logger.warning(
                     "Downloaded file %s is outside cache directory %s.",
-                    resolved, cache_root,
+                    resolved,
+                    cache_root,
                 )
         return downloaded
 
@@ -715,7 +734,9 @@ class _EarthAccessBRDFProvider:
         temporal_windows: Sequence[int],
     ) -> list[tuple[Any, Any, np.ndarray]]:
         windows: list[tuple[Any, Any, np.ndarray]] = []
-        for (obs_time, sample_dates), temporal_window in zip(request_specs, temporal_windows, strict=True):
+        for (obs_time, sample_dates), temporal_window in zip(
+            request_specs, temporal_windows, strict=True
+        ):
             days = np.asarray(sample_dates, dtype="datetime64[D]")
             start_day: Any
             end_day: Any
@@ -727,7 +748,9 @@ class _EarthAccessBRDFProvider:
                 start_month = cast("np.datetime64", days.min().astype("datetime64[M]"))
                 end_month = cast("np.datetime64", days.max().astype("datetime64[M]"))
                 start_day = start_month.astype("datetime64[D]")
-                end_month_day: np.datetime64 = (end_month + np.timedelta64(1, "M")).astype("datetime64[D]")
+                end_month_day: np.datetime64 = (end_month + np.timedelta64(1, "M")).astype(
+                    "datetime64[D]"
+                )
                 end_day = end_month_day - np.timedelta64(1, "D")
                 days = np.unique(days).astype("datetime64[D]")
 
@@ -747,7 +770,9 @@ class _EarthAccessBRDFProvider:
             if start_day <= (prev_end + np.timedelta64(1, "D")):
                 merged_start = min(prev_start, start_day)
                 merged_end = max(prev_end, end_day)
-                merged_sample_dates = np.unique(np.concatenate([prev_sample_dates, sample_dates])).astype("datetime64[D]")
+                merged_sample_dates = np.unique(
+                    np.concatenate([prev_sample_dates, sample_dates])
+                ).astype("datetime64[D]")
                 batches[-1] = (merged_start, merged_end, merged_sample_dates)
             else:
                 batches.append((start_day, end_day, sample_dates))
@@ -841,7 +866,9 @@ class _EarthAccessBRDFProvider:
         target_resolution: float,
     ) -> tuple[xr.DataArray, float]:
         try:
-            first_dataset = resolve_gdal_subdataset_path(paths[0], requested[0][1].parameter_dataset)
+            first_dataset = resolve_gdal_subdataset_path(
+                paths[0], requested[0][1].parameter_dataset
+            )
             return build_source_aligned_target_template(
                 first_dataset,
                 bounds=bounds,
@@ -1266,17 +1293,23 @@ class _EarthAccessBRDFProvider:
                     x_size=int(target_template.sizes["x"]),
                 )
             else:
-                logger.info("%s temporal BRDF stack: daily-payload fallback completed", self._source_name)
+                logger.info(
+                    "%s temporal BRDF stack: daily-payload fallback completed", self._source_name
+                )
                 params_values, unc_values = temporal_payload
         else:
-            logger.info("%s temporal BRDF stack: direct temporal VRT read completed", self._source_name)
+            logger.info(
+                "%s temporal BRDF stack: direct temporal VRT read completed", self._source_name
+            )
             params_values, unc_values = temporal_payload
 
         def _coerce_daily(data: xr.DataArray) -> np.ndarray:
             extra_coords = [name for name in data.coords if name not in data.dims]
             if extra_coords:
                 data = data.drop_vars(extra_coords, errors="ignore")
-            daily_values: np.ndarray = np.asarray(data.transpose("band", "y", "x").values, dtype=np.float32)
+            daily_values: np.ndarray = np.asarray(
+                data.transpose("band", "y", "x").values, dtype=np.float32
+            )
             return daily_values
 
         if temporal_payload is None:
@@ -1359,12 +1392,18 @@ class _EarthAccessBRDFProvider:
             param_tiles.append(self._stack_parameter_cube(params))
             qa_tiles.append(qa)
         return (
-            xr.concat(param_tiles, dim=xr.IndexVariable("band", band_coords)).transpose("band", "parameter", "y", "x"),
-            xr.concat(qa_tiles, dim=xr.IndexVariable("band", band_coords)).transpose("band", "y", "x"),
+            xr.concat(param_tiles, dim=xr.IndexVariable("band", band_coords)).transpose(
+                "band", "parameter", "y", "x"
+            ),
+            xr.concat(qa_tiles, dim=xr.IndexVariable("band", band_coords)).transpose(
+                "band", "y", "x"
+            ),
         )
 
     @staticmethod
-    def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
+    def _grid(
+        bounds: tuple[float, float, float, float], resolution: float
+    ) -> tuple[np.ndarray, np.ndarray]:
         return target_grid_coords(bounds, resolution, resolution_name="target_resolution")
 
     def _constant_band_array(
@@ -1600,12 +1639,17 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
         dataset_names: tuple[str, ...],
     ) -> dict[str, tuple[np.ndarray, dict[str, Any]]]:
         if self._read_dataset is _ORIGINAL_HDF4_READER:
-            return cast("dict[str, tuple[np.ndarray, dict[str, Any]]]", read_hdf4_datasets(path, dataset_names))
+            return cast(
+                "dict[str, tuple[np.ndarray, dict[str, Any]]]",
+                read_hdf4_datasets(path, dataset_names),
+            )
         if self._read_dataset is _ORIGINAL_HDF5_READER:
-            return cast("dict[str, tuple[np.ndarray, dict[str, Any]]]", read_hdf5_datasets(path, dataset_names))
+            return cast(
+                "dict[str, tuple[np.ndarray, dict[str, Any]]]",
+                read_hdf5_datasets(path, dataset_names),
+            )
         return {
-            dataset_name: self._read_dataset(path, dataset_name)
-            for dataset_name in dataset_names
+            dataset_name: self._read_dataset(path, dataset_name) for dataset_name in dataset_names
         }
 
     def _read_named_dataset_attrs(
@@ -1664,7 +1708,10 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 [
                     dataset_name
                     for _band_coord, product_band in requested
-                    for dataset_name in (product_band.parameter_dataset, product_band.qa_dataset or "")
+                    for dataset_name in (
+                        product_band.parameter_dataset,
+                        product_band.qa_dataset or "",
+                    )
                 ]
             )
         )
@@ -1693,8 +1740,12 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
             qa_tiles.append(make_native_grid_dataarray(qa, granule_path=path))
 
         return (
-            xr.concat(param_tiles, dim=xr.IndexVariable("band", band_coords)).transpose("band", "parameter", "y", "x"),
-            xr.concat(qa_tiles, dim=xr.IndexVariable("band", band_coords)).transpose("band", "y", "x"),
+            xr.concat(param_tiles, dim=xr.IndexVariable("band", band_coords)).transpose(
+                "band", "parameter", "y", "x"
+            ),
+            xr.concat(qa_tiles, dim=xr.IndexVariable("band", band_coords)).transpose(
+                "band", "y", "x"
+            ),
         )
 
     def _load_requested_payload_vrt(
@@ -1715,7 +1766,10 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 [
                     dataset_name
                     for _band_coord, product_band in requested
-                    for dataset_name in (product_band.parameter_dataset, product_band.qa_dataset or "")
+                    for dataset_name in (
+                        product_band.parameter_dataset,
+                        product_band.qa_dataset or "",
+                    )
                 ]
             )
         )
@@ -1730,12 +1784,17 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
             for _band_coord, product_band in requested:
                 qa_name = product_band.qa_dataset or ""
                 source_groups.append(
-                    [resolve_gdal_subdataset_path(path, product_band.parameter_dataset) for path in paths]
+                    [
+                        resolve_gdal_subdataset_path(path, product_band.parameter_dataset)
+                        for path in paths
+                    ]
                 )
                 group_band_counts.append(3)
                 param_attrs.append(dataset_attrs[product_band.parameter_dataset])
 
-                source_groups.append([resolve_gdal_subdataset_path(path, qa_name) for path in paths])
+                source_groups.append(
+                    [resolve_gdal_subdataset_path(path, qa_name) for path in paths]
+                )
                 group_band_counts.append(1)
                 qa_attrs.append(dataset_attrs[qa_name])
 
@@ -1750,15 +1809,23 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 target_template=target_template,
             )
         except _DATA_READ_ERRORS:
-            logger.debug("%s direct VRT payload path unavailable; falling back to array merge.", self._source_name, exc_info=True)
+            logger.debug(
+                "%s direct VRT payload path unavailable; falling back to array merge.",
+                self._source_name,
+                exc_info=True,
+            )
             return None
 
         layer_values = np.asarray(stacked.values, dtype=np.float32)
-        params_values, unc_values = self._allocate_spatial_payload_arrays(requested, target_template)
+        params_values, unc_values = self._allocate_spatial_payload_arrays(
+            requested, target_template
+        )
 
         offset = 0
         for band_index in range(len(requested)):
-            params_values[band_index] = apply_scale_and_mask(layer_values[offset : offset + 3], param_attrs[band_index])
+            params_values[band_index] = apply_scale_and_mask(
+                layer_values[offset : offset + 3], param_attrs[band_index]
+            )
             offset += 3
             qa_values = apply_scale_and_mask(layer_values[offset], qa_attrs[band_index])
             offset += 1
@@ -1807,7 +1874,11 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
             y_size=int(target_template.sizes["y"]),
             x_size=int(target_template.sizes["x"]),
         )
-        available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
+        available_days = [
+            (time_index, grouped_paths[day])
+            for time_index, day in enumerate(time_axis)
+            if grouped_paths.get(day)
+        ]
         if not available_days:
             return params_values, unc_values
 
@@ -1816,7 +1887,10 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 [
                     dataset_name
                     for _band_coord, product_band in requested
-                    for dataset_name in (product_band.parameter_dataset, product_band.qa_dataset or "")
+                    for dataset_name in (
+                        product_band.parameter_dataset,
+                        product_band.qa_dataset or "",
+                    )
                 ]
             )
         )
@@ -1843,12 +1917,19 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 for band_index, (_band_coord, product_band) in enumerate(requested):
                     qa_name = product_band.qa_dataset or ""
                     source_groups.append(
-                        [resolve_gdal_subdataset_path(path, product_band.parameter_dataset) for path in day_paths]
+                        [
+                            resolve_gdal_subdataset_path(path, product_band.parameter_dataset)
+                            for path in day_paths
+                        ]
                     )
                     group_band_counts.append(3)
-                    entries.append(("params", time_index, band_index, product_band.parameter_dataset))
+                    entries.append(
+                        ("params", time_index, band_index, product_band.parameter_dataset)
+                    )
 
-                    source_groups.append([resolve_gdal_subdataset_path(path, qa_name) for path in day_paths])
+                    source_groups.append(
+                        [resolve_gdal_subdataset_path(path, qa_name) for path in day_paths]
+                    )
                     group_band_counts.append(1)
                     entries.append(("qa", time_index, band_index, qa_name))
 
@@ -1884,7 +1965,11 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
             return None
 
         layer_values = np.asarray(stacked.values, dtype=np.float32)
-        logger.info("%s direct temporal VRT payload: stacked shape=%s", self._source_name, tuple(layer_values.shape))
+        logger.info(
+            "%s direct temporal VRT payload: stacked shape=%s",
+            self._source_name,
+            tuple(layer_values.shape),
+        )
         offset = 0
         for kind, time_index, band_index, dataset_name in entries:
             if kind == "params":
@@ -1921,7 +2006,11 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
             y_size=int(target_template.sizes["y"]),
             x_size=int(target_template.sizes["x"]),
         )
-        available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
+        available_days = [
+            (time_index, grouped_paths[day])
+            for time_index, day in enumerate(time_axis)
+            if grouped_paths.get(day)
+        ]
         if not available_days:
             return params_values, unc_values
 
@@ -1930,16 +2019,27 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 [
                     dataset_name
                     for _band_coord, product_band in requested
-                    for dataset_name in (product_band.parameter_dataset, product_band.qa_dataset or "")
+                    for dataset_name in (
+                        product_band.parameter_dataset,
+                        product_band.qa_dataset or "",
+                    )
                 ]
             )
         )
         day_specs: list[Any] = []
         try:
             dataset_attrs = self._read_named_dataset_attrs(available_days[0][1][0], dataset_names)
-            param_attrs = [dataset_attrs[product_band.parameter_dataset] for _band_coord, product_band in requested]
-            qa_attrs = [dataset_attrs[product_band.qa_dataset or ""] for _band_coord, product_band in requested]
-            target_bounds = _target_bounds_from_template(target_template, resolution=target_resolution)
+            param_attrs = [
+                dataset_attrs[product_band.parameter_dataset]
+                for _band_coord, product_band in requested
+            ]
+            qa_attrs = [
+                dataset_attrs[product_band.qa_dataset or ""]
+                for _band_coord, product_band in requested
+            ]
+            target_bounds = _target_bounds_from_template(
+                target_template, resolution=target_resolution
+            )
             target_crs = str(target_template.rio.crs)
             source_groups: list[list[str]] = []
             group_band_counts: list[int] = []
@@ -1956,10 +2056,15 @@ class _StackParameterProvider(_EarthAccessBRDFProvider):
                 for _band_coord, product_band in requested:
                     qa_name = product_band.qa_dataset or ""
                     day_source_groups.append(
-                        [resolve_gdal_subdataset_path(path, product_band.parameter_dataset) for path in day_paths]
+                        [
+                            resolve_gdal_subdataset_path(path, product_band.parameter_dataset)
+                            for path in day_paths
+                        ]
                     )
                     day_group_band_counts.append(3)
-                    day_source_groups.append([resolve_gdal_subdataset_path(path, qa_name) for path in day_paths])
+                    day_source_groups.append(
+                        [resolve_gdal_subdataset_path(path, qa_name) for path in day_paths]
+                    )
                     day_group_band_counts.append(1)
 
                 day_spec = _build_virtual_stack_vrt(
@@ -2037,13 +2142,62 @@ class MCD43EarthAccessProvider(_StackParameterProvider):
     _source_name = "MCD43"
     _rsrf_sensor_unit_id = "terra_modis"
     _product_bands = (
-        ProductBandDefinition("Band1", 645.0, 50.0, "BRDF_Albedo_Parameters_Band1", "BRDF_Albedo_Band_Mandatory_Quality_Band1", rsrf_band_id="B1"),
-        ProductBandDefinition("Band2", 858.5, 35.0, "BRDF_Albedo_Parameters_Band2", "BRDF_Albedo_Band_Mandatory_Quality_Band2", rsrf_band_id="B2"),
-        ProductBandDefinition("Band3", 469.0, 20.0, "BRDF_Albedo_Parameters_Band3", "BRDF_Albedo_Band_Mandatory_Quality_Band3", rsrf_band_id="B3"),
-        ProductBandDefinition("Band4", 555.0, 20.0, "BRDF_Albedo_Parameters_Band4", "BRDF_Albedo_Band_Mandatory_Quality_Band4", rsrf_band_id="B4"),
-        ProductBandDefinition("Band5", 1240.0, 20.0, "BRDF_Albedo_Parameters_Band5", "BRDF_Albedo_Band_Mandatory_Quality_Band5", rsrf_band_id="B5"),
-        ProductBandDefinition("Band6", 1640.0, 24.0, "BRDF_Albedo_Parameters_Band6", "BRDF_Albedo_Band_Mandatory_Quality_Band6", rsrf_band_id="B6"),
-        ProductBandDefinition("Band7", 2130.0, 50.0, "BRDF_Albedo_Parameters_Band7", "BRDF_Albedo_Band_Mandatory_Quality_Band7", rsrf_band_id="B7"),
+        ProductBandDefinition(
+            "Band1",
+            645.0,
+            50.0,
+            "BRDF_Albedo_Parameters_Band1",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band1",
+            rsrf_band_id="B1",
+        ),
+        ProductBandDefinition(
+            "Band2",
+            858.5,
+            35.0,
+            "BRDF_Albedo_Parameters_Band2",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band2",
+            rsrf_band_id="B2",
+        ),
+        ProductBandDefinition(
+            "Band3",
+            469.0,
+            20.0,
+            "BRDF_Albedo_Parameters_Band3",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band3",
+            rsrf_band_id="B3",
+        ),
+        ProductBandDefinition(
+            "Band4",
+            555.0,
+            20.0,
+            "BRDF_Albedo_Parameters_Band4",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band4",
+            rsrf_band_id="B4",
+        ),
+        ProductBandDefinition(
+            "Band5",
+            1240.0,
+            20.0,
+            "BRDF_Albedo_Parameters_Band5",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band5",
+            rsrf_band_id="B5",
+        ),
+        ProductBandDefinition(
+            "Band6",
+            1640.0,
+            24.0,
+            "BRDF_Albedo_Parameters_Band6",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band6",
+            rsrf_band_id="B6",
+        ),
+        ProductBandDefinition(
+            "Band7",
+            2130.0,
+            50.0,
+            "BRDF_Albedo_Parameters_Band7",
+            "BRDF_Albedo_Band_Mandatory_Quality_Band7",
+            rsrf_band_id="B7",
+        ),
     )
     _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
 
@@ -2205,7 +2359,9 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             }
 
         qa_raw, qa_attrs = datasets["Status_QA"]
-        qa_da = make_native_grid_dataarray(apply_scale_and_mask(qa_raw, qa_attrs), granule_path=path)
+        qa_da = make_native_grid_dataarray(
+            apply_scale_and_mask(qa_raw, qa_attrs), granule_path=path
+        )
         param_tiles = []
         qa_tiles = []
         for label in labels:
@@ -2215,17 +2371,27 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             param_tiles.append(
                 self._stack_parameter_cube(
                     (
-                        make_native_grid_dataarray(apply_scale_and_mask(f0_raw, f0_attrs), granule_path=path),
-                        make_native_grid_dataarray(apply_scale_and_mask(f1_raw, f1_attrs), granule_path=path),
-                        make_native_grid_dataarray(apply_scale_and_mask(f2_raw, f2_attrs), granule_path=path),
+                        make_native_grid_dataarray(
+                            apply_scale_and_mask(f0_raw, f0_attrs), granule_path=path
+                        ),
+                        make_native_grid_dataarray(
+                            apply_scale_and_mask(f1_raw, f1_attrs), granule_path=path
+                        ),
+                        make_native_grid_dataarray(
+                            apply_scale_and_mask(f2_raw, f2_attrs), granule_path=path
+                        ),
                     )
                 )
             )
             qa_tiles.append(qa_da)
 
         return (
-            xr.concat(param_tiles, dim=xr.IndexVariable("band", band_coords)).transpose("band", "parameter", "y", "x"),
-            xr.concat(qa_tiles, dim=xr.IndexVariable("band", band_coords)).transpose("band", "y", "x"),
+            xr.concat(param_tiles, dim=xr.IndexVariable("band", band_coords)).transpose(
+                "band", "parameter", "y", "x"
+            ),
+            xr.concat(qa_tiles, dim=xr.IndexVariable("band", band_coords)).transpose(
+                "band", "y", "x"
+            ),
         )
 
     def _load_requested_payload_vrt(
@@ -2263,10 +2429,14 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                     f"Kvol_Band{label}",
                     f"Kgeo_Band{label}",
                 ):
-                    source_groups.append([resolve_gdal_subdataset_path(path, dataset_name) for path in paths])
+                    source_groups.append(
+                        [resolve_gdal_subdataset_path(path, dataset_name) for path in paths]
+                    )
                     group_band_counts.append(1)
 
-            source_groups.append([resolve_gdal_subdataset_path(path, "Status_QA") for path in paths])
+            source_groups.append(
+                [resolve_gdal_subdataset_path(path, "Status_QA") for path in paths]
+            )
             group_band_counts.append(1)
 
             stacked = read_virtual_stack_to_target(
@@ -2280,18 +2450,30 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                 target_template=target_template,
             )
         except _DATA_READ_ERRORS:
-            logger.debug("%s direct VRT payload path unavailable; falling back to array merge.", self._source_name, exc_info=True)
+            logger.debug(
+                "%s direct VRT payload path unavailable; falling back to array merge.",
+                self._source_name,
+                exc_info=True,
+            )
             return None
 
         layer_values = np.asarray(stacked.values, dtype=np.float32)
-        params_values, _unused_unc_values = self._allocate_spatial_payload_arrays(requested, target_template)
+        params_values, _unused_unc_values = self._allocate_spatial_payload_arrays(
+            requested, target_template
+        )
         offset = 0
         for band_index, label in enumerate(labels):
-            params_values[band_index, 0] = apply_scale_and_mask(layer_values[offset], dataset_attrs[f"Kiso_Band{label}"])
+            params_values[band_index, 0] = apply_scale_and_mask(
+                layer_values[offset], dataset_attrs[f"Kiso_Band{label}"]
+            )
             offset += 1
-            params_values[band_index, 1] = apply_scale_and_mask(layer_values[offset], dataset_attrs[f"Kvol_Band{label}"])
+            params_values[band_index, 1] = apply_scale_and_mask(
+                layer_values[offset], dataset_attrs[f"Kvol_Band{label}"]
+            )
             offset += 1
-            params_values[band_index, 2] = apply_scale_and_mask(layer_values[offset], dataset_attrs[f"Kgeo_Band{label}"])
+            params_values[band_index, 2] = apply_scale_and_mask(
+                layer_values[offset], dataset_attrs[f"Kgeo_Band{label}"]
+            )
             offset += 1
 
         qa_values = apply_scale_and_mask(layer_values[offset], dataset_attrs["Status_QA"])
@@ -2342,7 +2524,11 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             y_size=int(target_template.sizes["y"]),
             x_size=int(target_template.sizes["x"]),
         )
-        available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
+        available_days = [
+            (time_index, grouped_paths[day])
+            for time_index, day in enumerate(time_axis)
+            if grouped_paths.get(day)
+        ]
         if not available_days:
             return params_values, unc_values
 
@@ -2380,11 +2566,17 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                             f"Kgeo_Band{label}",
                         )
                     ):
-                        source_groups.append([resolve_gdal_subdataset_path(path, dataset_name) for path in day_paths])
+                        source_groups.append(
+                            [resolve_gdal_subdataset_path(path, dataset_name) for path in day_paths]
+                        )
                         group_band_counts.append(1)
-                        entries.append(("param", time_index, band_index, parameter_index, dataset_name))
+                        entries.append(
+                            ("param", time_index, band_index, parameter_index, dataset_name)
+                        )
 
-                source_groups.append([resolve_gdal_subdataset_path(path, "Status_QA") for path in day_paths])
+                source_groups.append(
+                    [resolve_gdal_subdataset_path(path, "Status_QA") for path in day_paths]
+                )
                 group_band_counts.append(1)
                 entries.append(("qa", time_index, -1, -1, "Status_QA"))
 
@@ -2420,7 +2612,11 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             return None
 
         layer_values = np.asarray(stacked.values, dtype=np.float32)
-        logger.info("%s direct temporal VRT payload: stacked shape=%s", self._source_name, tuple(layer_values.shape))
+        logger.info(
+            "%s direct temporal VRT payload: stacked shape=%s",
+            self._source_name,
+            tuple(layer_values.shape),
+        )
         offset = 0
         for kind, time_index, band_index, parameter_index, dataset_name in entries:
             if kind == "param":
@@ -2458,7 +2654,11 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
             y_size=int(target_template.sizes["y"]),
             x_size=int(target_template.sizes["x"]),
         )
-        available_days = [(time_index, grouped_paths[day]) for time_index, day in enumerate(time_axis) if grouped_paths.get(day)]
+        available_days = [
+            (time_index, grouped_paths[day])
+            for time_index, day in enumerate(time_axis)
+            if grouped_paths.get(day)
+        ]
         if not available_days:
             return params_values, unc_values
 
@@ -2471,7 +2671,9 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
         day_specs: list[Any] = []
         try:
             dataset_attrs = read_hdf4_datasets_attrs(available_days[0][1][0], unique_dataset_names)
-            target_bounds = _target_bounds_from_template(target_template, resolution=target_resolution)
+            target_bounds = _target_bounds_from_template(
+                target_template, resolution=target_resolution
+            )
             target_crs = str(target_template.rio.crs)
             source_groups: list[list[str]] = []
             group_band_counts: list[int] = []
@@ -2491,10 +2693,14 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
                         f"Kvol_Band{label}",
                         f"Kgeo_Band{label}",
                     ):
-                        day_source_groups.append([resolve_gdal_subdataset_path(path, dataset_name) for path in day_paths])
+                        day_source_groups.append(
+                            [resolve_gdal_subdataset_path(path, dataset_name) for path in day_paths]
+                        )
                         day_group_band_counts.append(1)
 
-                day_source_groups.append([resolve_gdal_subdataset_path(path, "Status_QA") for path in day_paths])
+                day_source_groups.append(
+                    [resolve_gdal_subdataset_path(path, "Status_QA") for path in day_paths]
+                )
                 day_group_band_counts.append(1)
 
                 day_spec = _build_virtual_stack_vrt(

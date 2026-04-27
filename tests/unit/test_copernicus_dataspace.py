@@ -211,6 +211,36 @@ def test_download_cdse_extracts_safe_zip(monkeypatch, tmp_path: Path):
     assert (safe_path / "manifest.safe").exists()
 
 
+def test_download_cdse_rejects_zip_path_traversal(monkeypatch, tmp_path: Path):
+    product_id = "S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000"
+    product = S2Product(
+        product_id=product_id,
+        mgrs_tile="31UDQ",
+        sensing_date=datetime(2024, 1, 1, 10, 31, 1),
+        processing_baseline="N0500",
+        cloud_cover=12.0,
+        satellite="S2A",
+        orbit_number=8,
+        source_url="https://download.example/products/1/$value",
+    )
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, mode="w") as zf:
+        zf.writestr("../outside.txt", "nope")
+    payload = zip_buffer.getvalue()
+
+    def _fake_get(url: str, headers: dict | None = None, **kwargs):  # noqa: ARG001
+        return _FakeResponse(raw_bytes=payload)
+
+    dest = tmp_path / "downloads"
+    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+
+    with pytest.raises(DataNotFoundError, match="unsafe path"):
+        download_cdse(product, dest)
+
+    assert not (tmp_path / "outside.txt").exists()
+    assert not list(dest.glob("cdse_*.zip"))
+
+
 def test_cdse_backend_delegates(monkeypatch, tmp_path: Path):
     product = S2Product(
         product_id="S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000",
@@ -277,7 +307,11 @@ def test_item_to_product_error_paths():
 
     with pytest.raises(DataNotFoundError, match="has no href"):
         cdse._item_to_product(
-            {"id": "X_MSIL1C_20240101T103101", "properties": {}, "assets": {"Product": {"title": "x"}}}
+            {
+                "id": "X_MSIL1C_20240101T103101",
+                "properties": {},
+                "assets": {"Product": {"title": "x"}},
+            }
         )
 
     with pytest.raises(ValueError, match="Cannot parse sensing datetime"):
@@ -319,7 +353,9 @@ def test_search_payload_and_next_link_helpers():
         "rel": "next",
         "href": "https://example.test/n",
     }
-    assert cdse._next_link({"links": ["not-a-link", {"rel": "next", "href": "https://example.test/n"}]}) == {
+    assert cdse._next_link(
+        {"links": ["not-a-link", {"rel": "next", "href": "https://example.test/n"}]}
+    ) == {
         "rel": "next",
         "href": "https://example.test/n",
     }
@@ -336,7 +372,9 @@ def test_auth_header_resolution_modes(monkeypatch):
         called["ok"] = (username, password) == ("user", "pass")
         return "issued-token"
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace._token_from_credentials", _fake_token)
+    monkeypatch.setattr(
+        "siac.adapters.data.copernicus_dataspace._token_from_credentials", _fake_token
+    )
     assert cdse._resolve_auth_header("user", "pass") == {"Authorization": "Bearer issued-token"}
     assert called["ok"] is True
 
@@ -385,9 +423,7 @@ def test_search_cdse_processing_level_filter_and_product_lookup_error(monkeypatc
     monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_500)
     with pytest.raises(requests.HTTPError):
         search_cdse(
-            S2Query.from_product_id(
-                "S2B_MSIL1C_20240101T000000_N0500_R000_T31UDQ_20240101T000000"
-            )
+            S2Query.from_product_id("S2B_MSIL1C_20240101T000000_N0500_R000_T31UDQ_20240101T000000")
         )
 
 

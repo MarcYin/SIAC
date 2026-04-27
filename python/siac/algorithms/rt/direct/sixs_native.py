@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 _SIXS_GRID_START_UM = 0.25
 _SIXS_GRID_STEP_UM = 0.0025
 _SIXS_GRID_SIZE = 1501
-_SIXS_GRID_UM = _SIXS_GRID_START_UM + _SIXS_GRID_STEP_UM * np.arange(_SIXS_GRID_SIZE, dtype=np.float64)
+_SIXS_GRID_UM = _SIXS_GRID_START_UM + _SIXS_GRID_STEP_UM * np.arange(
+    _SIXS_GRID_SIZE, dtype=np.float64
+)
 _BASE_OUTPUTS = SIXS_BASE_OUTPUTS
 _ALL_OUTPUTS = SIXS_OUTPUT_VARIABLE_CHOICES
 _ATMOSPHERIC_PROFILE_CODES: dict[str, int] = {
@@ -150,7 +152,9 @@ def _default_native_threads() -> int:
     return max(1, cpu_total)
 
 
-def _resample_geometry_to_template(geometry: GeometryAngles, template: xr.DataArray) -> GeometryAngles:
+def _resample_geometry_to_template(
+    geometry: GeometryAngles, template: xr.DataArray
+) -> GeometryAngles:
     if all(
         shares_template_grid(field, template)
         for field in (geometry.sza, geometry.saa, geometry.vza, geometry.vaa)
@@ -173,7 +177,9 @@ def _wrap_azimuth_degrees(angle: xr.DataArray, name: str) -> xr.DataArray:
     )
 
 
-def _to_native_output_names(output_variables: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+def _to_native_output_names(
+    output_variables: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
     if output_variables is None:
         return _ALL_OUTPUTS
     selected = [name for name in output_variables if name not in {"xbp", "xcp"}]
@@ -204,7 +210,13 @@ def _build_spectral_response(band: SensorBand) -> tuple[np.ndarray, float, float
     native = np.interp(_SIXS_GRID_UM, wavelengths_um, response, left=0.0, right=0.0)
     positive = np.flatnonzero(native > 0.0)
     if positive.size == 0:
-        center_index = int(np.clip(round((band.wavelength_um - _SIXS_GRID_START_UM) / _SIXS_GRID_STEP_UM), 0, _SIXS_GRID_SIZE - 1))
+        center_index = int(
+            np.clip(
+                round((band.wavelength_um - _SIXS_GRID_START_UM) / _SIXS_GRID_STEP_UM),
+                0,
+                _SIXS_GRID_SIZE - 1,
+            )
+        )
         native[center_index] = 1.0
         positive = np.array([center_index], dtype=np.int64)
 
@@ -385,10 +397,14 @@ def _auto_atmospheric_profile_from_latitude_and_month(latitude: float, month: in
     return lookup[rounded_lat]
 
 
-def _resolve_atmospheric_inputs(rt_setup: RTSetupConfig, *, month: int) -> tuple[int, dict[str, np.ndarray]]:
+def _resolve_atmospheric_inputs(
+    rt_setup: RTSetupConfig, *, month: int
+) -> tuple[int, dict[str, np.ndarray]]:
     atmosphere = rt_setup.atmosphere
     if atmosphere is None or atmosphere.profile is None:
-        raise ValueError("Native 6S requires rt_setup.atmosphere.profile to be resolved before execution.")
+        raise ValueError(
+            "Native 6S requires rt_setup.atmosphere.profile to be resolved before execution."
+        )
     profile = atmosphere.profile
     radiosonde = _empty_radiosonde_profile()
     if profile == "auto_latitude_date":
@@ -402,11 +418,15 @@ def _resolve_atmospheric_inputs(rt_setup: RTSetupConfig, *, month: int) -> tuple
         )
     if profile == "user_profile":
         if atmosphere.radiosonde_profile is None:
-            raise ValueError("rt.setup.atmosphere.radiosonde_profile is required for profile='user_profile'.")
+            raise ValueError(
+                "rt.setup.atmosphere.radiosonde_profile is required for profile='user_profile'."
+            )
         radiosonde = {
             "altitude_km": np.asarray(atmosphere.radiosonde_profile.altitude_km, dtype=np.float64),
             "pressure_mb": np.asarray(atmosphere.radiosonde_profile.pressure_mb, dtype=np.float64),
-            "temperature_k": np.asarray(atmosphere.radiosonde_profile.temperature_k, dtype=np.float64),
+            "temperature_k": np.asarray(
+                atmosphere.radiosonde_profile.temperature_k, dtype=np.float64
+            ),
             "water_g_m3": np.asarray(atmosphere.radiosonde_profile.water_g_m3, dtype=np.float64),
             "ozone_g_m3": np.asarray(atmosphere.radiosonde_profile.ozone_g_m3, dtype=np.float64),
         }
@@ -432,11 +452,15 @@ def _resolve_atmospheric_columns_mode(rt_setup: RTSetupConfig) -> int:
 def _resolve_aerosol_mode(rt_setup: RTSetupConfig) -> int:
     aerosol = rt_setup.aerosol
     if aerosol is None or aerosol.profile is None:
-        raise ValueError("Native 6S requires rt_setup.aerosol.profile to be resolved before execution.")
+        raise ValueError(
+            "Native 6S requires rt_setup.aerosol.profile to be resolved before execution."
+        )
     return _AEROSOL_PROFILE_CODES[aerosol.profile]
 
 
-def _resolve_aerosol_inputs(rt_setup: RTSetupConfig) -> tuple[int, dict[str, np.ndarray | float | int]]:
+def _resolve_aerosol_inputs(
+    rt_setup: RTSetupConfig,
+) -> tuple[int, dict[str, np.ndarray | float | int]]:
     aerosol = rt_setup.aerosol
     if aerosol is None or aerosol.profile is None:
         raise ValueError("Native 6S requires rt_setup.aerosol to be resolved before execution.")
@@ -477,7 +501,9 @@ def _resolve_aerosol_inputs(rt_setup: RTSetupConfig) -> tuple[int, dict[str, np.
         payload["dist_ri"] = ri
     elif aerosol.profile == "sun_photometer":
         if aerosol.sun_photometer_aerosol is None:
-            raise ValueError("rt.setup.aerosol.sun_photometer_aerosol is required for sun-photometer aerosols.")
+            raise ValueError(
+                "rt.setup.aerosol.sun_photometer_aerosol is required for sun-photometer aerosols."
+            )
         count = len(aerosol.sun_photometer_aerosol.radii_um)
         radius = np.zeros(50, dtype=np.float64)
         dvlogr = np.zeros(50, dtype=np.float64)
@@ -494,7 +520,9 @@ def _resolve_aerosol_inputs(rt_setup: RTSetupConfig) -> tuple[int, dict[str, np.
         payload["dist_ri"] = ri
     elif aerosol.profile == "layered_profile":
         if not aerosol.layer_profile:
-            raise ValueError("rt.setup.aerosol.layer_profile is required for layered aerosol profiles.")
+            raise ValueError(
+                "rt.setup.aerosol.layer_profile is required for layered aerosol profiles."
+            )
         count = len(aerosol.layer_profile)
         height = np.zeros(50, dtype=np.float64)
         aot = np.zeros(50, dtype=np.float64)
@@ -510,7 +538,9 @@ def _resolve_aerosol_inputs(rt_setup: RTSetupConfig) -> tuple[int, dict[str, np.
     return mode, payload
 
 
-def _build_surface_spectrum(values: tuple[float, ...] | None, wavelengths_um: tuple[float, ...] | None) -> np.ndarray:
+def _build_surface_spectrum(
+    values: tuple[float, ...] | None, wavelengths_um: tuple[float, ...] | None
+) -> np.ndarray:
     if values is None:
         return np.zeros(_SIXS_GRID_SIZE, dtype=np.float64)
     data = np.asarray(values, dtype=np.float64)
@@ -538,7 +568,11 @@ def _resolve_surface_reflectance(
     if reflectance.kind == "constant":
         return 0, float(reflectance.constant or 0.0), np.zeros(_SIXS_GRID_SIZE, dtype=np.float64)
     if reflectance.kind == "built_in":
-        return _BUILTIN_REFLECTANCE_CODES[reflectance.built_in], 0.0, np.zeros(_SIXS_GRID_SIZE, dtype=np.float64)
+        return (
+            _BUILTIN_REFLECTANCE_CODES[reflectance.built_in],
+            0.0,
+            np.zeros(_SIXS_GRID_SIZE, dtype=np.float64),
+        )
     return -1, 0.0, _build_surface_spectrum(reflectance.values, reflectance.wavelengths_um)
 
 
@@ -571,7 +605,9 @@ def _resolve_surface_inputs(rt_setup: RTSetupConfig) -> dict[str, np.ndarray | f
 
     if surface.mode == "heterogeneous_lambertian":
         if surface.environment is None:
-            raise ValueError("Heterogeneous Lambertian surfaces require an environment reflectance.")
+            raise ValueError(
+                "Heterogeneous Lambertian surfaces require an environment reflectance."
+            )
         env_mode, env_constant, env_spectrum = _resolve_surface_reflectance(surface.environment)
         payload["inhomo"] = 1
         payload["idirec"] = 0
@@ -677,9 +713,17 @@ def _resolve_surface_inputs(rt_setup: RTSetupConfig) -> dict[str, np.ndarray | f
 
 def _resolve_atmospheric_correction_inputs(rt_setup: RTSetupConfig) -> tuple[int, float]:
     correction = rt_setup.atmospheric_correction
-    correction_mode = correction.mode if correction is not None and correction.mode is not None else "none"
-    reference_reflectance = rt_setup.reference_reflectance if rt_setup.reference_reflectance is not None else 0.1
-    value = float(correction.value if correction is not None and correction.value is not None else reference_reflectance)
+    correction_mode = (
+        correction.mode if correction is not None and correction.mode is not None else "none"
+    )
+    reference_reflectance = (
+        rt_setup.reference_reflectance if rt_setup.reference_reflectance is not None else 0.1
+    )
+    value = float(
+        correction.value
+        if correction is not None and correction.value is not None
+        else reference_reflectance
+    )
     mapping = {
         "none": (-1, 0.0),
         "lambertian_reflectance": (0, -value),
@@ -715,7 +759,9 @@ def _as_output_array(values: np.ndarray, template: xr.DataArray, name: str) -> x
     return copy_spatial_metadata_like(data, template)
 
 
-def _nan_output_arrays(template: xr.DataArray, selected_names: tuple[str, ...]) -> dict[str, xr.DataArray]:
+def _nan_output_arrays(
+    template: xr.DataArray, selected_names: tuple[str, ...]
+) -> dict[str, xr.DataArray]:
     return {
         name: _as_output_array(np.full(template.size, np.nan, dtype=np.float64), template, name)
         for name in selected_names
@@ -762,7 +808,9 @@ def _build_scene_lut_plan(
     max_cases: int,
 ) -> _SceneLUTPlan:
     axes = {
-        name: _build_scene_lut_axis(np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis)
+        name: _build_scene_lut_axis(
+            np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis
+        )
         for name in _CASE_ARRAY_NAMES
     }
     while _scene_lut_case_count(axes) > max_cases:
@@ -770,7 +818,9 @@ def _build_scene_lut_plan(
         if not reducible:
             break
         name = max(reducible, key=lambda item: axes[item].size)
-        axes[name] = _build_scene_lut_axis(np.asarray(case_arrays[name], dtype=np.float64), axes[name].size - 1)
+        axes[name] = _build_scene_lut_axis(
+            np.asarray(case_arrays[name], dtype=np.float64), axes[name].size - 1
+        )
 
     mesh = np.meshgrid(*(axes[name] for name in _CASE_ARRAY_NAMES), indexing="ij")
     grid_case_arrays = {
@@ -804,7 +854,9 @@ def _interpolate_scene_lut_outputs(
             result[name] = np.full(n_cases, value, dtype=np.float64)
         return result
 
-    sample_points = np.column_stack([np.asarray(case_arrays[name], dtype=np.float64) for name in varying])
+    sample_points = np.column_stack(
+        [np.asarray(case_arrays[name], dtype=np.float64) for name in varying]
+    )
     for name in selected_names:
         values = np.asarray(native_outputs.outputs[name], dtype=np.float64).reshape(full_shape)
         reduced = values
@@ -989,7 +1041,9 @@ class _SixSExtensionModule:
     ) -> _NativeBatchResult:
         n_cases = int(sza_deg.size)
         if n_cases == 0:
-            return _NativeBatchResult(outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32))
+            return _NativeBatchResult(
+                outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32)
+            )
 
         native_output_matrix = np.empty(
             (len(SIXS_NATIVE_OUTPUT_NAMES), n_cases),
@@ -1066,11 +1120,16 @@ class _SixSExtensionModule:
         )
         outputs = _empty_output_bundle(n_cases)
         for row_index, name in enumerate(SIXS_NATIVE_OUTPUT_NAMES):
-            outputs[name] = np.ascontiguousarray(native_output_matrix[row_index, :], dtype=np.float64)
+            outputs[name] = np.ascontiguousarray(
+                native_output_matrix[row_index, :], dtype=np.float64
+            )
         outputs["xbp"] = np.ascontiguousarray(outputs["xb"], dtype=np.float64)
         outputs["xcp"] = np.ascontiguousarray(outputs["xc"], dtype=np.float64)
         return _NativeBatchResult(
-            outputs={name: np.ascontiguousarray(values, dtype=np.float64) for name, values in outputs.items()},
+            outputs={
+                name: np.ascontiguousarray(values, dtype=np.float64)
+                for name, values in outputs.items()
+            },
             status=np.ascontiguousarray(status, dtype=np.int32),
         )
 
@@ -1168,9 +1227,13 @@ class SixSNativeRunner:
             required_speedup=float(self._config.scene_lut_required_speedup),
         ):
             return None
-        selected_names = _to_native_output_names(output_variables or getattr(self._config, "output_variables", None))
+        selected_names = _to_native_output_names(
+            output_variables or getattr(self._config, "output_variables", None)
+        )
         for band in bands:
-            self._run_scene_lut_batch(prepared=prepared, band=band, selected_names=selected_names, plan=plan)
+            self._run_scene_lut_batch(
+                prepared=prepared, band=band, selected_names=selected_names, plan=plan
+            )
         return None
 
     def _compute_band_outputs_multi(
@@ -1222,9 +1285,13 @@ class SixSNativeRunner:
         template = atmo_state.aot
         geometry_on_grid = _resample_geometry_to_template(geometry, template)
 
-        sza_deg = xr.DataArray(np.degrees(geometry_on_grid.sza.values), dims=template.dims, coords=template.coords)
+        sza_deg = xr.DataArray(
+            np.degrees(geometry_on_grid.sza.values), dims=template.dims, coords=template.coords
+        )
         saa_deg = _wrap_azimuth_degrees(geometry_on_grid.saa, name="saa_deg")
-        vza_deg = xr.DataArray(np.degrees(geometry_on_grid.vza.values), dims=template.dims, coords=template.coords)
+        vza_deg = xr.DataArray(
+            np.degrees(geometry_on_grid.vza.values), dims=template.dims, coords=template.coords
+        )
         vaa_deg = _wrap_azimuth_degrees(geometry_on_grid.vaa, name="vaa_deg")
         valid = (
             np.isfinite(sza_deg.values)
@@ -1236,13 +1303,17 @@ class SixSNativeRunner:
             & np.isfinite(atmo_state.tco3.values)
             & np.isfinite(atmo_state.elevation.values)
         )
-        month = self._observation_time.month if self._observation_time is not None else self._config.month
+        month = (
+            self._observation_time.month
+            if self._observation_time is not None
+            else self._config.month
+        )
         day = self._observation_time.day if self._observation_time is not None else self._config.day
         atmospheric_mode, radiosonde = _resolve_atmospheric_inputs(self._rt_setup, month=month)
         aerosol_mode, aerosol_inputs = _resolve_aerosol_inputs(self._rt_setup)
         surface_inputs = _resolve_surface_inputs(self._rt_setup)
-        atmospheric_correction_mode, atmospheric_correction_value = _resolve_atmospheric_correction_inputs(
-            self._rt_setup
+        atmospheric_correction_mode, atmospheric_correction_value = (
+            _resolve_atmospheric_correction_inputs(self._rt_setup)
         )
         reference_reflectance = (
             float(self._rt_setup.reference_reflectance)
@@ -1261,49 +1332,101 @@ class SixSNativeRunner:
                 "day": day,
                 "atmospheric_mode": atmospheric_mode,
                 "atmospheric_columns_mode": _resolve_atmospheric_columns_mode(self._rt_setup),
-                "radiosonde_altitude_km": np.ascontiguousarray(radiosonde["altitude_km"], dtype=np.float64),
-                "radiosonde_pressure_mb": np.ascontiguousarray(radiosonde["pressure_mb"], dtype=np.float64),
-                "radiosonde_temperature_k": np.ascontiguousarray(radiosonde["temperature_k"], dtype=np.float64),
-                "radiosonde_water_g_m3": np.ascontiguousarray(radiosonde["water_g_m3"], dtype=np.float64),
-                "radiosonde_ozone_g_m3": np.ascontiguousarray(radiosonde["ozone_g_m3"], dtype=np.float64),
+                "radiosonde_altitude_km": np.ascontiguousarray(
+                    radiosonde["altitude_km"], dtype=np.float64
+                ),
+                "radiosonde_pressure_mb": np.ascontiguousarray(
+                    radiosonde["pressure_mb"], dtype=np.float64
+                ),
+                "radiosonde_temperature_k": np.ascontiguousarray(
+                    radiosonde["temperature_k"], dtype=np.float64
+                ),
+                "radiosonde_water_g_m3": np.ascontiguousarray(
+                    radiosonde["water_g_m3"], dtype=np.float64
+                ),
+                "radiosonde_ozone_g_m3": np.ascontiguousarray(
+                    radiosonde["ozone_g_m3"], dtype=np.float64
+                ),
                 "aerosol_mode": aerosol_mode,
-                "aerosol_mixture": np.ascontiguousarray(aerosol_inputs["mixture"], dtype=np.float64),
+                "aerosol_mixture": np.ascontiguousarray(
+                    aerosol_inputs["mixture"], dtype=np.float64
+                ),
                 "aerosol_distribution_rmin": float(aerosol_inputs["dist_rmin"]),
                 "aerosol_distribution_rmax": float(aerosol_inputs["dist_rmax"]),
                 "aerosol_distribution_component_count": int(aerosol_inputs["dist_component_count"]),
-                "aerosol_distribution_x1": np.ascontiguousarray(aerosol_inputs["dist_x1"], dtype=np.float64),
-                "aerosol_distribution_x2": np.ascontiguousarray(aerosol_inputs["dist_x2"], dtype=np.float64),
-                "aerosol_distribution_x3": np.ascontiguousarray(aerosol_inputs["dist_x3"], dtype=np.float64),
-                "aerosol_distribution_cij": np.ascontiguousarray(aerosol_inputs["dist_cij"], dtype=np.float64),
-                "aerosol_distribution_rn": np.ascontiguousarray(aerosol_inputs["dist_rn"], dtype=np.float64),
-                "aerosol_distribution_ri": np.ascontiguousarray(aerosol_inputs["dist_ri"], dtype=np.float64),
+                "aerosol_distribution_x1": np.ascontiguousarray(
+                    aerosol_inputs["dist_x1"], dtype=np.float64
+                ),
+                "aerosol_distribution_x2": np.ascontiguousarray(
+                    aerosol_inputs["dist_x2"], dtype=np.float64
+                ),
+                "aerosol_distribution_x3": np.ascontiguousarray(
+                    aerosol_inputs["dist_x3"], dtype=np.float64
+                ),
+                "aerosol_distribution_cij": np.ascontiguousarray(
+                    aerosol_inputs["dist_cij"], dtype=np.float64
+                ),
+                "aerosol_distribution_rn": np.ascontiguousarray(
+                    aerosol_inputs["dist_rn"], dtype=np.float64
+                ),
+                "aerosol_distribution_ri": np.ascontiguousarray(
+                    aerosol_inputs["dist_ri"], dtype=np.float64
+                ),
                 "aerosol_sun_count": int(aerosol_inputs["sun_count"]),
-                "aerosol_sun_radius": np.ascontiguousarray(aerosol_inputs["sun_radius"], dtype=np.float64),
-                "aerosol_sun_dvlogr": np.ascontiguousarray(aerosol_inputs["sun_dvlogr"], dtype=np.float64),
+                "aerosol_sun_radius": np.ascontiguousarray(
+                    aerosol_inputs["sun_radius"], dtype=np.float64
+                ),
+                "aerosol_sun_dvlogr": np.ascontiguousarray(
+                    aerosol_inputs["sun_dvlogr"], dtype=np.float64
+                ),
                 "aerosol_layer_count": int(aerosol_inputs["layer_count"]),
-                "aerosol_layer_height": np.ascontiguousarray(aerosol_inputs["layer_height"], dtype=np.float64),
-                "aerosol_layer_aot": np.ascontiguousarray(aerosol_inputs["layer_aot"], dtype=np.float64),
-                "aerosol_layer_type": np.ascontiguousarray(aerosol_inputs["layer_type"], dtype=np.int32),
+                "aerosol_layer_height": np.ascontiguousarray(
+                    aerosol_inputs["layer_height"], dtype=np.float64
+                ),
+                "aerosol_layer_aot": np.ascontiguousarray(
+                    aerosol_inputs["layer_aot"], dtype=np.float64
+                ),
+                "aerosol_layer_type": np.ascontiguousarray(
+                    aerosol_inputs["layer_type"], dtype=np.int32
+                ),
                 "reference_reflectance": reference_reflectance,
                 "aerosol_model_path": aerosol_model_path,
                 "surface_inhomo": int(surface_inputs["inhomo"]),
                 "surface_idirec": int(surface_inputs["idirec"]),
                 "surface_target_mode": int(surface_inputs["target_mode"]),
                 "surface_target_constant": float(surface_inputs["target_constant"]),
-                "surface_target_spectrum": np.ascontiguousarray(surface_inputs["target_spectrum"], dtype=np.float64),
+                "surface_target_spectrum": np.ascontiguousarray(
+                    surface_inputs["target_spectrum"], dtype=np.float64
+                ),
                 "surface_env_mode": int(surface_inputs["env_mode"]),
                 "surface_env_constant": float(surface_inputs["env_constant"]),
-                "surface_env_spectrum": np.ascontiguousarray(surface_inputs["env_spectrum"], dtype=np.float64),
+                "surface_env_spectrum": np.ascontiguousarray(
+                    surface_inputs["env_spectrum"], dtype=np.float64
+                ),
                 "surface_radius_km": float(surface_inputs["radius_km"]),
                 "surface_brdf_model": int(surface_inputs["brdf_model"]),
-                "surface_brdf_params": np.ascontiguousarray(surface_inputs["brdf_params"], dtype=np.float64),
-                "surface_brdf_options": np.ascontiguousarray(surface_inputs["brdf_options"], dtype=np.int32),
-                "surface_brdf_struct": np.ascontiguousarray(surface_inputs["brdf_struct"], dtype=np.float64),
-                "surface_brdf_optics": np.ascontiguousarray(surface_inputs["brdf_optics"], dtype=np.float64),
-                "surface_brdf_table_solar": np.ascontiguousarray(surface_inputs["brdf_table_solar"], dtype=np.float64),
-                "surface_brdf_table_view": np.ascontiguousarray(surface_inputs["brdf_table_view"], dtype=np.float64),
+                "surface_brdf_params": np.ascontiguousarray(
+                    surface_inputs["brdf_params"], dtype=np.float64
+                ),
+                "surface_brdf_options": np.ascontiguousarray(
+                    surface_inputs["brdf_options"], dtype=np.int32
+                ),
+                "surface_brdf_struct": np.ascontiguousarray(
+                    surface_inputs["brdf_struct"], dtype=np.float64
+                ),
+                "surface_brdf_optics": np.ascontiguousarray(
+                    surface_inputs["brdf_optics"], dtype=np.float64
+                ),
+                "surface_brdf_table_solar": np.ascontiguousarray(
+                    surface_inputs["brdf_table_solar"], dtype=np.float64
+                ),
+                "surface_brdf_table_view": np.ascontiguousarray(
+                    surface_inputs["brdf_table_view"], dtype=np.float64
+                ),
                 "surface_brdf_spherical_albedo": float(surface_inputs["brdf_spherical_albedo"]),
-                "surface_brdf_directional_reflectance": float(surface_inputs["brdf_directional_reflectance"]),
+                "surface_brdf_directional_reflectance": float(
+                    surface_inputs["brdf_directional_reflectance"]
+                ),
                 "atmospheric_correction_mode": int(atmospheric_correction_mode),
                 "atmospheric_correction_value": float(atmospheric_correction_value),
             },
@@ -1319,7 +1442,9 @@ class SixSNativeRunner:
             },
         )
 
-    def _band_native_kwargs(self, prepared: _PreparedSceneInputs, band: SensorBand) -> dict[str, Any]:
+    def _band_native_kwargs(
+        self, prepared: _PreparedSceneInputs, band: SensorBand
+    ) -> dict[str, Any]:
         response, wlinf, wlsup = _build_spectral_response(band)
         kwargs = dict(prepared.common_kwargs)
         kwargs.update(
@@ -1424,9 +1549,13 @@ class SixSNativeRunner:
     def _run_native_batch_worker_libraries(self, **kwargs: Any) -> _NativeBatchResult:
         n_cases = int(np.asarray(kwargs["sza_deg"]).size)
         if n_cases == 0:
-            return _NativeBatchResult(outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32))
+            return _NativeBatchResult(
+                outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32)
+            )
         chunk_size = max(1, int(getattr(self._config, "chunk_size", 4096)))
-        chunks = [(start, min(start + chunk_size, n_cases)) for start in range(0, n_cases, chunk_size)]
+        chunks = [
+            (start, min(start + chunk_size, n_cases)) for start in range(0, n_cases, chunk_size)
+        ]
         worker_count = min(len(chunks), self._worker_library_count())
         sessions = self._ensure_worker_sessions(worker_count)
         if not sessions:
@@ -1438,7 +1567,9 @@ class SixSNativeRunner:
         for idx, chunk in enumerate(chunks):
             assignments[idx % worker_count].append(chunk)
 
-        def _run_assigned(session: _SixSExtensionModule, assigned: list[tuple[int, int]]) -> list[tuple[int, int, _NativeBatchResult]]:
+        def _run_assigned(
+            session: _SixSExtensionModule, assigned: list[tuple[int, int]]
+        ) -> list[tuple[int, int, _NativeBatchResult]]:
             completed: list[tuple[int, int, _NativeBatchResult]] = []
             for start, stop in assigned:
                 result = session.run_batch(n_threads=1, **_slice_case_kwargs(kwargs, start, stop))

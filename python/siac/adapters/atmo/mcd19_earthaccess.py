@@ -122,9 +122,9 @@ class _EarthAccessMAIACAODProvider:
     ) -> tuple[list[Path], str | None]:
         temporal = EarthAccessSource.temporal_window(obs_time, self.temporal_window_days)
         candidate_short_names = (
-            (self.short_name,) if self.short_name is not None else tuple(
-                self.catalog.resolve_short_name(key) for key in self.product_keys
-            )
+            (self.short_name,)
+            if self.short_name is not None
+            else tuple(self.catalog.resolve_short_name(key) for key in self.product_keys)
         )
 
         for short_name in candidate_short_names:
@@ -145,7 +145,9 @@ class _EarthAccessMAIACAODProvider:
             if selected:
                 return selected, short_name
 
-        logger.warning("No %s granules found via Earthaccess for requested AOI/time", self._source_name)
+        logger.warning(
+            "No %s granules found via Earthaccess for requested AOI/time", self._source_name
+        )
         return [], None
 
     @staticmethod
@@ -200,7 +202,11 @@ class _EarthAccessMAIACAODProvider:
             tcwv = xr.full_like(aot, 1.5)
             tcwv_unc = xr.full_like(aot, 0.3)
             if short_name is not None:
-                logger.info("%s %s does not provide TCWV; using default prior values.", self._source_name, short_name)
+                logger.info(
+                    "%s %s does not provide TCWV; using default prior values.",
+                    self._source_name,
+                    short_name,
+                )
 
         tco3 = xr.full_like(aot, 0.30)
         tco3_unc = xr.full_like(aot, 0.03)
@@ -266,7 +272,9 @@ class _EarthAccessMAIACAODProvider:
         )
 
     @staticmethod
-    def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
+    def _grid(
+        bounds: tuple[float, float, float, float], resolution: float
+    ) -> tuple[np.ndarray, np.ndarray]:
         return target_grid_coords(bounds, resolution, resolution_name="resolution")
 
     def _constant_array(

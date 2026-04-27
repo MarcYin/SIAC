@@ -127,9 +127,15 @@ def test_monthly_composite_database_accepts_query_on_coarser_grid() -> None:
 
     corrected = xr.Dataset(
         {
-            "B08": xr.DataArray(np.array([[0.47]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}),
-            "B11": xr.DataArray(np.array([[0.37]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}),
-            "B12": xr.DataArray(np.array([[0.27]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}),
+            "B08": xr.DataArray(
+                np.array([[0.47]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}
+            ),
+            "B11": xr.DataArray(
+                np.array([[0.37]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}
+            ),
+            "B12": xr.DataArray(
+                np.array([[0.27]], dtype=np.float32), dims=["y", "x"], coords={"y": [10], "x": [20]}
+            ),
         }
     )
 

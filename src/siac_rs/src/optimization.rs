@@ -559,8 +559,8 @@ pub fn evaluate_block_grid_search_cost_cube_with_provider_qa<'py>(
         ));
     }
 
-    let block_rows = (ny + block_size - 1) / block_size;
-    let block_cols = (nx + block_size - 1) / block_size;
+    let block_rows = ny.div_ceil(block_size);
+    let block_cols = nx.div_ceil(block_size);
     let mut costs = Array4::<f32>::zeros((aot_axis.len(), tcwv_axis.len(), block_rows, block_cols));
     let mut obs_counts =
         Array4::<u16>::zeros((aot_axis.len(), tcwv_axis.len(), block_rows, block_cols));

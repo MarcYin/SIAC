@@ -32,6 +32,7 @@ _INTERP_PIXEL_LIMIT = 1_000_000  # ~1000×1000
 # Grid comparison
 # ---------------------------------------------------------------------------
 
+
 def shares_template_grid(field: xr.DataArray, template: xr.DataArray) -> bool:
     """Return True when *field* already sits on the same spatial grid as *template*.
 
@@ -61,6 +62,7 @@ def shares_template_grid(field: xr.DataArray, template: xr.DataArray) -> bool:
 # Axis resolution helper
 # ---------------------------------------------------------------------------
 
+
 def axis_resolution(values: np.ndarray) -> float | None:
     """Return the median absolute step size along a coordinate axis."""
     if values.size <= 1:
@@ -85,6 +87,7 @@ def _can_coord_interp(source: xr.DataArray, template: xr.DataArray) -> bool:
 # ---------------------------------------------------------------------------
 # Field resampling (continuous data)
 # ---------------------------------------------------------------------------
+
 
 def resample_field_to_template(
     field: xr.DataArray,
@@ -114,7 +117,11 @@ def resample_field_to_template(
                 coords={dim: template.coords[dim] for dim in template.dims},
                 method="linear",
             )
-            resampled = copy_spatial_metadata_like(interpolated, template) if copy_metadata else interpolated
+            resampled = (
+                copy_spatial_metadata_like(interpolated, template)
+                if copy_metadata
+                else interpolated
+            )
         except Exception as exc:
             logger.warning(
                 "Linear interpolation failed for field %s (%s); falling back to zoom resampling",
@@ -158,6 +165,7 @@ def resample_field_to_template(
 # Mask resampling (boolean data, conservative / dilated)
 # ---------------------------------------------------------------------------
 
+
 def resample_mask_to_template(mask: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
     """Resample a boolean mask to *template* grid, dilating to avoid false negatives.
 
@@ -200,7 +208,9 @@ def resample_mask_to_template(mask: xr.DataArray, template: xr.DataArray) -> xr.
                 xr.DataArray(
                     values > 0.5,
                     dims=template.dims,
-                    coords={dim: template.coords[dim] for dim in template.dims if dim in template.coords},
+                    coords={
+                        dim: template.coords[dim] for dim in template.dims if dim in template.coords
+                    },
                     attrs=mask.attrs,
                 ),
                 template,
@@ -242,6 +252,7 @@ def resample_mask_to_template(mask: xr.DataArray, template: xr.DataArray) -> xr.
 # RT coefficient resampling
 # ---------------------------------------------------------------------------
 
+
 def resample_coefficients_to_template(
     coeffs: RTCoefficients,
     template: xr.DataArray,
@@ -255,12 +266,21 @@ def resample_coefficients_to_template(
         if len(field.dims) == 2:
             return resample_field_to_template(field, template)
         if len(field.dims) == 3 and "param" in field.dims:
-            param_values = field.coords["param"].values if "param" in field.coords else np.arange(field.sizes["param"])
+            param_values = (
+                field.coords["param"].values
+                if "param" in field.coords
+                else np.arange(field.sizes["param"])
+            )
             stacked = xr.concat(
-                [resample_field_to_template(field.sel(param=param, drop=True), template) for param in param_values],
+                [
+                    resample_field_to_template(field.sel(param=param, drop=True), template)
+                    for param in param_values
+                ],
                 dim="param",
             )
-            result: xr.DataArray = stacked.assign_coords(param=param_values).transpose("param", *template.dims)
+            result: xr.DataArray = stacked.assign_coords(param=param_values).transpose(
+                "param", *template.dims
+            )
             return result
         return field
 
@@ -284,6 +304,7 @@ def resample_coefficients_to_template(
 # NaN gap-fill helper
 # ---------------------------------------------------------------------------
 
+
 def fill_nonfinite_like_template(
     field: xr.DataArray,
     source: xr.DataArray,
@@ -298,7 +319,9 @@ def fill_nonfinite_like_template(
         return field
 
     filled = values.copy()
-    src_pixels = source.sizes[source.dims[0]] * source.sizes[source.dims[1]] if source.ndim == 2 else 0
+    src_pixels = (
+        source.sizes[source.dims[0]] * source.sizes[source.dims[1]] if source.ndim == 2 else 0
+    )
     if _can_coord_interp(source, template) and src_pixels <= _INTERP_PIXEL_LIMIT:
         try:
             nearest = source.interp(

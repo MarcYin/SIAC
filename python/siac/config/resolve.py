@@ -111,7 +111,9 @@ def resolve_config(system: SystemConfig, request: RunRequest) -> ResolvedConfig:
 
     algorithms = ResolvedAlgorithmsConfig(
         surface_prior=ResolvedSurfacePriorAlgorithmConfig(
-            **system.algorithms.surface_prior.model_dump(exclude={"spectral_mapping"}, mode="python"),
+            **system.algorithms.surface_prior.model_dump(
+                exclude={"spectral_mapping"}, mode="python"
+            ),
             spectral_mapping=ResolvedSpectralMappingConfig(
                 **system.algorithms.surface_prior.spectral_mapping.model_dump(mode="python"),
             ),

@@ -351,7 +351,9 @@ def test_process_s2_honors_runtime_log_level_per_invocation(
     monkeypatch.setattr(cli.SIACConfig, "from_file", classmethod(_fake_from_file))
     monkeypatch.setattr("siac.api.public.siac_process_s2", _fake_process)
 
-    quiet_code = cli.main(["process-s2", "T31UDQ_20240101", "--config", str(tmp_path / "quiet.toml")])
+    quiet_code = cli.main(
+        ["process-s2", "T31UDQ_20240101", "--config", str(tmp_path / "quiet.toml")]
+    )
     quiet_output = capsys.readouterr()
 
     info_code = cli.main(["process-s2", "T31UDQ_20240101", "--config", str(tmp_path / "info.toml")])

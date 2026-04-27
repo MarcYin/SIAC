@@ -95,10 +95,7 @@ class TwoLayerNNEmulator:
         self._available_bands = self._discover_bands()
 
         if not self._available_bands:
-            logger.warning(
-                f"No emulators found for {sensor_id}/{satellite_id} "
-                f"in {emulator_dir}"
-            )
+            logger.warning(f"No emulators found for {sensor_id}/{satellite_id} in {emulator_dir}")
 
     # Satellites whose emulator weights can be substituted from another platform.
     _SATELLITE_FALLBACKS: dict[str, str] = {"S2C": "S2A"}
@@ -309,8 +306,12 @@ class TwoLayerNNEmulator:
             ).assign_coords(param=["aot", "tcwv"])
 
         return RTCoefficients(
-            xap=xap_da, xbp=xbp_da, xcp=xcp_da,
-            d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp,
+            xap=xap_da,
+            xbp=xbp_da,
+            xcp=xcp_da,
+            d_xap=d_xap,
+            d_xbp=d_xbp,
+            d_xcp=d_xcp,
         )
 
     def compute_coefficients(
@@ -337,7 +338,11 @@ class TwoLayerNNEmulator:
         inputs, original_shape, template = self._prepare_inputs(geometry, atmo_state)
         outputs, jacobians = emulator.forward(inputs, compute_jacobian=compute_jacobian)
         return self._build_rt_coefficients(
-            outputs, jacobians, original_shape, template, compute_jacobian,
+            outputs,
+            jacobians,
+            original_shape,
+            template,
+            compute_jacobian,
         )
 
     def compute_coefficients_multi(
@@ -365,9 +370,15 @@ class TwoLayerNNEmulator:
         for band in bands:
             emulator = self._load_band_emulator(band.name)
             outputs, jacobians = emulator.forward(inputs, compute_jacobian=compute_jacobian)
-            results.append(self._build_rt_coefficients(
-                outputs, jacobians, original_shape, template, compute_jacobian,
-            ))
+            results.append(
+                self._build_rt_coefficients(
+                    outputs,
+                    jacobians,
+                    original_shape,
+                    template,
+                    compute_jacobian,
+                )
+            )
 
         return results
 

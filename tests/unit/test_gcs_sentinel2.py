@@ -65,9 +65,7 @@ def test_search_gcs_by_product_id_uses_prefix_exists(monkeypatch):
 
     monkeypatch.setattr(gcs_mod, "_list_api", _fake_list_api)
 
-    query = S2Query(
-        product_id="S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000.SAFE"
-    )
+    query = S2Query(product_id="S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000.SAFE")
     out = gcs_mod.search_gcs(query)
     assert len(out) == 1
     assert out[0].product_id.endswith("_T31UDQ_20240103T120000")

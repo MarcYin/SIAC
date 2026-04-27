@@ -75,7 +75,9 @@ def _relative_href(path: str | Path, base_dir: Path) -> str:
     return Path(rel).as_posix()
 
 
-def _parse_satellite_id(input_href: str | Path | None, metadata: dict[str, Any], fallback: str) -> str:
+def _parse_satellite_id(
+    input_href: str | Path | None, metadata: dict[str, Any], fallback: str
+) -> str:
     if input_href is not None:
         match = re.match(r"^(S2[A-Z]|L\d+)", Path(str(input_href)).name)
         if match is not None:
@@ -131,7 +133,9 @@ def _cloud_cover_percent(mask: Any) -> float | None:
     return float(np.clip(mean * 100.0, 0.0, 100.0))
 
 
-def _native_bounds(first_band: Any, fallback_bounds: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+def _native_bounds(
+    first_band: Any, fallback_bounds: tuple[float, float, float, float]
+) -> tuple[float, float, float, float]:
     try:
         return tuple(map(float, first_band.rio.bounds()))
     except (AttributeError, ValueError, RuntimeError, OSError) as exc:
@@ -151,18 +155,22 @@ def _wgs84_bounds_and_geometry(
     bbox = [xmin, ymin, xmax, ymax]
     geometry = {
         "type": "Polygon",
-        "coordinates": [[
-            [xmin, ymin],
-            [xmin, ymax],
-            [xmax, ymax],
-            [xmax, ymin],
-            [xmin, ymin],
-        ]],
+        "coordinates": [
+            [
+                [xmin, ymin],
+                [xmin, ymax],
+                [xmax, ymax],
+                [xmax, ymin],
+                [xmin, ymin],
+            ]
+        ],
     }
     return bbox, geometry
 
 
-def _proj_properties(first_band: Any, native_bounds: tuple[float, float, float, float]) -> dict[str, Any]:
+def _proj_properties(
+    first_band: Any, native_bounds: tuple[float, float, float, float]
+) -> dict[str, Any]:
     props: dict[str, Any] = {
         "proj:bbox": [float(v) for v in native_bounds],
         "proj:shape": [int(first_band.sizes["y"]), int(first_band.sizes["x"])],
@@ -496,7 +504,12 @@ def build_stac_item_from_result(
 
     # Preview PNGs
     _preview_specs: list[tuple[str, str, str, list[str]]] = [
-        ("preview.false_colour", "preview_false_colour", "False colour composite (NIR-R-G)", ["overview", "visual"]),
+        (
+            "preview.false_colour",
+            "preview_false_colour",
+            "False colour composite (NIR-R-G)",
+            ["overview", "visual"],
+        ),
         ("preview.aot", "preview_aot", "AOT colour map", ["overview"]),
         ("preview.tcwv", "preview_tcwv", "TCWV colour map", ["overview"]),
         ("preview.cloud_mask", "preview_cloud_mask", "Cloud mask overlay", ["overview"]),

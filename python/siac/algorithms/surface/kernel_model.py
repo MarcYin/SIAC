@@ -98,9 +98,7 @@ class KernelModelDeriver:
             sigma_x, sigma_y = self.psf_sigma_x, self.psf_sigma_y
 
         # Compute kernel values at observation geometry
-        k_vol, k_geo = self._kernels.compute(
-            geometry.vza, geometry.sza, geometry.raa
-        )
+        k_vol, k_geo = self._kernels.compute(geometry.vza, geometry.sza, geometry.raa)
         k_vol_da = cast("xr.DataArray", k_vol)
         k_geo_da = cast("xr.DataArray", k_geo)
         k_vol_da, k_geo_da = self._align_kernels_to_brdf_grid(
@@ -176,7 +174,8 @@ class KernelModelDeriver:
 
         # Already aligned.
         if (
-            "y" in k_vol.dims and "x" in k_vol.dims
+            "y" in k_vol.dims
+            and "x" in k_vol.dims
             and k_vol.sizes.get("y") == ref.sizes.get("y")
             and k_vol.sizes.get("x") == ref.sizes.get("x")
         ):

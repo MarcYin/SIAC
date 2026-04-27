@@ -57,7 +57,9 @@ def _auxiliary_dataset(result: CorrectionResult) -> xr.Dataset:
             if np.issubdtype(field.dtype, np.floating):
                 aux_vars[name] = field.astype(np.float32)
             else:
-                aux_vars[name] = resample_mask_to_template(field.astype(bool), aux_template).astype(np.uint8)
+                aux_vars[name] = resample_mask_to_template(field.astype(bool), aux_template).astype(
+                    np.uint8
+                )
     return xr.Dataset(aux_vars)
 
 
@@ -97,10 +99,10 @@ def _cast_dataarray(
     return data.astype(dtype)
 
 
-
 # ---------------------------------------------------------------------------
 # Scene prefix derivation
 # ---------------------------------------------------------------------------
+
 
 def _derive_scene_prefix(metadata: dict[str, Any]) -> str:
     """Build ``S2A_L2A_20240115T103045`` style prefix from metadata."""
@@ -228,7 +230,9 @@ class ConfiguredOutputWriter:
         nodata = int(self.defaults.boa_nodata) if self.defaults.boa_dtype == "uint16" else None
 
         def _write_bands(
-            dataset: xr.Dataset, product_tag: str, artifact_prefix: str,
+            dataset: xr.Dataset,
+            product_tag: str,
+            artifact_prefix: str,
         ) -> None:
             for band_name in dataset.data_vars:
                 prepared = _cast_dataarray(
@@ -268,7 +272,12 @@ class ConfiguredOutputWriter:
                     as_cog=as_cog,
                     nodata=nodata,
                 )
-                artifacts.update({f"monthly_composites.{label}.{name}": path for name, path in composite_paths.items()})
+                artifacts.update(
+                    {
+                        f"monthly_composites.{label}.{name}": path
+                        for name, path in composite_paths.items()
+                    }
+                )
                 artifacts[f"monthly_composites.{label}.quality"] = write_fn(
                     composite.quality.astype(np.float32),
                     composite_dir / "quality.tif",
@@ -285,10 +294,12 @@ class ConfiguredOutputWriter:
         if self.defaults.include_auxiliary:
             aux_ds = _auxiliary_dataset(result)
             artifacts["auxiliary.aot"] = write_fn(
-                aux_ds["aot"], output_dir / f"{prefix}_AOT.tif",
+                aux_ds["aot"],
+                output_dir / f"{prefix}_AOT.tif",
             )
             artifacts["auxiliary.tcwv"] = write_fn(
-                aux_ds["tcwv"], output_dir / f"{prefix}_TCWV.tif",
+                aux_ds["tcwv"],
+                output_dir / f"{prefix}_TCWV.tif",
             )
             artifacts["auxiliary.cloud_mask"] = write_fn(
                 aux_ds["cloud_mask"],
@@ -305,13 +316,17 @@ class ConfiguredOutputWriter:
                     field,
                     output_dir / f"{prefix}_QA_{name}.tif",
                     compression="lzw",
-                    **({
-                        "dtype": "float32",
-                        "nodata": float("nan"),
-                    } if is_float_qa else {
-                        "dtype": "uint8",
-                        "nodata": 255,
-                    }),
+                    **(
+                        {
+                            "dtype": "float32",
+                            "nodata": float("nan"),
+                        }
+                        if is_float_qa
+                        else {
+                            "dtype": "uint8",
+                            "nodata": 255,
+                        }
+                    ),
                 )
 
         # --- RGB quicklook ---
@@ -359,9 +374,13 @@ class ConfiguredOutputWriter:
             )
             artifacts["boa"] = write_netcdf(prepared_boa, output_dir / f"{prefix}_BOA.nc")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
-            artifacts["boa_unc"] = write_netcdf(result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.nc")
+            artifacts["boa_unc"] = write_netcdf(
+                result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.nc"
+            )
         if result.surface_prior is not None:
-            artifacts["surface_prior"] = write_netcdf(result.surface_prior.astype(np.float32), output_dir / f"{prefix}_SURF.nc")
+            artifacts["surface_prior"] = write_netcdf(
+                result.surface_prior.astype(np.float32), output_dir / f"{prefix}_SURF.nc"
+            )
         if self.defaults.include_uncertainty and result.surface_prior_unc is not None:
             artifacts["surface_prior_unc"] = write_netcdf(
                 result.surface_prior_unc.astype(np.float32),
@@ -407,9 +426,13 @@ class ConfiguredOutputWriter:
             )
             artifacts["boa"] = write_zarr(prepared_boa, output_dir / f"{prefix}_BOA.zarr")
         if self.defaults.include_uncertainty and result.boa_unc is not None:
-            artifacts["boa_unc"] = write_zarr(result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.zarr")
+            artifacts["boa_unc"] = write_zarr(
+                result.boa_unc.astype(np.float32), output_dir / f"{prefix}_BOA_UNC.zarr"
+            )
         if result.surface_prior is not None:
-            artifacts["surface_prior"] = write_zarr(result.surface_prior.astype(np.float32), output_dir / f"{prefix}_SURF.zarr")
+            artifacts["surface_prior"] = write_zarr(
+                result.surface_prior.astype(np.float32), output_dir / f"{prefix}_SURF.zarr"
+            )
         if self.defaults.include_uncertainty and result.surface_prior_unc is not None:
             artifacts["surface_prior_unc"] = write_zarr(
                 result.surface_prior_unc.astype(np.float32),
@@ -547,7 +570,11 @@ class _RasterCorrectionBoaStream:
 
     def write_boa_band(self, band_name: str, data: xr.DataArray) -> xr.DataArray:
         write_fn = write_cog if self.as_cog else write_raster
-        nodata = int(self.writer.defaults.boa_nodata) if self.writer.defaults.boa_dtype == "uint16" else None
+        nodata = (
+            int(self.writer.defaults.boa_nodata)
+            if self.writer.defaults.boa_dtype == "uint16"
+            else None
+        )
         prepared = _cast_dataarray(
             data,
             dtype=self.writer.defaults.boa_dtype,

@@ -197,11 +197,17 @@ def test_rsrf_from_tabulated_validates_basic_inputs(
 
 
 def test_fwhm_returns_none_for_small_or_invalid_curves() -> None:
-    assert spectral_mod._fwhm(  # noqa: SLF001
-        np.array([460.0], dtype=np.float32),
-        np.array([1.0], dtype=np.float32),
-    ) is None
-    assert spectral_mod._fwhm(  # noqa: SLF001
-        np.array([450.0, 460.0], dtype=np.float32),
-        np.array([-1.0, -0.5], dtype=np.float32),
-    ) is None
+    assert (
+        spectral_mod._fwhm(  # noqa: SLF001
+            np.array([460.0], dtype=np.float32),
+            np.array([1.0], dtype=np.float32),
+        )
+        is None
+    )
+    assert (
+        spectral_mod._fwhm(  # noqa: SLF001
+            np.array([450.0, 460.0], dtype=np.float32),
+            np.array([-1.0, -0.5], dtype=np.float32),
+        )
+        is None
+    )

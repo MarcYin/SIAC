@@ -221,11 +221,7 @@ class TestLaplacianEigenvalues:
         # Check i,j symmetry with j,i (separable and symmetric in x/y)
         for i in range(n):
             for j in range(n):
-                np.testing.assert_allclose(
-                    lambda_vals[i, j],
-                    lambda_vals[j, i],
-                    rtol=1e-10
-                )
+                np.testing.assert_allclose(lambda_vals[i, j], lambda_vals[j, i], rtol=1e-10)
 
 
 class TestSmoothnessFilter:
@@ -567,7 +563,9 @@ class TestSharpTransitionObservationExclusion:
         expected = np.array([[True, False], [True, True]], dtype=bool)
         np.testing.assert_array_equal(valid.values, expected)
 
-    def test_lbfgsb_solver_excluded_water_pixels_are_gap_filled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_lbfgsb_solver_excluded_water_pixels_are_gap_filled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from siac.domain import SensorBand
 
         class _DummyRT:
@@ -596,7 +594,9 @@ class TestSharpTransitionObservationExclusion:
         shape = (2, 2)
         toa = xr.DataArray(np.full((1, *shape), 0.2, dtype=np.float32), dims=["band", "y", "x"])
         cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
-        water_mask = xr.DataArray(np.array([[False, True], [False, False]], dtype=bool), dims=["y", "x"])
+        water_mask = xr.DataArray(
+            np.array([[False, True], [False, False]], dtype=bool), dims=["y", "x"]
+        )
         surface_prior = SurfacePrior(
             boa=xr.DataArray(np.full(shape, 0.12, dtype=np.float32), dims=["y", "x"]),
             boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
@@ -724,7 +724,9 @@ class TestSharpTransitionObservationExclusion:
         np.testing.assert_array_equal(qa["fitting_cost"].values, cost_map)
         assert qa["fitting_cost"].dtype == np.float32
 
-    def test_build_solver_qa_dataset_masks_unsupported_and_nonfinite_fitting_cost_pixels_to_nan(self) -> None:
+    def test_build_solver_qa_dataset_masks_unsupported_and_nonfinite_fitting_cost_pixels_to_nan(
+        self,
+    ) -> None:
         solver = MultiGridSolver()
         template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"])
         cost_map = np.array([[0.01, np.inf], [0.03, 0.04]], dtype=np.float32)
@@ -903,7 +905,9 @@ class TestMultiGridSolver:
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
         nodata_result = solver.solve(
-            toa=xr.DataArray(np.full((2, *shape), np.nan, dtype=np.float32), dims=["band", "y", "x"]),
+            toa=xr.DataArray(
+                np.full((2, *shape), np.nan, dtype=np.float32), dims=["band", "y", "x"]
+            ),
             surface_prior=nodata_surface_prior,
             geometry=geometry,
             atmo_prior=atmo_prior,
@@ -964,8 +968,12 @@ class TestMultiGridSolver:
             f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
         )
         surface_prior = SurfacePrior(
-            boa=xr.DataArray(np.stack([np.full(shape, 0.2), np.full(shape, 0.22)]), dims=["band", "y", "x"]),
-            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02), np.full(shape, 0.02)]), dims=["band", "y", "x"]),
+            boa=xr.DataArray(
+                np.stack([np.full(shape, 0.2), np.full(shape, 0.22)]), dims=["band", "y", "x"]
+            ),
+            boa_unc=xr.DataArray(
+                np.stack([np.full(shape, 0.02), np.full(shape, 0.02)]), dims=["band", "y", "x"]
+            ),
             kernels=brdf,
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
@@ -1129,7 +1137,9 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (2, 3)
-        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=5, grid_search_tcwv_points=3))
+        solver = MultiGridSolver(
+            MultiGridConfig(grid_search_aot_points=5, grid_search_tcwv_points=3)
+        )
 
         toa = xr.DataArray(
             np.stack([np.full(shape, 0.1, dtype=np.float32)]),
@@ -1160,8 +1170,12 @@ class TestMultiGridSolver:
             f2_unc=xr.DataArray(np.full(shape, 0.002, dtype=np.float32), dims=["y", "x"]),
         )
         surface_prior = SurfacePrior(
-            boa=xr.DataArray(np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]),
-            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02, dtype=np.float32)]), dims=["band", "y", "x"]),
+            boa=xr.DataArray(
+                np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]
+            ),
+            boa_unc=xr.DataArray(
+                np.stack([np.full(shape, 0.02, dtype=np.float32)]), dims=["band", "y", "x"]
+            ),
             kernels=brdf,
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
@@ -1169,7 +1183,11 @@ class TestMultiGridSolver:
         class _DummyRT:
             def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
                 _ = (band, compute_jacobian)
-                xap = xr.DataArray(np.ones(shape, dtype=np.float32), dims=geometry.sza.dims, coords=geometry.sza.coords)
+                xap = xr.DataArray(
+                    np.ones(shape, dtype=np.float32),
+                    dims=geometry.sza.dims,
+                    coords=geometry.sza.coords,
+                )
                 xbp = xr.DataArray(
                     0.05 * np.asarray(atmo_state.aot.values, dtype=np.float32),
                     dims=geometry.sza.dims,
@@ -1199,15 +1217,21 @@ class TestMultiGridSolver:
         )
 
         assert result.qa is not None
-        np.testing.assert_allclose(result.aot.values, np.full(shape, solver.config.aot_bounds[0], dtype=np.float32))
+        np.testing.assert_allclose(
+            result.aot.values, np.full(shape, solver.config.aot_bounds[0], dtype=np.float32)
+        )
         assert not np.any(result.qa["invalid_retrieval"].values)
         assert not np.any(result.qa["zero_obs_support"].values)
         assert np.all(result.qa["aot_lower_boundary"].values)
         assert not np.any(result.qa["aot_upper_boundary"].values)
         assert np.all(result.qa["parameter_boundary"].values)
         assert np.all(result.qa["low_quality"].values)
-        assert result.level_history[-1]["qa_final_aot_lower_boundary_pixels"] == pytest.approx(float(np.prod(shape)))
-        assert result.level_history[-1]["qa_final_low_quality_pixels"] == pytest.approx(float(np.prod(shape)))
+        assert result.level_history[-1]["qa_final_aot_lower_boundary_pixels"] == pytest.approx(
+            float(np.prod(shape))
+        )
+        assert result.level_history[-1]["qa_final_low_quality_pixels"] == pytest.approx(
+            float(np.prod(shape))
+        )
 
     def test_grid_search_prefers_rust_refiner_when_available(self, monkeypatch):
         """Grid-search refinement should call Rust helper."""
@@ -1216,7 +1240,9 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (4, 4)
-        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
+        solver = MultiGridSolver(
+            MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3)
+        )
 
         toa = xr.DataArray(
             np.stack([np.full(shape, 0.25, dtype=np.float32)]),
@@ -1335,7 +1361,9 @@ class TestMultiGridSolver:
                 fixed_atmospheric_parameter="tcwv",
             )
         )
-        toa = xr.DataArray(np.stack([np.full(shape, 0.25, dtype=np.float32)]), dims=["band", "y", "x"])
+        toa = xr.DataArray(
+            np.stack([np.full(shape, 0.25, dtype=np.float32)]), dims=["band", "y", "x"]
+        )
         mask = xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"])
         geometry = GeometryAngles(
             sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -1365,8 +1393,12 @@ class TestMultiGridSolver:
             f2_unc=xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
         )
         surface_prior = SurfacePrior(
-            boa=xr.DataArray(np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]),
-            boa_unc=xr.DataArray(np.stack([np.full(shape, 0.02, dtype=np.float32)]), dims=["band", "y", "x"]),
+            boa=xr.DataArray(
+                np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]
+            ),
+            boa_unc=xr.DataArray(
+                np.stack([np.full(shape, 0.02, dtype=np.float32)]), dims=["band", "y", "x"]
+            ),
             kernels=brdf,
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
@@ -1377,7 +1409,9 @@ class TestMultiGridSolver:
             def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
                 _ = (band, compute_jacobian)
                 seen_tcwv.append(np.asarray(atmo_state.tcwv.values, dtype=np.float32).copy())
-                xap = xr.DataArray(np.full(geometry.sza.shape, 0.9, dtype=np.float32), dims=["y", "x"])
+                xap = xr.DataArray(
+                    np.full(geometry.sza.shape, 0.9, dtype=np.float32), dims=["y", "x"]
+                )
                 return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
 
             def supports_jacobian(self) -> bool:
@@ -1428,7 +1462,9 @@ class TestMultiGridSolver:
                 np.zeros(valid_mask.shape, dtype=bool),
             )
 
-        monkeypatch.setattr(mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fake_pixel_eval)
+        monkeypatch.setattr(
+            mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fake_pixel_eval
+        )
         monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_refiner)
 
         out_aot, out_tcwv, _out_aot_unc, out_tcwv_unc, diag = solver._solve_level_grid_search(
@@ -1477,7 +1513,9 @@ class TestMultiGridSolver:
         aot_prior_unc = np.full(shape, 0.05, dtype=np.float32)
         tcwv_prior_unc = np.full(shape, 0.3, dtype=np.float32)
 
-        def _provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def _provider(
+            _aot_val: float, _tcwv_val: float
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             xap = np.ones((1, *shape), dtype=np.float32)
             zeros = np.zeros((1, *shape), dtype=np.float32)
             return xap, zeros, zeros
@@ -1496,20 +1534,22 @@ class TestMultiGridSolver:
             aot_prior_unc,
             tcwv_prior_unc,
         )
-        block_costs, block_counts, block_valid = evaluate_block_grid_search_cost_cube_with_provider_qa(
-            _provider,
-            aot_axis,
-            tcwv_axis,
-            toa,
-            boa_prior,
-            boa_unc,
-            band_weights,
-            valid_mask,
-            aot_prior,
-            tcwv_prior,
-            aot_prior_unc,
-            tcwv_prior_unc,
-            block_size,
+        block_costs, block_counts, block_valid = (
+            evaluate_block_grid_search_cost_cube_with_provider_qa(
+                _provider,
+                aot_axis,
+                tcwv_axis,
+                toa,
+                boa_prior,
+                boa_unc,
+                band_weights,
+                valid_mask,
+                aot_prior,
+                tcwv_prior,
+                aot_prior_unc,
+                tcwv_prior_unc,
+                block_size,
+            )
         )
 
         full_costs = np.asarray(full_costs, dtype=np.float32)
@@ -1538,25 +1578,29 @@ class TestMultiGridSolver:
                 np.testing.assert_array_equal(block_counts[:, :, by, bx], expected_count)
         np.testing.assert_array_equal(block_valid, _any_blocks_reference(valid_mask, block_size))
 
-        def _coarse_provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def _coarse_provider(
+            _aot_val: float, _tcwv_val: float
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             xap = np.ones((1, *block_valid.shape), dtype=np.float32)
             zeros = np.zeros((1, *block_valid.shape), dtype=np.float32)
             return xap, zeros, zeros
 
-        coarse_costs, coarse_counts, coarse_valid = evaluate_block_grid_search_cost_cube_with_provider_qa(
-            _coarse_provider,
-            aot_axis,
-            tcwv_axis,
-            toa,
-            boa_prior,
-            boa_unc,
-            band_weights,
-            valid_mask,
-            aot_prior,
-            tcwv_prior,
-            aot_prior_unc,
-            tcwv_prior_unc,
-            block_size,
+        coarse_costs, coarse_counts, coarse_valid = (
+            evaluate_block_grid_search_cost_cube_with_provider_qa(
+                _coarse_provider,
+                aot_axis,
+                tcwv_axis,
+                toa,
+                boa_prior,
+                boa_unc,
+                band_weights,
+                valid_mask,
+                aot_prior,
+                tcwv_prior,
+                aot_prior_unc,
+                tcwv_prior_unc,
+                block_size,
+            )
         )
         np.testing.assert_allclose(np.asarray(coarse_costs, dtype=np.float32), block_costs)
         np.testing.assert_array_equal(np.asarray(coarse_counts, dtype=np.uint16), block_counts)
@@ -1636,7 +1680,9 @@ class TestMultiGridSolver:
                 return True
 
         def _fail_pixel_eval(*_args, **_kwargs):  # noqa: ANN002, ANN003
-            raise AssertionError("Per-pixel evaluator should not be used when quadratic_block_size > 1")
+            raise AssertionError(
+                "Per-pixel evaluator should not be used when quadratic_block_size > 1"
+            )
 
         def _fake_block_eval(
             _provider,
@@ -1678,8 +1724,12 @@ class TestMultiGridSolver:
             block_valid = np.ones((2, 2), dtype=bool)
             return costs, obs_counts, block_valid
 
-        monkeypatch.setattr(mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fail_pixel_eval)
-        monkeypatch.setattr(mg_mod, "evaluate_block_grid_search_cost_cube_with_provider_qa", _fake_block_eval)
+        monkeypatch.setattr(
+            mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fail_pixel_eval
+        )
+        monkeypatch.setattr(
+            mg_mod, "evaluate_block_grid_search_cost_cube_with_provider_qa", _fake_block_eval
+        )
 
         out_aot, out_tcwv, out_aot_unc, out_tcwv_unc, level_diag = solver._solve_level_grid_search(
             toa=toa,
@@ -1793,7 +1843,9 @@ class TestMultiGridSolver:
         class _DummyRT:
             def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
                 _ = (atmo_state, band, compute_jacobian)
-                xap = xr.DataArray(np.full(geometry.sza.shape, 0.9, dtype=np.float32), dims=["y", "x"])
+                xap = xr.DataArray(
+                    np.full(geometry.sza.shape, 0.9, dtype=np.float32), dims=["y", "x"]
+                )
                 return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
 
             def supports_jacobian(self) -> bool:
@@ -1808,7 +1860,9 @@ class TestMultiGridSolver:
                 return True
 
         def _fail_pixel_eval(*_args, **_kwargs):  # noqa: ANN002, ANN003
-            raise AssertionError("Per-pixel evaluator should not be used when quadratic_block_size > 1")
+            raise AssertionError(
+                "Per-pixel evaluator should not be used when quadratic_block_size > 1"
+            )
 
         def _fake_block_eval(
             _provider,
@@ -1867,19 +1921,25 @@ class TestMultiGridSolver:
                 zero_obs,
             )
 
-        monkeypatch.setattr(mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fail_pixel_eval)
-        monkeypatch.setattr(mg_mod, "evaluate_block_grid_search_cost_cube_with_provider_qa", _fake_block_eval)
+        monkeypatch.setattr(
+            mg_mod, "evaluate_grid_search_cost_cube_with_provider_qa", _fail_pixel_eval
+        )
+        monkeypatch.setattr(
+            mg_mod, "evaluate_block_grid_search_cost_cube_with_provider_qa", _fake_block_eval
+        )
         monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_refiner)
 
-        _out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = solver._solve_level_grid_search(
-            toa=toa,
-            surface_prior=surface_prior,
-            geometry=geometry,
-            atmo_prior=atmo_prior,
-            rt_model=_DummyRT(),
-            mask=mask,
-            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
-            cost_config=CostFunctionConfig(aot_gamma=0.0, tcwv_gamma=0.0),
+        _out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = (
+            solver._solve_level_grid_search(
+                toa=toa,
+                surface_prior=surface_prior,
+                geometry=geometry,
+                atmo_prior=atmo_prior,
+                rt_model=_DummyRT(),
+                mask=mask,
+                bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+                cost_config=CostFunctionConfig(aot_gamma=0.0, tcwv_gamma=0.0),
+            )
         )
 
         assert level_diag["valid_pixels"] == pytest.approx(31.0)
@@ -1898,7 +1958,9 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (3, 4)
-        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
+        solver = MultiGridSolver(
+            MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3)
+        )
 
         toa = xr.DataArray(
             np.stack([np.full(shape, 0.25, dtype=np.float32)]),
@@ -2187,7 +2249,9 @@ class TestMultiGridSolver:
         aot_prior_unc = np.array([[0.05]], dtype=np.float32)
         tcwv_prior_unc = np.array([[0.5]], dtype=np.float32)
 
-        def _provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def _provider(
+            _aot_val: float, _tcwv_val: float
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             xap = np.array([[[1.0]]], dtype=np.float32)
             zeros = np.array([[[0.0]]], dtype=np.float32)
             return xap, zeros, zeros
@@ -2261,7 +2325,9 @@ class TestMultiGridSolver:
         aot_prior_unc = np.array([[0.05]], dtype=np.float32)
         tcwv_prior_unc = np.array([[0.5]], dtype=np.float32)
 
-        def _provider(_aot_val: float, _tcwv_val: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def _provider(
+            _aot_val: float, _tcwv_val: float
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             xap = np.array([[[1.0]]], dtype=np.float32)
             zeros = np.array([[[0.0]]], dtype=np.float32)
             return xap, zeros, zeros
@@ -2290,7 +2356,9 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (2, 2)
-        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=11, grid_search_tcwv_points=3))
+        solver = MultiGridSolver(
+            MultiGridConfig(grid_search_aot_points=11, grid_search_tcwv_points=3)
+        )
 
         toa = xr.DataArray(
             np.stack([np.full(shape, 0.2, dtype=np.float32)]),
@@ -2321,8 +2389,12 @@ class TestMultiGridSolver:
             f2_unc=xr.DataArray(np.full(shape, 0.002, dtype=np.float32), dims=["y", "x"]),
         )
         surface_prior = SurfacePrior(
-            boa=xr.DataArray(np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]),
-            boa_unc=xr.DataArray(np.stack([np.full(shape, np.nan, dtype=np.float32)]), dims=["band", "y", "x"]),
+            boa=xr.DataArray(
+                np.stack([np.full(shape, 0.2, dtype=np.float32)]), dims=["band", "y", "x"]
+            ),
+            boa_unc=xr.DataArray(
+                np.stack([np.full(shape, np.nan, dtype=np.float32)]), dims=["band", "y", "x"]
+            ),
             kernels=brdf,
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
@@ -2344,15 +2416,17 @@ class TestMultiGridSolver:
                 _ = (sensor_id, satellite_id)
                 return True
 
-        out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = solver._solve_level_grid_search(
-            toa=toa,
-            surface_prior=surface_prior,
-            geometry=geometry,
-            atmo_prior=atmo_prior,
-            rt_model=_DummyRT(),
-            mask=mask,
-            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
-            cost_config=CostFunctionConfig(),
+        out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = (
+            solver._solve_level_grid_search(
+                toa=toa,
+                surface_prior=surface_prior,
+                geometry=geometry,
+                atmo_prior=atmo_prior,
+                rt_model=_DummyRT(),
+                mask=mask,
+                bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+                cost_config=CostFunctionConfig(),
+            )
         )
 
         np.testing.assert_allclose(out_aot, np.full(shape, 0.05, dtype=np.float32))
@@ -2370,7 +2444,9 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (2, 2)
-        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
+        solver = MultiGridSolver(
+            MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3)
+        )
 
         toa = xr.DataArray(
             np.stack([np.full(shape, 0.25, dtype=np.float32)]),
@@ -2456,15 +2532,17 @@ class TestMultiGridSolver:
 
         monkeypatch.setattr(mg_mod, "quadratic_refine_grid_search_qa", _fake_rust_refiner)
 
-        out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = solver._solve_level_grid_search(
-            toa=toa,
-            surface_prior=surface_prior,
-            geometry=geometry,
-            atmo_prior=atmo_prior,
-            rt_model=_DummyRT(),
-            mask=mask,
-            bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
-            cost_config=CostFunctionConfig(),
+        out_aot, _out_tcwv, _out_aot_unc, _out_tcwv_unc, level_diag = (
+            solver._solve_level_grid_search(
+                toa=toa,
+                surface_prior=surface_prior,
+                geometry=geometry,
+                atmo_prior=atmo_prior,
+                rt_model=_DummyRT(),
+                mask=mask,
+                bands=[SensorBand("B02", 490.0, 65.0, 10.0, 0)],
+                cost_config=CostFunctionConfig(),
+            )
         )
 
         np.testing.assert_allclose(out_aot, np.full(shape, 0.001, dtype=np.float32))
@@ -2484,7 +2562,7 @@ class TestMultiGridSolver:
         boa_prior = rng.uniform(0.02, 0.5, size=(n_band, ny, nx)).astype(np.float32)
         boa_unc = rng.uniform(0.01, 0.08, size=(n_band, ny, nx)).astype(np.float32)
         band_weights = np.array([0.2, 0.3, 0.5], dtype=np.float32)
-        valid_mask = (rng.random((ny, nx)) > 0.2)
+        valid_mask = rng.random((ny, nx)) > 0.2
 
         aot_val = np.float32(0.24)
         tcwv_val = np.float32(2.1)
@@ -2544,7 +2622,7 @@ class TestMultiGridSolver:
         boa_prior = rng.uniform(0.02, 0.5, size=(n_band, ny, nx)).astype(np.float32)
         boa_unc = rng.uniform(0.01, 0.09, size=(n_band, ny, nx)).astype(np.float32)
         band_weights = np.array([0.4, 0.6], dtype=np.float32)
-        valid_mask = (rng.random((ny, nx)) > 0.15)
+        valid_mask = rng.random((ny, nx)) > 0.15
         aot_prior = rng.uniform(0.04, 0.6, size=(ny, nx)).astype(np.float32)
         tcwv_prior = rng.uniform(0.5, 3.8, size=(ny, nx)).astype(np.float32)
         aot_prior_unc = rng.uniform(0.02, 0.15, size=(ny, nx)).astype(np.float32)
@@ -2612,7 +2690,9 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (5, 6)
-        solver = MultiGridSolver(MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3))
+        solver = MultiGridSolver(
+            MultiGridConfig(grid_search_aot_points=3, grid_search_tcwv_points=3)
+        )
 
         toa = xr.DataArray(
             np.stack([np.full(shape, 0.24, dtype=np.float32)]),
@@ -2821,6 +2901,7 @@ class TestCostFunctionGradient:
         vaa = xr.DataArray(np.full(shape, 1.5), dims=["y", "x"])
 
         from siac.runtime import GeometryAngles
+
         geometry = GeometryAngles(sza=sza, saa=saa, vza=vza, vaa=vaa)
 
         # Atmospheric state
@@ -2847,7 +2928,9 @@ class TestCostFunctionGradient:
 
         # Analytical gradient via _pseudo_huber_cost_grad
         j_analytical, dj_analytical = CostFunction._pseudo_huber_cost_grad(
-            aot, gamma, delta,
+            aot,
+            gamma,
+            delta,
         )
 
         # Numerical gradient
@@ -2859,13 +2942,17 @@ class TestCostFunctionGradient:
                 aot_plus = aot.copy()
                 aot_plus[i, j] += eps
                 j_plus, _ = CostFunction._pseudo_huber_cost_grad(
-                    aot_plus, gamma, delta,
+                    aot_plus,
+                    gamma,
+                    delta,
                 )
 
                 aot_minus = aot.copy()
                 aot_minus[i, j] -= eps
                 j_minus, _ = CostFunction._pseudo_huber_cost_grad(
-                    aot_minus, gamma, delta,
+                    aot_minus,
+                    gamma,
+                    delta,
                 )
 
                 numerical_grad[i, j] = (j_plus - j_minus) / (2 * eps)
@@ -2895,7 +2982,7 @@ class TestCostFunctionGradient:
         # For comparison: what L2 would give (quadratic in gradient)
         dy_h = np.diff(hotspot, axis=0)
         dx_h = np.diff(hotspot, axis=1)
-        j_l2 = 0.5 * gamma ** 2 * (np.sum(dy_h ** 2) + np.sum(dx_h ** 2))
+        j_l2 = 0.5 * gamma**2 * (np.sum(dy_h**2) + np.sum(dx_h**2))
 
         # Pseudo-Huber cost should be strictly less than L2 for large gradients
         assert j_hotspot < j_l2
@@ -2956,7 +3043,7 @@ class TestCostFunctionGradient:
         grad_aot = grad[:n].reshape(aot.shape)
         grad_tcwv = grad[n:].reshape(tcwv.shape)
 
-        expected = 0.5 * ((0.10 ** 2) / (0.05 ** 2) + (0.50 ** 2) / (0.3 ** 2))
+        expected = 0.5 * ((0.10**2) / (0.05**2) + (0.50**2) / (0.3**2))
         assert j_prior == pytest.approx(expected)
         np.testing.assert_allclose(grad_aot, np.array([[40.0, 0.0], [0.0, 0.0]], dtype=np.float32))
         np.testing.assert_allclose(
@@ -3037,6 +3124,7 @@ def _make_geometry(shape: tuple[int, int]):  # noqa: ANN201
 
 class _StubRT:
     """Minimal stub that satisfies isinstance(rt, RTModelBackend)."""
+
     pass
 
 
@@ -3069,7 +3157,9 @@ class TestSolverErrorPaths:
         )
         sp = SurfacePrior(
             boa=xr.DataArray(np.full((2, *shape), 0.1, dtype=np.float32), dims=["band", "y", "x"]),
-            boa_unc=xr.DataArray(np.full((2, *shape), 0.02, dtype=np.float32), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(
+                np.full((2, *shape), 0.02, dtype=np.float32), dims=["band", "y", "x"]
+            ),
             kernels=None,
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
@@ -3097,7 +3187,9 @@ class TestSolverErrorPaths:
         )
         sp = SurfacePrior(
             boa=xr.DataArray(np.full((1, *shape), 0.1, dtype=np.float32), dims=["band", "y", "x"]),
-            boa_unc=xr.DataArray(np.full((1, *shape), 0.02, dtype=np.float32), dims=["band", "y", "x"]),
+            boa_unc=xr.DataArray(
+                np.full((1, *shape), 0.02, dtype=np.float32), dims=["band", "y", "x"]
+            ),
             kernels=None,
             mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
         )
@@ -3143,7 +3235,7 @@ class TestSolverErrorPaths:
         cloud = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
         toa = xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"])
         toa.values[0, 0] = -0.1  # below range
-        toa.values[0, 1] = 1.5   # above range
+        toa.values[0, 1] = 1.5  # above range
         sp = SurfacePrior(
             boa=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
             boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
@@ -3153,7 +3245,7 @@ class TestSolverErrorPaths:
         result = build_solver_valid_mask(cloud, toa, sp)
         assert not result.values[0, 0]  # negative TOA excluded
         assert not result.values[0, 1]  # TOA > 1 excluded
-        assert result.values[1, 1]      # valid pixel included
+        assert result.values[1, 1]  # valid pixel included
 
     def test_solver_config_defaults(self):
         """MultiGridConfig default values should be sane."""

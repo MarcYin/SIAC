@@ -27,7 +27,16 @@ def _geom(shape=(2, 2)):
 def _atmo(shape=(2, 2)):
     def da(v):
         return xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
-    return AtmosphericState(aot=da(0.15), tcwv=da(2.0), tco3=da(0.3), aot_unc=da(0.05), tcwv_unc=da(0.3), tco3_unc=da(0.03), elevation=da(0.1))
+
+    return AtmosphericState(
+        aot=da(0.15),
+        tcwv=da(2.0),
+        tco3=da(0.3),
+        aot_unc=da(0.05),
+        tcwv_unc=da(0.3),
+        tco3_unc=da(0.03),
+        elevation=da(0.1),
+    )
 
 
 def _weights(hidden=4):
@@ -59,15 +68,19 @@ def test_two_nn_compute_coeffs_jacobian_requested_but_none(monkeypatch, tmp_path
     class _FakeBand:
         def forward(self, x, compute_jacobian=False):
             n = x.shape[0]
-            out = np.column_stack([
-                np.full(n, 0.9, dtype=np.float32),
-                np.full(n, 0.02, dtype=np.float32),
-                np.full(n, 0.1, dtype=np.float32),
-            ])
+            out = np.column_stack(
+                [
+                    np.full(n, 0.9, dtype=np.float32),
+                    np.full(n, 0.02, dtype=np.float32),
+                    np.full(n, 0.1, dtype=np.float32),
+                ]
+            )
             return out, None
 
     monkeypatch.setattr(emu, "_load_band_emulator", lambda _band_name: _FakeBand())
-    coeffs = emu.compute_coefficients(_geom(), _atmo(), SensorBand("B02", 490.0, 65.0, 10.0, 0), compute_jacobian=True)
+    coeffs = emu.compute_coefficients(
+        _geom(), _atmo(), SensorBand("B02", 490.0, 65.0, 10.0, 0), compute_jacobian=True
+    )
     assert coeffs.d_xap is None
     assert coeffs.xap.shape == (2, 2)
 

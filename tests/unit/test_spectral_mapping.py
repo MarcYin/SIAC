@@ -88,11 +88,21 @@ def _full_spectrum() -> tuple[np.ndarray, np.ndarray]:
 
 def _source_bands() -> tuple[SensorBand, ...]:
     return (
-        SensorBand("Band3", 469.0, 20.0, 500.0, 0, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B3"),
-        SensorBand("Band4", 555.0, 20.0, 500.0, 1, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B4"),
-        SensorBand("Band2", 858.5, 35.0, 500.0, 2, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B2"),
-        SensorBand("Band6", 1640.0, 24.0, 500.0, 3, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B6"),
-        SensorBand("Band7", 2130.0, 50.0, 500.0, 4, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B7"),
+        SensorBand(
+            "Band3", 469.0, 20.0, 500.0, 0, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B3"
+        ),
+        SensorBand(
+            "Band4", 555.0, 20.0, 500.0, 1, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B4"
+        ),
+        SensorBand(
+            "Band2", 858.5, 35.0, 500.0, 2, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B2"
+        ),
+        SensorBand(
+            "Band6", 1640.0, 24.0, 500.0, 3, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B6"
+        ),
+        SensorBand(
+            "Band7", 2130.0, 50.0, 500.0, 4, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B7"
+        ),
     )
 
 
@@ -129,19 +139,35 @@ def _sampled_band(
 
 def _target_bands() -> tuple[SensorBand, ...]:
     return (
-        _sampled_band("B02", 490.0, 65.0, 10.0, 0, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B02"),
-        _sampled_band("B03", 560.0, 35.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B03"),
-        _sampled_band("B08", 842.0, 115.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B08"),
-        _sampled_band("B11", 1610.0, 90.0, 20.0, 3, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B11"),
-        _sampled_band("B12", 2190.0, 180.0, 20.0, 4, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B12"),
+        _sampled_band(
+            "B02", 490.0, 65.0, 10.0, 0, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B02"
+        ),
+        _sampled_band(
+            "B03", 560.0, 35.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B03"
+        ),
+        _sampled_band(
+            "B08", 842.0, 115.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B08"
+        ),
+        _sampled_band(
+            "B11", 1610.0, 90.0, 20.0, 3, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B11"
+        ),
+        _sampled_band(
+            "B12", 2190.0, 180.0, 20.0, 4, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B12"
+        ),
     )
 
 
 def _unsupported_source_bands() -> tuple[SensorBand, ...]:
     return (
-        SensorBand("M2", 445.0, 18.0, 500.0, 0, rsrf_sensor_unit_id="snpp_viirs", rsrf_band_id="M2"),
-        SensorBand("M4", 555.0, 20.0, 500.0, 1, rsrf_sensor_unit_id="snpp_viirs", rsrf_band_id="M4"),
-        SensorBand("M7", 865.0, 39.0, 500.0, 2, rsrf_sensor_unit_id="snpp_viirs", rsrf_band_id="M7"),
+        SensorBand(
+            "M2", 445.0, 18.0, 500.0, 0, rsrf_sensor_unit_id="snpp_viirs", rsrf_band_id="M2"
+        ),
+        SensorBand(
+            "M4", 555.0, 20.0, 500.0, 1, rsrf_sensor_unit_id="snpp_viirs", rsrf_band_id="M4"
+        ),
+        SensorBand(
+            "M7", 865.0, 39.0, 500.0, 2, rsrf_sensor_unit_id="snpp_viirs", rsrf_band_id="M7"
+        ),
     )
 
 
@@ -228,7 +254,9 @@ def _install_fake_runtime(
     calls: dict[str, object] = {}
     prepared_root = tmp_path / "published-runtime"
     prepared_root.mkdir()
-    monkeypatch.setattr(spectral_mapping_mod, "resolve_prepared_library_root", lambda: prepared_root)
+    monkeypatch.setattr(
+        spectral_mapping_mod, "resolve_prepared_library_root", lambda: prepared_root
+    )
 
     def _factory(prepared_root_arg, verify_checksums=False):  # noqa: ANN001
         calls["init"] = {
@@ -248,13 +276,27 @@ def _install_fake_runtime(
 
 def _published_target_sensor_bands() -> tuple[SensorBand, ...]:
     return (
-        _sampled_band("B01", 443.0, 20.0, 60.0, 0, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B01"),
-        _sampled_band("B02", 490.0, 65.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B02"),
-        _sampled_band("B03", 560.0, 35.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B03"),
-        _sampled_band("B04", 665.0, 30.0, 10.0, 3, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B04"),
-        _sampled_band("B08", 842.0, 115.0, 10.0, 4, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B08"),
-        _sampled_band("B11", 1610.0, 90.0, 20.0, 5, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B11"),
-        _sampled_band("B12", 2190.0, 180.0, 20.0, 6, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B12"),
+        _sampled_band(
+            "B01", 443.0, 20.0, 60.0, 0, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B01"
+        ),
+        _sampled_band(
+            "B02", 490.0, 65.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B02"
+        ),
+        _sampled_band(
+            "B03", 560.0, 35.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B03"
+        ),
+        _sampled_band(
+            "B04", 665.0, 30.0, 10.0, 3, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B04"
+        ),
+        _sampled_band(
+            "B08", 842.0, 115.0, 10.0, 4, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B08"
+        ),
+        _sampled_band(
+            "B11", 1610.0, 90.0, 20.0, 5, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B11"
+        ),
+        _sampled_band(
+            "B12", 2190.0, 180.0, 20.0, 6, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B12"
+        ),
     )
 
 
@@ -291,11 +333,15 @@ def test_multispectral_mapping_projects_requested_target_bands_from_full_spectru
         dims=["y", "x", "wavelength"],
         coords={"y": [0], "x": [0], "wavelength": wavelengths},
     )
-    published_target = convolve_hyperspectral_reflectance(sample, wavelengths, _published_target_sensor_bands())
+    published_target = convolve_hyperspectral_reflectance(
+        sample, wavelengths, _published_target_sensor_bands()
+    )
     calls = _install_fake_runtime(
         monkeypatch,
         tmp_path,
-        target_rows_by_sensor={"sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)},
+        target_rows_by_sensor={
+            "sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)
+        },
     )
     source = convolve_hyperspectral_reflectance(sample, wavelengths, _source_bands())
     expected = convolve_hyperspectral_reflectance(sample, wavelengths, _target_bands())
@@ -317,7 +363,17 @@ def test_multispectral_mapping_projects_requested_target_bands_from_full_spectru
     assert calls["batch"]["target_sensor"] == "sentinel-2a_msi"
     np.testing.assert_allclose(
         np.asarray(calls["batch"]["reflectance_rows"][0], dtype=np.float64),
-        np.array([source.values[0, 0, 0], source.values[1, 0, 0], np.nan, source.values[2, 0, 0], source.values[3, 0, 0], source.values[4, 0, 0]], dtype=np.float64),
+        np.array(
+            [
+                source.values[0, 0, 0],
+                source.values[1, 0, 0],
+                np.nan,
+                source.values[2, 0, 0],
+                source.values[3, 0, 0],
+                source.values[4, 0, 0],
+            ],
+            dtype=np.float64,
+        ),
         equal_nan=True,
     )
     assert needs_spectral_mapping(_source_bands(), _target_bands()) is True
@@ -333,17 +389,24 @@ def test_whittaker_route_uses_published_runtime_mapping(
         dims=["y", "x", "wavelength"],
         coords={"y": [0], "x": [0], "wavelength": wavelengths},
     )
-    published_target = convolve_hyperspectral_reflectance(sample, wavelengths, _published_target_sensor_bands())
+    published_target = convolve_hyperspectral_reflectance(
+        sample, wavelengths, _published_target_sensor_bands()
+    )
     _install_fake_runtime(
         monkeypatch,
         tmp_path,
-        target_rows_by_sensor={"sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)},
+        target_rows_by_sensor={
+            "sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)
+        },
     )
     expected = convolve_hyperspectral_reflectance(sample, wavelengths, _target_bands())
     source = convolve_hyperspectral_reflectance(sample, wavelengths, _source_bands())
 
     times = np.array(
-        [(datetime(2024, 7, 15) + timedelta(days=offset)).date().isoformat() for offset in (-1, 0, 1)],
+        [
+            (datetime(2024, 7, 15) + timedelta(days=offset)).date().isoformat()
+            for offset in (-1, 0, 1)
+        ],
         dtype="datetime64[D]",
     )
     source_values = np.repeat(source.values[np.newaxis, ...], len(times), axis=0)
@@ -351,8 +414,12 @@ def test_whittaker_route_uses_published_runtime_mapping(
     coords = {"time": times, "band": source.coords["band"], "y": [0], "x": [0]}
     weights = BRDFKernelWeights(
         f0=xr.DataArray(source_values, dims=["time", "band", "y", "x"], coords=coords),
-        f1=xr.DataArray(np.zeros_like(source_values), dims=["time", "band", "y", "x"], coords=coords),
-        f2=xr.DataArray(np.zeros_like(source_values), dims=["time", "band", "y", "x"], coords=coords),
+        f1=xr.DataArray(
+            np.zeros_like(source_values), dims=["time", "band", "y", "x"], coords=coords
+        ),
+        f2=xr.DataArray(
+            np.zeros_like(source_values), dims=["time", "band", "y", "x"], coords=coords
+        ),
         f0_unc=xr.DataArray(source_unc, dims=["time", "band", "y", "x"], coords=coords),
         f1_unc=xr.DataArray(source_unc, dims=["time", "band", "y", "x"], coords=coords),
         f2_unc=xr.DataArray(source_unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -368,7 +435,9 @@ def test_whittaker_route_uses_published_runtime_mapping(
         spectral_k_neighbors=1,
     )
 
-    assert tuple(prior.boa.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
+    assert tuple(prior.boa.coords["band"].values.tolist()) == tuple(
+        band.name for band in _target_bands()
+    )
     np.testing.assert_allclose(prior.boa.values, expected.values, atol=2.0e-2)
     assert np.all(prior.boa_unc.values > 0.0)
 
@@ -383,11 +452,15 @@ def test_spectral_mapper_handles_time_dimension(
         dims=["y", "x", "wavelength"],
         coords={"y": [0], "x": [0], "wavelength": wavelengths},
     )
-    published_target = convolve_hyperspectral_reflectance(sample, wavelengths, _published_target_sensor_bands())
+    published_target = convolve_hyperspectral_reflectance(
+        sample, wavelengths, _published_target_sensor_bands()
+    )
     _install_fake_runtime(
         monkeypatch,
         tmp_path,
-        target_rows_by_sensor={"sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)},
+        target_rows_by_sensor={
+            "sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)
+        },
     )
     source0 = convolve_hyperspectral_reflectance(sample, wavelengths, _source_bands())
     source1 = convolve_hyperspectral_reflectance(sample * 0.8, wavelengths, _source_bands())
@@ -398,13 +471,17 @@ def test_spectral_mapper_handles_time_dimension(
     source = _with_geo(source)
     unc = _with_geo(xr.full_like(source, 0.02))
 
-    mapper = SpectralMapper(_source_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1)
+    mapper = SpectralMapper(
+        _source_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1
+    )
     mapped, mapped_unc, source_fit = mapper.map(source, source_uncertainty=unc)
 
     assert mapped.dims == ("time", "band", "y", "x")
     assert mapped_unc.shape == mapped.shape
     assert source_fit.dims == ("time", "y", "x")
-    assert tuple(mapped.coords["band"].values.tolist()) == tuple(band.name for band in _target_bands())
+    assert tuple(mapped.coords["band"].values.tolist()) == tuple(
+        band.name for band in _target_bands()
+    )
     assert mapped.rio.crs is not None
     assert mapped.rio.crs.to_string() == "EPSG:32615"
     assert mapped_unc.rio.crs is not None
@@ -425,11 +502,15 @@ def test_mapping_requires_supported_published_source_sensor(
     _install_fake_runtime(monkeypatch, tmp_path, source_sensors=("terra_modis",))
 
     with pytest.raises(ValueError, match="does not support the requested source sensor"):
-        SpectralMapper(_unsupported_source_bands(), _target_bands(), spectral_library=SpectralMappingConfig())
+        SpectralMapper(
+            _unsupported_source_bands(), _target_bands(), spectral_library=SpectralMappingConfig()
+        )
 
 
 def test_spectral_mapper_rejects_missing_band_dimension() -> None:
-    mapper = SpectralMapper(_target_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1)
+    mapper = SpectralMapper(
+        _target_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1
+    )
     data = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
 
     with pytest.raises(ValueError, match="'band' dimension"):
@@ -437,7 +518,9 @@ def test_spectral_mapper_rejects_missing_band_dimension() -> None:
 
 
 def test_spectral_mapper_rejects_missing_source_bands() -> None:
-    mapper = SpectralMapper(_target_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1)
+    mapper = SpectralMapper(
+        _target_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1
+    )
     data = xr.DataArray(
         np.ones((1, 1, 1), dtype=np.float32),
         dims=["band", "y", "x"],
@@ -458,11 +541,15 @@ def test_uncertainty_is_at_least_floor_for_mapped_bands(
         dims=["y", "x", "wavelength"],
         coords={"y": [0], "x": [0], "wavelength": wavelengths},
     )
-    published_target = convolve_hyperspectral_reflectance(sample, wavelengths, _published_target_sensor_bands())
+    published_target = convolve_hyperspectral_reflectance(
+        sample, wavelengths, _published_target_sensor_bands()
+    )
     calls = _install_fake_runtime(
         monkeypatch,
         tmp_path,
-        target_rows_by_sensor={"sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)},
+        target_rows_by_sensor={
+            "sentinel-2a_msi": np.asarray(published_target.values[:, 0, 0], dtype=np.float64)
+        },
     )
     source = xr.DataArray(
         np.array([[[0.2]], [[0.3]], [[0.4]], [[0.25]], [[0.15]]], dtype=np.float32),
@@ -482,7 +569,9 @@ def test_uncertainty_is_at_least_floor_for_mapped_bands(
             output_columns=("ultra_blue", "blue", "green", "red", "nir", "swir1", "swir2"),
         )
 
-    mapper = SpectralMapper(_source_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1)
+    mapper = SpectralMapper(
+        _source_bands(), _target_bands(), spectral_library=SpectralMappingConfig(), k_neighbors=1
+    )
     mapper._package_mapper = SimpleNamespace(map_reflectance_batch_arrays_ndarray=_zero_fit)
     mapped, mapped_unc, _source_fit = mapper.map(source)
 

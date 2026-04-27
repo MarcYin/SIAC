@@ -112,7 +112,9 @@ class SensorConfig:
                     f"Band {band.name!r} has non-positive center_wavelength: {band.center_wavelength}"
                 )
             if band.resolution <= 0:
-                raise ValueError(f"Band {band.name!r} has non-positive resolution: {band.resolution}")
+                raise ValueError(
+                    f"Band {band.name!r} has non-positive resolution: {band.resolution}"
+                )
 
     def get_band(self, name: str) -> SensorBand:
         for band in self.bands:
@@ -142,9 +144,7 @@ class SensorConfig:
     def band_wavelengths(self) -> tuple[float, ...]:
         return tuple(b.center_wavelength for b in self.bands)
 
-    def select_bands_in_range(
-        self, wl_min_nm: float, wl_max_nm: float
-    ) -> list[SensorBand]:
+    def select_bands_in_range(self, wl_min_nm: float, wl_max_nm: float) -> list[SensorBand]:
         return [b for b in self.bands if wl_min_nm <= b.center_wavelength <= wl_max_nm]
 
     def select_nearest_band(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import subprocess
+import tarfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -216,22 +218,38 @@ def test_encoded_string_io_reports_utf8_encoding() -> None:
 
 
 def test_default_native_profile_maps_to_us_standard_62() -> None:
-    assert _resolve_atmospheric_mode(
-        RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"}),
-        month=1,
-    ) == 6
+    assert (
+        _resolve_atmospheric_mode(
+            RTSetupConfig(
+                atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"}
+            ),
+            month=1,
+        )
+        == 6
+    )
 
 
 def test_default_native_columns_mode_uses_scene_inputs() -> None:
-    assert _resolve_atmospheric_columns_mode(
-        RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"})
-    ) == 1
-    assert _resolve_atmospheric_columns_mode(
-        RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "profile_default"})
-    ) == 0
-    assert _resolve_atmospheric_columns_mode(
-        RTSetupConfig(atmosphere={"profile": "no_gas", "columns_mode": "input_columns"})
-    ) == 0
+    assert (
+        _resolve_atmospheric_columns_mode(
+            RTSetupConfig(atmosphere={"profile": "us_standard_62", "columns_mode": "input_columns"})
+        )
+        == 1
+    )
+    assert (
+        _resolve_atmospheric_columns_mode(
+            RTSetupConfig(
+                atmosphere={"profile": "us_standard_62", "columns_mode": "profile_default"}
+            )
+        )
+        == 0
+    )
+    assert (
+        _resolve_atmospheric_columns_mode(
+            RTSetupConfig(atmosphere={"profile": "no_gas", "columns_mode": "input_columns"})
+        )
+        == 0
+    )
 
 
 def test_spectral_response_build_uses_band_rsrf_support() -> None:
@@ -362,6 +380,24 @@ def test_resolve_build_paths_separates_release_and_parity_roots() -> None:
     assert parity_paths.root_dir.name == "parity"
 
 
+def test_fetch_and_unpack_source_rejects_path_traversal_archive(tmp_path: Path) -> None:
+    archive_path = tmp_path / "bad-6s.tar"
+    payload = b"unsafe"
+    with tarfile.open(archive_path, "w") as archive:
+        member = tarfile.TarInfo("../escape.txt")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+
+    with pytest.raises(RuntimeError, match="unsafe 6S source archive member"):
+        sixs_build_module._fetch_and_unpack_source(
+            "https://example.invalid/6s.tar",
+            archive_path,
+            tmp_path / "upstream",
+        )
+
+    assert not (tmp_path / "escape.txt").exists()
+
+
 def test_resolve_f2py_backends_skips_unavailable_distutils(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sixs_build_module,
@@ -373,7 +409,9 @@ def test_resolve_f2py_backends_skips_unavailable_distutils(monkeypatch: pytest.M
     assert _resolve_f2py_backends() == ("meson",)
 
 
-def test_distutils_backend_supported_rejects_new_setuptools(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_distutils_backend_supported_rejects_new_setuptools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("numpy.f2py.f2py2e.MESON_ONLY_VER", False)
     monkeypatch.setattr(
         sixs_build_module.importlib.metadata,
@@ -437,7 +475,9 @@ def test_compile_f2py_extension_accepts_built_module_after_nonzero_exit(
             stderr='buildmodule: Could not find the body of interfaced routine "sixs_case_core". Skipping.',
         )
 
-    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"]
+    )
     monkeypatch.setattr(
         sixs_build_module,
         "_generate_f2py_signature",
@@ -486,7 +526,9 @@ def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
             stderr="distutils stderr",
         )
 
-    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"]
+    )
     monkeypatch.setattr(
         sixs_build_module,
         "_generate_f2py_signature",
@@ -505,10 +547,18 @@ def test_compile_f2py_extension_persists_backend_diagnostics_on_failure(
         )
 
     diagnostics_dir = build_paths.root_dir / "diagnostics"
-    assert (diagnostics_dir / "f2py-distutils.stdout.txt").read_text(encoding="utf-8") == "distutils stdout"
-    assert (diagnostics_dir / "f2py-distutils.stderr.txt").read_text(encoding="utf-8") == "distutils stderr"
-    assert "status=failed" in (diagnostics_dir / "f2py-distutils.summary.txt").read_text(encoding="utf-8")
-    assert "Backend distutils" in (diagnostics_dir / "build_failure_summary.txt").read_text(encoding="utf-8")
+    assert (diagnostics_dir / "f2py-distutils.stdout.txt").read_text(
+        encoding="utf-8"
+    ) == "distutils stdout"
+    assert (diagnostics_dir / "f2py-distutils.stderr.txt").read_text(
+        encoding="utf-8"
+    ) == "distutils stderr"
+    assert "status=failed" in (diagnostics_dir / "f2py-distutils.summary.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "Backend distutils" in (diagnostics_dir / "build_failure_summary.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
@@ -534,7 +584,9 @@ def test_compile_f2py_extension_accepts_module_found_in_environment_roots(
             stderr='buildmodule: Could not find the body of interfaced routine "sixs_case_core". Skipping.',
         )
 
-    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"]
+    )
     monkeypatch.setattr(
         sixs_build_module,
         "_generate_f2py_signature",
@@ -622,7 +674,9 @@ def test_compile_f2py_extension_falls_back_after_import_validation_failure(
             stderr="",
         )
 
-    monkeypatch.setattr(sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"])
+    monkeypatch.setattr(
+        sixs_build_module, "parse_makefile_sources", lambda _path: [source_dir / "main.f"]
+    )
     monkeypatch.setattr(
         sixs_build_module,
         "_generate_f2py_signature",
@@ -633,7 +687,9 @@ def test_compile_f2py_extension_falls_back_after_import_validation_failure(
     monkeypatch.setattr(sixs_build_module, "_run_distutils_backend", _fake_run_distutils_backend)
     monkeypatch.setattr(sixs_build_module, "_find_built_extension", _fake_find_built_extension)
     monkeypatch.setattr(sixs_build_module, "_environment_extension_roots", lambda: ())
-    monkeypatch.setattr(sixs_build_module, "_validate_extension_import", _fake_validate_extension_import)
+    monkeypatch.setattr(
+        sixs_build_module, "_validate_extension_import", _fake_validate_extension_import
+    )
 
     _compile_f2py_extension(
         source_dir=source_dir,
@@ -646,7 +702,9 @@ def test_compile_f2py_extension_falls_back_after_import_validation_failure(
     meson_summary = (diagnostics_dir / "f2py-meson.summary.txt").read_text(encoding="utf-8")
     assert "status=import-failed" in meson_summary
     assert "import_check_returncode=1" in meson_summary
-    assert "GOMP_parallel" in (diagnostics_dir / "f2py-meson.import_check.stderr.txt").read_text(encoding="utf-8")
+    assert "GOMP_parallel" in (diagnostics_dir / "f2py-meson.import_check.stderr.txt").read_text(
+        encoding="utf-8"
+    )
     assert not meson_module.exists()
     assert distutils_module.exists()
 
@@ -707,20 +765,26 @@ def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:
 
     assert plan.direct_case_count == 32
     assert plan.lut_case_count <= 81
-    assert _should_use_scene_lut(
-        mode="auto",
-        direct_case_count=plan.direct_case_count,
-        lut_case_count=plan.lut_case_count,
-        min_pixels=8,
-        required_speedup=1.1,
-    ) is True
-    assert _should_use_scene_lut(
-        mode="direct",
-        direct_case_count=plan.direct_case_count,
-        lut_case_count=plan.lut_case_count,
-        min_pixels=8,
-        required_speedup=1.1,
-    ) is False
+    assert (
+        _should_use_scene_lut(
+            mode="auto",
+            direct_case_count=plan.direct_case_count,
+            lut_case_count=plan.lut_case_count,
+            min_pixels=8,
+            required_speedup=1.1,
+        )
+        is True
+    )
+    assert (
+        _should_use_scene_lut(
+            mode="direct",
+            direct_case_count=plan.direct_case_count,
+            lut_case_count=plan.lut_case_count,
+            min_pixels=8,
+            required_speedup=1.1,
+        )
+        is False
+    )
 
 
 def test_scene_lut_mode_interpolates_linear_native_outputs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -793,24 +857,41 @@ def test_scene_lut_mode_interpolates_linear_native_outputs(monkeypatch: pytest.M
             "tgasm": 0.8 + 0.001 * sza - 0.01 * aot,
         }
         return _NativeBatchResult(
-            outputs={name: np.ascontiguousarray(values, dtype=np.float64) for name, values in outputs.items()},
+            outputs={
+                name: np.ascontiguousarray(values, dtype=np.float64)
+                for name, values in outputs.items()
+            },
             status=np.zeros(n_cases, dtype=np.int32),
         )
 
     monkeypatch.setattr(direct_runner, "_run_native_batch", _fake_run_native_batch)
     monkeypatch.setattr(scene_runner, "_run_native_batch", _fake_run_native_batch)
 
-    direct = direct_runner.compute_coefficients(geometry=geometry, atmo_state=atmo, band=band, output_variables=("xap", "xbp", "xcp", "tgasm"))
+    direct = direct_runner.compute_coefficients(
+        geometry=geometry,
+        atmo_state=atmo,
+        band=band,
+        output_variables=("xap", "xbp", "xcp", "tgasm"),
+    )
     direct_case_count = call_sizes[-1]
-    scene = scene_runner.compute_coefficients(geometry=geometry, atmo_state=atmo, band=band, output_variables=("xap", "xbp", "xcp", "tgasm"))
+    scene = scene_runner.compute_coefficients(
+        geometry=geometry,
+        atmo_state=atmo,
+        band=band,
+        output_variables=("xap", "xbp", "xcp", "tgasm"),
+    )
     scene_case_count = call_sizes[-1]
 
     assert scene_case_count < direct_case_count
     for name in ("xap", "xbp", "xcp", "tgasm"):
-        np.testing.assert_allclose(scene[name].values, direct[name].values, rtol=1.0e-10, atol=1.0e-10)
+        np.testing.assert_allclose(
+            scene[name].values, direct[name].values, rtol=1.0e-10, atol=1.0e-10
+        )
 
 
-def test_worker_library_backend_slices_batches_and_merges_outputs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_library_backend_slices_batches_and_merges_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
         lambda _config: Path("/tmp/fake_sixs_native.so"),
@@ -845,7 +926,9 @@ def test_worker_library_backend_slices_batches_and_merges_outputs(monkeypatch: p
             return None
 
     sessions = [_FakeSession(), _FakeSession()]
-    monkeypatch.setattr(runner, "_ensure_worker_sessions", lambda worker_count: sessions[:worker_count])
+    monkeypatch.setattr(
+        runner, "_ensure_worker_sessions", lambda worker_count: sessions[:worker_count]
+    )
 
     result = runner._run_native_batch_worker_libraries(
         month=1,

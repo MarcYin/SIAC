@@ -285,20 +285,30 @@ class TestCAMSProvider:
     def test_extract_variable_missing_var_fallback(self, tmp_path: Path):
         p = CAMSProvider(tmp_path)
         ds = xr.Dataset({"dummy": (("y", "x"), np.ones((3, 3), dtype=np.float32))})
-        arr = p._extract_variable(ds, "aod550", (0.0, 0.0, 4.0, 4.0), "EPSG:4326", 1.0, datetime(2024, 1, 1))
+        arr = p._extract_variable(
+            ds, "aod550", (0.0, 0.0, 4.0, 4.0), "EPSG:4326", 1.0, datetime(2024, 1, 1)
+        )
         assert arr.shape == (4, 4)
         assert float(arr.mean()) == pytest.approx(0.15)
 
     def test_get_prior_from_dataset_and_no_temporal_interp(self, tmp_path: Path, monkeypatch):
-        time = np.array([np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T03:00:00")])
+        time = np.array(
+            [np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T03:00:00")]
+        )
         lat = np.array([1.0, 0.0, -1.0], dtype=np.float32)
         lon = np.array([0.0, 1.0], dtype=np.float32)
         shape = (2, 3, 2)
         ds = xr.Dataset(
             {
-                "aod550": (("time", "latitude", "longitude"), np.full(shape, 0.2, dtype=np.float32)),
+                "aod550": (
+                    ("time", "latitude", "longitude"),
+                    np.full(shape, 0.2, dtype=np.float32),
+                ),
                 "tcwv": (("time", "latitude", "longitude"), np.full(shape, 2.2, dtype=np.float32)),
-                "gtco3": (("time", "latitude", "longitude"), np.full(shape, 0.006, dtype=np.float32)),
+                "gtco3": (
+                    ("time", "latitude", "longitude"),
+                    np.full(shape, 0.006, dtype=np.float32),
+                ),
             },
             coords={"time": time, "latitude": lat, "longitude": lon},
         )
@@ -312,7 +322,9 @@ class TestCAMSProvider:
         monkeypatch.setattr(
             xr,
             "open_mfdataset",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("open_mfdataset should not be used")),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("open_mfdataset should not be used")
+            ),
         )
         state = p.get_prior((0.0, -1.0, 1.0, 1.0), "EPSG:4326", datetime(2024, 1, 1, 1), 1.0)
 
@@ -329,20 +341,33 @@ class TestCAMSProvider:
 
         orig = xr.open_mfdataset
         try:
+
             def _boom(*args, **kwargs):
                 raise RuntimeError("read failed")
+
             xr.open_mfdataset = _boom  # type: ignore[assignment]
             assert p._load_cams_data(datetime(2024, 1, 1)) is None
         finally:
             xr.open_mfdataset = orig  # type: ignore[assignment]
 
-    def test_load_cams_from_direct_netcdf_file(self, tmp_path: Path, request: pytest.FixtureRequest):
+    def test_load_cams_from_direct_netcdf_file(
+        self, tmp_path: Path, request: pytest.FixtureRequest
+    ):
         _skip_native_heavy_for_cdse_cov(request)
         ds = xr.Dataset(
             {
-                "aod550": (("time", "latitude", "longitude"), np.full((1, 2, 2), 0.2, dtype=np.float32)),
-                "tcwv": (("time", "latitude", "longitude"), np.full((1, 2, 2), 2.0, dtype=np.float32)),
-                "gtco3": (("time", "latitude", "longitude"), np.full((1, 2, 2), 0.006, dtype=np.float32)),
+                "aod550": (
+                    ("time", "latitude", "longitude"),
+                    np.full((1, 2, 2), 0.2, dtype=np.float32),
+                ),
+                "tcwv": (
+                    ("time", "latitude", "longitude"),
+                    np.full((1, 2, 2), 2.0, dtype=np.float32),
+                ),
+                "gtco3": (
+                    ("time", "latitude", "longitude"),
+                    np.full((1, 2, 2), 0.006, dtype=np.float32),
+                ),
             },
             coords={
                 "time": [np.datetime64("2024-01-01T00:00:00")],

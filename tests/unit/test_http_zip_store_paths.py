@@ -34,8 +34,12 @@ class _SessionProbeContentRange:
     def get(self, path, headers=None, timeout=None):  # noqa: ARG002
         hdrs = dict(headers or {})
         if "Range" in hdrs:
-            return _Resp(ok=True, status_code=206, headers={"Content-Range": "bytes 0-0/1234"}, content=b"x")
-        return _Resp(ok=True, status_code=200, headers={"Content-Length": "1234"}, content=b"x" * 1234)
+            return _Resp(
+                ok=True, status_code=206, headers={"Content-Range": "bytes 0-0/1234"}, content=b"x"
+            )
+        return _Resp(
+            ok=True, status_code=200, headers={"Content-Length": "1234"}, content=b"x" * 1234
+        )
 
     def close(self):
         pass
@@ -179,6 +183,7 @@ def test_build_s3_fs_and_mapper_validation_paths(monkeypatch):
     monkeypatch.setattr(zip_store, "_build_s3_filesystem", lambda _options: "fake-base")
     monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
     monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda _zfs: "")
+
     def _fake_fsmap(root, fs, check=False, create=False):  # noqa: ANN001
         _ = (check, create)
         return {"root": root, "fs": fs}

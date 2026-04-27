@@ -38,7 +38,9 @@ The standard validation commands are:
 ```bash
 pixi run build-rust
 pixi run lint
+pixi run format-check
 pixi run typecheck-scoped
+pixi run rust-test
 pixi run test-fast
 pixi run test
 pixi run coverage
@@ -62,6 +64,10 @@ stop working.
 python -m pip install -e ".[dev,docs]"
 maturin develop --release --manifest-path src/siac_rs/Cargo.toml
 ```
+
+Install `siac[dask]` when you want to run with `execution.backend = "dask"`.
+The default installation keeps the threaded backend available without pulling
+in the distributed scheduler.
 
 Use this only when you specifically want a non-Pixi environment.
 

@@ -102,7 +102,9 @@ class MERRA2Provider:
             logger.warning("MERRA-2 Earthaccess probe failed; using defaults (%s)", exc)
 
     @staticmethod
-    def _grid(bounds: tuple[float, float, float, float], resolution: float) -> tuple[np.ndarray, np.ndarray]:
+    def _grid(
+        bounds: tuple[float, float, float, float], resolution: float
+    ) -> tuple[np.ndarray, np.ndarray]:
         coords: tuple[np.ndarray, np.ndarray] = target_grid_coords(
             bounds,
             resolution,

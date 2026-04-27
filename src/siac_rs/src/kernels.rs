@@ -203,8 +203,14 @@ mod tests {
                         sza_deg.to_radians(),
                         raa_deg.to_radians(),
                     );
-                    assert!(ross.is_finite(), "ross not finite at sza={sza_deg} vza={vza_deg} raa={raa_deg}");
-                    assert!(li.is_finite(), "li not finite at sza={sza_deg} vza={vza_deg} raa={raa_deg}");
+                    assert!(
+                        ross.is_finite(),
+                        "ross not finite at sza={sza_deg} vza={vza_deg} raa={raa_deg}"
+                    );
+                    assert!(
+                        li.is_finite(),
+                        "li not finite at sza={sza_deg} vza={vza_deg} raa={raa_deg}"
+                    );
                 }
             }
         }
@@ -219,6 +225,9 @@ mod tests {
         let (ross_ref, li_ref) = k_ref.compute_single(0.4, 0.6, 0.5);
         let (ross_tall, li_tall) = k_tall.compute_single(0.4, 0.6, 0.5);
         assert_relative_eq!(ross_ref, ross_tall, epsilon = 1e-12);
-        assert!((li_ref - li_tall).abs() > 1e-6, "Li kernel should depend on br");
+        assert!(
+            (li_ref - li_tall).abs() > 1e-6,
+            "Li kernel should depend on br"
+        );
     }
 }

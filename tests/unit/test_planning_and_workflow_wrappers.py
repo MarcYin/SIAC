@@ -72,9 +72,7 @@ def test_coerce_aoi_spec_returns_existing_aoi_and_rejects_unknown() -> None:
 def test_build_execution_plan_default_aoi_resolver_uses_callable_override(tmp_path: Path) -> None:
     cfg = SIACConfig(sensor="s2")
     request = SceneProcessRequest(config=cfg, input_path=tmp_path / "in.SAFE")
-    toa = xr.Dataset(
-        {"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])})
     expected_aoi = AOI.from_bounds((5.0, 6.0, 7.0, 8.0))
 
     def _fake_build_preprocessor_runtime(config, *, input_path, sensor, default_aoi_resolver):  # noqa: ANN001
@@ -96,7 +94,11 @@ def test_build_execution_plan_default_aoi_resolver_uses_callable_override(tmp_pa
         resolve_grid_assembler_fn=lambda: "grid",
         resolve_solver_fn=lambda _config: "solver",
         resolve_corrector_fn=lambda _config: "corrector",
-        resolve_rt_model_fn=lambda _config, auth=None, sensor_config=None: ("rt", auth, sensor_config),
+        resolve_rt_model_fn=lambda _config, auth=None, sensor_config=None: (
+            "rt",
+            auth,
+            sensor_config,
+        ),
         resolve_output_writer_fn=lambda _config: "writer",
         aoi_resolver=lambda _toa: expected_aoi,
     )
@@ -106,12 +108,12 @@ def test_build_execution_plan_default_aoi_resolver_uses_callable_override(tmp_pa
     assert result.aoi is expected_aoi
 
 
-def test_build_execution_plan_default_aoi_resolver_falls_back_to_raster(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_execution_plan_default_aoi_resolver_falls_back_to_raster(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     cfg = SIACConfig(sensor="s2")
     request = SceneProcessRequest(config=cfg, input_path=tmp_path / "in.SAFE")
-    toa = xr.Dataset(
-        {"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])})
     expected_aoi = AOI.from_bounds((9.0, 10.0, 11.0, 12.0))
 
     def _fake_build_preprocessor_runtime(config, *, input_path, sensor, default_aoi_resolver):  # noqa: ANN001
@@ -135,7 +137,11 @@ def test_build_execution_plan_default_aoi_resolver_falls_back_to_raster(monkeypa
         resolve_grid_assembler_fn=lambda: "grid",
         resolve_solver_fn=lambda _config: "solver",
         resolve_corrector_fn=lambda _config: "corrector",
-        resolve_rt_model_fn=lambda _config, auth=None, sensor_config=None: ("rt", auth, sensor_config),
+        resolve_rt_model_fn=lambda _config, auth=None, sensor_config=None: (
+            "rt",
+            auth,
+            sensor_config,
+        ),
         resolve_output_writer_fn=lambda _config: "writer",
     )
 
@@ -159,7 +165,9 @@ def test_write_output_passes_a_path_to_output_writer(tmp_path: Path) -> None:
     assert captured["output_path"] == tmp_path / "out"
 
 
-def test_process_scene_writes_outputs_when_plan_has_writer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_process_scene_writes_outputs_when_plan_has_writer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import siac.workflows.scene as scene_mod
 
     request = SceneProcessRequest(config=SIACConfig(sensor="s2"), input_path=tmp_path / "in.SAFE")

@@ -54,13 +54,15 @@ def _make_sensor_config() -> SensorConfig:
 def _make_obs_bundle() -> ObservationBundle:
     rng = np.random.RandomState(99)
     config = _make_sensor_config()
-    toa = xr.Dataset({
-        b.name: xr.DataArray(
-            rng.uniform(0.05, 0.4, SHAPE).astype(np.float32),
-            dims=["y", "x"],
-        )
-        for b in config.bands
-    })
+    toa = xr.Dataset(
+        {
+            b.name: xr.DataArray(
+                rng.uniform(0.05, 0.4, SHAPE).astype(np.float32),
+                dims=["y", "x"],
+            )
+            for b in config.bands
+        }
+    )
     geometry = GeometryAngles(
         sza=xr.DataArray(np.full(SHAPE, 0.5), dims=["y", "x"]),
         saa=xr.DataArray(np.full(SHAPE, 2.5), dims=["y", "x"]),
@@ -109,6 +111,7 @@ def _make_surface() -> SurfacePrior:
 
 
 # ── E2E tests ────────────────────────────────────────────────────────
+
 
 class TestE2ESynthetic:
     """Full pipeline end-to-end with all-synthetic data."""
@@ -205,6 +208,7 @@ class TestE2ESynthetic:
         """Cloud pixels in M1 output should be flagged in M4 output."""
         obs = _make_obs_bundle()
         import dataclasses
+
         cloud = np.zeros(SHAPE, dtype=bool)
         cloud[20:40, 20:40] = True
         obs = dataclasses.replace(

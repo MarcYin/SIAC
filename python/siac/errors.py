@@ -36,6 +36,7 @@ class ConfigurationError(SIACError):
 
 class DataNotFoundError(SIACError):
     """Required data not found."""
+
     is_recoverable = False
 
 
@@ -49,6 +50,7 @@ class RTModelError(SIACError):
 
 class SolverConvergenceError(SIACError):
     """Aerosol solver failed to converge."""
+
     is_recoverable = True
 
 
@@ -66,6 +68,7 @@ class PreprocessingError(SIACError):
 
 class ResamplingError(SIACError):
     """Spatial resampling between grids failed."""
+
     is_recoverable = True
 
 
@@ -75,4 +78,5 @@ class EmulatorError(RTModelError):
 
 class LUTInterpolationError(RTModelError):
     """Error during look-up table interpolation."""
+
     is_recoverable = True

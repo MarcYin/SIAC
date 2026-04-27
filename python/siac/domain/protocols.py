@@ -33,24 +33,19 @@ class SatellitePreprocessor(Protocol):
     """Protocol for satellite-specific data preprocessing."""
 
     @property
-    def sensor_config(self) -> SensorConfig:
-        ...
+    def sensor_config(self) -> SensorConfig: ...
 
-    def load_toa(self, input_path: str) -> xr.Dataset:
-        ...
+    def load_toa(self, input_path: str) -> xr.Dataset: ...
 
-    def extract_geometry(self, input_path: str) -> GeometryAngles:
-        ...
+    def extract_geometry(self, input_path: str) -> GeometryAngles: ...
 
     def extract_cloud_mask(
         self,
         input_path: str,
         toa: xr.Dataset | None = None,
-    ) -> xr.DataArray:
-        ...
+    ) -> xr.DataArray: ...
 
-    def get_metadata(self, input_path: str) -> dict:
-        ...
+    def get_metadata(self, input_path: str) -> dict: ...
 
 
 @runtime_checkable
@@ -63,12 +58,10 @@ class AtmosphericPriorProvider(Protocol):
         crs: str,
         obs_time: datetime,
         resolution: float,
-    ) -> AtmosphericState:
-        ...
+    ) -> AtmosphericState: ...
 
     @property
-    def source_name(self) -> str:
-        ...
+    def source_name(self) -> str: ...
 
 
 @runtime_checkable
@@ -83,12 +76,10 @@ class BRDFProductProvider(Protocol):
         target_resolution: float,
         bands: Sequence[int],
         temporal_window: int = 16,
-    ) -> BRDFKernelWeights:
-        ...
+    ) -> BRDFKernelWeights: ...
 
     @property
-    def source_name(self) -> str:
-        ...
+    def source_name(self) -> str: ...
 
 
 @runtime_checkable
@@ -100,8 +91,7 @@ class SurfacePriorDeriver(Protocol):
         brdf_weights: BRDFKernelWeights,
         geometry: GeometryAngles,
         psf_params: tuple[float, float] | None = None,
-    ) -> SurfacePrior:
-        ...
+    ) -> SurfacePrior: ...
 
 
 @runtime_checkable
@@ -109,19 +99,16 @@ class MonthlyCompositeProvider(Protocol):
     """Protocol for providers returning prepared monthly composite inputs."""
 
     @property
-    def source_name(self) -> str:
-        ...
+    def source_name(self) -> str: ...
 
     @property
-    def source_bands(self) -> Sequence[SensorBand]:
-        ...
+    def source_bands(self) -> Sequence[SensorBand]: ...
 
     def get_monthly_composites(
         self,
         observation: ObservationBundle,
         resolution: float,
-    ) -> MonthlyCompositeCollection:
-        ...
+    ) -> MonthlyCompositeCollection: ...
 
 
 @runtime_checkable
@@ -134,18 +121,14 @@ class RTModelBackend(Protocol):
         atmo_state: AtmosphericState,
         band: SensorBand,
         compute_jacobian: bool = False,
-    ) -> RTCoefficients:
-        ...
+    ) -> RTCoefficients: ...
 
-    def supports_jacobian(self) -> bool:
-        ...
+    def supports_jacobian(self) -> bool: ...
 
     @property
-    def backend_name(self) -> str:
-        ...
+    def backend_name(self) -> str: ...
 
-    def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool:
-        ...
+    def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool: ...
 
 
 @runtime_checkable
@@ -155,8 +138,7 @@ class AerosolSolver(Protocol):
     def solve(
         self,
         inputs: SolverInputBundle,
-    ) -> SolvedAtmosphere:
-        ...
+    ) -> SolvedAtmosphere: ...
 
 
 @runtime_checkable
@@ -167,5 +149,4 @@ class OutputWriter(Protocol):
         self,
         result: CorrectionResult,
         output_dir: str | Path,
-    ) -> dict[str, Path]:
-        ...
+    ) -> dict[str, Path]: ...

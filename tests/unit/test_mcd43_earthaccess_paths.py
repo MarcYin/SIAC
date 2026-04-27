@@ -89,7 +89,9 @@ def _install_runtime(
                 np.zeros((1, 1), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [0.0], "x": [0.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             float(kwargs.get("resolution") or 500.0),
         ),
     )
@@ -176,7 +178,10 @@ def test_granule_helpers_cover_render_dict_parse_fallbacks_and_repr() -> None:
 
     assert mcd_mod._granule_key({"meta": {"native-id": "native-1"}}) == "native-1"
     assert mcd_mod._granule_key({"meta": {"concept-id": "concept-1"}}) == "concept-1"
-    assert mcd_mod._granule_key({"umm": {"GranuleUR": "", "ProducerGranuleId": "producer-1"}}) == "producer-1"
+    assert (
+        mcd_mod._granule_key({"umm": {"GranuleUR": "", "ProducerGranuleId": "producer-1"}})
+        == "producer-1"
+    )
     fallback = object()
     assert mcd_mod._granule_key(fallback) == repr(fallback)
 
@@ -204,11 +209,15 @@ def test_provider_validation_band_resolution_and_time_helpers(
         provider._resolve_requested_bands([99])
 
     assert provider._resolved_short_name() == "SN:dummy_brdf"
-    assert mcd_mod._EarthAccessBRDFProvider._coerce_sample_day(np.datetime64("2024-01-02T12:00:00")) == np.datetime64(
+    assert mcd_mod._EarthAccessBRDFProvider._coerce_sample_day(
+        np.datetime64("2024-01-02T12:00:00")
+    ) == np.datetime64(
         "2024-01-02",
         "D",
     )
-    assert mcd_mod._EarthAccessBRDFProvider._coerce_sample_day(datetime(2024, 1, 3, 4, 5, 6)) == np.datetime64(
+    assert mcd_mod._EarthAccessBRDFProvider._coerce_sample_day(
+        datetime(2024, 1, 3, 4, 5, 6)
+    ) == np.datetime64(
         "2024-01-03",
         "D",
     )
@@ -298,23 +307,29 @@ def test_download_and_filter_helpers_cover_warning_and_passthrough_branches(
 
     monkeypatch.setattr(provider, "_search_granules", lambda **_kwargs: [])
     with caplog.at_level("WARNING"):
-        assert provider._download_granules(
-            bounds=(0.0, 0.0, 1.0, 1.0),
-            crs="EPSG:4326",
-            obs_time=datetime(2024, 1, 1, 12, 0, 0),
-            temporal_window=1,
-        ) == []
+        assert (
+            provider._download_granules(
+                bounds=(0.0, 0.0, 1.0, 1.0),
+                crs="EPSG:4326",
+                obs_time=datetime(2024, 1, 1, 12, 0, 0),
+                temporal_window=1,
+            )
+            == []
+        )
     assert "returned no results" in caplog.text
 
     granules = [{"meta": {"native-id": "MCD43A1.A2024001.h29v07.061.fake.hdf"}}]
     sample_dates = np.array(["2024-01-08"], dtype="datetime64[D]")
     monkeypatch.setattr(provider, "_filter_granules_to_sample_dates", lambda _g, _d: [])
     with caplog.at_level("WARNING"):
-        assert provider._filter_sampled_granules(
-            granules,
-            sample_dates,
-            empty_message="%s empty after filtering",
-        ) == []
+        assert (
+            provider._filter_sampled_granules(
+                granules,
+                sample_dates,
+                empty_message="%s empty after filtering",
+            )
+            == []
+        )
     assert "empty after filtering" in caplog.text
     assert provider._filter_sampled_granules(granules, None) == granules
 
@@ -352,12 +367,15 @@ def test_download_and_filter_helpers_cover_warning_and_passthrough_branches(
     )
     monkeypatch.setattr(provider, "_search_granules", lambda **_kwargs: [])
     with caplog.at_level("WARNING"):
-        assert provider._download_granules_batch(
-            bounds=(0.0, 0.0, 1.0, 1.0),
-            crs="EPSG:4326",
-            request_specs=[(datetime(2024, 1, 1, 12, 0, 0), sample_dates)],
-            temporal_windows=[1],
-        ) == []
+        assert (
+            provider._download_granules_batch(
+                bounds=(0.0, 0.0, 1.0, 1.0),
+                crs="EPSG:4326",
+                request_specs=[(datetime(2024, 1, 1, 12, 0, 0), sample_dates)],
+                temporal_windows=[1],
+            )
+            == []
+        )
     assert "no sampled results" in caplog.text
 
 
@@ -450,8 +468,12 @@ def test_temporal_batch_loader_reads_combined_stack_once_and_slices_per_request(
         np.datetime64("2024-02-01"),
         np.datetime64("2024-02-08"),
     ]
-    np.testing.assert_allclose(outputs[0].f0[:, 0, 0, 0].values, np.array([0.0, 1.0], dtype=np.float32))
-    np.testing.assert_allclose(outputs[1].f0[:, 0, 0, 0].values, np.array([2.0, 3.0], dtype=np.float32))
+    np.testing.assert_allclose(
+        outputs[0].f0[:, 0, 0, 0].values, np.array([0.0, 1.0], dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        outputs[1].f0[:, 0, 0, 0].values, np.array([2.0, 3.0], dtype=np.float32)
+    )
 
 
 def test_provider_accepts_unbounded_max_granules(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -496,7 +518,9 @@ def test_batched_temporal_brdf_slicing_preserves_missing_requested_days(
     sliced = provider._slice_temporal_weights(
         weights,
         source_time_axis=np.array(["2024-01-01", "2024-01-08"], dtype="datetime64[D]"),
-        request_time_axis=np.array(["2024-01-01", "2024-01-04", "2024-01-08"], dtype="datetime64[D]"),
+        request_time_axis=np.array(
+            ["2024-01-01", "2024-01-04", "2024-01-08"], dtype="datetime64[D]"
+        ),
     )
 
     assert list(sliced.f0.coords["time"].values) == [
@@ -535,9 +559,15 @@ def test_load_from_granules_fills_missing_values_and_builds_uncertainties(
     )
 
     assert weights.f0.dims == ("band", "y", "x")
-    np.testing.assert_allclose(weights.f0.sel(band="B02").values[0], np.array([0.20, 0.4], dtype=np.float32))
-    np.testing.assert_allclose(weights.f1.sel(band="B02").values[0], np.array([0.05, 0.2], dtype=np.float32))
-    np.testing.assert_allclose(weights.f2.sel(band="B02").values[0], np.array([0.02, 0.06], dtype=np.float32))
+    np.testing.assert_allclose(
+        weights.f0.sel(band="B02").values[0], np.array([0.20, 0.4], dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        weights.f1.sel(band="B02").values[0], np.array([0.05, 0.2], dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        weights.f2.sel(band="B02").values[0], np.array([0.02, 0.06], dtype=np.float32)
+    )
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(0.015)
     assert float(weights.reflectance_unc.sel(band="B02").values[1, 0]) == pytest.approx(0.08)
 
@@ -577,8 +607,12 @@ def test_load_from_granules_batches_requested_bands_into_one_payload_merge(
 
     assert merge_calls == [(("layer", "y", "x"), 8)]
     assert list(weights.f0.coords["band"].values) == ["B02", "B03"]
-    np.testing.assert_allclose(weights.f0.sel(band="B02").values, np.full((2, 2), 0.1, dtype=np.float32))
-    np.testing.assert_allclose(weights.f0.sel(band="B03").values, np.full((2, 2), 0.2, dtype=np.float32))
+    np.testing.assert_allclose(
+        weights.f0.sel(band="B02").values, np.full((2, 2), 0.1, dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        weights.f0.sel(band="B03").values, np.full((2, 2), 0.2, dtype=np.float32)
+    )
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(0.015)
     assert float(weights.reflectance_unc.sel(band="B03").values[0, 0]) == pytest.approx(
         0.015 * (2.0**1.6)
@@ -601,7 +635,9 @@ def test_payload_stack_round_trips_through_real_merge_helper() -> None:
         "x": [1.0, 2.0],
     }
 
-    def _native_with_transform(values: np.ndarray, *, dims: tuple[str, ...], coords: dict[str, object]) -> xr.DataArray:
+    def _native_with_transform(
+        values: np.ndarray, *, dims: tuple[str, ...], coords: dict[str, object]
+    ) -> xr.DataArray:
         x_values = np.asarray(coords["x"], dtype=np.float64)
         y_values = np.asarray(coords["y"], dtype=np.float64)
         x_step = float(x_values[1] - x_values[0]) if x_values.size > 1 else 1.0
@@ -625,7 +661,11 @@ def test_payload_stack_round_trips_through_real_merge_helper() -> None:
     left_params = _native_with_transform(
         np.array(
             [
-                [[[1.0, 2.0], [3.0, 4.0]], [[10.0, 20.0], [30.0, 40.0]], [[100.0, 200.0], [300.0, 400.0]]],
+                [
+                    [[1.0, 2.0], [3.0, 4.0]],
+                    [[10.0, 20.0], [30.0, 40.0]],
+                    [[100.0, 200.0], [300.0, 400.0]],
+                ],
             ],
             dtype=np.float32,
         ),
@@ -640,7 +680,11 @@ def test_payload_stack_round_trips_through_real_merge_helper() -> None:
     right_params = _native_with_transform(
         np.array(
             [
-                [[[9.0, 10.0], [11.0, 12.0]], [[90.0, 100.0], [110.0, 120.0]], [[900.0, 1000.0], [1100.0, 1200.0]]],
+                [
+                    [[9.0, 10.0], [11.0, 12.0]],
+                    [[90.0, 100.0], [110.0, 120.0]],
+                    [[900.0, 1000.0], [1100.0, 1200.0]],
+                ],
             ],
             dtype=np.float32,
         ),
@@ -664,17 +708,30 @@ def test_payload_stack_round_trips_through_real_merge_helper() -> None:
         resampling="nearest",
         nodata=np.nan,
     )
-    params, unc = provider._unpack_payload_stack(merged, requested=[("B02", provider._product_bands[0])])
+    params, unc = provider._unpack_payload_stack(
+        merged, requested=[("B02", provider._product_bands[0])]
+    )
 
     assert merged.dims == ("layer", "y", "x")
     assert params.rio.crs is not None
     assert params.rio.crs.to_string() == "EPSG:4326"
     assert unc.rio.crs is not None
     assert unc.rio.crs.to_string() == "EPSG:4326"
-    np.testing.assert_allclose(params.sel(band="B02", parameter="f0").values, np.array([[1.0, 2.0, 10.0], [3.0, 4.0, 12.0]], dtype=np.float32))
-    np.testing.assert_allclose(params.sel(band="B02", parameter="f1").values, np.array([[10.0, 20.0, 100.0], [30.0, 40.0, 120.0]], dtype=np.float32))
-    np.testing.assert_allclose(params.sel(band="B02", parameter="f2").values, np.array([[100.0, 200.0, 1000.0], [300.0, 400.0, 1200.0]], dtype=np.float32))
-    np.testing.assert_allclose(unc.sel(band="B02").values, np.array([[0.1, 0.2, 1.0], [0.3, 0.4, 1.2]], dtype=np.float32))
+    np.testing.assert_allclose(
+        params.sel(band="B02", parameter="f0").values,
+        np.array([[1.0, 2.0, 10.0], [3.0, 4.0, 12.0]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        params.sel(band="B02", parameter="f1").values,
+        np.array([[10.0, 20.0, 100.0], [30.0, 40.0, 120.0]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        params.sel(band="B02", parameter="f2").values,
+        np.array([[100.0, 200.0, 1000.0], [300.0, 400.0, 1200.0]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        unc.sel(band="B02").values, np.array([[0.1, 0.2, 1.0], [0.3, 0.4, 1.2]], dtype=np.float32)
+    )
 
 
 def test_stack_parameter_provider_uses_direct_vrt_payload_path(
@@ -701,7 +758,9 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
     monkeypatch.setattr(
         provider,
         "_load_native_band_stack",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("array fallback should not be used")
+        ),
     )
     monkeypatch.setattr(
         mcd_mod,
@@ -711,7 +770,9 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
                 np.zeros((1, 1), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [0.0], "x": [0.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             500.0,
         ),
     )
@@ -777,8 +838,12 @@ def test_stack_parameter_provider_uses_direct_vrt_payload_path(
         ],
     ]
     assert resampling_seen == ["nearest"]
-    np.testing.assert_allclose(weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32))
-    np.testing.assert_allclose(weights.f2.sel(band="B03").values, np.full((1, 1), 22.0, dtype=np.float32))
+    np.testing.assert_allclose(
+        weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        weights.f2.sel(band="B03").values, np.full((1, 1), 22.0, dtype=np.float32)
+    )
     assert weights.f0.rio.crs is not None
     assert weights.f0.rio.crs.to_string() == "EPSG:32615"
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(0.015)
@@ -811,7 +876,9 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
     monkeypatch.setattr(
         provider,
         "_load_native_band_stack",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("array fallback should not be used")
+        ),
     )
     monkeypatch.setattr(
         mcd_mod,
@@ -821,7 +888,9 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
                 np.zeros((1, 1), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [0.0], "x": [0.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             500.0,
         ),
     )
@@ -872,8 +941,12 @@ def test_mcd19_provider_uses_direct_vrt_payload_path(
         "tile_b.hdf:Status_QA",
     ]
     assert resampling_seen == ["nearest"]
-    np.testing.assert_allclose(weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32))
-    np.testing.assert_allclose(weights.f1.sel(band="B03").values, np.full((1, 1), 50.0, dtype=np.float32))
+    np.testing.assert_allclose(
+        weights.f0.sel(band="B02").values, np.full((1, 1), 10.0, dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        weights.f1.sel(band="B03").values, np.full((1, 1), 50.0, dtype=np.float32)
+    )
     assert float(weights.reflectance_unc.sel(band="B02").values[0, 0]) == pytest.approx(
         float(weights.reflectance_unc.sel(band="B03").values[0, 0])
     )
@@ -910,7 +983,9 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
     monkeypatch.setattr(
         provider,
         "_load_native_band_stack",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("array fallback should not be used")
+        ),
     )
     monkeypatch.setattr(
         mcd_mod,
@@ -920,7 +995,9 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
                 np.zeros((1, 1), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [0.0], "x": [0.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             500.0,
         ),
     )
@@ -993,9 +1070,9 @@ def test_stack_parameter_provider_uses_direct_temporal_vrt_payload_path(
     assert temporal.f0.rio.crs is not None
     assert temporal.f0.rio.crs.to_string() == "EPSG:32615"
     assert np.isnan(temporal.f0.sel(time=np.datetime64("2024-01-02")).values).all()
-    assert float(temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B02").values[0, 0]) == pytest.approx(
-        0.015 * (3.0**1.6)
-    )
+    assert float(
+        temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B02").values[0, 0]
+    ) == pytest.approx(0.015 * (3.0**1.6))
 
 
 def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
@@ -1035,7 +1112,9 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
     monkeypatch.setattr(
         provider,
         "_merge_requested_payload",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("per-day merges should not be used")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("per-day merges should not be used")
+        ),
     )
     monkeypatch.setattr(
         mcd_mod,
@@ -1045,12 +1124,18 @@ def test_stack_parameter_provider_daily_payload_fallback_uses_one_final_warp(
                 np.zeros((1, 1), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [0.0], "x": [0.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             500.0,
         ),
     )
 
-    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))))
+    monkeypatch.setitem(
+        sys.modules,
+        "osgeo",
+        SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))),
+    )
 
     def _fake_build_virtual_stack_vrt(source_groups, *, group_band_counts, **_kwargs):  # type: ignore[no-untyped-def]
         build_calls.append(([list(group) for group in source_groups], list(group_band_counts)))
@@ -1159,7 +1244,11 @@ def test_stack_parameter_provider_skips_oversized_temporal_vrt_and_logs_per_day_
         "_read_named_dataset_attrs",
         lambda _path, dataset_names: {dataset_name: {} for dataset_name in dataset_names},
     )
-    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))))
+    monkeypatch.setitem(
+        sys.modules,
+        "osgeo",
+        SimpleNamespace(gdal=SimpleNamespace(Unlink=lambda path: unlink_calls.append(path))),
+    )
 
     def _fake_build_virtual_stack_vrt(source_groups, *, group_band_counts, **_kwargs):  # type: ignore[no-untyped-def]
         index = build_counter["count"]
@@ -1174,7 +1263,9 @@ def test_stack_parameter_provider_skips_oversized_temporal_vrt_and_logs_per_day_
     monkeypatch.setattr(
         mcd_mod,
         "read_virtual_stack_to_target",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("oversized one-shot VRT should be skipped")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("oversized one-shot VRT should be skipped")
+        ),
     )
 
     def _fake_merge_requested_payload(
@@ -1274,7 +1365,9 @@ def test_mcd19_provider_uses_direct_temporal_vrt_payload_path(
     monkeypatch.setattr(
         provider,
         "_load_native_band_stack",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("array fallback should not be used")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("array fallback should not be used")
+        ),
     )
 
     def _fake_vrt_reader(source_groups, *, group_band_counts, **kwargs):  # type: ignore[no-untyped-def]
@@ -1335,9 +1428,9 @@ def test_mcd19_provider_uses_direct_temporal_vrt_payload_path(
     assert temporal.f0.rio.crs is not None
     assert temporal.f0.rio.crs.to_string() == "EPSG:32615"
     assert np.isnan(temporal.f0.sel(time=np.datetime64("2024-01-02")).values).all()
-    assert float(temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B03").values[0, 0]) == pytest.approx(
-        0.015 * (3.0**1.6)
-    )
+    assert float(
+        temporal.reflectance_unc.sel(time=np.datetime64("2024-01-03"), band="B03").values[0, 0]
+    ) == pytest.approx(0.015 * (3.0**1.6))
 
 
 def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
@@ -1352,7 +1445,11 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
     }
 
     monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
-    monkeypatch.setattr(provider, "_grid", lambda _bounds, _resolution: (np.array([10.0, 20.0]), np.array([30.0, 40.0])))
+    monkeypatch.setattr(
+        provider,
+        "_grid",
+        lambda _bounds, _resolution: (np.array([10.0, 20.0]), np.array([30.0, 40.0])),
+    )
     monkeypatch.setattr(
         mcd_mod,
         "build_source_aligned_target_template",
@@ -1361,7 +1458,9 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
                 np.zeros((2, 2), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [10.0, 20.0], "x": [30.0, 40.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             float(kwargs.get("resolution") or 500.0),
         ),
     )
@@ -1375,8 +1474,12 @@ def test_temporal_loading_covers_missing_days_target_grid_coercion_and_fallback(
         }
         params = (
             xr.DataArray(np.full((2, 2), base, dtype=np.float32), dims=("y", "x"), coords=coords),
-            xr.DataArray(np.full((2, 2), base / 2.0, dtype=np.float32), dims=("y", "x"), coords=coords),
-            xr.DataArray(np.full((2, 2), base / 4.0, dtype=np.float32), dims=("y", "x"), coords=coords),
+            xr.DataArray(
+                np.full((2, 2), base / 2.0, dtype=np.float32), dims=("y", "x"), coords=coords
+            ),
+            xr.DataArray(
+                np.full((2, 2), base / 4.0, dtype=np.float32), dims=("y", "x"), coords=coords
+            ),
         )
         qa = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=("y", "x"), coords=coords)
         return params, qa
@@ -1461,7 +1564,11 @@ def test_temporal_loading_fallback_batches_requested_bands_into_one_payload_merg
     }
 
     monkeypatch.setattr(mcd_mod, "parse_granule_date", lambda path: day_map[Path(path)])
-    monkeypatch.setattr(provider, "_grid", lambda _bounds, _resolution: (np.array([10.0, 20.0]), np.array([30.0, 40.0])))
+    monkeypatch.setattr(
+        provider,
+        "_grid",
+        lambda _bounds, _resolution: (np.array([10.0, 20.0]), np.array([30.0, 40.0])),
+    )
     monkeypatch.setattr(
         mcd_mod,
         "build_source_aligned_target_template",
@@ -1470,7 +1577,9 @@ def test_temporal_loading_fallback_batches_requested_bands_into_one_payload_merg
                 np.zeros((2, 2), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [10.0, 20.0], "x": [30.0, 40.0]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615"),
             float(kwargs.get("resolution") or 500.0),
         ),
     )
@@ -1534,8 +1643,12 @@ def test_stack_parameter_provider_validates_shape_and_splits_parameters(
             return np.ones((2, 2), dtype=np.int16), {}
         return np.zeros((2, 2), dtype=np.int16), {}
 
-    monkeypatch.setattr(MCD43EarthAccessProvider, "_read_dataset", staticmethod(_invalid_read_dataset))
-    monkeypatch.setattr(mcd_mod, "apply_scale_and_mask", lambda values, _attrs: np.asarray(values, dtype=np.float32))
+    monkeypatch.setattr(
+        MCD43EarthAccessProvider, "_read_dataset", staticmethod(_invalid_read_dataset)
+    )
+    monkeypatch.setattr(
+        mcd_mod, "apply_scale_and_mask", lambda values, _attrs: np.asarray(values, dtype=np.float32)
+    )
     monkeypatch.setattr(mcd_mod, "make_native_grid_dataarray", _fake_native_grid)
 
     with pytest.raises(ValueError, match="3-parameter BRDF stack"):
@@ -1553,7 +1666,9 @@ def test_stack_parameter_provider_validates_shape_and_splits_parameters(
             ), {}
         return np.full((2, 2), 4, dtype=np.int16), {}
 
-    monkeypatch.setattr(MCD43EarthAccessProvider, "_read_dataset", staticmethod(_valid_read_dataset))
+    monkeypatch.setattr(
+        MCD43EarthAccessProvider, "_read_dataset", staticmethod(_valid_read_dataset)
+    )
     (f0, f1, f2), qa = provider._load_native_band_stack(Path("/tmp/granule.hdf"), product_band)
     assert float(f0.mean()) == pytest.approx(10.0)
     assert float(f1.mean()) == pytest.approx(20.0)
@@ -1591,7 +1706,9 @@ def test_stack_parameter_provider_batches_requested_native_reads(
         return outputs
 
     monkeypatch.setattr(provider, "_read_named_datasets", _fake_read_named_datasets)
-    monkeypatch.setattr(mcd_mod, "apply_scale_and_mask", lambda values, _attrs: np.asarray(values, dtype=np.float32))
+    monkeypatch.setattr(
+        mcd_mod, "apply_scale_and_mask", lambda values, _attrs: np.asarray(values, dtype=np.float32)
+    )
     monkeypatch.setattr(mcd_mod, "make_native_grid_dataarray", _fake_native_grid)
 
     params, qa = provider._load_native_requested_stack(Path("/tmp/granule.hdf"), requested)
@@ -1607,8 +1724,12 @@ def test_stack_parameter_provider_batches_requested_native_reads(
     assert params.dims == ("band", "parameter", "y", "x")
     assert qa.dims == ("band", "y", "x")
     assert list(params.coords["band"].values) == ["B02", "B03"]
-    np.testing.assert_allclose(params.sel(band="B02", parameter="f0").values, np.full((2, 2), 10.0, dtype=np.float32))
-    np.testing.assert_allclose(params.sel(band="B03", parameter="f2").values, np.full((2, 2), 22.0, dtype=np.float32))
+    np.testing.assert_allclose(
+        params.sel(band="B02", parameter="f0").values, np.full((2, 2), 10.0, dtype=np.float32)
+    )
+    np.testing.assert_allclose(
+        params.sel(band="B03", parameter="f2").values, np.full((2, 2), 22.0, dtype=np.float32)
+    )
 
 
 def test_mcd19_native_stack_reads_expected_fields(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1628,7 +1749,9 @@ def test_mcd19_native_stack_reads_expected_fields(monkeypatch: pytest.MonkeyPatc
         return values, {}
 
     monkeypatch.setattr(mcd_mod, "read_hdf4_dataset", _fake_read_hdf4_dataset)
-    monkeypatch.setattr(mcd_mod, "apply_scale_and_mask", lambda values, _attrs: np.asarray(values, dtype=np.float32))
+    monkeypatch.setattr(
+        mcd_mod, "apply_scale_and_mask", lambda values, _attrs: np.asarray(values, dtype=np.float32)
+    )
     monkeypatch.setattr(mcd_mod, "make_native_grid_dataarray", _fake_native_grid)
 
     (f0, f1, f2), qa = provider._load_native_band_stack(Path("/tmp/granule.hdf"), product_band)

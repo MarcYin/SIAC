@@ -22,7 +22,14 @@ if TYPE_CHECKING:
 
 
 def _load_satellite_base_module() -> ModuleType:
-    path = Path(__file__).resolve().parents[2] / "python" / "siac" / "adapters" / "satellite" / "base.py"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "python"
+        / "siac"
+        / "adapters"
+        / "satellite"
+        / "base.py"
+    )
     spec = importlib.util.spec_from_file_location("siac_satellite_base_test_module", path)
     assert spec is not None
     assert spec.loader is not None
@@ -41,7 +48,9 @@ def test_earthdata_scalar_and_parse_helpers_cover_fallbacks() -> None:
     assert earth_mod.attr_scalar({"empty": np.array([], dtype=np.int32)}, "empty", default=7) == 7
     assert earth_mod.attr_scalar({"none": None}, "none", default=5) == 5
     assert earth_mod.attr_scalar({"ints": np.array([4, 5], dtype=np.int32)}, "ints") == 4
-    assert earth_mod.attr_scalar({"floats": np.array([2.5, 3.5], dtype=np.float32)}, "floats") == 2.5
+    assert (
+        earth_mod.attr_scalar({"floats": np.array([2.5, 3.5], dtype=np.float32)}, "floats") == 2.5
+    )
 
     assert earth_mod.parse_tile_indices("MCD43A1.A2024001.h12v04.061.hdf") == (12, 4)
     with pytest.raises(ValueError, match="tile indices"):
@@ -53,7 +62,9 @@ def test_earthdata_scalar_and_parse_helpers_cover_fallbacks() -> None:
 
     assert earth_mod._decode_gctp_angle(120.0) == 120.0
     assert earth_mod._decode_gctp_angle(-160000000.0) == -160.0
-    assert "+lon_0=-160.0" in earth_mod._build_sinusoidal_crs(radius=6371007.181, central_meridian=-160.0)
+    assert "+lon_0=-160.0" in earth_mod._build_sinusoidal_crs(
+        radius=6371007.181, central_meridian=-160.0
+    )
 
 
 def test_earthdata_metadata_grid_and_bounds_helpers_cover_error_paths(
@@ -61,7 +72,11 @@ def test_earthdata_metadata_grid_and_bounds_helpers_cover_error_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     earth_mod._parse_hdf5_grid_metadata.cache_clear()
-    monkeypatch.setattr(earth_mod, "_read_hdf5_struct_metadata", lambda _path: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        earth_mod,
+        "_read_hdf5_struct_metadata",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     assert earth_mod._parse_hdf5_grid_metadata("broken.h5") == {}
 
     struct_metadata = """
@@ -131,9 +146,13 @@ def test_earthdata_native_grid_reproject_and_dataset_helpers(
         earth_mod.modland_tile_coords(10, 4, 0, 2)
 
     with pytest.raises(ValueError, match="at least 2 dimensions"):
-        earth_mod.make_native_grid_dataarray(np.array([1.0], dtype=np.float32), granule_path=fallback_path)
+        earth_mod.make_native_grid_dataarray(
+            np.array([1.0], dtype=np.float32), granule_path=fallback_path
+        )
 
-    monkeypatch.setattr(earth_mod, "_read_hdf5_native_grid_definition", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        earth_mod, "_read_hdf5_native_grid_definition", lambda *_args, **_kwargs: None
+    )
     da = earth_mod.make_native_grid_dataarray(
         np.arange(12, dtype=np.float32).reshape(2, 2, 3),
         granule_path=fallback_path,
@@ -189,10 +208,16 @@ def test_earthdata_native_grid_reproject_and_dataset_helpers(
             return self.parent
 
         def reproject_match(self, target_da: xr.DataArray, resampling: object):
-            return {"target_shape": target_da.shape, "resampling": resampling, "nodata": self.nodata}
+            return {
+                "target_shape": target_da.shape,
+                "resampling": resampling,
+                "nodata": self.nodata,
+            }
 
     fake_clipped = _FakeClipped()
-    monkeypatch.setattr(earth_mod, "clip_native_to_target_bounds", lambda *_args, **_kwargs: fake_clipped)
+    monkeypatch.setattr(
+        earth_mod, "clip_native_to_target_bounds", lambda *_args, **_kwargs: fake_clipped
+    )
     reprojected = earth_mod.reproject_native_to_target(
         xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=("y", "x")),
         target_bounds=(0.0, 0.0, 2000.0, 2000.0),
@@ -227,7 +252,9 @@ def test_earthdata_native_grid_reproject_and_dataset_helpers(
     assert np.isnan(scaled[0, 2])
     assert np.isnan(scaled[1, 0])
 
-    reduced = earth_mod.reduce_orbit_stack(np.array([[[1.0, np.nan], [3.0, 5.0]], [[3.0, 7.0], [np.nan, 5.0]]], dtype=np.float32))
+    reduced = earth_mod.reduce_orbit_stack(
+        np.array([[[1.0, np.nan], [3.0, 5.0]], [[3.0, 7.0], [np.nan, 5.0]]], dtype=np.float32)
+    )
     assert reduced.shape == (2, 2)
     assert reduced[0, 0] == pytest.approx(2.0)
     assert reduced[0, 1] == pytest.approx(7.0)
@@ -298,7 +325,10 @@ def test_earthdata_attribute_readers_and_gdal_subdataset_resolution(
     assert earth_mod.resolve_gdal_subdataset_path("scene.hdf", "BRDF_Albedo_Parameters_Band1") == (
         'HDF4_EOS:EOS_GRID:"scene.hdf":MOD_Grid_BRDF:BRDF_Albedo_Parameters_Band1'
     )
-    assert earth_mod.resolve_gdal_subdataset_path("scene.hdf", "Status_QA") == 'HDF4_SDS:UNKNOWN:"scene.hdf":7'
+    assert (
+        earth_mod.resolve_gdal_subdataset_path("scene.hdf", "Status_QA")
+        == 'HDF4_SDS:UNKNOWN:"scene.hdf":7'
+    )
 
     earth_mod.resolve_gdal_subdataset_path.cache_clear()
     fake_empty_gdal = SimpleNamespace(
@@ -308,21 +338,40 @@ def test_earthdata_attribute_readers_and_gdal_subdataset_resolution(
         OpenEx=lambda _path, _flags: SimpleNamespace(GetSubDatasets=lambda: []),
     )
     monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_empty_gdal))
-    assert earth_mod.resolve_gdal_subdataset_path(
-        "scene.h5",
-        "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1",
-    ) == 'HDF5:"scene.h5"://HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1'
+    assert (
+        earth_mod.resolve_gdal_subdataset_path(
+            "scene.h5",
+            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1",
+        )
+        == 'HDF5:"scene.h5"://HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1'
+    )
 
 
 def test_earthdata_intersection_and_hdf4_reader_branches(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(earth_mod, "granule_geographic_bounds", lambda _path: (-10.0, -10.0, -5.0, -5.0))
-    monkeypatch.setattr(earth_mod, "transform_bounds", lambda bounds, src, dst: bounds if src == dst else (0.0, 0.0, 1.0, 1.0))
-    assert not earth_mod.granule_intersects_bounds("scene.h5", bounds=(2.0, 2.0, 3.0, 3.0), crs="EPSG:4326")
+    monkeypatch.setattr(
+        earth_mod, "granule_geographic_bounds", lambda _path: (-10.0, -10.0, -5.0, -5.0)
+    )
+    monkeypatch.setattr(
+        earth_mod,
+        "transform_bounds",
+        lambda bounds, src, dst: bounds if src == dst else (0.0, 0.0, 1.0, 1.0),
+    )
+    assert not earth_mod.granule_intersects_bounds(
+        "scene.h5", bounds=(2.0, 2.0, 3.0, 3.0), crs="EPSG:4326"
+    )
 
     monkeypatch.setattr(earth_mod, "granule_geographic_bounds", lambda _path: None)
-    monkeypatch.setattr(earth_mod, "granule_native_bounds", lambda _path: ((0.0, 0.0, 1.0, 1.0), earth_mod.MODLAND_SINUSOIDAL_CRS))
-    monkeypatch.setattr(earth_mod, "transform_bounds", lambda *_args, **_kwargs: (2.0, 2.0, 3.0, 3.0))
-    assert not earth_mod.granule_intersects_bounds("scene.hdf", bounds=(0.0, 0.0, 1.0, 1.0), crs="EPSG:4326")
+    monkeypatch.setattr(
+        earth_mod,
+        "granule_native_bounds",
+        lambda _path: ((0.0, 0.0, 1.0, 1.0), earth_mod.MODLAND_SINUSOIDAL_CRS),
+    )
+    monkeypatch.setattr(
+        earth_mod, "transform_bounds", lambda *_args, **_kwargs: (2.0, 2.0, 3.0, 3.0)
+    )
+    assert not earth_mod.granule_intersects_bounds(
+        "scene.hdf", bounds=(0.0, 0.0, 1.0, 1.0), crs="EPSG:4326"
+    )
 
     class _FakeSDS:
         def get(self) -> np.ndarray:
@@ -360,7 +409,9 @@ def test_read_virtual_stack_to_target_builds_group_vrts_then_one_stack(
                 np.zeros((2, 3), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [1.5, 0.5], "x": [0.5, 1.5, 2.5]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:4326"),
             1.0,
         ),
     )
@@ -422,7 +473,9 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
                 np.zeros((1, 2), dtype=np.float32),
                 dims=("y", "x"),
                 coords={"y": [0.5], "x": [0.5, 1.5]},
-            ).rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326"),
+            )
+            .rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:4326"),
             1.0,
         ),
     )
@@ -432,8 +485,15 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
             self,
             values: np.ndarray | None = None,
             *,
-            projection: str = "PROJCS[\"MODLAND\"]",
-            geotransform: tuple[float, float, float, float, float, float] = (0.0, 10.0, 0.0, 100.0, 0.0, -10.0),
+            projection: str = 'PROJCS["MODLAND"]',
+            geotransform: tuple[float, float, float, float, float, float] = (
+                0.0,
+                10.0,
+                0.0,
+                100.0,
+                0.0,
+                -10.0,
+            ),
             width: int = 10,
             height: int = 10,
         ) -> None:
@@ -450,7 +510,9 @@ def test_read_virtual_stack_to_target_crops_group_vrts_in_native_crs(
         def GetProjection(self) -> str:
             return self._projection
 
-        def GetGeoTransform(self, can_return_null: bool = False) -> tuple[float, float, float, float, float, float]:
+        def GetGeoTransform(
+            self, can_return_null: bool = False
+        ) -> tuple[float, float, float, float, float, float]:
             assert can_return_null in {True, False}
             return self._geotransform
 
@@ -514,7 +576,14 @@ def test_read_virtual_stack_to_target_defaults_to_source_crs_resolution_when_omi
             values: np.ndarray | None = None,
             *,
             projection: str = "EPSG:32615",
-            geotransform: tuple[float, float, float, float, float, float] = (100.0, 20.0, 0.0, 220.0, 0.0, -20.0),
+            geotransform: tuple[float, float, float, float, float, float] = (
+                100.0,
+                20.0,
+                0.0,
+                220.0,
+                0.0,
+                -20.0,
+            ),
             width: int = 2,
             height: int = 1,
         ) -> None:
@@ -531,7 +600,9 @@ def test_read_virtual_stack_to_target_defaults_to_source_crs_resolution_when_omi
         def GetProjection(self) -> str:
             return self._projection
 
-        def GetGeoTransform(self, can_return_null: bool = False) -> tuple[float, float, float, float, float, float]:
+        def GetGeoTransform(
+            self, can_return_null: bool = False
+        ) -> tuple[float, float, float, float, float, float]:
             assert can_return_null in {True, False}
             return self._geotransform
 
@@ -593,7 +664,14 @@ def test_read_virtual_stack_to_target_keeps_requested_grid_when_resolution_is_ex
             values: np.ndarray | None = None,
             *,
             projection: str = "EPSG:32615",
-            geotransform: tuple[float, float, float, float, float, float] = (100.0, 20.0, 0.0, 220.0, 0.0, -20.0),
+            geotransform: tuple[float, float, float, float, float, float] = (
+                100.0,
+                20.0,
+                0.0,
+                220.0,
+                0.0,
+                -20.0,
+            ),
             width: int = 2,
             height: int = 1,
         ) -> None:
@@ -610,7 +688,9 @@ def test_read_virtual_stack_to_target_keeps_requested_grid_when_resolution_is_ex
         def GetProjection(self) -> str:
             return self._projection
 
-        def GetGeoTransform(self, can_return_null: bool = False) -> tuple[float, float, float, float, float, float]:
+        def GetGeoTransform(
+            self, can_return_null: bool = False
+        ) -> tuple[float, float, float, float, float, float]:
             assert can_return_null in {True, False}
             return self._geotransform
 
@@ -801,7 +881,9 @@ def test_merge_reprojected_tiles_preserves_priority_and_extra_dims() -> None:
     )
 
 
-def test_merge_reprojected_tiles_passes_full_sources_to_vrt_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_merge_reprojected_tiles_passes_full_sources_to_vrt_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     left = xr.DataArray(
         np.arange(100, dtype=np.float32).reshape(10, 10),
         dims=("y", "x"),
@@ -869,7 +951,9 @@ def test_satellite_base_preprocessor_registry_and_detection_paths(
 
         def load_toa(self, input_path):
             del input_path
-            return xr.Dataset({"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=("y", "x"))})
+            return xr.Dataset(
+                {"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=("y", "x"))}
+            )
 
         def extract_geometry(self, input_path):
             del input_path
@@ -898,7 +982,9 @@ def test_satellite_base_preprocessor_registry_and_detection_paths(
 
     kwarg = _KwargPreprocessor()
     kwarg._last_cloud_classes = xr.DataArray(np.ones((2, 2), dtype=np.uint8), dims=("y", "x"))
-    bundle = kwarg.to_observation_bundle(tmp_path / "scene", bounds=(1.0, 2.0, 3.0, 4.0), crs="EPSG:32632")
+    bundle = kwarg.to_observation_bundle(
+        tmp_path / "scene", bounds=(1.0, 2.0, 3.0, 4.0), crs="EPSG:32632"
+    )
     assert kwarg.received_toa is raw["toa"] or kwarg.received_toa is not None
     assert bundle.bounds == (1.0, 2.0, 3.0, 4.0)
     assert bundle.crs == "EPSG:32632"

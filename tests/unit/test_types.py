@@ -174,6 +174,55 @@ class TestRTCoefficients:
         """has_jacobian should return False when no Jacobians."""
         assert not sample_coeffs.has_jacobian
 
+    def test_compute_boa_jacobian_matches_finite_difference(self):
+        """BOA Jacobian should include both xcp and y derivative contributions."""
+        dims = ("y", "x")
+        coords = {"y": [0], "x": [0]}
+        toa = xr.DataArray([[0.21]], dims=dims, coords=coords)
+        xap = xr.DataArray([[0.92]], dims=dims, coords=coords)
+        xbp = xr.DataArray([[0.04]], dims=dims, coords=coords)
+        xcp = xr.DataArray([[0.35]], dims=dims, coords=coords)
+        params = ["aot", "tcwv"]
+        d_xap = xr.DataArray(
+            np.array([[[0.025]], [[-0.015]]]),
+            dims=("param", *dims),
+            coords={"param": params, **coords},
+        )
+        d_xbp = xr.DataArray(
+            np.array([[[0.006]], [[0.002]]]),
+            dims=("param", *dims),
+            coords={"param": params, **coords},
+        )
+        d_xcp = xr.DataArray(
+            np.array([[[0.55]], [[-0.25]]]),
+            dims=("param", *dims),
+            coords={"param": params, **coords},
+        )
+        coeffs = RTCoefficients(
+            xap=xap,
+            xbp=xbp,
+            xcp=xcp,
+            d_xap=d_xap,
+            d_xbp=d_xbp,
+            d_xcp=d_xcp,
+        )
+
+        d_boa_aot, d_boa_tcwv = coeffs.compute_boa_jacobian(toa)
+
+        def _boa_at(delta: float, param: str) -> xr.DataArray:
+            shifted = RTCoefficients(
+                xap=xap + delta * d_xap.sel(param=param),
+                xbp=xbp + delta * d_xbp.sel(param=param),
+                xcp=xcp + delta * d_xcp.sel(param=param),
+            )
+            return shifted.apply_correction(toa)
+
+        eps = 1.0e-6
+        expected_aot = (_boa_at(eps, "aot") - _boa_at(-eps, "aot")) / (2.0 * eps)
+        expected_tcwv = (_boa_at(eps, "tcwv") - _boa_at(-eps, "tcwv")) / (2.0 * eps)
+        xr.testing.assert_allclose(d_boa_aot, expected_aot, rtol=1.0e-6, atol=1.0e-9)
+        xr.testing.assert_allclose(d_boa_tcwv, expected_tcwv, rtol=1.0e-6, atol=1.0e-9)
+
     def test_output_selection_returns_core_and_requested_extras(self, sample_coeffs):
         trans = xr.DataArray(np.full((10, 10), 0.8), dims=["y", "x"])
         coeffs = RTCoefficients(
@@ -261,7 +310,10 @@ class TestSensorConfig:
         assert band.name == "B04"
 
     def test_default_aerosol_solver_bands(self):
-        assert [band.name for band in SENTINEL2A_CONFIG.default_aerosol_solver_bands()] == ["B02", "B04"]
+        assert [band.name for band in SENTINEL2A_CONFIG.default_aerosol_solver_bands()] == [
+            "B02",
+            "B04",
+        ]
 
     def test_get_sensor_config(self):
         """get_sensor_config should return correct config."""

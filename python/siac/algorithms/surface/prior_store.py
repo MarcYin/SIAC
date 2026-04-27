@@ -232,9 +232,7 @@ class PrebuiltPriorStore:
         tiles = _select_tiles(self.store_path, bounds)
 
         if not tiles:
-            raise ValueError(
-                f"No tiles in {self.store_path} overlap bounds {bounds}"
-            )
+            raise ValueError(f"No tiles in {self.store_path} overlap bounds {bounds}")
 
         # For simplicity, use the first overlapping tile.
         # Multi-tile mosaicking can be added later.
@@ -242,7 +240,11 @@ class PrebuiltPriorStore:
         ds = xr.open_zarr(str(tile_path))
 
         # Extract DOY coordinate
-        doy_values = ds["doy"].values if "doy" in ds.coords else ds.coords.get("doy", np.array([target_doy])).values
+        doy_values = (
+            ds["doy"].values
+            if "doy" in ds.coords
+            else ds.coords.get("doy", np.array([target_doy])).values
+        )
 
         # Interpolate to target DOY
         refl = _interpolate_doy(ds["reflectance"], doy_values, target_doy)

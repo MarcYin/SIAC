@@ -27,9 +27,7 @@ class _DummyPreprocessor(BaseSatellitePreprocessor):
 
     def load_toa(self, input_path: str | Path) -> xr.Dataset:
         del input_path
-        return xr.Dataset(
-            {"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}
-        )
+        return xr.Dataset({"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
 
     def extract_geometry(self, input_path: str | Path):
         del input_path
@@ -47,7 +45,9 @@ class _DummyPreprocessor(BaseSatellitePreprocessor):
         return {"observation_time": datetime(2024, 1, 1)}
 
 
-def test_satellite_base_covers_cloud_classes_observation_bundle_and_detection(tmp_path: Path) -> None:
+def test_satellite_base_covers_cloud_classes_observation_bundle_and_detection(
+    tmp_path: Path,
+) -> None:
     preprocessor = _DummyPreprocessor()
     preprocessor._last_cloud_classes = xr.DataArray(  # type: ignore[attr-defined]
         np.ones((2, 2), dtype=np.uint8),
@@ -116,7 +116,9 @@ def test_earthdata_common_scalar_and_grid_helpers_cover_error_paths(
     with pytest.raises(ValueError, match="positive"):
         earth_mod.modland_tile_coords(1, 2, 0, 4)
     with pytest.raises(ValueError, match="at least 2 dimensions"):
-        earth_mod.make_native_grid_dataarray(np.array([1.0], dtype=np.float32), granule_path="VNP19A2.A2024165.h25v05.h5")
+        earth_mod.make_native_grid_dataarray(
+            np.array([1.0], dtype=np.float32), granule_path="VNP19A2.A2024165.h25v05.h5"
+        )
     with pytest.raises(ValueError, match="resolution must be > 0"):
         earth_mod.build_target_template((0.0, 0.0, 1.0, 1.0), "EPSG:4326", 0.0)
 
@@ -182,14 +184,22 @@ def test_earthdata_common_native_grid_and_intersection_fallbacks(
     assert earth_mod._read_hdf5_native_grid_definition("x.h5") is None
 
     grid = SimpleNamespace(x=(1.0,), y=(2.0,), crs="EPSG:4326")
-    monkeypatch.setattr(earth_mod, "_read_hdf5_native_grid_definition", lambda *_args, **_kwargs: grid)
+    monkeypatch.setattr(
+        earth_mod, "_read_hdf5_native_grid_definition", lambda *_args, **_kwargs: grid
+    )
     bounds, crs = earth_mod.granule_native_bounds("x.h5", width=1, height=1)
     assert bounds == (-499.0, -498.0, 501.0, 502.0)
     assert crs == "EPSG:4326"
 
-    monkeypatch.setattr(earth_mod, "_read_hdf5_native_grid_definition", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        earth_mod, "_read_hdf5_native_grid_definition", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(earth_mod, "parse_tile_indices", lambda _p: (1, 2))
-    monkeypatch.setattr(earth_mod, "modland_tile_bounds", lambda h, v: (float(h), float(v), float(h + 1), float(v + 1)))
+    monkeypatch.setattr(
+        earth_mod,
+        "modland_tile_bounds",
+        lambda h, v: (float(h), float(v), float(h + 1), float(v + 1)),
+    )
     bounds, crs = earth_mod.granule_native_bounds("fallback.h5")
     assert bounds == (1.0, 2.0, 2.0, 3.0)
     assert crs == earth_mod.MODLAND_SINUSOIDAL_CRS
@@ -197,8 +207,12 @@ def test_earthdata_common_native_grid_and_intersection_fallbacks(
     monkeypatch.setattr(earth_mod, "granule_geographic_bounds", lambda _p: (0.0, 0.0, 2.0, 2.0))
     monkeypatch.setattr(earth_mod, "transform_bounds", lambda bounds, src, dst: bounds)  # noqa: ARG005
     assert earth_mod.granule_intersects_bounds("g.h5", bounds=(1.0, 1.0, 3.0, 3.0), crs="EPSG:4326")
-    assert not earth_mod.granule_intersects_bounds("g.h5", bounds=(3.0, 3.0, 4.0, 4.0), crs="EPSG:4326")
+    assert not earth_mod.granule_intersects_bounds(
+        "g.h5", bounds=(3.0, 3.0, 4.0, 4.0), crs="EPSG:4326"
+    )
 
     monkeypatch.setattr(earth_mod, "granule_geographic_bounds", lambda _p: None)
-    monkeypatch.setattr(earth_mod, "granule_native_bounds", lambda _p: ((0.0, 0.0, 2.0, 2.0), "EPSG:4326"))
+    monkeypatch.setattr(
+        earth_mod, "granule_native_bounds", lambda _p: ((0.0, 0.0, 2.0, 2.0), "EPSG:4326")
+    )
     assert earth_mod.granule_intersects_bounds("n.h5", bounds=(1.0, 1.0, 3.0, 3.0), crs="EPSG:4326")

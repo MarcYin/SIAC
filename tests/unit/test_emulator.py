@@ -59,16 +59,22 @@ class TestBandEmulator:
 
         # Two hidden layers + output
         hidden_layers = [
-            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
-             np.zeros(hidden, dtype=np.float32)],
-            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
-             np.zeros(hidden, dtype=np.float32)],
+            [
+                rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
+                np.zeros(hidden, dtype=np.float32),
+            ],
+            [
+                rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
+                np.zeros(hidden, dtype=np.float32),
+            ],
         ]
 
         # Three output heads (xap, xbp, xcp)
         output_layers = [
-            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
-             np.zeros(1, dtype=np.float32)]
+            [
+                rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
+                np.zeros(1, dtype=np.float32),
+            ]
             for _ in range(3)
         ]
 
@@ -124,14 +130,20 @@ class TestBandEmulator:
         input_dim, hidden = 7, 16
 
         hidden_layers = [
-            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
-             np.ones(hidden, dtype=np.float32) * 0.5],  # Positive bias
-            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
-             np.ones(hidden, dtype=np.float32) * 0.5],  # Positive bias
+            [
+                rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
+                np.ones(hidden, dtype=np.float32) * 0.5,
+            ],  # Positive bias
+            [
+                rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
+                np.ones(hidden, dtype=np.float32) * 0.5,
+            ],  # Positive bias
         ]
         output_layers = [
-            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
-             np.zeros(1, dtype=np.float32)]
+            [
+                rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
+                np.zeros(1, dtype=np.float32),
+            ]
             for _ in range(3)
         ]
 
@@ -173,15 +185,21 @@ class TestTwoLayerNNEmulator:
         input_dim = 7
 
         hidden_layers = [
-            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
-             np.zeros(hidden, dtype=np.float32)],
-            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
-             np.zeros(hidden, dtype=np.float32)],
+            [
+                rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
+                np.zeros(hidden, dtype=np.float32),
+            ],
+            [
+                rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
+                np.zeros(hidden, dtype=np.float32),
+            ],
         ]
 
         output_layers = [
-            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
-             np.zeros(1, dtype=np.float32)]
+            [
+                rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
+                np.zeros(1, dtype=np.float32),
+            ]
         ]
 
         # Save for multiple bands
@@ -234,16 +252,22 @@ class TestComputeCoefficientsMulti:
         input_dim = 7
 
         hidden_layers = [
-            [rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
-             np.zeros(hidden, dtype=np.float32)],
-            [rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
-             np.zeros(hidden, dtype=np.float32)],
+            [
+                rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.1,
+                np.zeros(hidden, dtype=np.float32),
+            ],
+            [
+                rng.standard_normal((hidden, hidden)).astype(np.float32) * 0.1,
+                np.zeros(hidden, dtype=np.float32),
+            ],
         ]
 
         # Three output heads (xap, xbp, xcp)
         output_layers = [
-            [rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
-             np.zeros(1, dtype=np.float32)]
+            [
+                rng.standard_normal((hidden, 1)).astype(np.float32) * 0.1,
+                np.zeros(1, dtype=np.float32),
+            ]
             for _ in range(3)
         ]
 
@@ -291,7 +315,9 @@ class TestComputeCoefficientsMulti:
         single = emulator.compute_coefficients(geometry, atmo_state, band, compute_jacobian=True)
 
         # Multi-band call with one band
-        multi = emulator.compute_coefficients_multi(geometry, atmo_state, [band], compute_jacobian=True)
+        multi = emulator.compute_coefficients_multi(
+            geometry, atmo_state, [band], compute_jacobian=True
+        )
 
         np.testing.assert_allclose(single.xap.values, multi[0].xap.values)
         np.testing.assert_allclose(single.xbp.values, multi[0].xbp.values)

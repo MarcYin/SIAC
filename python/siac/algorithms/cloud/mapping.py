@@ -32,9 +32,7 @@ def validate_class_mapping(mapping: dict[int, Iterable[int]] | None) -> dict[int
         elif isinstance(source_values, Iterable):
             sources = [int(v) for v in source_values]
         else:
-            raise TypeError(
-                f"class_mapping[{target}] must be an int or iterable of ints"
-            )
+            raise TypeError(f"class_mapping[{target}] must be an int or iterable of ints")
 
         uniq = sorted(set(sources))
         normalized[target] = uniq
@@ -83,9 +81,7 @@ def apply_class_mapping(
         known = np.isin(src, np.array(EXPECTED_CLASSES, dtype=src.dtype)) & finite
         if not unmapped_to_missing and not bool(np.all(known | ~finite)):
             unknown = np.unique(src[(~known) & finite])
-            raise ValueError(
-                f"Input cloud classes include unmapped values: {unknown.tolist()}"
-            )
+            raise ValueError(f"Input cloud classes include unmapped values: {unknown.tolist()}")
     else:
         all_sources: set[int] = set()
         for target, sources in normalized.items():
@@ -98,9 +94,7 @@ def apply_class_mapping(
             known = np.isin(src, np.array(sorted(all_sources), dtype=src.dtype)) & finite
             if not bool(np.all(known | ~finite)):
                 unknown = np.unique(src[(~known) & finite])
-                raise ValueError(
-                    f"Input cloud classes include unmapped values: {unknown.tolist()}"
-                )
+                raise ValueError(f"Input cloud classes include unmapped values: {unknown.tolist()}")
 
     result = xr.DataArray(
         out,

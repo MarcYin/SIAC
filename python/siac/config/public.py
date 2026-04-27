@@ -62,7 +62,9 @@ class SIACConfig(SystemConfig):
     """
 
     sensor: SensorName = "auto"
-    aoi: dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None = Field(default=None)
+    aoi: dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None = (
+        Field(default=None)
+    )
 
     @classmethod
     def from_file(cls, path: Path | str) -> SIACConfig:
@@ -122,7 +124,9 @@ class SIACConfig(SystemConfig):
         return snapshot_system_config(self, redact_secrets=redact_secrets)
 
     def write_state_snapshot(self, path: Path | str, *, redact_secrets: bool = True) -> None:
-        resolved = resolve_config(self.with_env_overlay(), RunRequest(sensor=self.sensor, aoi=self.aoi))
+        resolved = resolve_config(
+            self.with_env_overlay(), RunRequest(sensor=self.sensor, aoi=self.aoi)
+        )
         write_runtime_snapshot(resolved, path, redact_secrets=redact_secrets)
 
     @classmethod

@@ -18,7 +18,9 @@ from siac.domain import SensorConfig
 def _da(shape: tuple[int, int] = (8, 8), value: float = 1000.0) -> xr.DataArray:
     x = np.linspace(500000.0, 500000.0 + (shape[1] - 1) * 10.0, shape[1])
     y = np.linspace(4500000.0 + (shape[0] - 1) * 10.0, 4500000.0, shape[0])
-    da = xr.DataArray(np.full(shape, value, dtype=np.float32), dims=["y", "x"], coords={"y": y, "x": x})
+    da = xr.DataArray(
+        np.full(shape, value, dtype=np.float32), dims=["y", "x"], coords={"y": y, "x": x}
+    )
     return da.rio.write_crs("EPSG:32632")
 
 
@@ -287,7 +289,7 @@ class TestSentinel2Internals:
         # product + granule metadata files
         _write(
             safe / "MTD_MSIL1C.xml",
-            "<root><QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE><RADIO_ADD_OFFSET band_id=\"4\">-100</RADIO_ADD_OFFSET></root>",
+            '<root><QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE><RADIO_ADD_OFFSET band_id="4">-100</RADIO_ADD_OFFSET></root>',
         )
         _write(
             safe / "GRANULE" / "L1C_TILE" / "MTD_TL.xml",
@@ -352,10 +354,14 @@ class TestSentinel2Internals:
         assert settings["external_mask_path"] == safe / "masks" / "cloud.tif"
         assert p._get_namespace(ET.fromstring("<root/>")) == ""
 
-    def test_cloud_mask_settings_expands_user_paths(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_cloud_mask_settings_expands_user_paths(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.setenv("HOME", str(tmp_path))
         safe = _safe_tree(tmp_path)
-        p = Sentinel2Preprocessor(config={"cloud_mask": {"external_mask_path": "~/clouds/mask.tif"}})
+        p = Sentinel2Preprocessor(
+            config={"cloud_mask": {"external_mask_path": "~/clouds/mask.tif"}}
+        )
 
         settings = p._cloud_mask_settings(safe)
         assert settings["external_mask_path"] == tmp_path / "clouds" / "mask.tif"
@@ -389,7 +395,9 @@ class TestSentinel2Internals:
         p2._resolve_paths(aws)
         assert p2._get_img_data_path() == aws
 
-    def test_load_toa_rejects_invalid_quantification_value(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_load_toa_rejects_invalid_quantification_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         safe = _safe_tree(tmp_path)
         p = Sentinel2Preprocessor()
 
@@ -414,7 +422,10 @@ class TestSentinel2Internals:
         safe = _safe_tree(tmp_path, "S2A_MSIL1C_20260102T024121_BAD.SAFE")
         p = Sentinel2Preprocessor()
 
-        _write(safe / "MTD_MSIL1C.xml", "<root><QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE></root>")
+        _write(
+            safe / "MTD_MSIL1C.xml",
+            "<root><QUANTIFICATION_VALUE>10000</QUANTIFICATION_VALUE></root>",
+        )
         _write(
             safe / "GRANULE" / "L1C_TILE" / "MTD_TL.xml",
             "<root><SENSING_TIME>not-a-time</SENSING_TIME><TILE_ID>T31UDQ</TILE_ID></root>",

@@ -54,7 +54,9 @@ def test_build_aligned_rsrf_kernel_solar_weighting_normalizes_weighted_response(
     assert kernel.start_index == 0
     assert kernel.end_index == 5
     assert kernel.solar_weighted_response_on_lut is not None
-    assert np.trapezoid(kernel.solar_weighted_response_on_lut, kernel.wavelengths_nm) == pytest.approx(1.0)
+    assert np.trapezoid(
+        kernel.solar_weighted_response_on_lut, kernel.wavelengths_nm
+    ) == pytest.approx(1.0)
     peak_idx = int(np.argmax(kernel.solar_weighted_response_on_lut))
     assert kernel.wavelengths_nm[peak_idx] == pytest.approx(460.0)
 

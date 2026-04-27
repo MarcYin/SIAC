@@ -103,6 +103,7 @@ class BRDFKernels:
 
         return k_vol, k_geo
 
+
 def compute_kernels(
     vza: np.ndarray | xr.DataArray,
     sza: np.ndarray | xr.DataArray,
@@ -128,6 +129,7 @@ def compute_kernels(
 
     return kernels.compute(vza, sza, raa)
 
+
 def compute_reflectance(
     f0: np.ndarray | xr.DataArray,
     f1: np.ndarray | xr.DataArray,
@@ -151,6 +153,7 @@ def compute_reflectance(
     reflectance: np.ndarray | xr.DataArray = f0 + f1 * k_vol + f2 * k_geo
     return reflectance
 
+
 def compute_white_sky_albedo(
     f0: np.ndarray | xr.DataArray,
     f1: np.ndarray | xr.DataArray,
@@ -169,9 +172,9 @@ def compute_white_sky_albedo(
     """
     # Pre-computed analytical integrals of Ross-Thick and Li-Sparse kernels
     # over the full hemisphere (Lucht et al. 2000, Table 1).
-    g0 = 1.0                # Integral of isotropic kernel (≡ 1)
-    g1 = 0.189184           # Integral of Ross-Thick volumetric kernel
-    g2 = -1.377622          # Integral of Li-Sparse geometric kernel (negative is expected)
+    g0 = 1.0  # Integral of isotropic kernel (≡ 1)
+    g1 = 0.189184  # Integral of Ross-Thick volumetric kernel
+    g2 = -1.377622  # Integral of Li-Sparse geometric kernel (negative is expected)
 
     albedo: np.ndarray | xr.DataArray = f0 * g0 + f1 * g1 + f2 * g2
 
@@ -192,6 +195,7 @@ def compute_white_sky_albedo(
         albedo = np.clip(albedo, 0.0, 1.0)
 
     return albedo
+
 
 def compute_black_sky_albedo(
     f0: np.ndarray | xr.DataArray,

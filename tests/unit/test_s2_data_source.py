@@ -15,11 +15,10 @@ from siac.adapters.data.s2_data_source import (
 
 # ── S2Query ───────────────────────────────────────────────────────────
 
+
 class TestS2Query:
     def test_from_product_id(self):
-        q = S2Query.from_product_id(
-            "S2B_MSIL1C_20210801T103629_N0500_R008_T31UDQ_20230731T120241"
-        )
+        q = S2Query.from_product_id("S2B_MSIL1C_20210801T103629_N0500_R008_T31UDQ_20230731T120241")
         assert q.product_id is not None
         assert "MSIL1C" in q.product_id
 
@@ -56,6 +55,7 @@ class TestS2Query:
 
 # ── S2Product ─────────────────────────────────────────────────────────
 
+
 class TestS2Product:
     def _make_product(self, baseline="N0500", sensing_date=None):
         return S2Product(
@@ -79,6 +79,7 @@ class TestS2Product:
 
 
 # ── Deduplication ─────────────────────────────────────────────────────
+
 
 class TestDeduplication:
     def _make_product(self, baseline, tile="31UDQ", dt=None):

@@ -22,8 +22,7 @@ def get_sensor_config(sensor_id: str, satellite_id: str) -> SensorConfig:
     key = (sensor_id, satellite_id)
     if key not in SENSOR_CONFIGS:
         raise KeyError(
-            f"Unknown sensor {sensor_id}/{satellite_id}. "
-            f"Available: {list(SENSOR_CONFIGS.keys())}"
+            f"Unknown sensor {sensor_id}/{satellite_id}. Available: {list(SENSOR_CONFIGS.keys())}"
         )
     return SENSOR_CONFIGS[key]
 

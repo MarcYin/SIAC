@@ -149,7 +149,9 @@ class TestBRDFKernels:
             coords={"y": [10, 11, 12, 13], "x": [20, 21, 22]},
         )
         sza = np.full(shape, 0.5, dtype=np.float32)
-        raa = xr.DataArray(np.full(shape, 1.0, dtype=np.float32), dims=["y", "x"], coords=vza.coords)
+        raa = xr.DataArray(
+            np.full(shape, 1.0, dtype=np.float32), dims=["y", "x"], coords=vza.coords
+        )
 
         k_vol, k_geo = kernels.compute(vza, sza, raa)
 

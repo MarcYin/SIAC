@@ -124,7 +124,9 @@ def test_cds_make_client_requires_cdsapi(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         auth_mod,
         "import_module",
-        lambda name: (_ for _ in ()).throw(ModuleNotFoundError(name)) if name == "cdsapi" else object(),  # noqa: ARG005
+        lambda name: (
+            (_ for _ in ()).throw(ModuleNotFoundError(name)) if name == "cdsapi" else object()
+        ),  # noqa: ARG005
     )
 
     with pytest.raises(AuthenticationError, match="cdsapi is not installed"):

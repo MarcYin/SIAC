@@ -244,7 +244,11 @@ def _native_rsrf_band_id(band: SensorBand) -> str:
 
 
 def _source_sensor_id(source_bands: Sequence[SensorBand]) -> str:
-    sensor_ids = {str(band.rsrf_sensor_unit_id) for band in source_bands if band.rsrf_sensor_unit_id is not None}
+    sensor_ids = {
+        str(band.rsrf_sensor_unit_id)
+        for band in source_bands
+        if band.rsrf_sensor_unit_id is not None
+    }
     if len(sensor_ids) != 1:
         raise ValueError(
             "Published spectral-library mapping requires all source bands to share one rsrf_sensor_unit_id."
@@ -291,7 +295,11 @@ def _source_schema_indices_for_bands(
 
 
 def _target_sensor_id(target_bands: Sequence[SensorBand]) -> str:
-    sensor_ids = {str(band.rsrf_sensor_unit_id) for band in target_bands if band.rsrf_sensor_unit_id is not None}
+    sensor_ids = {
+        str(band.rsrf_sensor_unit_id)
+        for band in target_bands
+        if band.rsrf_sensor_unit_id is not None
+    }
     if len(sensor_ids) != 1:
         raise ValueError(
             "Published spectral-library target mapping requires all target bands to share one rsrf_sensor_unit_id."
@@ -437,7 +445,9 @@ def _prepare_runtime(
     del config
     source_sensor_id = _source_sensor_id(source_bands)
     prepared_root = resolve_prepared_library_root()
-    mapper = cast("_PackageMapperProtocol", PackageSpectralMapper(prepared_root, verify_checksums=False))
+    mapper = cast(
+        "_PackageMapperProtocol", PackageSpectralMapper(prepared_root, verify_checksums=False)
+    )
     manifest_source_sensors = tuple(getattr(mapper.manifest, "source_sensors", ()))
     if source_sensor_id not in manifest_source_sensors:
         raise ValueError(
@@ -521,7 +531,9 @@ class SpectralMapper:
         """Map source-basis multispectral reflectance to target bands."""
         source_data = self._align_source_data(source_reflectance)
         original_dims = tuple(source_data.dims)
-        source_unc = self._align_source_data(source_uncertainty) if source_uncertainty is not None else None
+        source_unc = (
+            self._align_source_data(source_uncertainty) if source_uncertainty is not None else None
+        )
 
         if self._identity:
             identity = source_data.assign_coords(band=self._target_band_names)
@@ -542,7 +554,9 @@ class SpectralMapper:
             raise RuntimeError("spectral-library runtime was not initialized")
 
         flattened = self._flatten_source_cube(source_data)
-        package_queries, package_valid_masks, package_valid_rows = self._package_query_rows(flattened)
+        package_queries, package_valid_masks, package_valid_rows = self._package_query_rows(
+            flattened
+        )
         unc_flat = self._flatten_optional_uncertainty(source_unc, flattened.transpose_dims)
         n_pixels = flattened.flat_values.shape[0]
         n_target = len(self.target_bands)
@@ -590,9 +604,13 @@ class SpectralMapper:
                 perf_counter() - batch_started,
             )
 
-            output_index = {str(band_id): index for index, band_id in enumerate(batch_result.output_columns)}
+            output_index = {
+                str(band_id): index for index, band_id in enumerate(batch_result.output_columns)
+            }
             missing_output_band_ids = [
-                band_id for band_id in self._runtime.target_output_band_ids if band_id not in output_index
+                band_id
+                for band_id in self._runtime.target_output_band_ids
+                if band_id not in output_index
             ]
             if missing_output_band_ids:
                 raise RuntimeError(
@@ -714,7 +732,9 @@ class SpectralMapper:
         for source_index, schema_index in enumerate(self._runtime.source_schema_indices):
             if schema_index is None:
                 continue
-            query_rows[:, schema_index] = np.asarray(flattened.flat_values[:, source_index], dtype=np.float64)
+            query_rows[:, schema_index] = np.asarray(
+                flattened.flat_values[:, source_index], dtype=np.float64
+            )
         valid_masks = np.isfinite(query_rows)
         valid_rows = np.asarray(np.any(valid_masks, axis=1), dtype=np.bool_)
         return query_rows, valid_masks, valid_rows

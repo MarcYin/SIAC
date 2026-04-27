@@ -42,12 +42,26 @@ def large_obs_bundle():
     )
     from datetime import datetime
 
-    toa = xr.Dataset({
-        "B01": xr.DataArray(np.random.RandomState(10).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-        "B02": xr.DataArray(np.random.RandomState(11).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-        "B03": xr.DataArray(np.random.RandomState(12).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-        "B04": xr.DataArray(np.random.RandomState(13).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-    })
+    toa = xr.Dataset(
+        {
+            "B01": xr.DataArray(
+                np.random.RandomState(10).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+            "B02": xr.DataArray(
+                np.random.RandomState(11).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+            "B03": xr.DataArray(
+                np.random.RandomState(12).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+            "B04": xr.DataArray(
+                np.random.RandomState(13).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+        }
+    )
     geometry = GeometryAngles(
         sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
         saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
@@ -117,7 +131,9 @@ class TestAssembleGrids:
         assert sib.surface_prior.boa.shape == toa_spatial
 
     def test_aux_resolution(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
-        sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=500.0)
+        sib = assemble_grids(
+            large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=500.0
+        )
         assert sib.aux_resolution_m == 500.0
 
     def test_aux_resolution_falls_back_to_solver_grid_for_legacy_callers(
@@ -127,7 +143,9 @@ class TestAssembleGrids:
         large_surface,
         mock_rt_model,
     ):
-        sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=320.0)
+        sib = assemble_grids(
+            large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=320.0
+        )
 
         assert sib.toa.shape[1:] == (2, 2)
         assert sib.aerosol_resolution_m == 320.0
@@ -223,9 +241,12 @@ class TestAssembleGrids:
         np.testing.assert_allclose(sib.surface_prior.boa.sel(band="B02").values, 0.22)
         np.testing.assert_allclose(sib.surface_prior.boa.sel(band="B04").values, 0.44)
 
-    def test_cloud_mask_conservative(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
+    def test_cloud_mask_conservative(
+        self, large_obs_bundle, large_atmo, large_surface, mock_rt_model
+    ):
         """Any native pixel that is cloud → aux pixel is cloud."""
         import dataclasses
+
         shape = (64, 64)
         cloud = np.zeros(shape, dtype=bool)
         cloud[10:20, 10:20] = True
@@ -332,7 +353,9 @@ class TestAssembleGrids:
         native.values[:, : width // 2] = True
         native = native.rio.set_spatial_dims(x_dim="x", y_dim="y")
         native = native.rio.write_crs("EPSG:4326")
-        native = native.rio.write_transform(from_bounds(lon_min, lat_min, lon_max, lat_max, width, height))
+        native = native.rio.write_transform(
+            from_bounds(lon_min, lat_min, lon_max, lat_max, width, height)
+        )
 
         def _fake_load(_bounds, _crs, *, source=None, cache_dir=None, session=None):  # noqa: ANN001
             del _bounds, _crs, source, cache_dir, session
@@ -392,7 +415,9 @@ class TestAssembleGrids:
         )
         wgs84_mask = wgs84_mask.rio.set_spatial_dims(x_dim="x", y_dim="y")
         wgs84_mask = wgs84_mask.rio.write_crs("EPSG:4326")
-        wgs84_mask = wgs84_mask.rio.write_transform(from_bounds(lon_min, lat_min, lon_max, lat_max, 64, 64))
+        wgs84_mask = wgs84_mask.rio.write_transform(
+            from_bounds(lon_min, lat_min, lon_max, lat_max, 64, 64)
+        )
 
         assert not assembler_mod._shape_only_mask_remap_is_safe(wgs84_mask, target_template)
 
@@ -406,7 +431,9 @@ class TestAssembleGrids:
         )
         utm_mask = utm_mask.rio.set_spatial_dims(x_dim="x", y_dim="y")
         utm_mask = utm_mask.rio.write_crs(large_obs_bundle.crs)
-        utm_mask = utm_mask.rio.write_transform(from_bounds(utm_xmin, utm_ymin, utm_xmax, utm_ymax, 64, 64))
+        utm_mask = utm_mask.rio.write_transform(
+            from_bounds(utm_xmin, utm_ymin, utm_xmax, utm_ymax, 64, 64)
+        )
 
         assert assembler_mod._shape_only_mask_remap_is_safe(utm_mask, target_template)
 
@@ -468,16 +495,24 @@ class TestAssembleGrids:
     def test_identity_same_res(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """When aerosol_resolution matches the scene pixel size, output ≈ input."""
         sib = assemble_grids(
-            large_obs_bundle, large_atmo, large_surface, mock_rt_model,
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
             aerosol_resolution_m=10.0,
         )
         # Should have same shape as input (64x64)
         assert sib.toa.shape[1:] == (64, 64)
 
-    def test_downsampling_reduces_shape(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
+    def test_downsampling_reduces_shape(
+        self, large_obs_bundle, large_atmo, large_surface, mock_rt_model
+    ):
         """Resampling to a coarser aerosol grid should produce a smaller grid."""
         sib = assemble_grids(
-            large_obs_bundle, large_atmo, large_surface, mock_rt_model,
+            large_obs_bundle,
+            large_atmo,
+            large_surface,
+            mock_rt_model,
             aerosol_resolution_m=500.0,
         )
         # 64 px @ 10m -> ~1.3 px @ 500m -> at least (1, 1)
@@ -764,7 +799,9 @@ class TestAssembleGrids:
 
         obs = dataclasses.replace(
             large_obs_bundle,
-            toa=xr.Dataset({name: _georef(data) for name, data in large_obs_bundle.toa.data_vars.items()}),
+            toa=xr.Dataset(
+                {name: _georef(data) for name, data in large_obs_bundle.toa.data_vars.items()}
+            ),
         )
 
         calls: list[RasterioResampling] = []
@@ -866,9 +903,7 @@ class TestAssembleGrids:
         )
         template = template.rio.set_spatial_dims(x_dim="x", y_dim="y")
         template = template.rio.write_crs("EPSG:32632")
-        template = template.rio.write_transform(
-            Affine(20.0, 0.0, 300000.0, 0.0, -20.0, 5500040.0)
-        )
+        template = template.rio.write_transform(Affine(20.0, 0.0, 300000.0, 0.0, -20.0, 5500040.0))
 
         def _warn_reproject_match(self, target, *, resampling, **kwargs):  # type: ignore[no-untyped-def]
             del self, target, resampling, kwargs
@@ -956,14 +991,18 @@ class TestAssembleGrids:
         assert sib.atmo_prior.aot.rio.crs is not None
         assert sib.atmo_prior.aot.rio.crs.to_string() == "EPSG:32632"
         assert sib.atmo_prior.aot.coords["x"].values.tolist() == pytest.approx([300160.0, 300480.0])
-        assert sib.atmo_prior.aot.coords["y"].values.tolist() == pytest.approx([5500480.0, 5500160.0])
+        assert sib.atmo_prior.aot.coords["y"].values.tolist() == pytest.approx(
+            [5500480.0, 5500160.0]
+        )
 
     def test_passes_validation(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Output should pass validate_solver_input_bundle()."""
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
         validate_solver_input_bundle(sib)  # should not raise
 
-    def test_surface_prior_with_band_dimension(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
+    def test_surface_prior_with_band_dimension(
+        self, large_obs_bundle, large_atmo, large_surface, mock_rt_model
+    ):
         """Assembler should handle banded SurfacePrior arrays from real BRDF providers."""
         shape = large_surface.boa.shape
         banded_boa = xr.DataArray(
@@ -1012,7 +1051,9 @@ class TestAssembleGrids:
 
         resolution_m = 320.0
         template = _build_target_template(
-            large_obs_bundle.bounds, large_obs_bundle.crs, resolution_m,
+            large_obs_bundle.bounds,
+            large_obs_bundle.crs,
+            resolution_m,
         )
         target_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
 
@@ -1040,7 +1081,10 @@ class TestAssembleGrids:
         prior = SurfacePrior(boa=boa, boa_unc=unc, kernels=None, mask=mask)
 
         sib = assemble_grids(
-            large_obs_bundle, large_atmo, prior, mock_rt_model,
+            large_obs_bundle,
+            large_atmo,
+            prior,
+            mock_rt_model,
             aerosol_resolution_m=resolution_m,
         )
 
@@ -1063,7 +1107,9 @@ class TestAssembleGrids:
 
         # Surface prior generated at 120m (M3 default)
         m3_template = _build_target_template(
-            large_obs_bundle.bounds, large_obs_bundle.crs, 120.0,
+            large_obs_bundle.bounds,
+            large_obs_bundle.crs,
+            120.0,
         )
         m3_shape = (int(m3_template.sizes["y"]), int(m3_template.sizes["x"]))
 
@@ -1072,21 +1118,24 @@ class TestAssembleGrids:
         boa = copy_spatial_metadata_like(
             xr.DataArray(
                 np.full(m3_shape, 0.15, dtype=np.float32),
-                dims=("y", "x"), coords=m3_template.coords,
+                dims=("y", "x"),
+                coords=m3_template.coords,
             ),
             m3_template,
         )
         unc = copy_spatial_metadata_like(
             xr.DataArray(
                 np.full(m3_shape, 0.02, dtype=np.float32),
-                dims=("y", "x"), coords=m3_template.coords,
+                dims=("y", "x"),
+                coords=m3_template.coords,
             ),
             m3_template,
         )
         mask = copy_spatial_metadata_like(
             xr.DataArray(
                 np.ones(m3_shape, dtype=bool),
-                dims=("y", "x"), coords=m3_template.coords,
+                dims=("y", "x"),
+                coords=m3_template.coords,
             ),
             m3_template,
         )
@@ -1094,14 +1143,19 @@ class TestAssembleGrids:
 
         # Trigger legacy override: aerosol_resolution=120 + aux_resolution=320
         sib = assemble_grids(
-            large_obs_bundle, large_atmo, prior, mock_rt_model,
+            large_obs_bundle,
+            large_atmo,
+            prior,
+            mock_rt_model,
             aux_resolution_m=320.0,
             aerosol_resolution_m=120.0,
         )
 
         # Grid should be at 320m (legacy override), not 120m
         m4_template = _build_target_template(
-            large_obs_bundle.bounds, large_obs_bundle.crs, 320.0,
+            large_obs_bundle.bounds,
+            large_obs_bundle.crs,
+            320.0,
         )
         expected_shape = (int(m4_template.sizes["y"]), int(m4_template.sizes["x"]))
         assert sib.toa.shape[1:] == expected_shape

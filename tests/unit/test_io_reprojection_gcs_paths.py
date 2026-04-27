@@ -65,13 +65,17 @@ def test_readers_open_kwargs_defaults_remote_and_alignment_branches(
     assert captured["kwargs"]["overview_level"] == 2
 
     # Default band-name paths + squeeze in multiband readers.
-    band1 = xr.DataArray(np.ones((1, 3, 3), dtype=np.float32), dims=["band", "y", "x"], coords={"band": [1]})
+    band1 = xr.DataArray(
+        np.ones((1, 3, 3), dtype=np.float32), dims=["band", "y", "x"], coords={"band": [1]}
+    )
     monkeypatch.setattr(readers_mod, "read_raster", lambda *_args, **_kwargs: band1)
 
     ds = readers_mod.read_multiband([tmp_path / "a.tif"])  # band_names=None branch
     assert set(ds.data_vars) == {"a"}
 
-    stacked = readers_mod.read_multiband_stack([tmp_path / "a.tif", tmp_path / "b.tif"])  # default names
+    stacked = readers_mod.read_multiband_stack(
+        [tmp_path / "a.tif", tmp_path / "b.tif"]
+    )  # default names
     assert stacked.shape == (2, 3, 3)
     assert list(stacked.coords["band"].values) == ["a", "b"]
 
@@ -87,7 +91,9 @@ def test_readers_open_kwargs_defaults_remote_and_alignment_branches(
     assert out.shape == (2, 2)
 
     # Remote zarr mapper path.
-    monkeypatch.setitem(sys.modules, "fsspec", SimpleNamespace(get_mapper=lambda path: {"remote": path}))
+    monkeypatch.setitem(
+        sys.modules, "fsspec", SimpleNamespace(get_mapper=lambda path: {"remote": path})
+    )
     opened: dict[str, object] = {}
 
     def _fake_open_zarr(obj, chunks=None):  # noqa: ANN001
@@ -138,7 +144,9 @@ def test_reprojection_missing_branches(monkeypatch: pytest.MonkeyPatch) -> None:
 
     src_ds = xr.Dataset({"meta": xr.DataArray(np.array([1, 2, 3], dtype=np.int16), dims=["k"])})
     target_no_crs = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
-    ds_out = reproj_mod.reproject_dataset_match(src_ds, target_no_crs, resampling=Resampling.nearest)
+    ds_out = reproj_mod.reproject_dataset_match(
+        src_ds, target_no_crs, resampling=Resampling.nearest
+    )
     assert "meta" in ds_out
 
     r_tuple = reproj_mod.resample(da, target_resolution=(20.0, 20.0), resampling=Resampling.nearest)
@@ -159,7 +167,9 @@ def test_reprojection_missing_branches(monkeypatch: pytest.MonkeyPatch) -> None:
         return bounds
 
     monkeypatch.setattr(reproj_mod, "transform_bounds", _fake_transform_bounds)
-    _ = reproj_mod.compute_common_bounds(_spatial_da((4, 4), "EPSG:32632"), _spatial_da((4, 4), "EPSG:4326"), method="union")
+    _ = reproj_mod.compute_common_bounds(
+        _spatial_da((4, 4), "EPSG:32632"), _spatial_da((4, 4), "EPSG:4326"), method="union"
+    )
     assert calls
 
     a = _spatial_da((4, 4), "EPSG:32632")
@@ -194,28 +204,43 @@ def test_gcs_helpers_and_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         gcs_mod._safe_prefix_from_source_url("https://example.com/abc")
 
     with pytest.raises(ValueError, match="Cannot infer SAFE prefix"):
-        gcs_mod._safe_prefix_from_source_url(f"gs://{gcs_mod.GCS_BUCKET}/tiles/31/U/DQ/no_safe_here")
+        gcs_mod._safe_prefix_from_source_url(
+            f"gs://{gcs_mod.GCS_BUCKET}/tiles/31/U/DQ/no_safe_here"
+        )
 
     encoded = GCS_DOWNLOAD_BASE + "tiles/31/U/DQ/P.SAFE/GRANULE/L1C.xml"
     assert gcs_mod._safe_prefix_from_source_url(encoded).endswith("P.SAFE/")
 
-    prod = _product("S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000", source_url="gs://invalid/path")
+    prod = _product(
+        "S2A_MSIL1C_20240103T103021_N0500_R051_T31UDQ_20240103T120000",
+        source_url="gs://invalid/path",
+    )
     fallback = gcs_mod._resolve_safe_prefix(prod)
     assert fallback.endswith(".SAFE/")
 
     safe_dir = tmp_path / "safe"
     safe_dir.mkdir()
     safe_prefix = "tiles/31/U/DQ/P.SAFE/"
-    assert gcs_mod._target_path_for_object("other/p.txt", safe_prefix=safe_prefix, safe_dir=safe_dir) is None
-    assert gcs_mod._target_path_for_object(safe_prefix, safe_prefix=safe_prefix, safe_dir=safe_dir) is None
+    assert (
+        gcs_mod._target_path_for_object("other/p.txt", safe_prefix=safe_prefix, safe_dir=safe_dir)
+        is None
+    )
+    assert (
+        gcs_mod._target_path_for_object(safe_prefix, safe_prefix=safe_prefix, safe_dir=safe_dir)
+        is None
+    )
     with pytest.raises(DataNotFoundError, match="outside SAFE root"):
-        gcs_mod._target_path_for_object(f"{safe_prefix}../escape.txt", safe_prefix=safe_prefix, safe_dir=safe_dir)
+        gcs_mod._target_path_for_object(
+            f"{safe_prefix}../escape.txt", safe_prefix=safe_prefix, safe_dir=safe_dir
+        )
 
     done = safe_dir / "done.bin"
     done.write_bytes(b"abc")
     assert gcs_mod._is_fully_downloaded(done, None)
 
-    monkeypatch.setattr(gcs_mod, "_list_api", lambda **_kwargs: {"items": [], "nextPageToken": None})
+    monkeypatch.setattr(
+        gcs_mod, "_list_api", lambda **_kwargs: {"items": [], "nextPageToken": None}
+    )
     assert not gcs_mod._prefix_exists("tiles/31/U/DQ/P.SAFE/")
 
     class _Resp:
@@ -237,7 +262,9 @@ def test_gcs_helpers_and_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert not target.with_suffix(".bin.part").exists()
 
 
-def test_gcs_retry_search_and_download_edge_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_gcs_retry_search_and_download_edge_cases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     target = tmp_path / "retry.bin"
 
     def _short_write(url, path, timeout=300):  # noqa: ANN001
@@ -246,7 +273,9 @@ def test_gcs_retry_search_and_download_edge_cases(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(gcs_mod, "_download_url_to_file", _short_write)
     with pytest.raises(RuntimeError, match="Failed downloading"):
-        gcs_mod._download_with_retry("https://example.com/x", target, expected_size=2, retries=0, backoff_sec=0.0)
+        gcs_mod._download_with_retry(
+            "https://example.com/x", target, expected_size=2, retries=0, backoff_sec=0.0
+        )
 
     # no-jobs branch
     gcs_mod._download_jobs_parallel([])
@@ -274,6 +303,8 @@ def test_gcs_retry_search_and_download_edge_cases(monkeypatch: pytest.MonkeyPatc
     safe_prefix = f"tiles/31/U/DQ/{product_id}.SAFE/"
     product = _product(product_id, source_url=f"gs://{gcs_mod.GCS_BUCKET}/{safe_prefix}")
 
-    monkeypatch.setattr(gcs_mod, "_list_objects_under", lambda _prefix: [{"name": 123, "size": "1"}])
+    monkeypatch.setattr(
+        gcs_mod, "_list_objects_under", lambda _prefix: [{"name": 123, "size": "1"}]
+    )
     with pytest.raises(DataNotFoundError, match="SAFE directory is empty"):
         gcs_mod.download_gcs(product, tmp_path)

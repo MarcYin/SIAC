@@ -238,7 +238,9 @@ def _normalize_aerosol_mixture_payload(value: Any) -> tuple[float, float, float,
     if series is None:
         return None
     if len(series) != 4:
-        raise ValueError("Aerosol mixtures must contain four components: dust, water, oceanic, soot.")
+        raise ValueError(
+            "Aerosol mixtures must contain four components: dust, water, oceanic, soot."
+        )
     return (
         float(series[0]),
         float(series[1]),
@@ -430,7 +432,9 @@ class ProvidersConfig(SIACBaseModel):
     atmo: AtmoProviderConfig = Field(default_factory=AtmoProviderConfig)
     brdf: BRDFProviderConfig = Field(default_factory=BRDFProviderConfig)
     s2: S2ProviderConfig = Field(default_factory=S2ProviderConfig)
-    monthly_composites: MonthlyCompositeProviderConfig = Field(default_factory=MonthlyCompositeProviderConfig)
+    monthly_composites: MonthlyCompositeProviderConfig = Field(
+        default_factory=MonthlyCompositeProviderConfig
+    )
 
 
 class SpectralMappingAlgorithmConfig(SIACBaseModel):
@@ -582,7 +586,9 @@ class SixSSunPhotometerAerosolConfig(SIACBaseModel):
         if len(self.radii_um) != len(self.dv_dlogr):
             raise ValueError("Sun-photometer radii and dv_dlogr arrays must have the same length.")
         if not (1 <= len(self.radii_um) <= 50):
-            raise ValueError("6S sun-photometer aerosol inputs support between 1 and 50 radius samples.")
+            raise ValueError(
+                "6S sun-photometer aerosol inputs support between 1 and 50 radius samples."
+            )
         if len(self.refr_real) != 20 or len(self.refr_imag) != 20:
             raise ValueError("Sun-photometer aerosol refractive indices require 20 wavelengths.")
         return self
@@ -629,7 +635,9 @@ class SixSSpectralReflectanceConfig(SIACBaseModel):
             if self.values is None:
                 raise ValueError("Spectrum surface reflectance requires `values`.")
             if self.wavelengths_um is not None and len(self.wavelengths_um) != len(self.values):
-                raise ValueError("Surface spectrum wavelengths and values must have the same length.")
+                raise ValueError(
+                    "Surface spectrum wavelengths and values must have the same length."
+                )
         return self
 
 
@@ -651,7 +659,9 @@ class SixSBRDFConfig(SIACBaseModel):
     def validate_brdf(self) -> SixSBRDFConfig:
         if self.model == "user_defined":
             if self.table_solar_zenith is None or self.table_view_zenith is None:
-                raise ValueError("User-defined BRDF requires both solar and view reflectance tables.")
+                raise ValueError(
+                    "User-defined BRDF requires both solar and view reflectance tables."
+                )
             if len(self.table_solar_zenith) != 13 or len(self.table_view_zenith) != 13:
                 raise ValueError("User-defined BRDF tables must have 13 azimuth rows.")
             if any(len(row) != 10 for row in self.table_solar_zenith + self.table_view_zenith):
@@ -669,13 +679,17 @@ class SixSSurfaceConfig(SIACBaseModel):
         default_factory=lambda: SixSSpectralReflectanceConfig(kind="constant", constant=0.0)
     )
     environment: SixSSpectralReflectanceConfig | None = None
-    radius_km: float = Field(default=1.0, gt=0.0, validation_alias=AliasChoices("radius_km", "radius"))
+    radius_km: float = Field(
+        default=1.0, gt=0.0, validation_alias=AliasChoices("radius_km", "radius")
+    )
     brdf: SixSBRDFConfig | None = None
 
     @model_validator(mode="after")
     def validate_surface(self) -> SixSSurfaceConfig:
         if self.mode == "heterogeneous_lambertian" and self.environment is None:
-            raise ValueError("Heterogeneous Lambertian surfaces require an `environment` reflectance.")
+            raise ValueError(
+                "Heterogeneous Lambertian surfaces require an `environment` reflectance."
+            )
         if self.mode == "homogeneous_brdf" and self.brdf is None:
             raise ValueError("BRDF surfaces require a `brdf` configuration.")
         return self
@@ -821,9 +835,7 @@ class RTAerosolSetupConfig(SIACBaseModel):
                     "rt.setup.aerosol.mixture must sum to 1.0 for user_mixture aerosol profiles."
                 )
         if self.profile != "user_mixture" and self.mixture is not None:
-            raise ValueError(
-                "rt.setup.aerosol.mixture is only valid when profile='user_mixture'."
-            )
+            raise ValueError("rt.setup.aerosol.mixture is only valid when profile='user_mixture'.")
         if self.profile in {"multimodal_log_normal", "modified_gamma", "junge_power_law"}:
             if self.distribution is None:
                 raise ValueError(
@@ -854,9 +866,7 @@ class RTAerosolSetupConfig(SIACBaseModel):
                 "rt.setup.aerosol.model_path must be provided when profile='user_model'."
             )
         if self.profile != "user_model" and self.model_path is not None:
-            raise ValueError(
-                "rt.setup.aerosol.model_path is only valid when profile='user_model'."
-            )
+            raise ValueError("rt.setup.aerosol.model_path is only valid when profile='user_model'.")
         return self
 
 
@@ -874,7 +884,9 @@ class RTSurfaceSetupConfig(SIACBaseModel):
     @model_validator(mode="after")
     def validate_surface(self) -> RTSurfaceSetupConfig:
         if self.mode == "heterogeneous_lambertian" and self.environment is None:
-            raise ValueError("Heterogeneous Lambertian surfaces require an `environment` reflectance.")
+            raise ValueError(
+                "Heterogeneous Lambertian surfaces require an `environment` reflectance."
+            )
         if self.mode == "homogeneous_brdf" and self.brdf is None:
             raise ValueError("BRDF surfaces require a `brdf` configuration.")
         return self
@@ -985,8 +997,7 @@ class SolverStageConfig(SIACBaseModel):
         overlap = set(self.solve) & set(self.fixed)
         if overlap:
             raise ValueError(
-                f"Solver stage {self.name!r} cannot both solve and fix "
-                f"{', '.join(sorted(overlap))}"
+                f"Solver stage {self.name!r} cannot both solve and fix {', '.join(sorted(overlap))}"
             )
         return self
 
@@ -1124,6 +1135,16 @@ class ExecutionRuntimeConfig(SIACBaseModel):
     @classmethod
     def normalize_report_path(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)
+
+    @field_validator("stage_timeouts")
+    @classmethod
+    def validate_stage_timeouts(cls, value: dict[str, float]) -> dict[str, float]:
+        for stage_name, timeout_s in value.items():
+            if not stage_name:
+                raise ValueError("stage_timeouts keys must be non-empty stage names")
+            if timeout_s <= 0.0:
+                raise ValueError("stage_timeouts values must be > 0")
+        return value
 
 
 class RuntimeConfig(SIACBaseModel):
@@ -1361,7 +1382,9 @@ class ResolvedConfig(_ConfigShortcutsMixin, SIACBaseModel):
         return self.run.sensor
 
     @property
-    def aoi(self) -> dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None:
+    def aoi(
+        self,
+    ) -> dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None:
         return self.run.aoi
 
     @property

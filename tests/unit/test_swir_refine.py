@@ -82,8 +82,18 @@ def _with_geo(data: xr.DataArray) -> xr.DataArray:
     resolution = 20.0
     xmin = 600000.0
     ymax = 4200000.0
-    x = np.linspace(xmin + resolution / 2.0, xmin + width * resolution - resolution / 2.0, width, dtype=np.float64)
-    y = np.linspace(ymax - resolution / 2.0, ymax - height * resolution + resolution / 2.0, height, dtype=np.float64)
+    x = np.linspace(
+        xmin + resolution / 2.0,
+        xmin + width * resolution - resolution / 2.0,
+        width,
+        dtype=np.float64,
+    )
+    y = np.linspace(
+        ymax - resolution / 2.0,
+        ymax - height * resolution + resolution / 2.0,
+        height,
+        dtype=np.float64,
+    )
     transform = rasterio.transform.from_origin(xmin, ymax, resolution, resolution)
     out = data.assign_coords({"x": x, "y": y}).rio.set_spatial_dims(x_dim="x", y_dim="y")
     return out.rio.write_crs("EPSG:32632").rio.write_transform(transform)
@@ -378,7 +388,11 @@ def test_query_surface_prior_from_monthly_database_corrects_on_query_grid(
             cloud_mask=(
                 cloud_mask
                 if cloud_mask is not None
-                else xr.DataArray(np.zeros(geometry.sza.shape, dtype=bool), dims=geometry.sza.dims, coords=geometry.sza.coords)
+                else xr.DataArray(
+                    np.zeros(geometry.sza.shape, dtype=bool),
+                    dims=geometry.sza.dims,
+                    coords=geometry.sza.coords,
+                )
             ),
         )
 
@@ -626,31 +640,41 @@ def test_query_surface_prior_from_monthly_database_caches_distance_metrics(tmp_p
         def predict_visible_with_diagnostics(self, corrected_reflectance, *, k_neighbors=3):  # noqa: ANN001
             del corrected_reflectance, k_neighbors
             coords = {"band": ["B02", "B03"], "y": [0, 1], "x": [0]}
-            predicted = _with_geo(xr.DataArray(
-                np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
-                dims=["band", "y", "x"],
-                coords=coords,
-            ))
-            predicted_unc = _with_geo(xr.DataArray(
-                np.full((2, 2, 1), 0.01, dtype=np.float32),
-                dims=["band", "y", "x"],
-                coords=coords,
-            ))
-            predicted_quality = _with_geo(xr.DataArray(
-                np.full((2, 1), 0.02, dtype=np.float32),
-                dims=["y", "x"],
-                coords={"y": [0, 1], "x": [0]},
-            ))
-            predicted_source_fit = _with_geo(xr.DataArray(
-                np.array([[0.01], [0.03]], dtype=np.float32),
-                dims=["y", "x"],
-                coords={"y": [0, 1], "x": [0]},
-            ))
-            predicted_distance = _with_geo(xr.DataArray(
-                np.array([[0.01], [0.09]], dtype=np.float32),
-                dims=["y", "x"],
-                coords={"y": [0, 1], "x": [0]},
-            ))
+            predicted = _with_geo(
+                xr.DataArray(
+                    np.array([[[0.1], [0.2]], [[0.15], [0.25]]], dtype=np.float32),
+                    dims=["band", "y", "x"],
+                    coords=coords,
+                )
+            )
+            predicted_unc = _with_geo(
+                xr.DataArray(
+                    np.full((2, 2, 1), 0.01, dtype=np.float32),
+                    dims=["band", "y", "x"],
+                    coords=coords,
+                )
+            )
+            predicted_quality = _with_geo(
+                xr.DataArray(
+                    np.full((2, 1), 0.02, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                )
+            )
+            predicted_source_fit = _with_geo(
+                xr.DataArray(
+                    np.array([[0.01], [0.03]], dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                )
+            )
+            predicted_distance = _with_geo(
+                xr.DataArray(
+                    np.array([[0.01], [0.09]], dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                )
+            )
             return SimpleNamespace(
                 predicted=predicted,
                 uncertainty=predicted_unc,
@@ -722,8 +746,12 @@ def test_build_monthly_composites_from_brdf_honors_explicit_period_selection() -
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -741,10 +769,17 @@ def test_build_monthly_composites_from_brdf_honors_explicit_period_selection() -
         year_months=((2023, 8), (2022, 7)),
     )
 
-    assert [(composite.year, composite.month) for composite in collection.composites] == [(2022, 7), (2023, 8)]
+    assert [(composite.year, composite.month) for composite in collection.composites] == [
+        (2022, 7),
+        (2023, 8),
+    ]
     assert len(provider.batch_calls) == 1
-    requested_sample_sets = [tuple(sample_dates) for sample_dates in provider.batch_calls[0]["sample_date_sets"]]
-    assert [(sample_dates[0].year, sample_dates[0].month) for sample_dates in requested_sample_sets] == [(2022, 7), (2023, 8)]
+    requested_sample_sets = [
+        tuple(sample_dates) for sample_dates in provider.batch_calls[0]["sample_date_sets"]
+    ]
+    assert [
+        (sample_dates[0].year, sample_dates[0].month) for sample_dates in requested_sample_sets
+    ] == [(2022, 7), (2023, 8)]
 
 
 def test_build_monthly_composites_from_brdf_rejects_duplicate_periods() -> None:
@@ -807,8 +842,12 @@ def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples(
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -819,7 +858,11 @@ def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples(
     provider = _FakeBRDFProvider()
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
 
     database = build_monthly_surface_prior_database(
         observation=obs,
@@ -839,7 +882,11 @@ def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples(
         for sample_dates in call["sample_date_sets"]
     ]
     assert len(all_sample_sets) == 15
-    july_call = next(sample_dates for sample_dates in all_sample_sets if sample_dates[0].year == 2023 and sample_dates[0].month == 7)
+    july_call = next(
+        sample_dates
+        for sample_dates in all_sample_sets
+        if sample_dates[0].year == 2023 and sample_dates[0].month == 7
+    )
     assert [dt.day for dt in july_call] == [1, 8, 15, 22, 29]
 
 
@@ -871,7 +918,9 @@ def test_forward_model_monthly_reflectance_uses_qa_based_reflectance_uncertainty
         f0_unc=xr.DataArray(huge_unc, dims=["time", "band", "y", "x"], coords=coords),
         f1_unc=xr.DataArray(huge_unc, dims=["time", "band", "y", "x"], coords=coords),
         f2_unc=xr.DataArray(huge_unc, dims=["time", "band", "y", "x"], coords=coords),
-        reflectance_unc=xr.DataArray(reflectance_unc, dims=["time", "band", "y", "x"], coords=coords),
+        reflectance_unc=xr.DataArray(
+            reflectance_unc, dims=["time", "band", "y", "x"], coords=coords
+        ),
     )
 
     _reflectance, quality, _reflectance_unc = _forward_model_monthly_reflectance(
@@ -934,8 +983,12 @@ def test_build_monthly_surface_prior_database_preserves_target_grid_metadata(
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -945,7 +998,11 @@ def test_build_monthly_surface_prior_database_preserves_target_grid_metadata(
 
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
     database = build_monthly_surface_prior_database(
         observation=obs,
         brdf_provider=_CoarseBRDFProvider(),
@@ -963,7 +1020,9 @@ def test_build_monthly_surface_prior_database_preserves_target_grid_metadata(
     assert tuple(database.median_summary.coords["y"].values.tolist()) == pytest.approx(
         tuple(geometry.sza.coords["y"].values.tolist())
     )
-    assert database.median_summary.rio.transform(recalc=True) == geometry.sza.rio.transform(recalc=True)
+    assert database.median_summary.rio.transform(recalc=True) == geometry.sza.rio.transform(
+        recalc=True
+    )
 
 
 def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
@@ -1003,7 +1062,9 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
 
         def get_temporal_brdf_parameters_batch(self, **kwargs):
             outputs = []
-            assert tuple(band.name for band in kwargs["bands"]) == tuple(band.name for band in source_bands)
+            assert tuple(band.name for band in kwargs["bands"]) == tuple(
+                band.name for band in source_bands
+            )
             for sample_dates in kwargs["sample_date_sets"]:
                 sample_dates = tuple(sample_dates)
                 coords = {
@@ -1012,14 +1073,20 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
                     "y": [0],
                     "x": [0],
                 }
-                base = np.array([0.08, 0.12, 0.42, 0.30, 0.22], dtype=np.float32).reshape(1, 5, 1, 1)
+                base = np.array([0.08, 0.12, 0.42, 0.30, 0.22], dtype=np.float32).reshape(
+                    1, 5, 1, 1
+                )
                 data = np.repeat(base, len(sample_dates), axis=0)
                 unc = np.full_like(data, 0.02)
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -1041,12 +1108,18 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
         def map(self, reflectance, *, source_uncertainty=None):  # noqa: ANN001
             mapped = xr.concat(
                 [
-                    reflectance.sel(band=self._source_name_by_target_name[name]).assign_coords(band=name)
+                    reflectance.sel(band=self._source_name_by_target_name[name]).assign_coords(
+                        band=name
+                    )
                     for name in self._target_band_names
                 ],
                 dim="band",
             ).assign_coords(band=self._target_band_names)
-            mapped_unc = xr.full_like(mapped, 0.03) if source_uncertainty is None else xr.full_like(mapped, 0.03)
+            mapped_unc = (
+                xr.full_like(mapped, 0.03)
+                if source_uncertainty is None
+                else xr.full_like(mapped, 0.03)
+            )
             mapped_fit = xr.zeros_like(mapped.mean(dim="band", skipna=True), dtype=np.float32)
             return mapped, mapped_unc, mapped_fit
 
@@ -1054,7 +1127,11 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
 
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
     database = build_monthly_surface_prior_database(
         observation=obs,
         brdf_provider=_MappedSourceBRDFProvider(),
@@ -1077,7 +1154,11 @@ def test_build_monthly_surface_prior_database_maps_same_name_different_response_
     captured: dict[str, object] = {}
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
     target_bands = (*visible_bands, *query_bands)
     source_bands = tuple(
         SensorBand(
@@ -1193,8 +1274,12 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -1262,7 +1347,11 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
 
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
     build_monthly_surface_prior_database(
         observation=obs,
         brdf_provider=_TwoSampleProvider(),
@@ -1314,7 +1403,9 @@ def test_normalize_monthly_composites_uses_area_when_target_grid_is_coarser(
         if da.ndim == 3 and "band" in da.dims:
             band_values = da.coords["band"].values
             return xr.DataArray(
-                np.full((len(band_values), target_shape[0], target_shape[1]), 0.2, dtype=np.float32),
+                np.full(
+                    (len(band_values), target_shape[0], target_shape[1]), 0.2, dtype=np.float32
+                ),
                 dims=["band", "y", "x"],
                 coords={"band": band_values, "y": template.coords["y"], "x": template.coords["x"]},
             )
@@ -1379,7 +1470,9 @@ def test_normalize_monthly_kernel_composites_uses_area_when_target_grid_is_coars
         if da.ndim == 3 and "band" in da.dims:
             band_values = da.coords["band"].values
             return xr.DataArray(
-                np.full((len(band_values), target_shape[0], target_shape[1]), 0.2, dtype=np.float32),
+                np.full(
+                    (len(band_values), target_shape[0], target_shape[1]), 0.2, dtype=np.float32
+                ),
                 dims=["band", "y", "x"],
                 coords={"band": band_values, "y": template.coords["y"], "x": template.coords["x"]},
             )
@@ -1447,7 +1540,9 @@ def test_normalize_monthly_composites_folds_source_fit_rmse_into_quality() -> No
                     0.2,
                     dtype=np.float32,
                 ),
-                dims=["time", "band", "y", "x"] if "time" in reflectance.dims else ["band", "y", "x"],
+                dims=["time", "band", "y", "x"]
+                if "time" in reflectance.dims
+                else ["band", "y", "x"],
                 coords=(
                     {
                         "time": reflectance.coords["time"],
@@ -1465,7 +1560,11 @@ def test_normalize_monthly_composites_folds_source_fit_rmse_into_quality() -> No
             )
             mapped_unc = xr.zeros_like(mapped, dtype=np.float32)
             fit = xr.DataArray(
-                np.full(tuple(reflectance.sizes[dim] for dim in reflectance.dims if dim != "band"), 0.04, dtype=np.float32),
+                np.full(
+                    tuple(reflectance.sizes[dim] for dim in reflectance.dims if dim != "band"),
+                    0.04,
+                    dtype=np.float32,
+                ),
                 dims=tuple(dim for dim in reflectance.dims if dim != "band"),
                 coords={dim: reflectance.coords[dim] for dim in reflectance.dims if dim != "band"},
             )
@@ -1527,14 +1626,20 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
                     "y": [0],
                     "x": [0],
                 }
-                base = np.array([0.08, 0.12, 0.42, 0.30, 0.22], dtype=np.float32).reshape(1, 5, 1, 1)
+                base = np.array([0.08, 0.12, 0.42, 0.30, 0.22], dtype=np.float32).reshape(
+                    1, 5, 1, 1
+                )
                 data = np.repeat(base, len(sample_dates), axis=0)
                 unc = np.full_like(data, 0.02)
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -1600,7 +1705,11 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
 
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
     database = build_monthly_surface_prior_database(
         observation=obs,
         brdf_provider=_ConstantSourceBRDFProvider(),
@@ -1641,7 +1750,11 @@ def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_ban
     )
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
 
     class _BandSequence:
         def __init__(self, bands: tuple[SensorBand, ...]) -> None:
@@ -1676,11 +1789,21 @@ def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_ban
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=time_coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=time_coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=time_coords),
-                        f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=time_coords),
-                        f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=time_coords),
-                        f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=time_coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=time_coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=time_coords
+                        ),
+                        f0_unc=xr.DataArray(
+                            unc, dims=["time", "band", "y", "x"], coords=time_coords
+                        ),
+                        f1_unc=xr.DataArray(
+                            unc, dims=["time", "band", "y", "x"], coords=time_coords
+                        ),
+                        f2_unc=xr.DataArray(
+                            unc, dims=["time", "band", "y", "x"], coords=time_coords
+                        ),
                     )
                 )
             return outputs
@@ -1722,7 +1845,11 @@ def test_build_monthly_surface_prior_database_falls_back_to_target_bands_when_pr
     )
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
     batch_band_calls: list[list[str]] = []
 
     class _LegacyBRDFProvider:
@@ -1742,8 +1869,12 @@ def test_build_monthly_surface_prior_database_falls_back_to_target_bands_when_pr
                 outputs.append(
                     BRDFKernelWeights(
                         f0=xr.DataArray(data, dims=["time", "band", "y", "x"], coords=coords),
-                        f1=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
-                        f2=xr.DataArray(np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords),
+                        f1=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
+                        f2=xr.DataArray(
+                            np.zeros_like(data), dims=["time", "band", "y", "x"], coords=coords
+                        ),
                         f0_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f1_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
                         f2_unc=xr.DataArray(unc, dims=["time", "band", "y", "x"], coords=coords),
@@ -1786,7 +1917,11 @@ def test_build_monthly_surface_prior_database_requires_batch_method() -> None:
     )
     sensor_config = _sensor_config()
     visible_bands = [sensor_config.get_band("B02"), sensor_config.get_band("B03")]
-    query_bands = [sensor_config.get_band("B08"), sensor_config.get_band("B11"), sensor_config.get_band("B12")]
+    query_bands = [
+        sensor_config.get_band("B08"),
+        sensor_config.get_band("B11"),
+        sensor_config.get_band("B12"),
+    ]
 
     with pytest.raises(TypeError, match="get_temporal_brdf_parameters_batch"):
         build_monthly_surface_prior_database(

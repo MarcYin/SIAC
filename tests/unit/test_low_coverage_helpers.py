@@ -27,7 +27,9 @@ from siac.config.snapshot import (
 from siac.workflows.sentinel2 import process_s2
 
 
-def test_process_s2_resolves_config_auth_and_delegates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_process_s2_resolves_config_auth_and_delegates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = SIACConfig(sensor="auto", aoi={"type": "Point", "coordinates": [0.0, 0.0]})
     request = Sentinel2ProcessRequest(
         config=config,
@@ -57,7 +59,9 @@ def test_process_s2_resolves_config_auth_and_delegates(monkeypatch: pytest.Monke
         return "done"
 
     monkeypatch.setitem(process_s2.__globals__, "resolve_run_config", _fake_resolve_run_config)
-    monkeypatch.setitem(process_s2.__globals__, "CredentialManager", SimpleNamespace(from_config=_fake_from_config))
+    monkeypatch.setitem(
+        process_s2.__globals__, "CredentialManager", SimpleNamespace(from_config=_fake_from_config)
+    )
     monkeypatch.setitem(process_s2.__globals__, "process_scene", _fake_process_scene)
 
     out = process_s2(request, resolve_s2_input_fn=_fake_resolve_s2_input)
@@ -80,7 +84,9 @@ def test_process_s2_resolves_config_auth_and_delegates(monkeypatch: pytest.Monke
     assert scene_request.auth is auth_obj
 
 
-def test_process_s2_uses_default_scene_resolver(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_process_s2_uses_default_scene_resolver(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = SIACConfig(sensor="s2")
     auth_obj = object()
     request = Sentinel2ProcessRequest(
@@ -107,7 +113,9 @@ def test_process_s2_uses_default_scene_resolver(monkeypatch: pytest.MonkeyPatch,
         return "done"
 
     monkeypatch.setitem(process_s2.__globals__, "resolve_run_config", _fake_resolve_run_config)
-    monkeypatch.setitem(process_s2.__globals__, "resolve_s2_scene_input", _fake_resolve_s2_scene_input)
+    monkeypatch.setitem(
+        process_s2.__globals__, "resolve_s2_scene_input", _fake_resolve_s2_scene_input
+    )
     monkeypatch.setitem(process_s2.__globals__, "process_scene", _fake_process_scene)
 
     out = process_s2(request)
@@ -193,7 +201,9 @@ def test_write_runtime_snapshot_serializes_state(tmp_path: Path) -> None:
     assert content["state"]["config"]["run"]["input_path"].endswith("scene.SAFE")
 
 
-def test_config_wrapper_helpers_and_loaders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_config_wrapper_helpers_and_loaders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = SIACConfig(sensor="s2")
     toml_path = tmp_path / "config.toml"
     config.to_toml(toml_path)
@@ -231,7 +241,9 @@ def test_load_helpers_cover_default_path_and_suffixless_output(
     assert written.exists()
 
 
-def test_write_state_snapshot_delegates_to_runtime_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_write_state_snapshot_delegates_to_runtime_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = SIACConfig(sensor="l8", aoi={"kind": "bbox"})
     snapshot_path = tmp_path / "runtime.yaml"
     captured: dict[str, object] = {}
@@ -267,7 +279,9 @@ def test_write_state_snapshot_delegates_to_runtime_snapshot(monkeypatch: pytest.
     assert captured["write_runtime_snapshot"]["redact_secrets"] is False
 
 
-def test_build_rt_model_covers_emulator_lut_and_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_rt_model_covers_emulator_lut_and_error_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _FakeEmulator:
         instances: list[dict[str, object | None]] = []
 

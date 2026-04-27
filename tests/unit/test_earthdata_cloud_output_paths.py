@@ -25,8 +25,12 @@ def _correction_result(
 ) -> CorrectionResult:
     coords = {"y": [0, 1], "x": [0, 1]}
     boa_vars: dict[str, xr.DataArray] = {
-        "B03": xr.DataArray(np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coords),
-        "B02": xr.DataArray(np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coords),
+        "B03": xr.DataArray(
+            np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
+        "B02": xr.DataArray(
+            np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
     }
     if include_rgb:
         boa_vars["B04"] = xr.DataArray(
@@ -67,17 +71,24 @@ def test_earthdata_helpers_cover_selection_grid_and_merge_paths(
     p1 = tmp_path / "p1.hdf"
     p2 = tmp_path / "p2.hdf"
 
-    assert earthdata_mod.select_candidate_paths(
-        [],
-        obs_time=datetime(2024, 1, 2),
-        bounds=(0.0, 0.0, 1.0, 1.0),
-        crs="EPSG:4326",
-    ) == []
+    assert (
+        earthdata_mod.select_candidate_paths(
+            [],
+            obs_time=datetime(2024, 1, 2),
+            bounds=(0.0, 0.0, 1.0, 1.0),
+            crs="EPSG:4326",
+        )
+        == []
+    )
 
     monkeypatch.setattr(
         earthdata_mod,
         "parse_granule_date",
-        lambda path: (_ for _ in ()).throw(RuntimeError("bad metadata")) if path == p0 else datetime(2024, 1, 2, 12, 0, 0),
+        lambda path: (
+            (_ for _ in ()).throw(RuntimeError("bad metadata"))
+            if path == p0
+            else datetime(2024, 1, 2, 12, 0, 0)
+        ),
     )
     assert earthdata_mod.select_candidate_paths(
         [p0, p1],
@@ -124,13 +135,17 @@ def test_earthdata_helpers_cover_selection_grid_and_merge_paths(
     assert none_selected == []
 
     with pytest.raises(ValueError, match="target resolution must be > 0"):
-        earthdata_mod.target_grid_coords((0.0, 0.0, 1.0, 1.0), 0.0, resolution_name="target resolution")
+        earthdata_mod.target_grid_coords(
+            (0.0, 0.0, 1.0, 1.0), 0.0, resolution_name="target resolution"
+        )
 
     grid = earthdata_mod.constant_target_array((0.0, 0.0, 2.0, 2.0), 1.0, 3.5)
     assert grid.shape == (2, 2)
     assert float(grid.values[0, 0]) == pytest.approx(3.5)
 
-    band_grid = earthdata_mod.constant_target_band_array(["B02", "B03"], (0.0, 0.0, 2.0, 2.0), 1.0, 7.0)
+    band_grid = earthdata_mod.constant_target_band_array(
+        ["B02", "B03"], (0.0, 0.0, 2.0, 2.0), 1.0, 7.0
+    )
     assert band_grid.dims == ("band", "y", "x")
     assert band_grid.coords["band"].values.tolist() == ["B02", "B03"]
 
@@ -171,7 +186,9 @@ def test_omnicloudmask_helpers_cover_import_and_normalization_paths(
     with pytest.raises(ImportError, match="omnicloudmask is required"):
         OmniCloudMaskProvider()._default_predictor()
 
-    template = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]})
+    template = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
+    )
     single_channel = OmniCloudMaskProvider._normalize_raw_output(
         np.array([[[1, 2], [3, 4]]], dtype=np.uint8),
         template,
@@ -192,13 +209,17 @@ def test_omnicloudmask_helpers_cover_import_and_normalization_paths(
 
 
 def test_omnicloudmask_predict_honors_custom_mapping_and_missing_mask() -> None:
-    red = xr.DataArray(np.array([[0.1, np.nan]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0, 1]})
-    green = xr.DataArray(np.array([[0.2, 0.3]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0, 1]})
-    nir = xr.DataArray(np.array([[0.4, 0.5]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0, 1]})
-
-    provider = OmniCloudMaskProvider(
-        predictor=lambda _rgbnir: np.array([[0, 1]], dtype=np.uint8)
+    red = xr.DataArray(
+        np.array([[0.1, np.nan]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0, 1]}
     )
+    green = xr.DataArray(
+        np.array([[0.2, 0.3]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0, 1]}
+    )
+    nir = xr.DataArray(
+        np.array([[0.4, 0.5]], dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0, 1]}
+    )
+
+    provider = OmniCloudMaskProvider(predictor=lambda _rgbnir: np.array([[0, 1]], dtype=np.uint8))
     out = provider.predict(
         red,
         green,
@@ -240,7 +261,9 @@ def test_output_writer_array_formats_cover_uncertainty_aux_and_quicklook(
             include_rgb=True,
         )
     )
-    artifacts = writer.write(_correction_result(include_uncertainty=True, include_rgb=True), tmp_path)
+    artifacts = writer.write(
+        _correction_result(include_uncertainty=True, include_rgb=True), tmp_path
+    )
 
     prefix = "SAT_L2A_00000000T000000"
     assert artifacts["boa"] == tmp_path / f"{prefix}_BOA{ext}"
@@ -290,8 +313,18 @@ def test_output_writer_rgb_helper_returns_none_when_disabled_or_missing_bands(tm
     prefix = "SAT_L2A_00000000T000000"
     defaults = OutputDefaultsConfig(include_rgb=False)
     writer = output_mod.ConfiguredOutputWriter(defaults)
-    assert writer._write_rgb_if_available(_correction_result(include_uncertainty=False, include_rgb=True), tmp_path, prefix) is None
+    assert (
+        writer._write_rgb_if_available(
+            _correction_result(include_uncertainty=False, include_rgb=True), tmp_path, prefix
+        )
+        is None
+    )
 
     defaults = OutputDefaultsConfig(include_rgb=True)
     writer = output_mod.ConfiguredOutputWriter(defaults)
-    assert writer._write_rgb_if_available(_correction_result(include_uncertainty=False, include_rgb=False), tmp_path, prefix) is None
+    assert (
+        writer._write_rgb_if_available(
+            _correction_result(include_uncertainty=False, include_rgb=False), tmp_path, prefix
+        )
+        is None
+    )

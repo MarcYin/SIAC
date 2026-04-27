@@ -43,13 +43,17 @@ def test_cdse_helpers_cover_header_revocation_and_exchange_validation(
 ) -> None:
     manager = auth_mod.CredentialManager()
     manager.set_credentials("cdse", key="user", secret="secret")
-    manager._oauth_tokens["cdse"] = auth_mod.OAuthToken(access_token="cached-token", expires_at=float("inf"))
+    manager._oauth_tokens["cdse"] = auth_mod.OAuthToken(
+        access_token="cached-token", expires_at=float("inf")
+    )
 
     delete_calls: dict[str, Any] = {}
     monkeypatch.setattr(
         auth_mod.requests,
         "delete",
-        lambda url, **kwargs: delete_calls.update({"url": url, "kwargs": kwargs}) or _FakeResponse({}),
+        lambda url, **kwargs: (
+            delete_calls.update({"url": url, "kwargs": kwargs}) or _FakeResponse({})
+        ),
     )
 
     assert manager.cdse().authorization_header() == {"Authorization": "Bearer cached-token"}
@@ -79,7 +83,9 @@ def test_cdse_wait_and_temporary_context_cover_failure_and_verify_false(
         def ls(self, path: str, detail: bool = False) -> list[str]:  # noqa: ARG002
             raise PermissionError(path)
 
-    monkeypatch.setattr(auth_mod, "import_module", lambda _name: SimpleNamespace(S3FileSystem=_AlwaysFailS3FS))
+    monkeypatch.setattr(
+        auth_mod, "import_module", lambda _name: SimpleNamespace(S3FileSystem=_AlwaysFailS3FS)
+    )
     monkeypatch.setattr(auth_mod.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(AuthenticationError, match="did not become active"):
@@ -94,12 +100,16 @@ def test_cdse_wait_and_temporary_context_cover_failure_and_verify_false(
     monkeypatch.setattr(
         manager.cdse(),
         "revoke_temporary_s3_credentials",
-        lambda access_key_id, timeout=60: seen.setdefault("revoked", []).append((access_key_id, timeout)),
+        lambda access_key_id, timeout=60: seen.setdefault("revoked", []).append(
+            (access_key_id, timeout)
+        ),
     )
     monkeypatch.setattr(
         manager.cdse(),
         "wait_for_temporary_s3_credentials",
-        lambda credentials, activation_delays=(0, 1, 2, 4): seen.setdefault("waited", []).append(activation_delays),  # noqa: ARG005
+        lambda _credentials, activation_delays=(0, 1, 2, 4): seen.setdefault("waited", []).append(
+            activation_delays
+        ),
     )
 
     with manager.cdse().temporary_s3_credentials(timeout=7, verify=False) as yielded:
@@ -118,7 +128,9 @@ def test_cds_aws_and_gcs_helpers_cover_empty_and_success_paths(
     assert manager.cds().client_kwargs() == {}
 
     manager.set_credentials("cds", key="api-key")
-    monkeypatch.setattr(auth_mod, "import_module", lambda _name: SimpleNamespace(Client=lambda **kwargs: kwargs))
+    monkeypatch.setattr(
+        auth_mod, "import_module", lambda _name: SimpleNamespace(Client=lambda **kwargs: kwargs)
+    )
     assert manager.cds().make_client(timeout=30) == {"key": "api-key", "timeout": 30}
 
     manager.set_credentials("aws", key="AK", secret=None)
@@ -163,7 +175,9 @@ def test_earthdata_environment_and_source_kwargs_cover_restore_and_errors(
         def __init__(self, **kwargs: Any) -> None:
             self.kwargs = kwargs
 
-    monkeypatch.setattr("siac.adapters.data.earthaccess_source.EarthAccessSource", _FakeEarthAccessSource)
+    monkeypatch.setattr(
+        "siac.adapters.data.earthaccess_source.EarthAccessSource", _FakeEarthAccessSource
+    )
     source = manager.earthdata().build_earthaccess_source(provider="LPDAAC_ECS", extra="x")
     assert source.kwargs["provider"] == "LPDAAC_ECS"
     assert source.kwargs["extra"] == "x"

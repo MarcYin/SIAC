@@ -22,6 +22,7 @@ from numpy import typing as npt
 
 from siac.adapters.data.water_mask import DEFAULT_WATER_MASK_VRT_URL
 from siac.algorithms.solver import build_solver_valid_mask
+from siac.errors import ValidationError as SIACValidationError
 from siac.observability import (
     ExecutionObserver,
     bind_execution_observer,
@@ -67,6 +68,16 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+_NON_RETRYABLE_EXCEPTIONS = (
+    SIACValidationError,
+    ValueError,
+    TypeError,
+    AssertionError,
+    AttributeError,
+    KeyError,
+    NotImplementedError,
+)
+
 Float32Array: TypeAlias = npt.NDArray[np.float32]
 
 PreprocessorFn = Callable[[Path, Any], ObservationBundle]
@@ -78,6 +89,23 @@ SurfacePriorFn = Callable[[ObservationBundle, AtmosphericState | None, Any, floa
 GridAssemblerFn = Callable[..., SolverInputBundle]
 SolverFn = Callable[[SolverInputBundle, Any], SolvedAtmosphere]
 CorrectorFn = Callable[..., CorrectionResult]
+
+
+def _is_retryable_exception(exc: BaseException) -> bool:
+    return not isinstance(exc, _NON_RETRYABLE_EXCEPTIONS)
+
+
+def _stage_timeout(settings: dict[str, Any], *stage_names: str) -> float | None:
+    stage_timeouts = settings.get("stage_timeouts", {})
+    if isinstance(stage_timeouts, dict):
+        for stage_name in stage_names:
+            timeout = stage_timeouts.get(stage_name)
+            if timeout is not None:
+                return float(timeout)
+    timeout = settings.get("stage_timeout_s")
+    return None if timeout is None else float(timeout)
+
+
 _OUTPUTS_WRITTEN_METADATA_KEY = "_siac_outputs_written"
 
 # Pure config-extraction helpers live in a companion module; re-export them
@@ -179,7 +207,9 @@ def _build_aot_scatter_diagnostics(
         aot=_finite_diagnostic_field(atmo_state.aot, solver_inputs.atmo_prior.aot),
         tcwv=_finite_diagnostic_field(atmo_state.tcwv, solver_inputs.atmo_prior.tcwv),
         tco3=_finite_diagnostic_field(atmo_state.tco3, solver_inputs.atmo_prior.tco3),
-        elevation=_finite_diagnostic_field(atmo_state.elevation, solver_inputs.atmo_prior.elevation),
+        elevation=_finite_diagnostic_field(
+            atmo_state.elevation, solver_inputs.atmo_prior.elevation
+        ),
         aot_unc=atmo_state.aot_unc,
         tcwv_unc=atmo_state.tcwv_unc,
         tco3_unc=atmo_state.tco3_unc,
@@ -224,9 +254,15 @@ def _build_aot_scatter_diagnostics(
         diagnostics.append(
             AOTScatterBandDiagnostics(
                 band_name=band.name,
-                surface_reflectance=_sample_scatter_values(surface_values, max_points=max_points_per_band),
-                observed_toa=_sample_scatter_values(observed_values, max_points=max_points_per_band),
-                simulated_toa=_sample_scatter_values(simulated_values, max_points=max_points_per_band),
+                surface_reflectance=_sample_scatter_values(
+                    surface_values, max_points=max_points_per_band
+                ),
+                observed_toa=_sample_scatter_values(
+                    observed_values, max_points=max_points_per_band
+                ),
+                simulated_toa=_sample_scatter_values(
+                    simulated_values, max_points=max_points_per_band
+                ),
                 total_valid_count=int(np.count_nonzero(band_valid)),
             )
         )
@@ -331,7 +367,9 @@ def _banded_dataarray_to_dataset(
     if "band" not in data.dims:
         return xr.Dataset({default_name: copy_spatial_metadata_like(data, template)})
 
-    band_values = data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
+    band_values = (
+        data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
+    )
     return xr.Dataset(
         {
             _band_name(band, index): copy_spatial_metadata_like(
@@ -361,7 +399,9 @@ def _monthly_composite_outputs(
                 template=template,
             ),
             quality=copy_spatial_metadata_like(composite.quality.astype(np.float32), template),
-            sample_index=copy_spatial_metadata_like(composite.sample_index.astype(np.int16), template),
+            sample_index=copy_spatial_metadata_like(
+                composite.sample_index.astype(np.int16), template
+            ),
         )
     return outputs
 
@@ -405,8 +445,7 @@ def _call_grid_assembler(
 
     if signature is not None:
         accepts_kwargs = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in signature.parameters.values()
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
         )
         supported_kwargs = (
             kwargs
@@ -423,7 +462,10 @@ def _call_grid_assembler(
             exc_info=True,
         )
         return grid_assembler(
-            obs, atmo, surface, rt_model,
+            obs,
+            atmo,
+            surface,
+            rt_model,
             aerosol_resolution_m=aerosol_resolution_m,
         )
 
@@ -455,7 +497,7 @@ def _call_with_retries(
                 duration = time.monotonic() - t0
                 if observer is not None:
                     observer.increment_counter("attempts_failed", stage=stage_name)
-                if attempt >= retries:
+                if attempt >= retries or not _is_retryable_exception(exc):
                     raise
                 if observer is not None:
                     observer.record_retry(
@@ -554,8 +596,7 @@ def _call_corrector(
     except (TypeError, ValueError):
         return corrector(obs, solved, rt_model)
     if "output_stream" not in signature.parameters and not any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in signature.parameters.values()
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
     ):
         return corrector(obs, solved, rt_model)
     return corrector(obs, solved, rt_model, output_stream=output_stream)
@@ -581,7 +622,9 @@ def _run_tail(
     paths_config = getattr(config, "paths", None)
     water_mask_path = getattr(paths_config, "water_mask", None) or DEFAULT_WATER_MASK_VRT_URL
     cache_root = getattr(paths_config, "cache_root", None)
-    water_mask_cache_dir = None if cache_root is None else Path(cache_root).expanduser() / "water-mask"
+    water_mask_cache_dir = (
+        None if cache_root is None else Path(cache_root).expanduser() / "water-mask"
+    )
     water_mask_buffer_pixels = int(getattr(solver_config, "water_mask_buffer_pixels", 0))
     solver_band_names = _requested_solver_band_names(config)
 
@@ -764,7 +807,9 @@ def _fetch_priors(
     """
     observer = current_execution_observer()
     observer_id = observer.run_id if observer is not None else None
-    timeout = settings["stage_timeout_s"]
+    m2_timeout = _stage_timeout(settings, "M2.atmospheric_prior", "M2", "atmospheric_prior")
+    m3_timeout = _stage_timeout(settings, "M3.surface_prior", "M3", "surface_prior")
+    lut_timeout = _stage_timeout(settings, "LUT.preload", "LUT", "lut_preload")
     retries = settings["retries"]
     resolution = _aerosol_resolution(config)
     requires_atmo = _surface_prior_requires_atmo(surface_prior_provider)
@@ -780,7 +825,9 @@ def _fetch_priors(
     )
     if observer is not None:
         observer.increment_counter("m2_started", stage="M2.atmospheric_prior")
-        observer.emit("progress", stage="M2.atmospheric_prior", message="Atmospheric prior submitted.")
+        observer.emit(
+            "progress", stage="M2.atmospheric_prior", message="Atmospheric prior submitted."
+        )
 
     f_m3 = None
     if not requires_atmo:
@@ -804,8 +851,12 @@ def _fetch_priors(
         logger.info("M2: Fetching atmospheric prior...")
 
     f_lut = None
+    timeout_stage = "M2/M3"
+    active_timeout: float | None = None
     try:
-        atmo = f_m2.result(timeout=timeout)
+        timeout_stage = "M2.atmospheric_prior"
+        active_timeout = m2_timeout
+        atmo = f_m2.result(timeout=m2_timeout)
         if observer is not None:
             observer.increment_counter("m2_done", stage="M2.atmospheric_prior")
             observer.emit(
@@ -840,7 +891,9 @@ def _fetch_priors(
             retries=retries,
             observer_id=observer_id,
         )
-        surface = f_m3.result(timeout=timeout)
+        timeout_stage = "M3.surface_prior"
+        active_timeout = m3_timeout
+        surface = f_m3.result(timeout=m3_timeout)
         if observer is not None:
             observer.increment_counter("m3_done", stage="M3.surface_prior")
             observer.emit(
@@ -850,7 +903,7 @@ def _fetch_priors(
             )
         if f_lut is not None:
             try:
-                f_lut.result(timeout=timeout)
+                f_lut.result(timeout=lut_timeout)
                 if observer is not None:
                     observer.increment_counter("lut_preload_done", stage="LUT.preload")
                     observer.emit(
@@ -859,16 +912,19 @@ def _fetch_priors(
                         message="LUT preload complete.",
                     )
             except FuturesTimeoutError:
-                if observer is not None and timeout is not None:
+                if observer is not None and lut_timeout is not None:
                     observer.record_timeout(
                         stage="LUT.preload",
-                        timeout_s=float(timeout),
+                        timeout_s=float(lut_timeout),
                         backend=backend_label,
                     )
-                logger.warning(
-                    "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
-                    float(timeout),
-                )
+                if lut_timeout is not None:
+                    logger.warning(
+                        "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
+                        float(lut_timeout),
+                    )
+                else:
+                    logger.warning("LUT preload timed out; proceeding with on-demand LUT reads.")
             except (OSError, RuntimeError, ValueError) as exc:
                 if observer is not None:
                     observer.record_error(
@@ -887,14 +943,17 @@ def _fetch_priors(
             f_m3.cancel()
         if f_lut is not None:
             f_lut.cancel()
-        if observer is not None and timeout is not None:
+        if observer is not None and active_timeout is not None:
             observer.record_timeout(
-                stage="M2/M3",
-                timeout_s=float(timeout),
+                stage=timeout_stage,
+                timeout_s=float(active_timeout),
                 backend=backend_label,
             )
+        timeout_description = (
+            f" after {float(active_timeout):.1f}s" if active_timeout is not None else ""
+        )
         raise TimeoutError(
-            f"M2/M3 timed out after {float(timeout):.1f}s ({backend_label} backend)"
+            f"{timeout_stage} timed out{timeout_description} ({backend_label} backend)"
         ) from exc
     except Exception:
         f_m2.cancel()

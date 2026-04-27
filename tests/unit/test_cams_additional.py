@@ -86,7 +86,11 @@ def test_load_cams_data_handles_non_directory_and_failed_local_candidates(
     fallback = CAMSProvider(local_dir, download_missing=False)
     monkeypatch.setattr(fallback, "_load_from_explicit_path", lambda _path: None)
     monkeypatch.setattr(fallback, "_load_cams_tif_group", lambda _date, _iso: None)
-    monkeypatch.setattr(xr, "open_mfdataset", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad nc")))
+    monkeypatch.setattr(
+        xr,
+        "open_mfdataset",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad nc")),
+    )
     assert fallback._load_cams_data(datetime(2024, 1, 1)) is None
 
 
@@ -105,7 +109,9 @@ def test_load_cams_data_uses_open_dataset_for_single_local_netcdf(
     monkeypatch.setattr(
         xr,
         "open_mfdataset",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("open_mfdataset should not be used")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("open_mfdataset should not be used")
+        ),
     )
 
     loaded = provider._load_cams_data(datetime(2024, 1, 1))
@@ -179,7 +185,9 @@ def test_complete_cams_dataset_handles_complete_and_empty_fallbacks(
     assert provider._complete_cams_dataset(complete, datetime(2024, 1, 1)).equals(complete)
 
     partial = _dataset(("aod550",))
-    empty_fallback = xr.Dataset({"other": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"])})
+    empty_fallback = xr.Dataset(
+        {"other": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["latitude", "longitude"])}
+    )
     cds = _dataset(("tcwv", "gtco3"))
     calls: list[str] = []
 
@@ -219,7 +227,9 @@ def test_select_longitude_window_and_standardize_temporal_dim_edge_cases(tmp_pat
     descending_wrap = provider._select_longitude_window(descending, xmin=25.0, xmax=10.0)
     descending_left_only = provider._select_longitude_window(descending, xmin=10.0, xmax=-5.0)
     assert np.array_equal(descending_wrap.coords["longitude"].values, np.array([10.0, 5.0, 0.0]))
-    assert np.array_equal(descending_left_only.coords["longitude"].values, np.array([20.0, 15.0, 10.0]))
+    assert np.array_equal(
+        descending_left_only.coords["longitude"].values, np.array([20.0, 15.0, 10.0])
+    )
 
     valid_time_2d = xr.DataArray(
         np.array([[np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T03:00:00")]]),
@@ -244,20 +254,31 @@ def test_select_longitude_window_and_standardize_temporal_dim_edge_cases(tmp_pat
         dims=["forecast_period", "longitude"],
         coords={"forecast_period": np.array([0, 3], dtype="timedelta64[h]"), "longitude": [0.0]},
     )
-    assert provider._standardize_temporal_dims(without_valid_time, datetime(2024, 1, 1)).identical(without_valid_time)
+    assert provider._standardize_temporal_dims(without_valid_time, datetime(2024, 1, 1)).identical(
+        without_valid_time
+    )
 
     mismatch_valid_time = xr.DataArray(
         np.ones((2, 2, 1), dtype=np.float32),
         dims=["forecast_reference_time", "forecast_period", "longitude"],
         coords={
-            "forecast_reference_time": [np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T06:00:00")],
+            "forecast_reference_time": [
+                np.datetime64("2024-01-01T00:00:00"),
+                np.datetime64("2024-01-01T06:00:00"),
+            ],
             "forecast_period": np.array([0, 3], dtype="timedelta64[h]"),
             "valid_time": (
                 ("forecast_reference_time", "forecast_period"),
                 np.array(
                     [
-                        [np.datetime64("2024-01-01T00:00:00"), np.datetime64("2024-01-01T03:00:00")],
-                        [np.datetime64("2024-01-01T06:00:00"), np.datetime64("2024-01-01T09:00:00")],
+                        [
+                            np.datetime64("2024-01-01T00:00:00"),
+                            np.datetime64("2024-01-01T03:00:00"),
+                        ],
+                        [
+                            np.datetime64("2024-01-01T06:00:00"),
+                            np.datetime64("2024-01-01T09:00:00"),
+                        ],
                     ],
                 ),
             ),
@@ -272,11 +293,18 @@ def test_select_longitude_window_and_standardize_temporal_dim_edge_cases(tmp_pat
         dims=["forecast_period", "longitude"],
         coords={
             "forecast_period": np.array([0, 3], dtype="timedelta64[h]"),
-            "valid_time": (("forecast_period", "longitude"), np.array([[np.datetime64("2024-01-01T00:00:00")], [np.datetime64("2024-01-01T03:00:00")]])),
+            "valid_time": (
+                ("forecast_period", "longitude"),
+                np.array(
+                    [[np.datetime64("2024-01-01T00:00:00")], [np.datetime64("2024-01-01T03:00:00")]]
+                ),
+            ),
             "longitude": [0.0],
         },
     )
-    assert provider._standardize_temporal_dims(bad_valid_time, datetime(2024, 1, 1)).identical(bad_valid_time)
+    assert provider._standardize_temporal_dims(bad_valid_time, datetime(2024, 1, 1)).identical(
+        bad_valid_time
+    )
 
 
 def test_normalize_source_and_storage_context_helpers(
@@ -328,7 +356,9 @@ def test_normalize_source_and_storage_context_helpers(
         assert opts == {"key": "AWS_KEY", "secret": "AWS_SECRET"}
 
     no_auth_provider = CAMSProvider("https://example.com/cams/")
-    with no_auth_provider._remote_storage_options_context("https://example.com/cams/file.nc") as opts:
+    with no_auth_provider._remote_storage_options_context(
+        "https://example.com/cams/file.nc"
+    ) as opts:
         assert opts == {}
 
 
@@ -354,8 +384,12 @@ def test_extract_variable_adds_halo_before_reprojection(tmp_path: Path) -> None:
     extracted = provider._extract_variable(data, "tcwv", bounds, crs, 60.0, obs_time)
 
     assert extracted.shape == (5, 5)
-    assert np.array_equal(extracted.coords["latitude"].values, np.array([35.6, 35.2, 34.8, 34.4, 34.0]))
-    assert np.array_equal(extracted.coords["longitude"].values, np.array([118.0, 118.4, 118.8, 119.2, 119.6]))
+    assert np.array_equal(
+        extracted.coords["latitude"].values, np.array([35.6, 35.2, 34.8, 34.4, 34.0])
+    )
+    assert np.array_equal(
+        extracted.coords["longitude"].values, np.array([118.0, 118.4, 118.8, 119.2, 119.6])
+    )
 
 
 def test_remote_cache_and_loading_helpers_cover_error_paths(
@@ -392,7 +426,9 @@ def test_remote_cache_and_loading_helpers_cover_error_paths(
         ),
     )
 
-    s3_cached = provider._cache_remote_file("s3://eodata/CAMS/GLOBAL/2024/01/01/file.nc", storage_options={"anon": True})
+    s3_cached = provider._cache_remote_file(
+        "s3://eodata/CAMS/GLOBAL/2024/01/01/file.nc", storage_options={"anon": True}
+    )
     assert s3_cached.exists()
     assert fake_fs.calls[0][0] == "eodata/CAMS/GLOBAL/2024/01/01/file.nc"
 
@@ -414,14 +450,22 @@ def test_remote_cache_and_loading_helpers_cover_error_paths(
 
     monkeypatch.setattr(provider, "_cache_remote_file", missing_cache)
     with caplog.at_level("WARNING"):
-        assert provider._cache_remote_path_with_options(
-            "s3://eodata/CAMS/GLOBAL/missing.nc",
-            missing_ok=False,
-            storage_options={},
-        ) is None
+        assert (
+            provider._cache_remote_path_with_options(
+                "s3://eodata/CAMS/GLOBAL/missing.nc",
+                missing_ok=False,
+                storage_options={},
+            )
+            is None
+        )
     assert "not found" in caplog.text or "Failed to cache" in caplog.text
 
-    assert provider._cache_remote_path_with_options("s3://eodata/CAMS/GLOBAL/missing.nc", missing_ok=True, storage_options={}) is None
+    assert (
+        provider._cache_remote_path_with_options(
+            "s3://eodata/CAMS/GLOBAL/missing.nc", missing_ok=True, storage_options={}
+        )
+        is None
+    )
 
     assert provider._load_from_remote_url("s3://eodata/CAMS/GLOBAL/file.txt") is None
 
@@ -430,20 +474,32 @@ def test_remote_cache_and_loading_helpers_cover_error_paths(
         return None
 
     monkeypatch.setattr(provider, "_resolve_remote_local_path", resolve_none)
-    assert provider._load_from_remote_url("s3://eodata/CAMS/GLOBAL/file.nc", missing_ok=True) is None
+    assert (
+        provider._load_from_remote_url("s3://eodata/CAMS/GLOBAL/file.nc", missing_ok=True) is None
+    )
 
     assert provider._load_from_remote_s3_base("s3://bucket/not-cams", datetime(2024, 1, 1)) is None
     monkeypatch.setattr(provider, "_select_cdse_cams_files", lambda _base, _time, _opts: [])
-    assert provider._load_from_remote_s3_base("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1)) is None
+    assert (
+        provider._load_from_remote_s3_base("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1)) is None
+    )
 
-    monkeypatch.setattr(provider, "_select_cdse_cams_files", lambda _base, _time, _opts: ["s3://eodata/CAMS/GLOBAL/file.nc"])
+    monkeypatch.setattr(
+        provider,
+        "_select_cdse_cams_files",
+        lambda _base, _time, _opts: ["s3://eodata/CAMS/GLOBAL/file.nc"],
+    )
 
-    def fake_load_remote_url(url: str, missing_ok: bool = False, storage_options: dict | None = None) -> None:
+    def fake_load_remote_url(
+        url: str, missing_ok: bool = False, storage_options: dict | None = None
+    ) -> None:
         del url, missing_ok, storage_options
         return None
 
     monkeypatch.setattr(provider, "_load_from_remote_url", fake_load_remote_url)
-    assert provider._load_from_remote_s3_base("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1)) is None
+    assert (
+        provider._load_from_remote_s3_base("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1)) is None
+    )
 
 
 def test_select_cdse_files_tif_dataset_and_download_helpers(
@@ -459,7 +515,9 @@ def test_select_cdse_files_tif_dataset_and_download_helpers(
             raise FileNotFoundError(path)
 
     monkeypatch.setattr(fsspec, "filesystem", lambda _protocol, **_kwargs: _MissingFS())
-    assert provider._select_cdse_cams_files("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1), {}) == []
+    assert (
+        provider._select_cdse_cams_files("s3://eodata/CAMS/GLOBAL", datetime(2024, 1, 1), {}) == []
+    )
 
     class _ChoiceFS:
         def ls(self, path, detail=False):  # noqa: ARG002
@@ -493,7 +551,9 @@ def test_select_cdse_files_tif_dataset_and_download_helpers(
         del kwargs
         raise RuntimeError("should not be called")
 
-    monkeypatch.setattr(file_provider, "_import_cdsapi", lambda: SimpleNamespace(Client=unreachable_client))
+    monkeypatch.setattr(
+        file_provider, "_import_cdsapi", lambda: SimpleNamespace(Client=unreachable_client)
+    )
     monkeypatch.setattr(file_provider, "_auth", CredentialManager())
     assert file_provider._download_cams_file(datetime(2024, 1, 1)) is None
 

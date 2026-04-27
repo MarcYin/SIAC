@@ -186,7 +186,9 @@ class TestEarthAccessCatalog:
             keyword="CACHED",
             short_name="READY",
         )
-        cached_catalog = EarthAccessCatalog(source=_FakeSource([]), products={"cached": cached_product})
+        cached_catalog = EarthAccessCatalog(
+            source=_FakeSource([]), products={"cached": cached_product}
+        )
 
         marker = {"called": False}
 
@@ -204,7 +206,9 @@ class TestEarthAccessCatalog:
             keyword="UNCACHED",
             short_name=None,
         )
-        uncached_catalog = EarthAccessCatalog(source=_FakeSource([]), products={"uncached": uncached_product})
+        uncached_catalog = EarthAccessCatalog(
+            source=_FakeSource([]), products={"uncached": uncached_product}
+        )
         monkeypatch.setattr(
             uncached_catalog,
             "validate_product",

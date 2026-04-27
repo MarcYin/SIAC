@@ -137,12 +137,11 @@ pub fn whittaker_smooth_cube<'py>(
         .collect();
 
     let mut out = Array4::<f32>::from_elem((n_time, n_band, ny, nx), f32::NAN);
-    for flat_idx in 0..series_count {
+    for (flat_idx, series) in smoothed_series.iter().enumerate().take(series_count) {
         let band = flat_idx / (ny * nx);
         let rem = flat_idx % (ny * nx);
         let y = rem / nx;
         let x = rem % nx;
-        let series = &smoothed_series[flat_idx];
         for t in 0..n_time {
             out[[t, band, y, x]] = series[t];
         }

@@ -34,9 +34,7 @@ def _cloud_mask_config() -> object:
 def test_build_preprocessor_runtime_supports_auto_sensor_and_typeerror_fallback(
     mock_sensor_config,
 ) -> None:
-    toa = xr.Dataset(
-        {"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
     raw = {
         "toa": toa,
         "geometry": "geometry",
@@ -97,9 +95,7 @@ def test_build_preprocessor_runtime_uses_module_defaults_and_explicit_aoi(
     monkeypatch: pytest.MonkeyPatch,
     mock_sensor_config,
 ) -> None:
-    toa = xr.Dataset(
-        {"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])})
     fake_preprocessor = SimpleNamespace(
         sensor_config=mock_sensor_config,
         preprocess=lambda _path: {
@@ -141,15 +137,14 @@ def test_build_preprocessor_runtime_default_aoi_and_unknown_sensor(
     monkeypatch: pytest.MonkeyPatch,
     mock_sensor_config,
 ) -> None:
-    toa = xr.Dataset(
-        {"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
     raw = {
         "toa": toa,
         "geometry": "geometry",
         "cloud_mask": xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"]),
         "metadata": {"observation_time": "2024-01-01T00:00:00"},
     }
+
     def _default_aoi(_raster: object) -> object:
         return SimpleNamespace(crs="EPSG:3857", get_bounds=lambda: (0, 1, 2, 3))
 
@@ -181,9 +176,7 @@ def test_build_preprocessor_runtime_default_aoi_and_unknown_sensor(
 
 
 def test_build_preprocessor_runtime_primes_path_sensitive_sensor_config() -> None:
-    toa = xr.Dataset(
-        {"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
-    )
+    toa = xr.Dataset({"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])})
     generic_sensor_config = object()
     resolved_sensor_config = object()
     raw = {
@@ -231,7 +224,9 @@ def test_build_preprocessor_runtime_sets_s2_preload_band_plan() -> None:
         sensor_config=SENTINEL2A_CONFIG,
         config={},
         preprocess=lambda _path: {
-            "toa": xr.Dataset({"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}),
+            "toa": xr.Dataset(
+                {"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
+            ),
             "geometry": "geometry",
             "cloud_mask": xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"]),
             "metadata": {"observation_time": "2024-01-03T00:00:00"},
@@ -370,7 +365,9 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
     mock_atmospheric_state,
 ) -> None:
     template = mock_observation_bundle.toa["B02"]
-    same = xr.DataArray(np.ones(template.shape, dtype=np.float32), dims=template.dims, coords=template.coords)
+    same = xr.DataArray(
+        np.ones(template.shape, dtype=np.float32), dims=template.dims, coords=template.coords
+    )
     assert runtime_mod._shares_template_grid(same, template) is True
     assert runtime_mod._resample_field_to_template(same, template) is same
 
@@ -675,8 +672,18 @@ def test_shares_template_grid_false_cases_cover_mismatch_paths() -> None:
         coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
     )
 
-    assert runtime_mod._shares_template_grid(xr.DataArray(np.ones((1, 2), dtype=np.float32), dims=["y", "x"]), template) is False
-    assert runtime_mod._shares_template_grid(xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["x", "y"]), template) is False
+    assert (
+        runtime_mod._shares_template_grid(
+            xr.DataArray(np.ones((1, 2), dtype=np.float32), dims=["y", "x"]), template
+        )
+        is False
+    )
+    assert (
+        runtime_mod._shares_template_grid(
+            xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["x", "y"]), template
+        )
+        is False
+    )
 
     missing_coords = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
     assert runtime_mod._shares_template_grid(missing_coords, template) is False
@@ -766,11 +773,25 @@ def test_surface_helper_selection_and_mapping_runtime(
     )
 
     assert surface_mod._select_surface_prior_bands(None) == list(range(1, 8))
-    assert [band.name for band in surface_mod._select_surface_prior_bands(mock_sensor_config)] == ["B01", "B02"]
-    assert [band.name for band in surface_mod._select_visible_surface_prior_bands(mock_sensor_config)] == ["B01", "B02", "B03", "B04"]
-    assert [band.name for band in surface_mod._select_visible_surface_prior_bands(msi_visible_sensor)] == ["B01", "B02", "B04"]
-    assert [band.name for band in surface_mod._select_visible_surface_prior_bands(swir_sensor)] == ["B11", "B12"]
-    assert [band.name for band in surface_mod._select_route_b_query_bands(msi_sensor)] == ["B08", "B11", "B12"]
+    assert [band.name for band in surface_mod._select_surface_prior_bands(mock_sensor_config)] == [
+        "B01",
+        "B02",
+    ]
+    assert [
+        band.name for band in surface_mod._select_visible_surface_prior_bands(mock_sensor_config)
+    ] == ["B01", "B02", "B03", "B04"]
+    assert [
+        band.name for band in surface_mod._select_visible_surface_prior_bands(msi_visible_sensor)
+    ] == ["B01", "B02", "B04"]
+    assert [band.name for band in surface_mod._select_visible_surface_prior_bands(swir_sensor)] == [
+        "B11",
+        "B12",
+    ]
+    assert [band.name for band in surface_mod._select_route_b_query_bands(msi_sensor)] == [
+        "B08",
+        "B11",
+        "B12",
+    ]
     assert len(surface_mod._select_route_b_query_bands(mock_sensor_config)) == 3
 
     config = SimpleNamespace(
@@ -885,6 +906,7 @@ def test_surface_monthly_runtime_and_query_helpers(
         target_resolution=500.0,
         temporal_window=16,
     )
+
     def provider_fn(*args, **kwargs):  # noqa: ANN002, ANN003
         return args, kwargs
 
@@ -897,7 +919,10 @@ def test_surface_monthly_runtime_and_query_helpers(
     assert captured["query"]["diagnostic_cache_dir"] is None
     assert result == "prior"
     assert request["obs_time"] == mock_observation_bundle.metadata["observation_time"]
-    assert surface_mod._mark_surface_prior_metadata(provider_fn, requires_atmo_prior=True) is provider_fn
+    assert (
+        surface_mod._mark_surface_prior_metadata(provider_fn, requires_atmo_prior=True)
+        is provider_fn
+    )
     assert provider_fn.requires_atmo_prior is True
 
 
@@ -911,7 +936,9 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
         resolution_m=500.0,
         get_monthly_composites=lambda _observation, resolution: (
             captured.__setitem__("provider_resolution", resolution)
-            or SimpleNamespace(source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=())
+            or SimpleNamespace(
+                source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=()
+            )
         ),
     )
     config = SimpleNamespace(
@@ -954,7 +981,9 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
     assert runtime.geometry == "geometry-120.0"
     assert runtime.database_resolution == pytest.approx(500.0)
     assert runtime.query_resolution == pytest.approx(120.0)
-    assert captured["monthly_composites"].source_bands == tuple(mock_observation_bundle.sensor_config.bands)
+    assert captured["monthly_composites"].source_bands == tuple(
+        mock_observation_bundle.sensor_config.bands
+    )
 
 
 def test_prepare_monthly_surface_prior_runtime_can_force_aerosol_resolution(
@@ -967,7 +996,9 @@ def test_prepare_monthly_surface_prior_runtime_can_force_aerosol_resolution(
         resolution_m=500.0,
         get_monthly_composites=lambda _observation, resolution: (
             captured.__setitem__("provider_resolution", resolution)
-            or SimpleNamespace(source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=())
+            or SimpleNamespace(
+                source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=()
+            )
         ),
     )
     config = SimpleNamespace(
@@ -1011,7 +1042,9 @@ def test_prepare_monthly_surface_prior_runtime_can_force_aerosol_resolution(
     assert runtime.geometry == "geometry-120.0"
     assert runtime.database_resolution == pytest.approx(120.0)
     assert runtime.query_resolution == pytest.approx(120.0)
-    assert captured["monthly_composites"].source_bands == tuple(mock_observation_bundle.sensor_config.bands)
+    assert captured["monthly_composites"].source_bands == tuple(
+        mock_observation_bundle.sensor_config.bands
+    )
 
 
 def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_resolution(
@@ -1024,7 +1057,9 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
         resolution_m=500.0,
         get_monthly_composites=lambda _observation, resolution: (
             captured.__setitem__("provider_resolution", resolution)
-            or SimpleNamespace(source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=())
+            or SimpleNamespace(
+                source_bands=tuple(mock_observation_bundle.sensor_config.bands), composites=()
+            )
         ),
     )
     config = SimpleNamespace(
@@ -1067,7 +1102,9 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
     assert runtime.geometry == "geometry"
     assert runtime.database_resolution == pytest.approx(1000.0)
     assert runtime.query_resolution == pytest.approx(1000.0)
-    assert captured["monthly_composites"].source_bands == tuple(mock_observation_bundle.sensor_config.bands)
+    assert captured["monthly_composites"].source_bands == tuple(
+        mock_observation_bundle.sensor_config.bands
+    )
 
 
 def test_provider_builders_cover_registry_and_source_resolution(
@@ -1087,12 +1124,18 @@ def test_provider_builders_cover_registry_and_source_resolution(
             return (args, kwargs, self.kwargs)
 
     monkeypatch.setattr(providers_mod, "CAMSProvider", _FakeCAMSProvider)
-    monkeypatch.setattr(providers_mod, "earthaccess_source_from_auth", lambda auth: f"source:{auth}")
+    monkeypatch.setattr(
+        providers_mod, "earthaccess_source_from_auth", lambda auth: f"source:{auth}"
+    )
     monkeypatch.setattr("siac.adapters.atmo.merra2.MERRA2Provider", _FakePriorProvider)
     monkeypatch.setattr("siac.adapters.atmo.mcd19_earthaccess.MCD19AODProvider", _FakePriorProvider)
     monkeypatch.setattr("siac.adapters.atmo.mcd19_earthaccess.VNP19AODProvider", _FakePriorProvider)
-    monkeypatch.setattr("siac.adapters.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakePriorProvider)
-    monkeypatch.setattr("siac.adapters.brdf.mcd43_earthaccess.MCD19EarthAccessProvider", _FakePriorProvider)
+    monkeypatch.setattr(
+        "siac.adapters.brdf.mcd43_earthaccess.MCD43EarthAccessProvider", _FakePriorProvider
+    )
+    monkeypatch.setattr(
+        "siac.adapters.brdf.mcd43_earthaccess.MCD19EarthAccessProvider", _FakePriorProvider
+    )
     monkeypatch.setattr("siac.adapters.brdf.gee_stub.GEEBRDFProvider", lambda: "gee")
 
     config = SimpleNamespace(
@@ -1128,7 +1171,11 @@ def test_build_registered_component_delegates_common_signature() -> None:
     registry = SimpleNamespace(get=lambda name: lambda config, auth: (name, config, auth))
     config = SimpleNamespace()
 
-    assert providers_mod._build_registered_component(registry, "x", config, auth="y") == ("x", config, "y")
+    assert providers_mod._build_registered_component(registry, "x", config, auth="y") == (
+        "x",
+        config,
+        "y",
+    )
 
 
 def test_prepared_store_monthly_provider_loads_collection(tmp_path) -> None:
@@ -1137,7 +1184,9 @@ def test_prepared_store_monthly_provider_loads_collection(tmp_path) -> None:
         SensorBand("B08", 842.0, 115.0, 10.0, 1),
     )
     coords = {"band": ["B02", "B08"], "y": [0, 1], "x": [0]}
-    cube = xr.DataArray(np.full((2, 2, 1), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    cube = xr.DataArray(
+        np.full((2, 2, 1), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+    )
     collection = MonthlyCompositeCollection(
         composites=(
             MonthlyKernelWeightComposite(
@@ -1149,8 +1198,16 @@ def test_prepared_store_monthly_provider_loads_collection(tmp_path) -> None:
                     f1_unc=xr.full_like(cube, 0.01),
                     f2_unc=xr.full_like(cube, 0.01),
                 ),
-                quality=xr.DataArray(np.full((2, 1), 0.03, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}),
-                sample_index=xr.DataArray(np.zeros((2, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}),
+                quality=xr.DataArray(
+                    np.full((2, 1), 0.03, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                ),
+                sample_index=xr.DataArray(
+                    np.zeros((2, 1), dtype=np.int16),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                ),
                 year=2023,
                 month=7,
             ),
@@ -1187,7 +1244,9 @@ def test_prepared_store_monthly_provider_is_lazy_until_first_use(
         source_bands=(),
         entries=(),
     )
-    collection = MonthlyCompositeCollection(composites=(), source_bands=(), source_name="prepared-test")
+    collection = MonthlyCompositeCollection(
+        composites=(), source_bands=(), source_name="prepared-test"
+    )
 
     def _fake_read_manifest(_path):  # noqa: ANN001
         calls["manifest"] += 1
@@ -1229,7 +1288,9 @@ def test_prepared_store_monthly_provider_rejects_mismatched_grid_when_strict(tmp
         SensorBand("B08", 842.0, 115.0, 10.0, 1),
     )
     coords = {"band": ["B02", "B08"], "y": [750.0, 250.0], "x": [250.0, 750.0]}
-    cube = xr.DataArray(np.full((2, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    cube = xr.DataArray(
+        np.full((2, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+    )
     collection = MonthlyCompositeCollection(
         composites=(
             MonthlyKernelWeightComposite(
@@ -1261,7 +1322,9 @@ def test_prepared_store_monthly_provider_rejects_mismatched_grid_when_strict(tmp
     store_path = write_monthly_composite_collection(
         collection,
         tmp_path / "prepared_store",
-        grid=MonthlyCompositeStoreGridSpec.from_bounds((0.0, 0.0, 1000.0, 1000.0), crs="EPSG:32632", resolution=500.0),
+        grid=MonthlyCompositeStoreGridSpec.from_bounds(
+            (0.0, 0.0, 1000.0, 1000.0), crs="EPSG:32632", resolution=500.0
+        ),
     )
     config = SimpleNamespace(
         monthly_composites=SimpleNamespace(
@@ -1286,10 +1349,18 @@ def test_prepared_store_monthly_provider_accepts_finer_grid_when_strict(tmp_path
     transform = rasterio.transform.from_bounds(0.0, 0.0, 2000.0, 1000.0, 4, 2)
 
     def _with_geo(data: xr.DataArray) -> xr.DataArray:
-        return data.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32632").rio.write_transform(transform)
+        return (
+            data.rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32632")
+            .rio.write_transform(transform)
+        )
 
     coords = {"band": ["B02", "B08"], "y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
-    cube = _with_geo(xr.DataArray(np.full((2, 2, 4), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords))
+    cube = _with_geo(
+        xr.DataArray(
+            np.full((2, 2, 4), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+        )
+    )
     collection = MonthlyCompositeCollection(
         composites=(
             MonthlyKernelWeightComposite(
@@ -1306,11 +1377,13 @@ def test_prepared_store_monthly_provider_accepts_finer_grid_when_strict(tmp_path
                     dims=["y", "x"],
                     coords={"y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]},
                 ),
-                sample_index=_with_geo(xr.DataArray(
-                    np.zeros((2, 4), dtype=np.int16),
-                    dims=["y", "x"],
-                    coords={"y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]},
-                )),
+                sample_index=_with_geo(
+                    xr.DataArray(
+                        np.zeros((2, 4), dtype=np.int16),
+                        dims=["y", "x"],
+                        coords={"y": [750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]},
+                    )
+                ),
                 year=2023,
                 month=7,
             ),
@@ -1334,7 +1407,9 @@ def test_prepared_store_monthly_provider_accepts_finer_grid_when_strict(tmp_path
     store_path = write_monthly_composite_collection(
         collection,
         tmp_path / "prepared_store",
-        grid=MonthlyCompositeStoreGridSpec.from_bounds((0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632", resolution=500.0),
+        grid=MonthlyCompositeStoreGridSpec.from_bounds(
+            (0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632", resolution=500.0
+        ),
     )
     config = SimpleNamespace(
         monthly_composites=SimpleNamespace(

@@ -74,7 +74,9 @@ def test_reference_key_and_document_helpers_cover_skip_and_error_paths(tmp_path)
     assert explicit == tmp_path / "explicit.json"
 
 
-def test_reference_remote_and_open_mapper_cover_protocol_variants(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_reference_remote_and_open_mapper_cover_protocol_variants(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     with pytest.raises(TypeError, match="headers"):
         lut_store._reference_remote("https://example.com/lut.zip", {"headers": "bad"})  # noqa: SLF001
 
@@ -139,7 +141,9 @@ def test_remote_reference_mapper_refresh_and_read_failure_rebuild(
     monkeypatch.setattr(
         lut_store,
         "_open_reference_mapper",
-        lambda path, storage_options, reference_path, document=None: open_calls.__setitem__("n", open_calls["n"] + 1) or {"document": document},  # noqa: ARG005
+        lambda _path, _storage_options, _reference_path, document=None: (
+            open_calls.__setitem__("n", open_calls["n"] + 1) or {"document": document}
+        ),
     )
 
     out = lut_store._build_remote_zip_reference_mapper(  # noqa: SLF001

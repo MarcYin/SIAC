@@ -61,7 +61,9 @@ def build_monthly_best_pixel_composite(
         raise ValueError("quality must have dims ('time', 'y', 'x')")
     if reflectance.sizes.get("time") != quality.sizes.get("time"):
         raise ValueError("reflectance and quality must share the same time axis")
-    if reflectance.sizes.get("y") != quality.sizes.get("y") or reflectance.sizes.get("x") != quality.sizes.get("x"):
+    if reflectance.sizes.get("y") != quality.sizes.get("y") or reflectance.sizes.get(
+        "x"
+    ) != quality.sizes.get("x"):
         raise ValueError("reflectance and quality must share the same spatial shape")
 
     refl_values = np.asarray(reflectance.values, dtype=np.float32)
@@ -77,7 +79,9 @@ def build_monthly_best_pixel_composite(
 
     gather_index = sample_index[np.newaxis, np.newaxis, ...]
     selected = np.take_along_axis(refl_values, gather_index, axis=0)[0]
-    selected_quality = np.take_along_axis(quality_values[:, np.newaxis, ...], sample_index[np.newaxis, np.newaxis, ...], axis=0)[0, 0]
+    selected_quality = np.take_along_axis(
+        quality_values[:, np.newaxis, ...], sample_index[np.newaxis, np.newaxis, ...], axis=0
+    )[0, 0]
 
     selected = np.where(has_valid[np.newaxis, ...], selected, np.nan)
     selected_quality = np.where(has_valid, selected_quality, np.nan)
@@ -133,7 +137,9 @@ def build_monthly_best_pixel_kernel_composite(
             raise ValueError(f"{name} must have dims ('time', 'band', 'y', 'x')")
         if data.sizes.get("time") != quality.sizes.get("time"):
             raise ValueError(f"{name} and quality must share the same time axis")
-        if data.sizes.get("y") != quality.sizes.get("y") or data.sizes.get("x") != quality.sizes.get("x"):
+        if data.sizes.get("y") != quality.sizes.get("y") or data.sizes.get(
+            "x"
+        ) != quality.sizes.get("x"):
             raise ValueError(f"{name} and quality must share the same spatial shape")
 
     _validate("f0", temporal_weights.f0)

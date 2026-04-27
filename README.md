@@ -102,7 +102,9 @@ and troubleshooting.
 ```bash
 pixi run build-rust
 pixi run lint
+pixi run format-check
 pixi run typecheck-scoped
+pixi run rust-test
 pixi run test-fast
 pixi run test
 pixi run coverage
@@ -147,51 +149,50 @@ flowchart LR
     M6 --> Output["Outputs"]
 ```
 
-## CDSE STAC S2 Search/Download (New Helper)
+## CDSE Sentinel-2 Search and Processing
 
-You can now search Sentinel-2 L1C scenes from Copernicus Data Space Ecosystem (CDSE) STAC and download a SIAC-ready `.SAFE` subset (13 bands + key XML metadata), then query CopDEM tiles and crop DEM to AOI:
+SIAC can search Sentinel-2 L1C scenes through the Copernicus Data Space
+Ecosystem (CDSE), resolve the selected product into the configured local cache,
+and process it through the same staged pipeline as local SAFE inputs:
 
 ```python
-from SIAC import (
-    SIAC_S2,
-    get_cdse_access_token,
-    search_and_download_cdse_s2,
-    search_cdse_dem_http_urls,
-    open_cdse_dem_crop,
+from siac import (
+    SIACConfig,
+    resolve_s2_input,
+    search_sentinel2,
+    siac_process_s2,
 )
 
-token = get_cdse_access_token(username="your_cdse_user", password="your_cdse_pass")
+config = SIACConfig(
+    sensor="s2",
+    providers={"s2": {"backend": "cdse", "cache_dir": "./cdse_s2_data"}},
+)
 
-items, safe_dirs = search_and_download_cdse_s2(
-    output_dir="./cdse_s2_data",
-    aoi="./aoi.geojson",
-    start_time="2025-01-01T00:00:00Z",
-    end_time="2025-01-31T23:59:59Z",
+products = search_sentinel2(
+    tile="31UDQ",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
     max_cloud_cover=20,
-    max_items=1,
-    access_token=token,
+    backend="cdse",
+    config=config,
 )
 
-dem_s2_http_urls = search_cdse_dem_http_urls(aoi="./aoi.geojson", prefer_30m=True)
-dem = open_cdse_dem_crop(
-    dem_s2_http_urls,
+safe_path = resolve_s2_input(products[0].product_id, config)
+result = siac_process_s2(
+    config,
+    safe_path,
+    output_path="./outputs/cdse_s2",
     aoi="./aoi.geojson",
-    xRes=30,
-    yRes=30,
-    crs="EPSG:32631",
-    access_token=token,
 )
-dem.rio.to_raster("./cdse_dem_30m.tif")
 
-SIAC_S2(safe_dirs[0], global_dem="./cdse_dem_30m.tif", aoi="./aoi.geojson", cams_dir=cams_dir)
+print(result.boa)
 ```
 
 Notes:
-- `open_cdse_dem_crop` requires `rioxarray` (plus `rasterio`) in your environment.
-- CDSE band and metadata downloads use HTTPS STAC asset links with OIDC bearer token.
-- CopDEM tile discovery uses CDSE STAC, but DEM download URLs are composed to public-open buckets:
-  - `https://copernicus-dem-30m.s3.amazonaws.com/{tile_id}/{tile_id}.tif`
-  - `https://copernicus-dem-90m.s3.amazonaws.com/{tile_id}/{tile_id}.tif`
+- CDSE credentials are resolved from `SIACConfig.auth.cdse` and the configured
+  environment variables.
+- Use `process_sentinel2("/path/to/local.SAFE")` when the SAFE product already
+  exists locally.
 
 ## Documentation
 

@@ -573,7 +573,9 @@ def write_aot_scatter_plot(
     plot_right = width - margin_right
     plot_bottom = height - margin_bottom
 
-    draw.rectangle((plot_left, plot_top, plot_right, plot_bottom), outline=(60, 60, 60, 255), width=2)
+    draw.rectangle(
+        (plot_left, plot_top, plot_right, plot_bottom), outline=(60, 60, 60, 255), width=2
+    )
 
     x_values = np.asarray(scatter.surface_reflectance, dtype=np.float64)
     observed_values = np.asarray(scatter.observed_toa, dtype=np.float64)
@@ -617,7 +619,9 @@ def write_aot_scatter_plot(
         y_pos = _sy(y_tick)
         draw.line((x_pos, plot_bottom, x_pos, plot_bottom + 6), fill=(60, 60, 60, 255), width=1)
         draw.line((plot_left - 6, y_pos, plot_left, y_pos), fill=(60, 60, 60, 255), width=1)
-        draw.text((x_pos - 18, plot_bottom + 10), f"{x_tick:.2f}", fill=(40, 40, 40, 255), font=font)
+        draw.text(
+            (x_pos - 18, plot_bottom + 10), f"{x_tick:.2f}", fill=(40, 40, 40, 255), font=font
+        )
         draw.text((8, y_pos - 6), f"{y_tick:.2f}", fill=(40, 40, 40, 255), font=font)
 
     observed_color = (70, 70, 70, 110)
@@ -627,7 +631,9 @@ def write_aot_scatter_plot(
     }
     simulated_color = simulated_palette.get(scatter.band_name, (0, 140, 120, 120))
 
-    def _draw_points(x_series: np.ndarray, y_series: np.ndarray, color: tuple[int, int, int, int]) -> None:
+    def _draw_points(
+        x_series: np.ndarray, y_series: np.ndarray, color: tuple[int, int, int, int]
+    ) -> None:
         for x_value, y_value in zip(x_series, y_series, strict=False):
             if not np.isfinite(x_value) or not np.isfinite(y_value):
                 continue
@@ -644,7 +650,9 @@ def write_aot_scatter_plot(
         fill=(20, 20, 20, 255),
         font=font,
     )
-    draw.text((plot_left, height - 28), "Simulated surface reflectance", fill=(20, 20, 20, 255), font=font)
+    draw.text(
+        (plot_left, height - 28), "Simulated surface reflectance", fill=(20, 20, 20, 255), font=font
+    )
     draw.text((16, 24), "TOA", fill=(20, 20, 20, 255), font=font)
 
     legend_x = plot_right - 146
@@ -718,12 +726,12 @@ def _build_lut(palette: str) -> UInt8Array:
     if palette == "viridis":
         # Simplified viridis:  dark-blue → teal → green → yellow
         r = np.clip(np.where(t < 0.5, 0.26 + 0.1 * t, -0.4 + 2.4 * t), 0, 1)
-        g = np.clip(np.where(t < 0.3, 0.0 + 1.5 * t, 0.35 + 0.25 * t + 0.5 * t ** 2), 0, 1)
+        g = np.clip(np.where(t < 0.3, 0.0 + 1.5 * t, 0.35 + 0.25 * t + 0.5 * t**2), 0, 1)
         b = np.clip(np.where(t < 0.6, 0.33 + 0.6 * t, 1.5 - 1.5 * t), 0, 1)
     elif palette == "magma":
-        r = np.clip(t ** 0.6, 0, 1)
-        g = np.clip(0.15 * t + 0.5 * t ** 3, 0, 1)
-        b = np.clip(0.3 + 0.5 * t - 0.7 * t ** 2 + 0.5 * t ** 3, 0, 1)
+        r = np.clip(t**0.6, 0, 1)
+        g = np.clip(0.15 * t + 0.5 * t**3, 0, 1)
+        b = np.clip(0.3 + 0.5 * t - 0.7 * t**2 + 0.5 * t**3, 0, 1)
     elif palette == "coolwarm":
         r = np.clip(np.where(t < 0.5, 0.2 + 1.6 * t, 1.0), 0, 1)
         g = np.clip(np.where(t < 0.5, 0.2 + 1.6 * t, 1.0 - 1.6 * (t - 0.5)), 0, 1)
@@ -834,7 +842,9 @@ def write_field_preview(
     max_label = f"{vmax:.3f}"
     if unit:
         max_label = f"{vmax:.3f} {unit}"
-    draw.text((max(0, w - 8 * len(max_label) - 4), label_y), max_label, fill=(40, 40, 40), font=font)
+    draw.text(
+        (max(0, w - 8 * len(max_label) - 4), label_y), max_label, fill=(40, 40, 40), font=font
+    )
 
     image.save(output_path, format="PNG")
     logger.info("Wrote field preview to %s", output_path)

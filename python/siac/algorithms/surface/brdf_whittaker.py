@@ -62,7 +62,9 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
     ) -> SurfacePrior:
         obs_time = self._pop_obs_time(kwargs)
         if "time" not in brdf_weights.f0.dims:
-            raise ValueError("Whittaker BRDF derivation requires BRDF weights with a 'time' dimension")
+            raise ValueError(
+                "Whittaker BRDF derivation requires BRDF weights with a 'time' dimension"
+            )
         sigma_x, sigma_y = self._resolve_psf_sigmas(psf_params)
 
         ref = brdf_weights.f0.isel(time=0, drop=True)
@@ -84,9 +86,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         reflectance_unc = self._require_data_array(
             brdf_weights.compute_reflectance_uncertainty(k_vol, k_geo),
             name="reflectance_unc",
-        ).transpose(
-            "time", "band", "y", "x"
-        )
+        ).transpose("time", "band", "y", "x")
 
         reflectance_values = np.asarray(reflectance.values, dtype=np.float32)
         unc_values = np.asarray(reflectance_unc.values, dtype=np.float32)
@@ -146,11 +146,14 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
 
         if self.apply_psf and sigma_x > 0 and sigma_y > 0:
             boa = copy_spatial_metadata_like(self._apply_psf(boa, sigma_x, sigma_y), boa)
-            boa_unc = copy_spatial_metadata_like(self._apply_psf(boa_unc, sigma_x, sigma_y), boa_unc)
+            boa_unc = copy_spatial_metadata_like(
+                self._apply_psf(boa_unc, sigma_x, sigma_y), boa_unc
+            )
 
         mask = copy_spatial_metadata_like(
             xr.DataArray(
-                np.all(np.isfinite(boa.values), axis=0) & np.all(np.isfinite(boa_unc.values), axis=0),
+                np.all(np.isfinite(boa.values), axis=0)
+                & np.all(np.isfinite(boa_unc.values), axis=0),
                 dims=["y", "x"],
                 coords={"y": boa.coords["y"], "x": boa.coords["x"]},
             ),
@@ -207,7 +210,9 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
                 np.nanmin(unc_values[:, finite_any], axis=0),
                 dtype=np.float32,
             )
-        return np.asarray(np.where(np.isfinite(target_unc), target_unc, fallback_unc), dtype=np.float32)
+        return np.asarray(
+            np.where(np.isfinite(target_unc), target_unc, fallback_unc), dtype=np.float32
+        )
 
     @classmethod
     def _prior_uncertainty(
@@ -237,7 +242,9 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         )
 
     @staticmethod
-    def _require_data_array(value: xr.DataArray | np.ndarray[Any, Any], *, name: str) -> xr.DataArray:
+    def _require_data_array(
+        value: xr.DataArray | np.ndarray[Any, Any], *, name: str
+    ) -> xr.DataArray:
         if not isinstance(value, xr.DataArray):
             raise TypeError(f"{name} must be an xarray.DataArray")
         return value

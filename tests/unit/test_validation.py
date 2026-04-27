@@ -20,6 +20,7 @@ from siac.runtime.validation import (
 
 # ── _validate_observation_bundle ──────────────────────────────────────
 
+
 class TestValidateObservationBundle:
     def test_validate_obs_happy(self, mock_observation_bundle):
         validate_observation_bundle(mock_observation_bundle)  # no error
@@ -56,6 +57,7 @@ class TestValidateObservationBundle:
 
 # ── _validate_atmospheric_state ───────────────────────────────────────
 
+
 class TestValidateAtmosphericState:
     def test_validate_atmo_happy(self, mock_atmospheric_state):
         validate_atmospheric_state(mock_atmospheric_state)  # no error
@@ -84,6 +86,7 @@ class TestValidateAtmosphericState:
 
 # ── _validate_surface_prior ───────────────────────────────────────────
 
+
 class TestValidateSurfacePrior:
     def test_validate_prior_happy(self, mock_surface_prior):
         validate_surface_prior(mock_surface_prior)  # no error
@@ -106,12 +109,14 @@ class TestValidateSurfacePrior:
 
 # ── _validate_solver_input_bundle ─────────────────────────────────────
 
+
 class TestValidateSolverInputBundle:
     def test_validate_sib_happy(self, mock_solver_input_bundle):
         validate_solver_input_bundle(mock_solver_input_bundle)  # no error
 
     def test_validate_sib_bands_not_in_config(self, mock_solver_input_bundle):
         from siac.domain import SensorBand
+
         sib = mock_solver_input_bundle
         bad_band = SensorBand("FAKE", 9999.0, 10.0, 10.0, 99)
         bad_sib = dataclasses.replace(sib, bands=[bad_band])
@@ -145,6 +150,7 @@ class TestValidateSolverInputBundle:
 
 
 # ── _validate_solved_atmosphere ───────────────────────────────────────
+
 
 class TestValidateSolvedAtmosphere:
     def test_validate_solved_happy(self, mock_solved_atmosphere):
@@ -192,9 +198,11 @@ class TestValidateSolvedAtmosphere:
 
 # ── _validate_correction_result ───────────────────────────────────────
 
+
 class TestValidateCorrectionResult:
     def test_validate_result_happy(self, mock_observation_bundle, mock_solved_atmosphere):
         from siac.runtime import CorrectionDiagnostics, CorrectionResult
+
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,
@@ -207,6 +215,7 @@ class TestValidateCorrectionResult:
 
     def test_validate_result_empty_boa(self, mock_solved_atmosphere, mock_observation_bundle):
         from siac.runtime import CorrectionDiagnostics, CorrectionResult
+
         result = CorrectionResult(
             boa=xr.Dataset(),
             boa_unc=None,
@@ -218,8 +227,11 @@ class TestValidateCorrectionResult:
         with pytest.raises(ValidationError, match="at least one band"):
             validate_correction_result(result)
 
-    def test_validate_result_missing_timing_is_allowed(self, mock_observation_bundle, mock_solved_atmosphere):
+    def test_validate_result_missing_timing_is_allowed(
+        self, mock_observation_bundle, mock_solved_atmosphere
+    ):
         from siac.runtime import CorrectionResult
+
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,
@@ -235,6 +247,7 @@ class TestValidateCorrectionResult:
         mock_solved_atmosphere,
     ):
         from siac.runtime import CorrectionDiagnostics, CorrectionResult
+
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,
@@ -249,6 +262,7 @@ class TestValidateCorrectionResult:
     def test_validate_result_optional_unc(self, mock_observation_bundle, mock_solved_atmosphere):
         """boa_unc=None should be valid."""
         from siac.runtime import CorrectionDiagnostics, CorrectionResult
+
         result = CorrectionResult(
             boa=mock_observation_bundle.toa,
             boa_unc=None,

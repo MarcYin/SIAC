@@ -161,7 +161,9 @@ class TestSIACConfig:
         )
 
         assert isinstance(config.atmo_prior.data_path, str)
-        assert config.atmo_prior.data_path == "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/"
+        assert (
+            config.atmo_prior.data_path == "https://gws-access.jasmin.ac.uk/public/nceo_ard/cams/"
+        )
 
     def test_atmo_prior_remote_s3_url_is_preserved(self):
         config = SIACConfig(
@@ -207,7 +209,9 @@ class TestSIACConfig:
         assert loaded.brdf.temporal_window == 8
         assert loaded.surface_prior.spectral_mapping.k_neighbors == 7
 
-    def test_load_system_config_expands_user_paths(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_load_system_config_expands_user_paths(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.setenv("HOME", str(tmp_path))
         config_path = tmp_path / "config.toml"
         config_path.write_text('paths = { lut_path = "s3://bucket/lut.zarr" }\n', encoding="utf-8")
@@ -266,7 +270,9 @@ class TestSIACConfig:
         assert snapshot["config"]["auth"]["cds"]["api_key"] == "<redacted>"
         assert snapshot["config"]["auth"]["gcs"]["credentials_file"] == "<redacted>"
 
-    def test_overlay_env_secrets_expands_gcs_credentials(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_overlay_env_secrets_expands_gcs_credentials(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "~/creds.json")
         config = SIACConfig()
@@ -460,6 +466,12 @@ class TestExecutionConfig:
         assert ExecutionConfig(stage_timeout_s=30.0).stage_timeout_s == 30.0
         with pytest.raises(ValueError):
             ExecutionConfig(stage_timeout_s=0.0)
+
+    def test_stage_timeouts_values_are_positive(self):
+        cfg = ExecutionConfig(stage_timeouts={"M2.atmospheric_prior": 10.0})
+        assert cfg.stage_timeouts == {"M2.atmospheric_prior": 10.0}
+        with pytest.raises(ValueError, match="stage_timeouts values"):
+            ExecutionConfig(stage_timeouts={"M2.atmospheric_prior": 0.0})
 
 
 class TestSolverConfig:

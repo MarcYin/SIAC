@@ -23,7 +23,9 @@ def _require_native_6s_stack() -> Path:
         pytest.skip("Upstream 6S source tree is not available under tmp/6s_upstream.")
     missing = [tool for tool in ("gfortran", "meson", "ninja") if shutil.which(tool) is None]
     if missing:
-        pytest.skip(f"Native 6S integration tests require toolchain components on PATH: {', '.join(missing)}.")
+        pytest.skip(
+            f"Native 6S integration tests require toolchain components on PATH: {', '.join(missing)}."
+        )
     return source_dir
 
 
@@ -96,7 +98,9 @@ def _integration_bands() -> list[SensorBand]:
             resolution=10.0,
             band_index=2,
             rsrf_wavelengths_nm=np.arange(545.0, 575.0 + 2.5, 2.5, dtype=np.float64),
-            rsrf_response=np.array([0.0, 0.2, 0.6, 1.0, 0.8, 0.4, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64),
+            rsrf_response=np.array(
+                [0.0, 0.2, 0.6, 1.0, 0.8, 0.4, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64
+            ),
         ),
     ]
 
@@ -175,7 +179,9 @@ class TestSixSBackendIntegration:
         atmosphere = _scene_atmosphere(case.name)
         bands = _integration_bands()
 
-        backend.set_observation_time(datetime(2025, case.sixs_config.month, case.sixs_config.day, 10, 30))
+        backend.set_observation_time(
+            datetime(2025, case.sixs_config.month, case.sixs_config.day, 10, 30)
+        )
         assert backend.backend_name == "sixs"
         assert backend.preload_scene_subset(geometry, atmosphere, bands) is None
 
@@ -214,7 +220,9 @@ class TestSixSBackendIntegration:
         native_module_path: Path,
         sixs_source_dir: Path,
     ) -> None:
-        case = next(case for case in default_parity_cases() if case.name == "rahman_brdf_biomass_burning")
+        case = next(
+            case for case in default_parity_cases() if case.name == "rahman_brdf_biomass_burning"
+        )
         sixs_config = case.sixs_config.model_copy(
             update={
                 "source_dir": sixs_source_dir,
@@ -248,19 +256,39 @@ class TestSixSBackendIntegration:
     ) -> None:
         case = next(case for case in default_parity_cases() if case.name == "ocean_brdf_maritime")
         geometry = GeometryAngles.from_degrees(
-            xr.DataArray([[case.sza_deg, case.sza_deg], [case.sza_deg, case.sza_deg]], dims=("y", "x")),
-            xr.DataArray([[case.saa_deg, case.saa_deg], [case.saa_deg, case.saa_deg]], dims=("y", "x")),
-            xr.DataArray([[case.vza_deg, case.vza_deg], [case.vza_deg, case.vza_deg]], dims=("y", "x")),
-            xr.DataArray([[case.vaa_deg, case.vaa_deg], [case.vaa_deg, case.vaa_deg]], dims=("y", "x")),
+            xr.DataArray(
+                [[case.sza_deg, case.sza_deg], [case.sza_deg, case.sza_deg]], dims=("y", "x")
+            ),
+            xr.DataArray(
+                [[case.saa_deg, case.saa_deg], [case.saa_deg, case.saa_deg]], dims=("y", "x")
+            ),
+            xr.DataArray(
+                [[case.vza_deg, case.vza_deg], [case.vza_deg, case.vza_deg]], dims=("y", "x")
+            ),
+            xr.DataArray(
+                [[case.vaa_deg, case.vaa_deg], [case.vaa_deg, case.vaa_deg]], dims=("y", "x")
+            ),
         )
         atmosphere = AtmosphericState(
-            aot=xr.DataArray([[case.aot550, case.aot550 + 0.03], [case.aot550, case.aot550 + 0.03]], dims=("y", "x")),
-            tcwv=xr.DataArray([[case.tcwv_cm, case.tcwv_cm + 0.4], [case.tcwv_cm, case.tcwv_cm + 0.4]], dims=("y", "x")),
-            tco3=xr.DataArray([[case.tco3_atmcm, case.tco3_atmcm], [case.tco3_atmcm, case.tco3_atmcm]], dims=("y", "x")),
+            aot=xr.DataArray(
+                [[case.aot550, case.aot550 + 0.03], [case.aot550, case.aot550 + 0.03]],
+                dims=("y", "x"),
+            ),
+            tcwv=xr.DataArray(
+                [[case.tcwv_cm, case.tcwv_cm + 0.4], [case.tcwv_cm, case.tcwv_cm + 0.4]],
+                dims=("y", "x"),
+            ),
+            tco3=xr.DataArray(
+                [[case.tco3_atmcm, case.tco3_atmcm], [case.tco3_atmcm, case.tco3_atmcm]],
+                dims=("y", "x"),
+            ),
             aot_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=("y", "x")),
             tcwv_unc=xr.DataArray(np.full((2, 2), 0.05, dtype=np.float32), dims=("y", "x")),
             tco3_unc=xr.DataArray(np.full((2, 2), 0.01, dtype=np.float32), dims=("y", "x")),
-            elevation=xr.DataArray([[case.elevation_km, case.elevation_km], [case.elevation_km, case.elevation_km]], dims=("y", "x")),
+            elevation=xr.DataArray(
+                [[case.elevation_km, case.elevation_km], [case.elevation_km, case.elevation_km]],
+                dims=("y", "x"),
+            ),
         )
         requested_outputs = ("xap", "xbp", "xcp", "tgasm", "sutott", "sast", "rocave")
         direct_backend = build_rt_model(
@@ -314,7 +342,9 @@ class TestSixSBackendIntegration:
         native_module_path: Path,
         sixs_source_dir: Path,
     ) -> None:
-        case = next(case for case in default_parity_cases() if case.name == "rahman_brdf_biomass_burning")
+        case = next(
+            case for case in default_parity_cases() if case.name == "rahman_brdf_biomass_burning"
+        )
         requested_outputs = ("xap", "xbp", "xcp", "tgasm", "sutott", "sast")
         common_update = {
             "source_dir": sixs_source_dir,

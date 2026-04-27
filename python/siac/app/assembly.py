@@ -258,7 +258,9 @@ def _build_monthly_surface_prior(
             elif hasattr(monthly_composite_provider, "get_brdf_parameters"):
                 brdf_prov = monthly_composite_provider
             else:
-                raise ValueError("Route-B monthly_database fallback requires a BRDF provider factory")
+                raise ValueError(
+                    "Route-B monthly_database fallback requires a BRDF provider factory"
+                )
             brdf_weights = brdf_prov.get_brdf_parameters(
                 **_surface_prior_brdf_request(
                     observation,
@@ -284,7 +286,9 @@ def _build_monthly_surface_prior(
     return _mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=True)
 
 
-def resolve_surface_prior_provider(config: Any, auth: CredentialManager | None = None) -> SurfacePriorFn:
+def resolve_surface_prior_provider(
+    config: Any, auth: CredentialManager | None = None
+) -> SurfacePriorFn:
     method = getattr(config.surface_prior, "method", "kernel_model")
     if method == "monthly_database":
         monthly_provider = resolve_monthly_composite_provider(config, auth=auth)

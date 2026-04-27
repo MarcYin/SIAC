@@ -23,6 +23,7 @@ _EXECUTION_KEYS = (
     "max_workers",
     "retries",
     "stage_timeout_s",
+    "stage_timeouts",
     "dashboard",
     "dashboard_address",
     "performance_report_path",
@@ -70,6 +71,7 @@ def _resolve_execution_settings(
         "max_workers": 4,
         "retries": 2,
         "stage_timeout_s": None,
+        "stage_timeouts": {},
         "dashboard": False,
         "dashboard_address": None,
         "performance_report_path": None,
@@ -104,6 +106,22 @@ def _resolve_execution_settings(
         if timeout <= 0:
             raise ValueError("stage_timeout_s must be > 0 when provided")
     settings["stage_timeout_s"] = timeout
+
+    stage_timeouts_raw = settings.get("stage_timeouts")
+    if stage_timeouts_raw is None:
+        stage_timeouts_raw = {}
+    if not isinstance(stage_timeouts_raw, dict):
+        raise ValueError("stage_timeouts must be a mapping of stage names to positive timeouts")
+    stage_timeouts: dict[str, float] = {}
+    for stage_name, stage_timeout in stage_timeouts_raw.items():
+        stage_key = str(stage_name)
+        if not stage_key:
+            raise ValueError("stage_timeouts keys must be non-empty stage names")
+        timeout_value = float(stage_timeout)
+        if timeout_value <= 0:
+            raise ValueError("stage_timeouts values must be > 0")
+        stage_timeouts[stage_key] = timeout_value
+    settings["stage_timeouts"] = stage_timeouts
 
     report_path = settings.get("performance_report_path")
     if report_path is not None:

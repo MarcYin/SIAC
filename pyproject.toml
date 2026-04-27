@@ -93,8 +93,11 @@ docs = [
     "mkdocs-material>=9.5.0,<10.0",
     "pymdown-extensions>=10.0.0",
 ]
+dask = [
+    "dask[distributed]>=2024.1.0",
+]
 all = [
-    "siac[dev,gee,docs]",
+    "siac[dev,gee,docs,dask]",
 ]
 
 [project.urls]

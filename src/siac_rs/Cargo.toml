@@ -35,11 +35,6 @@ approx = "0.5"
 name = "kernels"
 harness = false
 
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
-
 [lints.rust]
 unused_must_use = "deny"
 # Note: `rust_2018_idioms` is intentionally NOT enabled because the existing
@@ -52,5 +47,9 @@ unused_must_use = "deny"
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
+# PyO3 entry points mirror the Python API and intentionally carry wide argument
+# lists / tuple returns at the boundary.
+too_many_arguments = "allow"
+type_complexity = "allow"
 # Pedantic is noisy — keep it opt-in per module if/when we want it.
 pedantic = { level = "allow", priority = -2 }

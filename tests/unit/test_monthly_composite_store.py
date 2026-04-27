@@ -44,9 +44,15 @@ def _source_bands() -> tuple[SensorBand, ...]:
 def _kernel_collection() -> MonthlyCompositeCollection:
     bands = ["B02", "B08"]
     coords = {"band": bands, "y": [0, 1], "x": [0]}
-    cube = xr.DataArray(np.full((2, 2, 1), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
-    quality = xr.DataArray(np.full((2, 1), 0.03, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]})
-    sample_index = xr.DataArray(np.zeros((2, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]})
+    cube = xr.DataArray(
+        np.full((2, 2, 1), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+    )
+    quality = xr.DataArray(
+        np.full((2, 1), 0.03, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}
+    )
+    sample_index = xr.DataArray(
+        np.zeros((2, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}
+    )
     composite = MonthlyKernelWeightComposite(
         kernels=BRDFKernelWeights(
             f0=cube,
@@ -71,9 +77,15 @@ def _kernel_collection() -> MonthlyCompositeCollection:
 def _nan_kernel_collection() -> MonthlyCompositeCollection:
     bands = ["B02", "B08"]
     coords = {"band": bands, "y": [0, 1], "x": [0]}
-    cube = xr.DataArray(np.full((2, 2, 1), np.nan, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
-    quality = xr.DataArray(np.full((2, 1), np.nan, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]})
-    sample_index = xr.DataArray(np.full((2, 1), -1, dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]})
+    cube = xr.DataArray(
+        np.full((2, 2, 1), np.nan, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+    )
+    quality = xr.DataArray(
+        np.full((2, 1), np.nan, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}
+    )
+    sample_index = xr.DataArray(
+        np.full((2, 1), -1, dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}
+    )
     composite = MonthlyKernelWeightComposite(
         kernels=BRDFKernelWeights(
             f0=cube,
@@ -109,8 +121,12 @@ def _reflectance_collection() -> MonthlyCompositeCollection:
             dims=["band", "y", "x"],
             coords={"band": ["B02", "B08"], "y": [0, 1], "x": [0]},
         ),
-        quality=xr.DataArray(np.full((2, 1), 0.05, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}),
-        sample_index=xr.DataArray(np.ones((2, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}),
+        quality=xr.DataArray(
+            np.full((2, 1), 0.05, dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}
+        ),
+        sample_index=xr.DataArray(
+            np.ones((2, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0, 1], "x": [0]}
+        ),
         year=2024,
         month=8,
     )
@@ -126,30 +142,41 @@ def _georeferenced_kernel_collection() -> MonthlyCompositeCollection:
     x = [400210.0, 400710.0]
     y = [4699790.0, 4699290.0]
     transform = rasterio.transform.from_bounds(399960.0, 4699040.0, 400960.0, 4700040.0, 2, 2)
-    def _with_geo(data: xr.DataArray) -> xr.DataArray:
-        return data.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:32615").rio.write_transform(transform)
 
-    cube = _with_geo(xr.DataArray(
-        np.array(
-            [
-                [[1.0, 2.0], [3.0, 4.0]],
-                [[10.0, 20.0], [30.0, 40.0]],
-            ],
-            dtype=np.float32,
-        ),
-        dims=["band", "y", "x"],
-        coords={"band": bands, "y": y, "x": x},
-    ))
-    quality = _with_geo(xr.DataArray(
-        np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
-        dims=["y", "x"],
-        coords={"y": y, "x": x},
-    ))
-    sample_index = _with_geo(xr.DataArray(
-        np.array([[0, 1], [2, 3]], dtype=np.int16),
-        dims=["y", "x"],
-        coords={"y": y, "x": x},
-    ))
+    def _with_geo(data: xr.DataArray) -> xr.DataArray:
+        return (
+            data.rio.set_spatial_dims(x_dim="x", y_dim="y")
+            .rio.write_crs("EPSG:32615")
+            .rio.write_transform(transform)
+        )
+
+    cube = _with_geo(
+        xr.DataArray(
+            np.array(
+                [
+                    [[1.0, 2.0], [3.0, 4.0]],
+                    [[10.0, 20.0], [30.0, 40.0]],
+                ],
+                dtype=np.float32,
+            ),
+            dims=["band", "y", "x"],
+            coords={"band": bands, "y": y, "x": x},
+        )
+    )
+    quality = _with_geo(
+        xr.DataArray(
+            np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+            dims=["y", "x"],
+            coords={"y": y, "x": x},
+        )
+    )
+    sample_index = _with_geo(
+        xr.DataArray(
+            np.array([[0, 1], [2, 3]], dtype=np.int16),
+            dims=["y", "x"],
+            coords={"y": y, "x": x},
+        )
+    )
     composite = MonthlyKernelWeightComposite(
         kernels=BRDFKernelWeights(
             f0=cube,
@@ -200,7 +227,9 @@ def test_monthly_composite_store_round_trips_kernel_collection(tmp_path) -> None
     assert isinstance(composite, MonthlyKernelWeightComposite)
     np.testing.assert_allclose(composite.kernels.f0.values, 0.2)
     np.testing.assert_allclose(composite.quality.values, 0.03)
-    with rasterio.open(store_path / manifest.entries[0].path / manifest.entries[0].assets["f0"]) as src:
+    with rasterio.open(
+        store_path / manifest.entries[0].path / manifest.entries[0].assets["f0"]
+    ) as src:
         assert src.driver == "GTiff"
         assert src.is_tiled
         assert str(src.profile["compress"]).lower() == "deflate"
@@ -220,15 +249,21 @@ def test_monthly_composite_store_honors_explicit_grid_metadata(tmp_path) -> None
     manifest = read_monthly_composite_store_manifest(store_path)
 
     assert manifest.grid == grid
-    with rasterio.open(store_path / manifest.entries[0].path / manifest.entries[0].assets["f0"]) as src:
+    with rasterio.open(
+        store_path / manifest.entries[0].path / manifest.entries[0].assets["f0"]
+    ) as src:
         assert src.crs is not None
         assert src.crs.to_string() == "EPSG:32615"
         assert src.width == grid.width
         assert src.height == grid.height
         assert src.bounds == pytest.approx(grid.bounds)
-        assert src.transform == rasterio.transform.from_bounds(*grid.bounds, grid.width, grid.height)
+        assert src.transform == rasterio.transform.from_bounds(
+            *grid.bounds, grid.width, grid.height
+        )
         b02 = src.read(1)
-        np.testing.assert_allclose(b02[:2, :2], np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        np.testing.assert_allclose(
+            b02[:2, :2], np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        )
         assert int(np.isfinite(b02).sum()) == 4
 
     loaded = read_monthly_composite_collection(store_path)
@@ -259,12 +294,16 @@ def test_monthly_composite_store_honors_explicit_grid_metadata(tmp_path) -> None
         ),
     )
     loaded_b02 = composite.kernels.f0.sel(band="B02").values
-    np.testing.assert_allclose(loaded_b02[:2, :2], np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+    np.testing.assert_allclose(
+        loaded_b02[:2, :2], np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    )
     assert int(np.isfinite(loaded_b02).sum()) == 4
 
 
 def test_monthly_composite_store_round_trips_reflectance_collection(tmp_path) -> None:
-    store_path = write_monthly_composite_collection(_reflectance_collection(), tmp_path / "reflectance_store")
+    store_path = write_monthly_composite_collection(
+        _reflectance_collection(), tmp_path / "reflectance_store"
+    )
     loaded = read_monthly_composite_collection(store_path)
     manifest = read_monthly_composite_store_manifest(store_path)
 
@@ -283,14 +322,18 @@ def test_monthly_composite_store_round_trips_reflectance_collection(tmp_path) ->
 def test_monthly_composite_store_manifest_rejects_unsupported_version(tmp_path) -> None:
     root = tmp_path / "bad_store"
     root.mkdir()
-    (root / "manifest.json").write_text(json.dumps({"version": 99, "entries": []}), encoding="utf-8")
+    (root / "manifest.json").write_text(
+        json.dumps({"version": 99, "entries": []}), encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="Unsupported monthly composite store version"):
         read_monthly_composite_store_manifest(root)
 
 
 def test_monthly_composite_store_skips_all_nan_kernel_month(tmp_path) -> None:
-    store_path = write_monthly_composite_collection(_nan_kernel_collection(), tmp_path / "nan_kernel_store")
+    store_path = write_monthly_composite_collection(
+        _nan_kernel_collection(), tmp_path / "nan_kernel_store"
+    )
 
     manifest = read_monthly_composite_store_manifest(store_path)
     assert manifest.entries == ()

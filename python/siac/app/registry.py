@@ -38,7 +38,9 @@ class NamedRegistry(Generic[T]):
 
 ATMO_PROVIDER_REGISTRY: NamedRegistry[object] = NamedRegistry("atmo provider")
 BRDF_PROVIDER_REGISTRY: NamedRegistry[object] = NamedRegistry("BRDF provider")
-MONTHLY_COMPOSITE_PROVIDER_REGISTRY: NamedRegistry[object] = NamedRegistry("monthly composite provider")
+MONTHLY_COMPOSITE_PROVIDER_REGISTRY: NamedRegistry[object] = NamedRegistry(
+    "monthly composite provider"
+)
 S2_BACKEND_REGISTRY: NamedRegistry[object] = NamedRegistry("S2 backend")
 SURFACE_PRIOR_METHOD_REGISTRY: NamedRegistry[object] = NamedRegistry("surface prior method")
 

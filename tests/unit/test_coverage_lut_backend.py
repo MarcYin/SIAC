@@ -74,7 +74,9 @@ def _write_small_lut(path: Path, consolidated: bool = True) -> Path:
     return path
 
 
-def _write_small_spectral_lut(path: Path, *, include_solar: bool = True) -> tuple[Path, dict[str, float]]:
+def _write_small_spectral_lut(
+    path: Path, *, include_solar: bool = True
+) -> tuple[Path, dict[str, float]]:
     wavelength = np.array([480.0, 490.0, 500.0], dtype=np.float32)
     sza = np.array([30.0], dtype=np.float32)
     vza = np.array([10.0], dtype=np.float32)
@@ -334,7 +336,9 @@ class TestZarrLUTBackend:
         with pytest.raises(ValueError, match="must share the same grid shape"):
             backend.compute_coefficients(geom, atmo, band, compute_jacobian=False)
 
-    def test_compute_coefficients_rejects_same_shape_but_misaligned_coordinates(self, tmp_path: Path):
+    def test_compute_coefficients_rejects_same_shape_but_misaligned_coordinates(
+        self, tmp_path: Path
+    ):
         lut_path = _write_small_lut(tmp_path / "lut_bad_coords.zarr")
         y = np.array([10.0, 0.0], dtype=np.float32)
         x_geom = np.array([0.0, 10.0], dtype=np.float32)
@@ -467,7 +471,9 @@ class TestZarrLUTBackend:
         b = ZarrLUTBackend(lut_path, interpolation_method="nearest")
         assert "path_reflectance" in b.lut
 
-    def test_coefficient_lut_with_altitude_axis_skips_legacy_elevation_correction(self, tmp_path: Path, monkeypatch):
+    def test_coefficient_lut_with_altitude_axis_skips_legacy_elevation_correction(
+        self, tmp_path: Path, monkeypatch
+    ):
         lut_path = tmp_path / "lut_with_altitude.zarr"
         ds = xr.Dataset(
             {
@@ -546,11 +552,13 @@ class TestZarrLUTBackend:
         np.testing.assert_allclose(coeffs.xcp.values, expected["xcp"], rtol=1e-5)
 
         toa = xr.DataArray(np.full((2, 2), 0.15, dtype=np.float32), dims=["y", "x"])
-        expected_boa = ((0.15 - expected["path_ref"]) / expected["t_total"])
+        expected_boa = (0.15 - expected["path_ref"]) / expected["t_total"]
         expected_boa = expected_boa / (1.0 + expected["xcp"] * expected_boa)
         np.testing.assert_allclose(coeffs.apply_correction(toa).values, expected_boa, rtol=1e-5)
 
-    def test_spectral_lut_without_solar_irradiance_still_returns_finite_coefficients(self, tmp_path: Path):
+    def test_spectral_lut_without_solar_irradiance_still_returns_finite_coefficients(
+        self, tmp_path: Path
+    ):
         lut_path, expected = _write_small_spectral_lut(
             tmp_path / "lut_spectral_no_solar.zarr",
             include_solar=False,
@@ -565,8 +573,12 @@ class TestZarrLUTBackend:
         assert np.isfinite(coeffs.xap.values).all()
         np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
 
-    def test_spectral_lut_compute_coefficients_allows_nonfinite_optional_scene_axes(self, tmp_path: Path):
-        lut_path, expected = _write_small_spectral_lut(tmp_path / "lut_spectral_nonfinite_optional.zarr")
+    def test_spectral_lut_compute_coefficients_allows_nonfinite_optional_scene_axes(
+        self, tmp_path: Path
+    ):
+        lut_path, expected = _write_small_spectral_lut(
+            tmp_path / "lut_spectral_nonfinite_optional.zarr"
+        )
         geom = GeometryAngles(
             sza=xr.DataArray(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32), dims=["y", "x"]),
             saa=xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"]),
@@ -594,7 +606,9 @@ class TestZarrLUTBackend:
         np.testing.assert_allclose(coeffs.xbp.values, expected["xbp"], rtol=1e-5)
         np.testing.assert_allclose(coeffs.xcp.values, expected["xcp"], rtol=1e-5)
 
-    def test_spectral_lut_compute_coefficients_rejects_nonfinite_required_scene_inputs(self, tmp_path: Path):
+    def test_spectral_lut_compute_coefficients_rejects_nonfinite_required_scene_inputs(
+        self, tmp_path: Path
+    ):
         lut_path, _ = _write_small_spectral_lut(tmp_path / "lut_spectral_nonfinite_required.zarr")
         geom = GeometryAngles(
             sza=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
@@ -652,8 +666,12 @@ class TestZarrLUTBackend:
         assert calls["scene_subset"] == 1
         assert calls["band_subset"] == 1
 
-    def test_spectral_scene_preload_handles_nonfinite_optional_scene_axes(self, tmp_path: Path, monkeypatch):
-        lut_path, expected = _write_small_spectral_lut(tmp_path / "lut_spectral_preload_nonfinite_optional.zarr")
+    def test_spectral_scene_preload_handles_nonfinite_optional_scene_axes(
+        self, tmp_path: Path, monkeypatch
+    ):
+        lut_path, expected = _write_small_spectral_lut(
+            tmp_path / "lut_spectral_preload_nonfinite_optional.zarr"
+        )
         geom = GeometryAngles(
             sza=xr.DataArray(np.full((2, 2), np.deg2rad(30.0), dtype=np.float32), dims=["y", "x"]),
             saa=xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=["y", "x"]),
@@ -697,7 +715,9 @@ class TestZarrLUTBackend:
         np.testing.assert_allclose(coeffs.xap.values, expected["xap"], rtol=1e-5)
 
     def test_spectral_scene_preload_rejects_nonfinite_required_scene_inputs(self, tmp_path: Path):
-        lut_path, _ = _write_small_spectral_lut(tmp_path / "lut_spectral_preload_nonfinite_required.zarr")
+        lut_path, _ = _write_small_spectral_lut(
+            tmp_path / "lut_spectral_preload_nonfinite_required.zarr"
+        )
         geom = GeometryAngles(
             sza=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
             saa=xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=["y", "x"]),
@@ -854,9 +874,7 @@ class TestZarrLUTBackend:
             "wavelength": np.array([480.0, 490.0, 500.0], dtype=np.float32),
         }
 
-        weights = backend._spectral_integration_weights(
-            SensorBand("B02", 490.0, 20.0, 10.0, 0)
-        )
+        weights = backend._spectral_integration_weights(SensorBand("B02", 490.0, 20.0, 10.0, 0))
         assert weights.dims == ("wavelength",)
         assert float(weights.max()) > 0.0
 
@@ -891,7 +909,9 @@ class TestZarrLUTBackend:
                 self.root = "lut.zarr"
 
         sentinel_store = {"kind": "reference"}
-        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda _path, _opts: _FakeMapper())
+        monkeypatch.setattr(
+            lut_store, "build_readonly_zip_mapper", lambda _path, _opts: _FakeMapper()
+        )
         monkeypatch.setattr("fsspec.get_mapper", lambda _path, **_kwargs: sentinel_store)
 
         store = lut_store.build_lut_store("https://example.com/lut.zarr.zip", storage_options={})
@@ -945,7 +965,7 @@ class _FakeSession:
             else:
                 start = int(bounds[0])
                 end = int(bounds[1]) if bounds[1] else len(self._data) - 1
-            payload = self._data[start:end + 1]
+            payload = self._data[start : end + 1]
             return _FakeResponse(
                 status_code=206,
                 content=payload,
@@ -1084,6 +1104,7 @@ class TestHTTPRangeHelpers:
             zf.writestr("arr/0", b"\x01")
 
         zip_fs = _ReadOnlyZipFileSystem(_BytesRangeFS(buf.getvalue()), "dummy.zip")
+
         async def _exercise():
             listing = await zip_fs._ls("", detail=False)
             payload = await zip_fs._cat_file(".zgroup")
@@ -1156,7 +1177,9 @@ class TestHTTPRangeHelpers:
 
         # Invalid central directory signature.
         bad_sig = _build_cd_header(signature=0x12345678)
-        tail3 = b"A" * 20 + _build_eocd(entries_disk=1, entries_total=1, cd_size=len(bad_sig), cd_offset=0)
+        tail3 = b"A" * 20 + _build_eocd(
+            entries_disk=1, entries_total=1, cd_size=len(bad_sig), cd_offset=0
+        )
         fs_bad_sig = _TwoPhaseFS(tail3, bad_sig)
         zip_fs3 = _ReadOnlyZipFileSystem(fs_bad_sig, "dummy.zip")
         with pytest.raises(ValueError, match="Invalid central directory signature"):
@@ -1196,7 +1219,9 @@ class TestHTTPRangeHelpers:
         _run_with_cd(cd_extra_header, "Truncated extra field header")
 
         # extra field payload missing after valid tag/size
-        cd_extra_payload = _build_cd_header(fname_len=1, extra_len=5) + b"a" + struct.pack("<HH", 1, 5) + b"x"
+        cd_extra_payload = (
+            _build_cd_header(fname_len=1, extra_len=5) + b"a" + struct.pack("<HH", 1, 5) + b"x"
+        )
         _run_with_cd(cd_extra_payload, "Truncated extra field payload")
 
     def test_zipfs_parent_directory_construction_branch(self):
@@ -1368,6 +1393,7 @@ class TestZipStoreUtilities:
 
         monkeypatch.setattr(zip_store, "_ReadOnlyZipFileSystem", _FakeZipFS)
         monkeypatch.setattr(zip_store, "_detect_zarr_prefix", lambda _fs: "")
+
         def _fake_fsmap(root, fs, check=False, create=False):  # noqa: ANN001
             _ = (check, create)
             return SimpleNamespace(root=root, fs=fs)
@@ -1451,7 +1477,9 @@ class TestZipStoreUtilities:
         captured: dict[str, object] = {}
         monkeypatch.setattr(
             "fsspec.get_mapper",
-            lambda path, **kwargs: captured.update({"path": path, "kwargs": kwargs}) or {"ok": True},
+            lambda path, **kwargs: (
+                captured.update({"path": path, "kwargs": kwargs}) or {"ok": True}
+            ),
         )
         out = lut_store.build_lut_store(str(tmp_path / "x.zarr"), {"anon": True})
         assert out == {"ok": True}
@@ -1592,7 +1620,9 @@ class TestZipStoreUtilities:
                 self.root = "lut.zarr"
 
         sentinel = _FakeMapper()
-        monkeypatch.setattr(lut_store, "build_readonly_zip_mapper", lambda _path, _options: sentinel)
+        monkeypatch.setattr(
+            lut_store, "build_readonly_zip_mapper", lambda _path, _options: sentinel
+        )
 
         def _raise_reference(path: str, **kwargs):
             if path == "reference://":
@@ -1606,4 +1636,3 @@ class TestZipStoreUtilities:
                 "https://example.com/lut.zarr.zip",
                 {"reference_cache_dir": str(tmp_path)},
             )
-

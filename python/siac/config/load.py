@@ -16,6 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 try:
     import tomli_w
 except ModuleNotFoundError:  # pragma: no cover - optional write dependency
+
     class _TomliWFallback:
         @staticmethod
         def dump(_payload: object, _handle: object) -> None:
@@ -68,7 +69,9 @@ def overlay_env_secrets(
     if updated.auth.aws.access_key_id is None:
         updated.auth.aws.access_key_id = resolved_env.get(updated.auth.aws.access_key_id_env)
     if updated.auth.aws.secret_access_key is None:
-        updated.auth.aws.secret_access_key = resolved_env.get(updated.auth.aws.secret_access_key_env)
+        updated.auth.aws.secret_access_key = resolved_env.get(
+            updated.auth.aws.secret_access_key_env
+        )
 
     if updated.auth.earthdata.username is None:
         updated.auth.earthdata.username = resolved_env.get(updated.auth.earthdata.username_env)

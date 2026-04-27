@@ -67,7 +67,9 @@ def test_derive_standard_rt_coefficients_handles_degenerate_denominators() -> No
     assert xcp.dtype == np.float32
 
 
-def test_build_spectral_integration_weights_covers_rsrf_and_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_spectral_integration_weights_covers_rsrf_and_error_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dataset = xr.Dataset(
         {
             "solar_irradiance": (

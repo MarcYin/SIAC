@@ -15,7 +15,10 @@ if TYPE_CHECKING:
 
 
 def _geometry(shape: tuple[int, int]) -> GeometryAngles:
-    coords = {"y": np.arange(shape[0], dtype=np.float32), "x": np.arange(shape[1], dtype=np.float32)}
+    coords = {
+        "y": np.arange(shape[0], dtype=np.float32),
+        "x": np.arange(shape[1], dtype=np.float32),
+    }
     return GeometryAngles(
         sza=xr.DataArray(np.full(shape, 0.5, dtype=np.float32), dims=["y", "x"], coords=coords),
         saa=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"], coords=coords),
@@ -128,7 +131,10 @@ def test_align_kernels_to_brdf_grid_covers_passthrough_and_resize_fallback(
     no_xy_ref = xr.DataArray(np.array([1.0, 2.0], dtype=np.float32), dims=["band"])
     same_vol = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
     same_geo = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
-    assert deriver._align_kernels_to_brdf_grid(same_vol, same_geo, no_xy_ref) == (same_vol, same_geo)
+    assert deriver._align_kernels_to_brdf_grid(same_vol, same_geo, no_xy_ref) == (
+        same_vol,
+        same_geo,
+    )
 
     aligned_vol, aligned_geo = deriver._align_kernels_to_brdf_grid(
         xr.DataArray(np.ones((2, 3), dtype=np.float32), dims=["y", "x"], coords=ref.coords),

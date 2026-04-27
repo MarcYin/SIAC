@@ -31,7 +31,9 @@ def _select_visible_surface_prior_bands(sensor_config: SensorConfig) -> list[Any
         "OLI": ("B1", "B2", "B4"),
     }
     preferred_names = preferred_by_sensor.get(sensor_config.sensor_id, ())
-    preferred = [band for name in preferred_names for band in sensor_config.bands if band.name == name]
+    preferred = [
+        band for name in preferred_names for band in sensor_config.bands if band.name == name
+    ]
     if preferred:
         return preferred
     bands = [band for band in sensor_config.bands if 400.0 <= band.center_wavelength < 700.0]
@@ -46,7 +48,9 @@ def _select_route_b_query_bands(sensor_config: SensorConfig) -> list[Any]:
         "OLI": ("B5", "B6", "B7"),
     }
     preferred_names = preferred_by_sensor.get(sensor_config.sensor_id, ())
-    selected = [band for name in preferred_names for band in sensor_config.bands if band.name == name]
+    selected = [
+        band for name in preferred_names for band in sensor_config.bands if band.name == name
+    ]
     if len(selected) == 3:
         return selected
 
@@ -97,7 +101,9 @@ def _surface_spectral_mapping_runtime(
     )
 
 
-def _mark_surface_prior_metadata(provider: SurfacePriorFn, *, requires_atmo_prior: bool) -> SurfacePriorFn:
+def _mark_surface_prior_metadata(
+    provider: SurfacePriorFn, *, requires_atmo_prior: bool
+) -> SurfacePriorFn:
     provider.requires_atmo_prior = requires_atmo_prior  # type: ignore[attr-defined]
     return provider
 
@@ -203,7 +209,9 @@ def _prepare_monthly_surface_prior_runtime(
 
     visible_bands = _select_visible_surface_prior_bands(observation.sensor_config)
     query_bands = _select_route_b_query_bands(observation.sensor_config)
-    monthly_filter = getattr(getattr(config, "surface_prior", None), "monthly_database_filter", None)
+    monthly_filter = getattr(
+        getattr(config, "surface_prior", None), "monthly_database_filter", None
+    )
     filter_enabled = bool(getattr(monthly_filter, "enabled", True))
     max_prediction_uncertainty = (
         float(getattr(monthly_filter, "max_prediction_uncertainty", 0.05))
@@ -211,19 +219,13 @@ def _prepare_monthly_surface_prior_runtime(
         else None
     )
     max_composite_quality = (
-        float(getattr(monthly_filter, "max_composite_quality", 0.05))
-        if filter_enabled
-        else None
+        float(getattr(monthly_filter, "max_composite_quality", 0.05)) if filter_enabled else None
     )
     max_source_fit_rmse = (
-        float(getattr(monthly_filter, "max_source_fit_rmse", 0.05))
-        if filter_enabled
-        else None
+        float(getattr(monthly_filter, "max_source_fit_rmse", 0.05)) if filter_enabled else None
     )
     max_knn_feature_distance = (
-        float(getattr(monthly_filter, "max_knn_feature_distance", 0.05))
-        if filter_enabled
-        else None
+        float(getattr(monthly_filter, "max_knn_feature_distance", 0.05)) if filter_enabled else None
     )
     database_resolution = _resolve_monthly_database_resolution(
         monthly_composite_provider,
@@ -261,7 +263,9 @@ def _prepare_monthly_surface_prior_runtime(
             max_source_fit_rmse=max_source_fit_rmse,
         )
     else:
-        source_bands = tuple(getattr(monthly_composite_provider, "source_bands", [*visible_bands, *query_bands]))
+        source_bands = tuple(
+            getattr(monthly_composite_provider, "source_bands", [*visible_bands, *query_bands])
+        )
         spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
             config,
             source_bands=source_bands,

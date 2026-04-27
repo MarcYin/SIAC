@@ -162,7 +162,9 @@ def read_monthly_composite_store_manifest(
     return MonthlyCompositeStoreManifest(
         version=version,
         source_name=manifest.get("source_name"),
-        source_bands=tuple(_deserialize_sensor_band(item) for item in manifest.get("source_bands", ())),
+        source_bands=tuple(
+            _deserialize_sensor_band(item) for item in manifest.get("source_bands", ())
+        ),
         entries=tuple(
             MonthlyCompositeStoreEntry(
                 label=str(entry["label"]),
@@ -172,7 +174,10 @@ def read_monthly_composite_store_manifest(
                 kind=str(entry["kind"]),
                 format=str(entry.get("format") or _infer_entry_format(str(entry["path"]))),
                 assets=(
-                    {str(name): str(path) for name, path in cast("dict[str, Any]", entry["assets"]).items()}
+                    {
+                        str(name): str(path)
+                        for name, path in cast("dict[str, Any]", entry["assets"]).items()
+                    }
                     if isinstance(entry.get("assets"), dict)
                     else None
                 ),
@@ -180,9 +185,7 @@ def read_monthly_composite_store_manifest(
             for entry in manifest.get("entries", ())
         ),
         grid=(
-            _deserialize_grid_spec(manifest["grid"])
-            if manifest.get("grid") is not None
-            else None
+            _deserialize_grid_spec(manifest["grid"]) if manifest.get("grid") is not None else None
         ),
     )
 
@@ -390,9 +393,13 @@ def _grid_template(grid: MonthlyCompositeStoreGridSpec) -> xr.DataArray:
 
 
 def _matches_template_grid(data: xr.DataArray, template: xr.DataArray) -> bool:
-    if data.sizes.get("x") != template.sizes.get("x") or data.sizes.get("y") != template.sizes.get("y"):
+    if data.sizes.get("x") != template.sizes.get("x") or data.sizes.get("y") != template.sizes.get(
+        "y"
+    ):
         return False
-    return np.array_equal(np.asarray(data.coords["x"].values), np.asarray(template.coords["x"].values)) and np.array_equal(
+    return np.array_equal(
+        np.asarray(data.coords["x"].values), np.asarray(template.coords["x"].values)
+    ) and np.array_equal(
         np.asarray(data.coords["y"].values),
         np.asarray(template.coords["y"].values),
     )
@@ -442,11 +449,21 @@ def _read_geotiff_composite(
         band_names = tuple(str(value) for value in first_band_data.coords["band"].values)
         kernel_arrays = {
             "f0": first_band_data,
-            "f1": _read_geotiff_asset(period_root / resolved_assets["f1"], band_names=band_names).astype(np.float32),
-            "f2": _read_geotiff_asset(period_root / resolved_assets["f2"], band_names=band_names).astype(np.float32),
-            "f0_unc": _read_geotiff_asset(period_root / resolved_assets["f0_unc"], band_names=band_names).astype(np.float32),
-            "f1_unc": _read_geotiff_asset(period_root / resolved_assets["f1_unc"], band_names=band_names).astype(np.float32),
-            "f2_unc": _read_geotiff_asset(period_root / resolved_assets["f2_unc"], band_names=band_names).astype(np.float32),
+            "f1": _read_geotiff_asset(
+                period_root / resolved_assets["f1"], band_names=band_names
+            ).astype(np.float32),
+            "f2": _read_geotiff_asset(
+                period_root / resolved_assets["f2"], band_names=band_names
+            ).astype(np.float32),
+            "f0_unc": _read_geotiff_asset(
+                period_root / resolved_assets["f0_unc"], band_names=band_names
+            ).astype(np.float32),
+            "f1_unc": _read_geotiff_asset(
+                period_root / resolved_assets["f1_unc"], band_names=band_names
+            ).astype(np.float32),
+            "f2_unc": _read_geotiff_asset(
+                period_root / resolved_assets["f2_unc"], band_names=band_names
+            ).astype(np.float32),
         }
         reflectance_unc = (
             _read_geotiff_asset(
@@ -523,7 +540,9 @@ def _read_geotiff_asset(
 ) -> xr.DataArray:
     with rasterio.open(path) as src:
         values = src.read()
-        y_coords, x_coords = _coords_from_transform(src.transform, height=src.height, width=src.width)
+        y_coords, x_coords = _coords_from_transform(
+            src.transform, height=src.height, width=src.width
+        )
         if src.count == 1:
             data = xr.DataArray(
                 values[0],
@@ -576,7 +595,9 @@ def _coords_from_transform(
     height: int,
     width: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if not np.isclose(transform.b, 0.0, rtol=0.0, atol=1e-12) or not np.isclose(transform.d, 0.0, rtol=0.0, atol=1e-12):
+    if not np.isclose(transform.b, 0.0, rtol=0.0, atol=1e-12) or not np.isclose(
+        transform.d, 0.0, rtol=0.0, atol=1e-12
+    ):
         raise ValueError("Monthly composite GeoTIFF assets must use axis-aligned transforms")
     x = transform.c + (np.arange(width, dtype=np.float32) + 0.5) * np.float32(transform.a)
     y = transform.f + (np.arange(height, dtype=np.float32) + 0.5) * np.float32(transform.e)
@@ -601,8 +622,16 @@ def _affine_from_coords(
     x_sign = _axis_sign(x) or 1.0
     y_sign = _axis_sign(y) or -1.0
 
-    x_step = (x_sign * x_resolution) if x_resolution is not None else (abs(y_resolution) if y_resolution is not None else 1.0)
-    y_step = (y_sign * y_resolution) if y_resolution is not None else (-abs(x_step) if x_step != 0 else -1.0)
+    x_step = (
+        (x_sign * x_resolution)
+        if x_resolution is not None
+        else (abs(y_resolution) if y_resolution is not None else 1.0)
+    )
+    y_step = (
+        (y_sign * y_resolution)
+        if y_resolution is not None
+        else (-abs(x_step) if x_step != 0 else -1.0)
+    )
     return Affine(
         float(x_step),
         0.0,
@@ -786,9 +815,7 @@ def _deserialize_sensor_band(payload: dict[str, Any]) -> SensorBand:
             else None
         ),
         rsrf_response=(
-            np.asarray(rsrf_response, dtype=np.float64)
-            if rsrf_response is not None
-            else None
+            np.asarray(rsrf_response, dtype=np.float64) if rsrf_response is not None else None
         ),
         rsrf_sensor_unit_id=cast("str | None", payload.get("rsrf_sensor_unit_id")),
         rsrf_representation_variant=cast("str | None", payload.get("rsrf_representation_variant")),
@@ -815,7 +842,9 @@ def _write_store_manifest(root: Path, manifest: MonthlyCompositeStoreManifest) -
         ],
         "grid": _serialize_grid_spec(manifest.grid),
     }
-    (root / _MANIFEST_NAME).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    (root / _MANIFEST_NAME).write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
 
 def _load_existing_store_entry_paths(root: Path) -> set[str]:
@@ -828,7 +857,9 @@ def _load_existing_store_entry_paths(root: Path) -> set[str]:
         logger.warning(
             "Could not read existing monthly composite manifest at %s (%s: %s); "
             "treating store as empty, stale entries will not be cleaned up.",
-            manifest_path, type(exc).__name__, exc,
+            manifest_path,
+            type(exc).__name__,
+            exc,
         )
         return set()
     return {entry.path for entry in manifest.entries}
@@ -856,7 +887,9 @@ def _serialize_grid_spec(grid: MonthlyCompositeStoreGridSpec | None) -> dict[str
 
 
 def _deserialize_grid_spec(payload: dict[str, Any]) -> MonthlyCompositeStoreGridSpec:
-    bounds = cast("tuple[float, float, float, float]", tuple(float(value) for value in payload["bounds"]))
+    bounds = cast(
+        "tuple[float, float, float, float]", tuple(float(value) for value in payload["bounds"])
+    )
     return MonthlyCompositeStoreGridSpec(
         bounds=bounds,
         crs=str(payload["crs"]),

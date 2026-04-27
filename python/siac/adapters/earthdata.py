@@ -394,7 +394,9 @@ def read_virtual_stack_to_target(
         values = values[np.newaxis, :, :]
 
     if values.shape[0] != stack_spec.expected_layers:
-        raise ValueError(f"Expected {stack_spec.expected_layers} stacked layer(s), got {values.shape[0]}")
+        raise ValueError(
+            f"Expected {stack_spec.expected_layers} stacked layer(s), got {values.shape[0]}"
+        )
 
     stacked = xr.DataArray(
         values,
@@ -463,7 +465,9 @@ def _build_virtual_stack_vrt(
         group_vrt = None
         group_vrt_paths.append(cropped_group_vrt_path)
 
-    logger.info("GDAL virtual stack: building master VRT from %d group VRT(s)", len(group_vrt_paths))
+    logger.info(
+        "GDAL virtual stack: building master VRT from %d group VRT(s)", len(group_vrt_paths)
+    )
     master_vrt = gdal.BuildVRT(
         master_vrt_path,
         group_vrt_paths,
@@ -499,7 +503,9 @@ def _crop_virtual_group_to_target_bounds(
     try:
         projected_bounds = transform_bounds(target_bounds, target_crs, source_crs)
     except Exception:
-        logger.debug("GDAL virtual stack: native bounds transform failed for %s", source_path, exc_info=True)
+        logger.debug(
+            "GDAL virtual stack: native bounds transform failed for %s", source_path, exc_info=True
+        )
         return source_path
 
     clipped_bounds = _intersect_bounds(projected_bounds, dataset_bounds)
@@ -562,7 +568,9 @@ def build_source_aligned_target_template(
             resolution_name=resolution_name,
         )
         source_bounds = _transform_bounds_to_crs(bounds, crs, source_crs)
-        return build_target_template(source_bounds, source_crs, resolved_resolution), resolved_resolution
+        return build_target_template(
+            source_bounds, source_crs, resolved_resolution
+        ), resolved_resolution
     finally:
         dataset = None
 
@@ -639,7 +647,14 @@ def _bounds_close(
     *,
     atol: float = 1e-6,
 ) -> bool:
-    return bool(np.allclose(np.asarray(left, dtype=np.float64), np.asarray(right, dtype=np.float64), atol=atol, rtol=0.0))
+    return bool(
+        np.allclose(
+            np.asarray(left, dtype=np.float64),
+            np.asarray(right, dtype=np.float64),
+            atol=atol,
+            rtol=0.0,
+        )
+    )
 
 
 def _resolve_target_template_resolution(
@@ -687,7 +702,9 @@ def _build_source_aligned_target_template_from_array(
     if resolved_resolution is None:
         raise ValueError(f"Could not infer {resolution_name} from source array")
     source_bounds = _transform_bounds_to_crs(bounds, crs, source_crs)
-    return build_target_template(source_bounds, source_crs, resolved_resolution), resolved_resolution
+    return build_target_template(
+        source_bounds, source_crs, resolved_resolution
+    ), resolved_resolution
 
 
 def _normalize_resolution_value(
@@ -778,15 +795,13 @@ def _merge_tiles_via_vrt(
         raise ValueError("Expected spatial dimensions to be the trailing ('y', 'x') axes")
     for arr in arrays[1:]:
         if not _merge_layout_compatible(reference, arr):
-            raise ValueError("All arrays must share the same band layout and non-spatial coordinates")
+            raise ValueError(
+                "All arrays must share the same band layout and non-spatial coordinates"
+            )
 
     resampling_enum = _normalize_resampling(resampling, RasterioResampling)
     target_transform = _target_transform(target, resolution=resolution)
-    source_tiles = [
-        arr
-        for arr in arrays
-        if _array_intersects_target(arr, bounds=bounds, crs=crs)
-    ]
+    source_tiles = [arr for arr in arrays if _array_intersects_target(arr, bounds=bounds, crs=crs)]
     if not source_tiles:
         empty = _empty_target_like(target, reference=reference, nodata=nodata)
         return empty.rio.write_transform(target_transform)
@@ -870,12 +885,15 @@ def _merge_layout_compatible(reference: xr.DataArray, candidate: xr.DataArray) -
         if not _coord_layout_compatible(reference.coords[dim], candidate.coords[dim]):
             return False
     grid_mappings = {
-        name
-        for name in (reference.rio.grid_mapping, candidate.rio.grid_mapping)
-        if name
+        name for name in (reference.rio.grid_mapping, candidate.rio.grid_mapping) if name
     }
     for name, coord in reference.coords.items():
-        if name in grid_mappings or "x" in coord.dims or "y" in coord.dims or name in reference.dims:
+        if (
+            name in grid_mappings
+            or "x" in coord.dims
+            or "y" in coord.dims
+            or name in reference.dims
+        ):
             continue
         candidate_coord = candidate.coords.get(name)
         if candidate_coord is None or not _coord_layout_compatible(coord, candidate_coord):
@@ -908,7 +926,9 @@ def _normalize_resampling(resampling: Resampling, enum_type: type) -> object:
 
 
 def _normalize_gdal_resampling(resampling: Resampling) -> str:
-    name = resampling if isinstance(resampling, str) else getattr(resampling, "name", str(resampling))
+    name = (
+        resampling if isinstance(resampling, str) else getattr(resampling, "name", str(resampling))
+    )
     normalized = str(name).lower()
     mapping = {
         "nearest": "near",
@@ -938,7 +958,9 @@ def _affine_from_coords(
 ) -> Any:
     from rasterio.transform import Affine
 
-    return Affine.translation(x_values[0] - x_step / 2.0, y_values[0] - y_step / 2.0) * Affine.scale(x_step, y_step)
+    return Affine.translation(
+        x_values[0] - x_step / 2.0, y_values[0] - y_step / 2.0
+    ) * Affine.scale(x_step, y_step)
 
 
 def _target_bounds_from_template(
@@ -997,11 +1019,10 @@ def _restore_merged_dataarray(
     reference: xr.DataArray,
     target: xr.DataArray,
 ) -> xr.DataArray:
-    restored = np.asarray(values, dtype=np.float32).reshape(reference.shape[:-2] + values.shape[-2:])
-    coords: dict[str, object] = {
-        dim: reference.coords[dim]
-        for dim in reference.dims[:-2]
-    }
+    restored = np.asarray(values, dtype=np.float32).reshape(
+        reference.shape[:-2] + values.shape[-2:]
+    )
+    coords: dict[str, object] = {dim: reference.coords[dim] for dim in reference.dims[:-2]}
     coords["y"] = target.coords["y"]
     coords["x"] = target.coords["x"]
     for name, coord in reference.coords.items():
@@ -1021,10 +1042,7 @@ def _empty_target_like(
 ) -> xr.DataArray:
     fill_value = np.nan if nodata is None else float(nodata)
     values = np.full(reference.shape[:-2] + target.shape, fill_value, dtype=np.float32)
-    coords: dict[str, object] = {
-        dim: reference.coords[dim]
-        for dim in reference.dims[:-2]
-    }
+    coords: dict[str, object] = {dim: reference.coords[dim] for dim in reference.dims[:-2]}
     coords["y"] = target.coords["y"]
     coords["x"] = target.coords["x"]
     for name, coord in reference.coords.items():

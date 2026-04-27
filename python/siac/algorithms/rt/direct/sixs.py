@@ -109,11 +109,12 @@ class SixSBackend:
         missing = {"xap", "xbp", "xcp"} - set(outputs)
         if missing:
             raise KeyError(
-                "SixS runner did not return required coefficients: "
-                + ", ".join(sorted(missing))
+                "SixS runner did not return required coefficients: " + ", ".join(sorted(missing))
             )
 
-        extras = {name: value for name, value in outputs.items() if name not in {"xap", "xbp", "xcp"}}
+        extras = {
+            name: value for name, value in outputs.items() if name not in {"xap", "xbp", "xcp"}
+        }
         return RTCoefficients(
             xap=outputs["xap"],
             xbp=outputs["xbp"],

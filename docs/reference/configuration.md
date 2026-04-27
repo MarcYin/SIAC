@@ -394,7 +394,7 @@ Execution knobs:
 Supported execution backends:
 
 - `thread`
-- `dask`
+- `dask` — requires installing the optional `siac[dask]` extra.
 
 ## `output.defaults`
 

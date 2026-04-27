@@ -36,9 +36,15 @@ def _result(
     coords = {"y": [0, 1], "x": [0, 1]}
     boa = xr.Dataset(
         {
-            "B04": xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coords),
-            "B03": xr.DataArray(np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coords),
-            "B02": xr.DataArray(np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coords),
+            "B04": xr.DataArray(
+                np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coords
+            ),
+            "B03": xr.DataArray(
+                np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coords
+            ),
+            "B02": xr.DataArray(
+                np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coords
+            ),
         }
     )
     boa_unc = (
@@ -58,8 +64,12 @@ def _result(
     surface_prior = (
         xr.Dataset(
             {
-                "B04": xr.DataArray(np.full((2, 2), 0.11, dtype=np.float32), dims=["y", "x"], coords=coords),
-                "B03": xr.DataArray(np.full((2, 2), 0.09, dtype=np.float32), dims=["y", "x"], coords=coords),
+                "B04": xr.DataArray(
+                    np.full((2, 2), 0.11, dtype=np.float32), dims=["y", "x"], coords=coords
+                ),
+                "B03": xr.DataArray(
+                    np.full((2, 2), 0.09, dtype=np.float32), dims=["y", "x"], coords=coords
+                ),
             }
         )
         if include_surface_prior
@@ -84,12 +94,20 @@ def _result(
             "2023_07": MonthlyCompositeOutput(
                 reflectance=xr.Dataset(
                     {
-                        "B04": xr.DataArray(np.full((2, 2), 0.13, dtype=np.float32), dims=["y", "x"], coords=coords),
-                        "B03": xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coords),
+                        "B04": xr.DataArray(
+                            np.full((2, 2), 0.13, dtype=np.float32), dims=["y", "x"], coords=coords
+                        ),
+                        "B03": xr.DataArray(
+                            np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coords
+                        ),
                     }
                 ),
-                quality=xr.DataArray(np.full((2, 2), 0.4, dtype=np.float32), dims=["y", "x"], coords=coords),
-                sample_index=xr.DataArray(np.full((2, 2), 3, dtype=np.int16), dims=["y", "x"], coords=coords),
+                quality=xr.DataArray(
+                    np.full((2, 2), 0.4, dtype=np.float32), dims=["y", "x"], coords=coords
+                ),
+                sample_index=xr.DataArray(
+                    np.full((2, 2), 3, dtype=np.int16), dims=["y", "x"], coords=coords
+                ),
             )
         }
         if include_monthly_composites
@@ -159,26 +177,32 @@ def _result(
 
 class TestScenePrefix:
     def test_sentinel2_prefix(self):
-        prefix = _derive_scene_prefix({
-            "satellite": "S2A",
-            "observation_time": datetime(2024, 3, 15, 10, 30, 45),
-            "tile_id": "32UQD",
-        })
+        prefix = _derive_scene_prefix(
+            {
+                "satellite": "S2A",
+                "observation_time": datetime(2024, 3, 15, 10, 30, 45),
+                "tile_id": "32UQD",
+            }
+        )
         assert prefix == "S2A_L2A_20240315T103045"
 
     def test_sentinel2b_prefix(self):
-        prefix = _derive_scene_prefix({
-            "satellite": "S2B",
-            "observation_time": datetime(2024, 1, 2, 8, 15, 0),
-            "tile_id": "T10SFG",
-        })
+        prefix = _derive_scene_prefix(
+            {
+                "satellite": "S2B",
+                "observation_time": datetime(2024, 1, 2, 8, 15, 0),
+                "tile_id": "T10SFG",
+            }
+        )
         assert prefix == "S2B_L2A_20240102T081500"
 
     def test_landsat_prefix(self):
-        prefix = _derive_scene_prefix({
-            "satellite": "L8",
-            "observation_time": datetime(2024, 6, 20, 14, 0, 0),
-        })
+        prefix = _derive_scene_prefix(
+            {
+                "satellite": "L8",
+                "observation_time": datetime(2024, 6, 20, 14, 0, 0),
+            }
+        )
         assert prefix == "L8_L2A_20240620T140000"
 
     def test_missing_metadata_defaults(self):
@@ -186,19 +210,23 @@ class TestScenePrefix:
         assert prefix == "SAT_L2A_00000000T000000"
 
     def test_tile_id_is_not_included_in_output_prefix(self):
-        prefix = _derive_scene_prefix({
-            "satellite": "S2A",
-            "observation_time": datetime(2024, 1, 1, 0, 0, 0),
-            "tile_id": "T32UQD",
-        })
+        prefix = _derive_scene_prefix(
+            {
+                "satellite": "S2A",
+                "observation_time": datetime(2024, 1, 1, 0, 0, 0),
+                "tile_id": "T32UQD",
+            }
+        )
         assert prefix == "S2A_L2A_20240101T000000"
 
     def test_esa_long_tile_id_is_not_included_in_output_prefix(self):
-        prefix = _derive_scene_prefix({
-            "satellite": "S2C",
-            "observation_time": datetime(2025, 8, 26, 17, 22, 22),
-            "tile_id": "S2C_OPER_MSI_L1C_TL_2CPS_20250826T204551_A005087_T15TVG_N05.11",
-        })
+        prefix = _derive_scene_prefix(
+            {
+                "satellite": "S2C",
+                "observation_time": datetime(2025, 8, 26, 17, 22, 22),
+                "tile_id": "S2C_OPER_MSI_L1C_TL_2CPS_20250826T204551_A005087_T15TVG_N05.11",
+            }
+        )
         assert prefix == "S2C_L2A_20250826T172222"
 
 
@@ -244,7 +272,9 @@ def test_raster_output_uses_satellite_prefix_for_boa_bands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -306,7 +336,9 @@ def test_correction_boa_stream_writes_boa_once_and_finishes_stac(
 
     monkeypatch.setattr(output_module, "write_cog", _fake_write_fn)
     monkeypatch.setattr("siac.storage.readers.read_raster", _fake_read_raster)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
     monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda *_a, **_kw: None)
     monkeypatch.setattr(output_module, "write_false_colour_preview", lambda *_a, **_kw: None)
     monkeypatch.setattr(output_module, "write_field_preview", lambda *_a, **_kw: None)
@@ -326,10 +358,7 @@ def test_correction_boa_stream_writes_boa_once_and_finishes_stac(
 
     assert stream is not None
     streamed_boa = xr.Dataset(
-        {
-            name: stream.write_boa_band(name, field)
-            for name, field in result.boa.data_vars.items()
-        }
+        {name: stream.write_boa_band(name, field) for name, field in result.boa.data_vars.items()}
     )
     streamed_result = replace(result, boa=streamed_boa)
 
@@ -361,7 +390,9 @@ def test_correction_boa_stream_can_skip_reopen_for_speed(
 
     monkeypatch.setattr(output_module, "write_cog", _fake_write_fn)
     monkeypatch.setattr("siac.storage.readers.read_raster", _unexpected_read_raster)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
     monkeypatch.setattr(output_module, "write_rgb_quicklook", lambda *_a, **_kw: None)
     monkeypatch.setattr(output_module, "write_false_colour_preview", lambda *_a, **_kw: None)
     monkeypatch.setattr(output_module, "write_field_preview", lambda *_a, **_kw: None)
@@ -382,10 +413,7 @@ def test_correction_boa_stream_can_skip_reopen_for_speed(
 
     assert stream is not None
     streamed_boa = xr.Dataset(
-        {
-            name: stream.write_boa_band(name, field)
-            for name, field in result.boa.data_vars.items()
-        }
+        {name: stream.write_boa_band(name, field) for name, field in result.boa.data_vars.items()}
     )
     streamed_result = replace(result, boa=streamed_boa)
 
@@ -406,7 +434,9 @@ def test_raster_output_emits_solver_qa_masks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -440,7 +470,9 @@ def test_raster_output_emits_fitting_cost_as_float32(
 ) -> None:
     """fitting_cost is a float32 QA field, not a boolean mask."""
     write_fn_calls, _, _, _ = _mock_writers(monkeypatch)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     coords = {"y": [0, 1], "x": [0, 1]}
     result = _result(include_uncertainty=False, include_solver_qa=True)
@@ -469,7 +501,9 @@ def test_raster_output_emits_fitting_cost_as_float32(
     assert cost_calls[0][1]["dtype"] == "float32"
 
     # Boolean QA fields should still use uint8
-    bool_calls = [c for c in write_fn_calls if "QA_" in c[0].name and "fitting_cost" not in c[0].name]
+    bool_calls = [
+        c for c in write_fn_calls if "QA_" in c[0].name and "fitting_cost" not in c[0].name
+    ]
     assert all(c[1]["dtype"] == "uint8" for c in bool_calls)
 
     assert "auxiliary.qa.fitting_cost" in artifacts
@@ -480,7 +514,9 @@ def test_raster_output_emits_surface_prior_and_monthly_composites(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_fn_calls, dataset_calls, _, _ = _mock_writers(monkeypatch)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -503,7 +539,10 @@ def test_raster_output_emits_surface_prior_and_monthly_composites(
     assert artifacts["surface_prior_unc.B04"].name == f"{prefix}_SURF_UNC_B04.tif"
 
     # Monthly composites still use subdirectory (too many files)
-    assert {path.name for path, _, _ in write_fn_calls if "monthly" in str(path)} == {"quality.tif", "sample_index.tif"}
+    assert {path.name for path, _, _ in write_fn_calls if "monthly" in str(path)} == {
+        "quality.tif",
+        "sample_index.tif",
+    }
     assert {
         "monthly_composites.2023_07.B04",
         "monthly_composites.2023_07.B03",
@@ -530,7 +569,9 @@ def test_netcdf_output_uses_satellite_prefix(
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
     monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _s, path: path)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -559,23 +600,38 @@ def test_netcdf_auxiliary_aligns_cloud_mask_to_atmo_grid(
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
     fine_coords = {"y": [1750.0, 1250.0, 750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
     result = CorrectionResult(
         boa=xr.Dataset(
             {
-                "B04": xr.DataArray(np.full((4, 4), 0.12, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
-                "B03": xr.DataArray(np.full((4, 4), 0.10, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
-                "B02": xr.DataArray(np.full((4, 4), 0.08, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+                "B04": xr.DataArray(
+                    np.full((4, 4), 0.12, dtype=np.float32), dims=["y", "x"], coords=fine_coords
+                ),
+                "B03": xr.DataArray(
+                    np.full((4, 4), 0.10, dtype=np.float32), dims=["y", "x"], coords=fine_coords
+                ),
+                "B02": xr.DataArray(
+                    np.full((4, 4), 0.08, dtype=np.float32), dims=["y", "x"], coords=fine_coords
+                ),
             }
         ),
         boa_unc=None,
-        aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-        tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        aot=xr.DataArray(
+            np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+        ),
+        tcwv=xr.DataArray(
+            np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+        ),
         cloud_mask=xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"], coords=fine_coords),
-        metadata={"satellite": "S2A", "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
+        metadata={
+            "satellite": "S2A",
+            "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        },
     )
     result.cloud_mask.values[0, 0] = True
 
@@ -610,7 +666,9 @@ def test_netcdf_auxiliary_includes_solver_qa_masks(
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -645,7 +703,9 @@ def test_zarr_output_uses_satellite_prefix(
 
     monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
     monkeypatch.setattr(output_module, "write_aot_scatter_plot", lambda _s, path: path)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -673,23 +733,38 @@ def test_zarr_auxiliary_aligns_cloud_mask_to_atmo_grid(
         return path
 
     monkeypatch.setattr(output_module, "write_zarr", _fake_write_zarr)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
     fine_coords = {"y": [1750.0, 1250.0, 750.0, 250.0], "x": [250.0, 750.0, 1250.0, 1750.0]}
     result = CorrectionResult(
         boa=xr.Dataset(
             {
-                "B04": xr.DataArray(np.full((4, 4), 0.12, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
-                "B03": xr.DataArray(np.full((4, 4), 0.10, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
-                "B02": xr.DataArray(np.full((4, 4), 0.08, dtype=np.float32), dims=["y", "x"], coords=fine_coords),
+                "B04": xr.DataArray(
+                    np.full((4, 4), 0.12, dtype=np.float32), dims=["y", "x"], coords=fine_coords
+                ),
+                "B03": xr.DataArray(
+                    np.full((4, 4), 0.10, dtype=np.float32), dims=["y", "x"], coords=fine_coords
+                ),
+                "B02": xr.DataArray(
+                    np.full((4, 4), 0.08, dtype=np.float32), dims=["y", "x"], coords=fine_coords
+                ),
             }
         ),
         boa_unc=None,
-        aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-        tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        aot=xr.DataArray(
+            np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+        ),
+        tcwv=xr.DataArray(
+            np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+        ),
         cloud_mask=xr.DataArray(np.zeros((4, 4), dtype=bool), dims=["y", "x"], coords=fine_coords),
-        metadata={"satellite": "S2A", "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
+        metadata={
+            "satellite": "S2A",
+            "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        },
     )
     result.cloud_mask.values[0, 0] = True
 
@@ -721,7 +796,9 @@ def test_zarr_surface_prior_and_monthly_composites(
         return path
 
     monkeypatch.setattr(output_module, "write_zarr", _fake_writer)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
         OutputDefaultsConfig(
@@ -763,7 +840,9 @@ def test_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
         return path
 
     monkeypatch.setattr(output_module, "write_netcdf", _fake_write_netcdf)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     coarse_coords = {"y": [1500.0, 500.0], "x": [500.0, 1500.0]}
     shifted_mask = xr.DataArray(
@@ -774,16 +853,29 @@ def test_netcdf_auxiliary_reorders_same_shape_cloud_mask_coords(
     result = CorrectionResult(
         boa=xr.Dataset(
             {
-                "B04": xr.DataArray(np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-                "B03": xr.DataArray(np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-                "B02": xr.DataArray(np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+                "B04": xr.DataArray(
+                    np.full((2, 2), 0.12, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+                ),
+                "B03": xr.DataArray(
+                    np.full((2, 2), 0.10, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+                ),
+                "B02": xr.DataArray(
+                    np.full((2, 2), 0.08, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+                ),
             }
         ),
         boa_unc=None,
-        aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
-        tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords),
+        aot=xr.DataArray(
+            np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+        ),
+        tcwv=xr.DataArray(
+            np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coarse_coords
+        ),
         cloud_mask=shifted_mask,
-        metadata={"satellite": "S2A", "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc)},
+        metadata={
+            "satellite": "S2A",
+            "observation_time": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        },
     )
 
     writer = ConfiguredOutputWriter(
@@ -871,7 +963,9 @@ def test_stac_item_includes_view_geometry_when_available(
     }
 
     writer = ConfiguredOutputWriter(
-        OutputDefaultsConfig(format="cog", include_uncertainty=False, include_auxiliary=False, include_rgb=False)
+        OutputDefaultsConfig(
+            format="cog", include_uncertainty=False, include_auxiliary=False, include_rgb=False
+        )
     )
     artifacts = writer.write(_result(include_uncertainty=False, metadata=meta), tmp_path)
 
@@ -910,10 +1004,14 @@ def test_output_with_empty_metadata_uses_fallback_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _mock_writers(monkeypatch)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     writer = ConfiguredOutputWriter(
-        OutputDefaultsConfig(format="cog", include_uncertainty=False, include_auxiliary=False, include_rgb=False)
+        OutputDefaultsConfig(
+            format="cog", include_uncertainty=False, include_auxiliary=False, include_rgb=False
+        )
     )
     artifacts = writer.write(_result(include_uncertainty=False, metadata={}), tmp_path)
 
@@ -928,7 +1026,9 @@ def test_skip_correction_writes_auxiliary_without_boa(
 ) -> None:
     """Empty BOA (skip_correction mode): no BOA bands written, but AOT/TCWV/cloud are."""
     _mock_writers(monkeypatch)
-    monkeypatch.setattr(output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"})
+    monkeypatch.setattr(
+        output_module, "build_stac_item_from_result", lambda *_a, **_kw: {"type": "Feature"}
+    )
 
     coords = {"y": [0, 1], "x": [0, 1]}
     result = CorrectionResult(

@@ -64,6 +64,7 @@ class _CDSClient(Protocol):
 class _CDSAPIModule(Protocol):
     def Client(self, **kwargs: object) -> _CDSClient: ...
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -197,9 +198,13 @@ class CAMSProvider:
         elevation = xr.zeros_like(aot)
 
         return AtmosphericState(
-            aot=aot, tcwv=tcwv, tco3=tco3,
-            aot_unc=aot_unc, tcwv_unc=tcwv_unc, tco3_unc=tco3_unc,
-            elevation=elevation
+            aot=aot,
+            tcwv=tcwv,
+            tco3=tco3,
+            aot_unc=aot_unc,
+            tcwv_unc=tcwv_unc,
+            tco3_unc=tco3_unc,
+            elevation=elevation,
         )
 
     @classmethod
@@ -348,10 +353,7 @@ class CAMSProvider:
         if not added:
             return primary, []
         reference = cls._reference_variable(primary)
-        aligned = {
-            name: cls._align_missing_variable(reference, fallback[name])
-            for name in added
-        }
+        aligned = {name: cls._align_missing_variable(reference, fallback[name]) for name in added}
         return xr.merge([primary, xr.Dataset(aligned)], compat="override", join="exact"), added
 
     def _load_cds_dataset(self, obs_time: datetime) -> xr.Dataset | None:
@@ -360,14 +362,18 @@ class CAMSProvider:
         downloaded_file = self._download_cams_file(obs_time)
         if downloaded_file is None:
             return None
-        return self._load_from_local_explicit_path(downloaded_file, source_name=downloaded_file.name)
+        return self._load_from_local_explicit_path(
+            downloaded_file, source_name=downloaded_file.name
+        )
 
     def _uses_jasmin_source(self) -> bool:
         if isinstance(self.data_dir, Path):
             return False
         return str(self.data_dir).rstrip("/").startswith(self._JASMIN_CAMS_BASE_URL.rstrip("/"))
 
-    def _complete_cams_dataset(self, dataset: xr.Dataset | None, obs_time: datetime) -> xr.Dataset | None:
+    def _complete_cams_dataset(
+        self, dataset: xr.Dataset | None, obs_time: datetime
+    ) -> xr.Dataset | None:
         missing = self._missing_required_variables(dataset)
         if not missing:
             return dataset
@@ -405,8 +411,13 @@ class CAMSProvider:
         return merged
 
     def _extract_variable(
-        self, data: xr.Dataset, var_name: str, bounds: tuple, crs: str,
-        resolution: float, obs_time: datetime
+        self,
+        data: xr.Dataset,
+        var_name: str,
+        bounds: tuple,
+        crs: str,
+        resolution: float,
+        obs_time: datetime,
     ) -> xr.DataArray:
         """Extract and regrid a single variable."""
         if var_name not in data:
@@ -564,7 +575,9 @@ class CAMSProvider:
             .drop_vars("forecast_period", errors="ignore")
         )
 
-    def _create_default_array(self, bounds: tuple, _crs: str, resolution: float, value: float) -> xr.DataArray:
+    def _create_default_array(
+        self, bounds: tuple, _crs: str, resolution: float, value: float
+    ) -> xr.DataArray:
         """Create default array with constant value."""
         xmin, ymin, xmax, ymax = bounds
         xmin, xmax = sorted((float(xmin), float(xmax)))
@@ -580,9 +593,13 @@ class CAMSProvider:
         tco3 = self._create_default_array(bounds, crs, resolution, 0.3)
 
         return AtmosphericState(
-            aot=aot, tcwv=tcwv, tco3=tco3,
-            aot_unc=aot * 0.5, tcwv_unc=tcwv * 0.2, tco3_unc=tco3 * 0.1,
-            elevation=xr.zeros_like(aot)
+            aot=aot,
+            tcwv=tcwv,
+            tco3=tco3,
+            aot_unc=aot * 0.5,
+            tcwv_unc=tcwv * 0.2,
+            tco3_unc=tco3 * 0.1,
+            elevation=xr.zeros_like(aot),
         )
 
     @classmethod
@@ -669,7 +686,8 @@ class CAMSProvider:
     def _has_cams_tif_candidates(self, date_str: str, iso_date: str) -> bool:
         for pattern in self._tif_patterns(date_str, iso_date):
             files = (
-                p for p in self._require_local_data_dir().glob(pattern)
+                p
+                for p in self._require_local_data_dir().glob(pattern)
                 if p.is_file() and p.suffix.lower() in self._TIFF_SUFFIXES
             )
             if any(files):
@@ -855,7 +873,9 @@ class CAMSProvider:
     @staticmethod
     def _looks_like_cdse_cams_base(base_url: str) -> bool:
         parsed = urlparse(base_url)
-        return parsed.scheme.lower() == "s3" and parsed.netloc == "eodata" and "/CAMS/" in parsed.path
+        return (
+            parsed.scheme.lower() == "s3" and parsed.netloc == "eodata" and "/CAMS/" in parsed.path
+        )
 
     def _select_cdse_cams_files(
         self,
@@ -910,7 +930,8 @@ class CAMSProvider:
         """Load CAMS variables from GeoTIFF files in a directory."""
         for pattern in self._tif_patterns(date_str, iso_date):
             files = sorted(
-                p for p in self._require_local_data_dir().glob(pattern)
+                p
+                for p in self._require_local_data_dir().glob(pattern)
                 if p.is_file() and p.suffix.lower() in self._TIFF_SUFFIXES
             )
             if not files:
@@ -946,7 +967,9 @@ class CAMSProvider:
 
         variable = self._infer_variable_name(source_name or path.name)
         if variable is None:
-            logger.warning(f"Could not infer CAMS variable from GeoTIFF name: {source_name or path.name}")
+            logger.warning(
+                f"Could not infer CAMS variable from GeoTIFF name: {source_name or path.name}"
+            )
             return None
 
         if "band" in da.dims and da.sizes["band"] == 1:
@@ -1032,7 +1055,9 @@ class CAMSProvider:
                 logger.info(
                     "No SIAC CDS credentials configured; relying on cdsapi defaults such as ~/.cdsapirc."
                 )
-            cdsapi.Client(**client_kwargs).retrieve(self._CDS_DATASET, request).download(str(output_path))
+            cdsapi.Client(**client_kwargs).retrieve(self._CDS_DATASET, request).download(
+                str(output_path)
+            )
         except Exception as e:
             logger.warning(f"Failed to download CAMS data for {obs_time:%Y-%m-%d}: {e}")
             return None

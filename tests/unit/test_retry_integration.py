@@ -52,6 +52,7 @@ def test_retry_with_timeout_then_success():
 
 def test_retry_permanent_failure_raises():
     """ValueError (non-transient) should not be retried."""
+
     def bad_query(**kwargs):
         raise ValueError("Invalid short_name")
 

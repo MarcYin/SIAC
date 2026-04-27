@@ -64,7 +64,9 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
-def _split_storage_options(storage_options: dict[str, Any]) -> tuple[dict[str, Any], _ReferenceOptions]:
+def _split_storage_options(
+    storage_options: dict[str, Any],
+) -> tuple[dict[str, Any], _ReferenceOptions]:
     """Split reference-cache options from backend storage options."""
     options = dict(storage_options)
     if "use_reference" in options:
@@ -76,8 +78,12 @@ def _split_storage_options(storage_options: dict[str, Any]) -> tuple[dict[str, A
     reference_cache_dir = options.pop("reference_cache_dir", None)
     reference_options = _ReferenceOptions(
         refresh=_coerce_bool(options.pop("reference_refresh", False), default=False),
-        reference_json=Path(str(reference_json)).expanduser() if reference_json is not None else None,
-        cache_dir=Path(str(reference_cache_dir)).expanduser() if reference_cache_dir is not None else None,
+        reference_json=Path(str(reference_json)).expanduser()
+        if reference_json is not None
+        else None,
+        cache_dir=Path(str(reference_cache_dir)).expanduser()
+        if reference_cache_dir is not None
+        else None,
     )
     return options, reference_options
 
@@ -180,7 +186,9 @@ def _load_reference_document(reference_path: Path) -> dict[str, Any]:
     return cast("dict[str, Any]", json.loads(reference_path.read_text(encoding="utf-8")))
 
 
-def _reference_remote(path: str, storage_options: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+def _reference_remote(
+    path: str, storage_options: dict[str, Any]
+) -> tuple[str | None, dict[str, Any]]:
     """Resolve remote protocol/options for reference:// mapper."""
     scheme = urlparse(path).scheme or None
     if scheme in {"http", "https"}:
@@ -281,7 +289,9 @@ def build_lut_store(path: str, storage_options: dict[str, Any]) -> str | Mutable
         return build_readonly_zip_mapper(path_or_url, resolved_storage_options)
 
     if is_remote_path(path):
-        return cast("MutableMapping[str, bytes]", fsspec.get_mapper(path, **resolved_storage_options))
+        return cast(
+            "MutableMapping[str, bytes]", fsspec.get_mapper(path, **resolved_storage_options)
+        )
 
     if resolved_storage_options:
         return cast(

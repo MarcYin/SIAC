@@ -173,7 +173,9 @@ def read_raster_window(
         )
 
         if np.ma.isMaskedArray(values):
-            values = np.asarray(np.ma.filled(np.ma.asarray(values, dtype=np.float32), np.nan), dtype=np.float32)
+            values = np.asarray(
+                np.ma.filled(np.ma.asarray(values, dtype=np.float32), np.nan), dtype=np.float32
+            )
 
         if values.ndim == 3 and values.shape[0] == 1:
             values = values[0]
@@ -271,7 +273,9 @@ def read_multiband(
         band_names = [Path(p).stem for p in paths]
 
     if len(paths) != len(band_names):
-        raise ValueError(f"Number of paths ({len(paths)}) must match band_names ({len(band_names)})")
+        raise ValueError(
+            f"Number of paths ({len(paths)}) must match band_names ({len(band_names)})"
+        )
 
     data_vars = {}
     ref_crs = None
@@ -516,4 +520,8 @@ def check_rasters_aligned(
         return False
 
     # Check bounds
-    return np.allclose([info1["bounds"].left, info1["bounds"].bottom, info1["bounds"].right, info1["bounds"].top], [info2["bounds"].left, info2["bounds"].bottom, info2["bounds"].right, info2["bounds"].top], atol=tolerance)
+    return np.allclose(
+        [info1["bounds"].left, info1["bounds"].bottom, info1["bounds"].right, info1["bounds"].top],
+        [info2["bounds"].left, info2["bounds"].bottom, info2["bounds"].right, info2["bounds"].top],
+        atol=tolerance,
+    )

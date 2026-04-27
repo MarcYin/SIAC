@@ -125,9 +125,7 @@ def test_stac_scalar_helpers_cover_identifier_and_fallback_paths(tmp_path: Path)
         )
         == "S2B"
     )
-    assert (
-        stac_mod._parse_satellite_id(None, metadata={"satellite": "L8"}, fallback="TEST") == "L8"
-    )
+    assert stac_mod._parse_satellite_id(None, metadata={"satellite": "L8"}, fallback="TEST") == "L8"
     assert stac_mod._parse_satellite_id(None, metadata={}, fallback="TEST") == "TEST"
     assert (
         stac_mod._parse_satellite_id(

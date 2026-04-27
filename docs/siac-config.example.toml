@@ -95,16 +95,21 @@ dilation_pixels = 5
 solver_cell_fraction_threshold = 0.5
 cloud_buffer_pixels = 2
 
-[auth.cdse]
-username = "your-cdse-username"
-password = "your-cdse-password"
-
-[auth.earthdata]
-username = "your-earthdata-username"
-password = "your-earthdata-password"
-
-[auth.cds]
-api_key = "uid:key"
+# Prefer environment variables for credentials:
+# - SIAC_CDSE_USERNAME / SIAC_CDSE_PASSWORD
+# - SIAC_EARTHDATA_USERNAME / SIAC_EARTHDATA_PASSWORD
+# - SIAC_CDS_API_KEY
+#
+# [auth.cdse]
+# username = ""
+# password = ""
+#
+# [auth.earthdata]
+# username = ""
+# password = ""
+#
+# [auth.cds]
+# api_key = ""
 
 [output.defaults]
 format = "cog"

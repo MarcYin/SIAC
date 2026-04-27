@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 # protocol line execution
 # ------------------------------
 
+
 def test_protocol_method_stubs_execute_lines():
     # Property/method stubs with ellipsis bodies are executable; invoke each once.
     assert SatellitePreprocessor.sensor_config.fget(object()) is None
@@ -50,17 +51,27 @@ def test_protocol_method_stubs_execute_lines():
     assert SatellitePreprocessor.extract_cloud_mask(object(), "/tmp") is None
     assert SatellitePreprocessor.get_metadata(object(), "/tmp") is None
 
-    assert AtmosphericPriorProvider.get_prior(object(), (0, 0, 1, 1), "EPSG:4326", datetime(2024, 1, 1), 1000.0) is None
+    assert (
+        AtmosphericPriorProvider.get_prior(
+            object(), (0, 0, 1, 1), "EPSG:4326", datetime(2024, 1, 1), 1000.0
+        )
+        is None
+    )
     assert AtmosphericPriorProvider.source_name.fget(object()) is None
 
-    assert BRDFProductProvider.get_brdf_parameters(
-        object(), (0, 0, 1, 1), "EPSG:4326", datetime(2024, 1, 1), 500.0, [1, 2, 3], 16
-    ) is None
+    assert (
+        BRDFProductProvider.get_brdf_parameters(
+            object(), (0, 0, 1, 1), "EPSG:4326", datetime(2024, 1, 1), 500.0, [1, 2, 3], 16
+        )
+        is None
+    )
     assert BRDFProductProvider.source_name.fget(object()) is None
 
     assert SurfacePriorDeriver.compute_surface_prior(object(), object(), object(), None) is None
 
-    assert RTModelBackend.compute_coefficients(object(), object(), object(), object(), False) is None
+    assert (
+        RTModelBackend.compute_coefficients(object(), object(), object(), object(), False) is None
+    )
     assert RTModelBackend.supports_jacobian(object()) is None
     assert RTModelBackend.backend_name.fget(object()) is None
     assert RTModelBackend.is_available_for_sensor(object(), "MSI", "S2A") is None
@@ -74,8 +85,11 @@ def test_protocol_method_stubs_execute_lines():
 # validation fallback shape path
 # ------------------------------
 
+
 def test_spatial_shape_fallback_and_error():
-    ds_3d = xr.Dataset({"v": xr.DataArray(np.zeros((2, 3, 4), dtype=np.float32), dims=["b", "row", "col"])})
+    ds_3d = xr.Dataset(
+        {"v": xr.DataArray(np.zeros((2, 3, 4), dtype=np.float32), dims=["b", "row", "col"])}
+    )
     assert spatial_shape(ds_3d) == (3, 4)
 
     ds_1d = xr.Dataset({"v": xr.DataArray(np.zeros((2,), dtype=np.float32), dims=["x"])})
@@ -86,6 +100,7 @@ def test_spatial_shape_fallback_and_error():
 # ------------------------------
 # satellite.base utility branches
 # ------------------------------
+
 
 class _DummyPreprocessor(BaseSatellitePreprocessor):
     @property
@@ -139,6 +154,7 @@ def test_base_preprocessor_and_sensor_detection_branches(tmp_path: Path, monkeyp
 # solver.cost uncovered helpers
 # ------------------------------
 
+
 def _geom(shape=(3, 3)) -> GeometryAngles:
     return GeometryAngles(
         sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -151,14 +167,31 @@ def _geom(shape=(3, 3)) -> GeometryAngles:
 def _atmo(shape=(3, 3)) -> AtmosphericState:
     def da(v):
         return xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
-    return AtmosphericState(aot=da(0.15), tcwv=da(2.0), tco3=da(0.3), aot_unc=da(0.05), tcwv_unc=da(0.3), tco3_unc=da(0.03), elevation=da(0.1))
+
+    return AtmosphericState(
+        aot=da(0.15),
+        tcwv=da(2.0),
+        tco3=da(0.3),
+        aot_unc=da(0.05),
+        tcwv_unc=da(0.3),
+        tco3_unc=da(0.03),
+        elevation=da(0.1),
+    )
 
 
 def _surface(shape=(3, 3)) -> SurfacePrior:
     def da(v):
         return xr.DataArray(np.full(shape, v, dtype=np.float32), dims=["y", "x"])
-    kernels = BRDFKernelWeights(f0=da(0.1), f1=da(0.05), f2=da(0.02), f0_unc=da(0.01), f1_unc=da(0.01), f2_unc=da(0.01))
-    return SurfacePrior(boa=da(0.2), boa_unc=da(0.1), kernels=kernels, mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]))
+
+    kernels = BRDFKernelWeights(
+        f0=da(0.1), f1=da(0.05), f2=da(0.02), f0_unc=da(0.01), f1_unc=da(0.01), f2_unc=da(0.01)
+    )
+    return SurfacePrior(
+        boa=da(0.2),
+        boa_unc=da(0.1),
+        kernels=kernels,
+        mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+    )
 
 
 class _NoMultiRT:
@@ -168,10 +201,13 @@ class _NoMultiRT:
         xap = xr.DataArray(np.full(shape, 1.0), dims=["y", "x"])
         xbp = xr.DataArray(np.full(shape, 0.0), dims=["y", "x"])
         xcp = xr.DataArray(np.full(shape, 0.0), dims=["y", "x"])
-        d = xr.concat([
-            xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
-            xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
-        ], dim="param").assign_coords(param=["aot", "tcwv"])
+        d = xr.concat(
+            [
+                xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+                xr.DataArray(np.full(shape, 0.2), dims=["y", "x"]),
+            ],
+            dim="param",
+        ).assign_coords(param=["aot", "tcwv"])
         return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp, d_xap=d, d_xbp=d, d_xcp=d)
 
     def supports_jacobian(self):

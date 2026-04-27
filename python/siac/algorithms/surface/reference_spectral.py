@@ -107,7 +107,11 @@ def sensor_to_reference(
 
     band_names = [band.name for band in sensor_bands]
     sensor_vals = np.stack(
-        [sensor_reflectance[band_name].values for band_name in band_names if band_name in sensor_reflectance],
+        [
+            sensor_reflectance[band_name].values
+            for band_name in band_names
+            if band_name in sensor_reflectance
+        ],
         axis=0,
     )
 

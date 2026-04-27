@@ -22,6 +22,7 @@ from siac.runtime import GeometryAngles, SurfacePrior
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def sensor_config():
     return SensorConfig(
@@ -90,6 +91,7 @@ def zarr_store(tmp_path):
 
 # ── Helper function tests ────────────────────────────────────────────
 
+
 class TestDOYFromDatetime:
     def test_jan_1(self):
         assert _doy_from_datetime(datetime(2023, 1, 1)) == 1
@@ -148,6 +150,7 @@ class TestSelectTiles:
 
 
 # ── PrebuiltPriorStore tests ─────────────────────────────────────────
+
 
 class TestPrebuiltPriorStore:
     def test_returns_surface_prior(self, zarr_store, sensor_config, geometry):

@@ -34,12 +34,12 @@ class TestUtilityFunctions:
         degrees = xr.DataArray([0, 90, 180, 360])
         radians = degrees_to_radians(degrees)
 
-        expected = np.array([0, np.pi/2, np.pi, 2*np.pi])
+        expected = np.array([0, np.pi / 2, np.pi, 2 * np.pi])
         np.testing.assert_allclose(radians.values, expected)
 
     def test_radians_to_degrees(self):
         """Should convert radians to degrees."""
-        radians = xr.DataArray([0, np.pi/2, np.pi, 2*np.pi])
+        radians = xr.DataArray([0, np.pi / 2, np.pi, 2 * np.pi])
         degrees = radians_to_degrees(radians)
 
         expected = np.array([0, 90, 180, 360])
@@ -173,10 +173,22 @@ class TestSentinel2Preprocessor:
         def fake_read_raster(path):
             name = str(path)
             if "B11" in name:
-                return _da(np.array([[500.0, 600.0], [700.0, 800.0]]), np.array([0.0, 30.0]), np.array([30.0, 0.0]))
+                return _da(
+                    np.array([[500.0, 600.0], [700.0, 800.0]]),
+                    np.array([0.0, 30.0]),
+                    np.array([30.0, 0.0]),
+                )
             if "B02" in name:
-                return _da(np.full((4, 4), 1000.0), np.array([0.0, 10.0, 20.0, 30.0]), np.array([30.0, 20.0, 10.0, 0.0]))
-            return _da(np.full((4, 4), 2000.0), np.array([0.0, 10.0, 20.0, 30.0]), np.array([30.0, 20.0, 10.0, 0.0]))
+                return _da(
+                    np.full((4, 4), 1000.0),
+                    np.array([0.0, 10.0, 20.0, 30.0]),
+                    np.array([30.0, 20.0, 10.0, 0.0]),
+                )
+            return _da(
+                np.full((4, 4), 2000.0),
+                np.array([0.0, 10.0, 20.0, 30.0]),
+                np.array([30.0, 20.0, 10.0, 0.0]),
+            )
 
         def fake_reproject_match(source, target, resampling="bilinear"):
             del resampling
@@ -326,7 +338,9 @@ class TestSentinel2Preprocessor:
             "T50QLD_TEST_B11.jp2",
         ]
 
-    def test_load_toa_uses_finest_available_reference_grid_for_late_loaded_bands(self, monkeypatch, tmp_path):
+    def test_load_toa_uses_finest_available_reference_grid_for_late_loaded_bands(
+        self, monkeypatch, tmp_path
+    ):
         """A coarse-first subset should still keep the loader anchored to the finest SAFE grid."""
         from siac.adapters.satellite import sentinel2 as s2mod
 
@@ -473,6 +487,7 @@ class TestPreprocessorBase:
             @property
             def sensor_config(self):
                 from siac.catalog import SENTINEL2A_CONFIG
+
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path):
@@ -482,6 +497,7 @@ class TestPreprocessorBase:
             def extract_geometry(self, input_path):
                 self.calls.append("extract_geometry")
                 from siac.runtime import GeometryAngles
+
                 arr = xr.DataArray(np.ones((10, 10)), dims=["y", "x"])
                 return GeometryAngles(sza=arr, saa=arr, vza=arr, vaa=arr)
 
@@ -518,6 +534,7 @@ class TestPreprocessorBase:
             @property
             def sensor_config(self):
                 from siac.catalog import SENTINEL2A_CONFIG
+
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path):
@@ -572,16 +589,20 @@ class TestPreprocessorBase:
             @property
             def sensor_config(self):
                 from siac.catalog import SENTINEL2A_CONFIG
+
                 return SENTINEL2A_CONFIG
 
             def load_toa(self, input_path, *, band_names=None):
                 del input_path
                 self.seen_band_names = band_names
-                return xr.Dataset({"B02": xr.DataArray(np.ones((4, 4), dtype=np.float32), dims=["y", "x"])})
+                return xr.Dataset(
+                    {"B02": xr.DataArray(np.ones((4, 4), dtype=np.float32), dims=["y", "x"])}
+                )
 
             def extract_geometry(self, input_path):
                 del input_path
                 from siac.runtime import GeometryAngles
+
                 arr = xr.DataArray(np.ones((4, 4), dtype=np.float32), dims=["y", "x"])
                 return GeometryAngles(sza=arr, saa=arr, vza=arr, vaa=arr)
 

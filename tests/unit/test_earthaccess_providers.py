@@ -70,7 +70,9 @@ def _fake_granule_date(year: int, month: int, day: int) -> dict[str, object]:
     }
 
 
-def _full_tile_bounds(h_index: int, v_index: int, shape: tuple[int, int]) -> tuple[float, float, float, float]:
+def _full_tile_bounds(
+    h_index: int, v_index: int, shape: tuple[int, int]
+) -> tuple[float, float, float, float]:
     x, y = modland_tile_coords(h_index, v_index, shape[0], shape[1])
     xres = float(x[1] - x[0]) if len(x) > 1 else 1000.0
     yres = float(y[0] - y[1]) if len(y) > 1 else 1000.0
@@ -300,7 +302,9 @@ def test_vnp43_provider_returns_default_weights_without_probe():
     assert float(weights.f2.mean()) == pytest.approx(0.02)
 
 
-def test_mcd43_provider_falls_back_to_default_weights_when_granule_parsing_fails(tmp_path: Path, monkeypatch):
+def test_mcd43_provider_falls_back_to_default_weights_when_granule_parsing_fails(
+    tmp_path: Path, monkeypatch
+):
     granule = tmp_path / "MCD43A1.A2024001.h29v07.061.fake.hdf"
     provider = MCD43EarthAccessProvider(
         source=_StubEarthAccessSource([granule]),
@@ -344,7 +348,11 @@ def test_mcd43_provider_returns_temporal_kernel_stack(monkeypatch):
             ).astype(np.int16),
         }
         if dataset_name in params:
-            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+            return params[dataset_name], {
+                "scale_factor": 0.001,
+                "_FillValue": 32767,
+                "valid_range": [0, 32766],
+            }
         if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
             return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
         raise KeyError(dataset_name)
@@ -461,7 +469,11 @@ def test_mcd43_provider_filters_temporal_granules_to_sample_dates(monkeypatch):
             ).astype(np.int16),
         }
         if dataset_name in params:
-            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+            return params[dataset_name], {
+                "scale_factor": 0.001,
+                "_FillValue": 32767,
+                "valid_range": [0, 32766],
+            }
         if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
             return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
         raise KeyError(dataset_name)
@@ -553,7 +565,11 @@ def test_mcd43_provider_batches_monthly_downloads_into_one_call(monkeypatch):
             ).astype(np.int16),
         }
         if dataset_name in params:
-            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+            return params[dataset_name], {
+                "scale_factor": 0.001,
+                "_FillValue": 32767,
+                "valid_range": [0, 32766],
+            }
         if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
             return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
         raise KeyError(dataset_name)
@@ -597,10 +613,22 @@ def test_mcd43_provider_batches_monthly_downloads_into_one_call(monkeypatch):
 def test_mcd43_provider_merges_sample_days_into_month_window_batches() -> None:
     batches = MCD43EarthAccessProvider._merge_search_batches(
         [
-            (datetime(2023, 12, 16, 12, 0, 0), np.array(["2023-12-01", "2023-12-08"], dtype="datetime64[D]")),
-            (datetime(2024, 1, 16, 12, 0, 0), np.array(["2024-01-01", "2024-01-08"], dtype="datetime64[D]")),
-            (datetime(2024, 2, 15, 12, 0, 0), np.array(["2024-02-01", "2024-02-08"], dtype="datetime64[D]")),
-            (datetime(2022, 12, 16, 12, 0, 0), np.array(["2022-12-01", "2022-12-08"], dtype="datetime64[D]")),
+            (
+                datetime(2023, 12, 16, 12, 0, 0),
+                np.array(["2023-12-01", "2023-12-08"], dtype="datetime64[D]"),
+            ),
+            (
+                datetime(2024, 1, 16, 12, 0, 0),
+                np.array(["2024-01-01", "2024-01-08"], dtype="datetime64[D]"),
+            ),
+            (
+                datetime(2024, 2, 15, 12, 0, 0),
+                np.array(["2024-02-01", "2024-02-08"], dtype="datetime64[D]"),
+            ),
+            (
+                datetime(2022, 12, 16, 12, 0, 0),
+                np.array(["2022-12-01", "2022-12-08"], dtype="datetime64[D]"),
+            ),
         ],
         [16, 16, 15, 16],
     )
@@ -664,9 +692,18 @@ def test_mcd43_provider_batch_preserves_nan_weights_when_combined_load_fails(
 def test_mcd43_provider_merges_cross_year_sample_batches_into_one_window() -> None:
     batches = MCD43EarthAccessProvider._merge_search_batches(
         [
-            (datetime(2025, 12, 16, 12, 0, 0), np.array(["2025-12-01", "2025-12-08"], dtype="datetime64[D]")),
-            (datetime(2026, 1, 16, 12, 0, 0), np.array(["2026-01-01", "2026-01-08"], dtype="datetime64[D]")),
-            (datetime(2026, 2, 15, 12, 0, 0), np.array(["2026-02-01", "2026-02-08"], dtype="datetime64[D]")),
+            (
+                datetime(2025, 12, 16, 12, 0, 0),
+                np.array(["2025-12-01", "2025-12-08"], dtype="datetime64[D]"),
+            ),
+            (
+                datetime(2026, 1, 16, 12, 0, 0),
+                np.array(["2026-01-01", "2026-01-08"], dtype="datetime64[D]"),
+            ),
+            (
+                datetime(2026, 2, 15, 12, 0, 0),
+                np.array(["2026-02-01", "2026-02-08"], dtype="datetime64[D]"),
+            ),
         ],
         [16, 16, 15],
     )
@@ -719,7 +756,11 @@ def test_mcd43_provider_parses_real_kernel_fields(monkeypatch):
             ).astype(np.int16),
         }
         if dataset_name in params:
-            return params[dataset_name], {"scale_factor": 0.001, "_FillValue": 32767, "valid_range": [0, 32766]}
+            return params[dataset_name], {
+                "scale_factor": 0.001,
+                "_FillValue": 32767,
+                "valid_range": [0, 32766],
+            }
         if dataset_name.startswith("BRDF_Albedo_Band_Mandatory_Quality_"):
             return np.zeros(shape, dtype=np.uint8), {"_FillValue": 255, "valid_range": [0, 1]}
         raise KeyError(dataset_name)
@@ -765,9 +806,15 @@ def test_mcd19_brdf_provider_parses_kernel_fields(monkeypatch):
         }
         if dataset_name not in fields:
             raise KeyError(dataset_name)
-        return fields[dataset_name], {"scale_factor": 0.001, "_FillValue": -28672, "valid_range": [0, 32766]}
+        return fields[dataset_name], {
+            "scale_factor": 0.001,
+            "_FillValue": -28672,
+            "valid_range": [0, 32766],
+        }
 
-    monkeypatch.setattr("siac.adapters.brdf.mcd43_earthaccess.read_hdf4_dataset", _fake_read_dataset)
+    monkeypatch.setattr(
+        "siac.adapters.brdf.mcd43_earthaccess.read_hdf4_dataset", _fake_read_dataset
+    )
 
     bounds = _full_tile_bounds(29, 7, (4, 4))
     resolution = (bounds[2] - bounds[0]) / 4.0
@@ -812,7 +859,11 @@ def test_mcd19_provider_parses_aod_and_tcwv(monkeypatch):
         if dataset_name not in fields:
             raise KeyError(dataset_name)
         scale = 0.0001 if dataset_name == "AOD_Uncertainty" else 0.001
-        return fields[dataset_name], {"scale_factor": scale, "_FillValue": -28672, "valid_range": [0, 30000]}
+        return fields[dataset_name], {
+            "scale_factor": scale,
+            "_FillValue": -28672,
+            "valid_range": [0, 30000],
+        }
 
     monkeypatch.setattr(MCD19AODProvider, "_read_dataset", staticmethod(_fake_read_dataset))
 
@@ -853,7 +904,11 @@ def test_vnp19_provider_parses_aod_and_defaults_tcwv(monkeypatch):
         if dataset_name not in fields:
             raise KeyError(dataset_name)
         scale = 0.0001 if dataset_name.endswith("AOD_Uncertainty") else 0.001
-        return fields[dataset_name], {"scale_factor": scale, "_FillValue": -28672, "valid_range": [0, 30000]}
+        return fields[dataset_name], {
+            "scale_factor": scale,
+            "_FillValue": -28672,
+            "valid_range": [0, 30000],
+        }
 
     monkeypatch.setattr(VNP19AODProvider, "_read_dataset", staticmethod(_fake_read_dataset))
 
@@ -870,7 +925,9 @@ def test_vnp19_provider_parses_aod_and_defaults_tcwv(monkeypatch):
     assert float(state.tcwv.mean()) == pytest.approx(1.5)
 
 
-def test_mcd19_provider_falls_back_to_default_prior_when_granule_parsing_fails(tmp_path: Path, monkeypatch):
+def test_mcd19_provider_falls_back_to_default_prior_when_granule_parsing_fails(
+    tmp_path: Path, monkeypatch
+):
     granule = tmp_path / "MCD19A2.A2024001.h29v07.061.fake.hdf"
     provider = MCD19AODProvider(
         source=_StubEarthAccessSource([granule]),

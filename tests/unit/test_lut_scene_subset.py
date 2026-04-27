@@ -223,7 +223,9 @@ def test_spectral_integration_weights_use_tabulated_srf_over_gaussian():
     backend = ZarrLUTBackend("dummy")
     lut = xr.Dataset(
         coords={
-            "wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+            "wavelength": np.array(
+                [430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32
+            ),
         }
     )
     band = SensorBand(
@@ -255,14 +257,18 @@ def test_weighted_spectral_mean_zero_fills_missing_srf_support():
         np.array([10.0, 1.0, 2.0, 4.0, 2.0, 1.0, 9.0], dtype=np.float32),
         dims=("wavelength",),
         coords={
-            "wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+            "wavelength": np.array(
+                [430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32
+            ),
         },
     )
     weights = xr.DataArray(
         np.array([0.0, 0.0, 0.25, 0.5, 0.25, 0.0, 0.0], dtype=np.float32),
         dims=("wavelength",),
         coords={
-            "wavelength": np.array([430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32),
+            "wavelength": np.array(
+                [430.0, 440.0, 450.0, 460.0, 470.0, 480.0, 490.0], dtype=np.float32
+            ),
         },
     )
 
@@ -305,7 +311,9 @@ def test_compute_coefficients_retries_transient_lut_io(monkeypatch):
     monkeypatch.setattr(backend, "_supports_coefficient_lut", lambda: False)
     monkeypatch.setattr(backend, "_supports_spectral_lut", lambda: True)
     monkeypatch.setattr(backend, "_compute_coefficients_from_spectral_lut", _fake_compute)
-    monkeypatch.setattr(backend, "_reload_lut", lambda: calls.__setitem__("reloads", calls["reloads"] + 1))
+    monkeypatch.setattr(
+        backend, "_reload_lut", lambda: calls.__setitem__("reloads", calls["reloads"] + 1)
+    )
 
     coeffs = backend.compute_coefficients(geometry, atmo, band, compute_jacobian=False)
 
@@ -344,7 +352,9 @@ def test_preload_scene_subset_retries_transient_lut_io(monkeypatch):
             raise RuntimeError("ServerDisconnectedError: temporary disconnect")
 
     monkeypatch.setattr(backend, "_preload_scene_subset_once", _fake_preload)
-    monkeypatch.setattr(backend, "_reload_lut", lambda: calls.__setitem__("reloads", calls["reloads"] + 1))
+    monkeypatch.setattr(
+        backend, "_reload_lut", lambda: calls.__setitem__("reloads", calls["reloads"] + 1)
+    )
 
     backend.preload_scene_subset(geometry, atmo, [band])
 

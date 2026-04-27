@@ -70,7 +70,9 @@ def test_missing_message_and_require_native_missing_symbol(monkeypatch: pytest.M
         rust_compat._require_native("TwoLayerNN")  # noqa: SLF001
 
 
-def test_proxy_classes_and_functions_delegate_to_native_impl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_proxy_classes_and_functions_delegate_to_native_impl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: dict[str, object] = {}
 
     class _FakeRoss:
@@ -117,8 +119,12 @@ def test_proxy_classes_and_functions_delegate_to_native_impl(monkeypatch: pytest
             "evaluate_grid_search_cost_cube_with_provider_qa": staticmethod(
                 lambda *args, **kwargs: ("cube_qa", args, kwargs)
             ),
-            "interpolate_to_fine_grid": staticmethod(lambda *args, **kwargs: ("interp", args, kwargs)),
-            "quadratic_refine_grid_search": staticmethod(lambda *args, **kwargs: ("quad", args, kwargs)),
+            "interpolate_to_fine_grid": staticmethod(
+                lambda *args, **kwargs: ("interp", args, kwargs)
+            ),
+            "quadratic_refine_grid_search": staticmethod(
+                lambda *args, **kwargs: ("quad", args, kwargs)
+            ),
             "quadratic_refine_grid_search_qa": staticmethod(
                 lambda *args, **kwargs: ("quad_qa", args, kwargs)
             ),

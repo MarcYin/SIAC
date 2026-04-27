@@ -105,7 +105,9 @@ def canonicalize_curve(
     weights = weights[unique_idx].astype(np.float32, copy=False)
     positive = np.flatnonzero(weights > 0.0)
     if positive.size == 0:
-        raise ValueError("Spectral response curves must contain at least one positive response sample")
+        raise ValueError(
+            "Spectral response curves must contain at least one positive response sample"
+        )
     start = max(int(positive[0]) - 1, 0)
     stop = min(int(positive[-1]) + 2, weights.size)
     return wavelengths[start:stop], weights[start:stop]

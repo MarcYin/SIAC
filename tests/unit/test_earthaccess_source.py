@@ -185,10 +185,15 @@ def test_earthaccess_source_from_auth_uses_manager_builder():
         def earthdata(self) -> _FakeEarthdataAuth:
             return _FakeEarthdataAuth()
 
-    assert earthdata_mod.earthaccess_source_from_auth(_FakeManager(), provider="LPDAAC_ECS") is expected
+    assert (
+        earthdata_mod.earthaccess_source_from_auth(_FakeManager(), provider="LPDAAC_ECS")
+        is expected
+    )
 
 
-def test_build_earthaccess_runtime_normalizes_cache_dir_and_keeps_supplied_dependencies(tmp_path: Path):
+def test_build_earthaccess_runtime_normalizes_cache_dir_and_keeps_supplied_dependencies(
+    tmp_path: Path,
+):
     source = EarthAccessSource(provider="LPDAAC_ECS")
     catalog = EarthAccessCatalog(source=source)
 
@@ -202,7 +207,10 @@ def test_build_earthaccess_runtime_normalizes_cache_dir_and_keeps_supplied_depen
     assert runtime.cache_dir == (tmp_path / "cache").expanduser()
     assert runtime.source is source
     assert runtime.catalog is catalog
-    assert earthdata_mod.earthaccess_cache_dir(runtime.cache_dir, "MCD43A1") == (tmp_path / "cache").expanduser()
+    assert (
+        earthdata_mod.earthaccess_cache_dir(runtime.cache_dir, "MCD43A1")
+        == (tmp_path / "cache").expanduser()
+    )
 
 
 def test_select_candidate_paths_orders_tiles_and_filters_sample_days(monkeypatch, tmp_path: Path):

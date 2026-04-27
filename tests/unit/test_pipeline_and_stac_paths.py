@@ -52,8 +52,12 @@ def _make_monthly_composites() -> list:
         composites.append(
             SimpleNamespace(
                 reflectance=reflectance,
-                quality=xr.DataArray(np.zeros((1, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0], "x": [0]}),
-                sample_index=xr.DataArray(np.zeros((1, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0], "x": [0]}),
+                quality=xr.DataArray(
+                    np.zeros((1, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0], "x": [0]}
+                ),
+                sample_index=xr.DataArray(
+                    np.zeros((1, 1), dtype=np.int16), dims=["y", "x"], coords={"y": [0], "x": [0]}
+                ),
                 year=2024,
                 month=idx + 1,
             )
@@ -108,7 +112,9 @@ def test_small_adapter_and_monthly_validation_paths() -> None:
         month=2,
     )
     with pytest.raises(ValueError, match="same spatial shape"):
-        build_monthly_composite_database(bad_composites, query_bands=("B08",), visible_bands=("B02",))
+        build_monthly_composite_database(
+            bad_composites, query_bands=("B08",), visible_bands=("B02",)
+        )
 
     with pytest.raises(ValueError, match="band"):
         _dataset_to_cube(xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"]), ["B08"])
@@ -120,7 +126,13 @@ def test_small_adapter_and_monthly_validation_paths() -> None:
     )
     with pytest.raises(ValueError, match="k_neighbors must be >= 1"):
         database.predict_visible(
-            xr.Dataset({"B08": xr.DataArray([[0.1]], dims=["y", "x"]), "B11": xr.DataArray([[0.1]], dims=["y", "x"]), "B12": xr.DataArray([[0.1]], dims=["y", "x"])}),
+            xr.Dataset(
+                {
+                    "B08": xr.DataArray([[0.1]], dims=["y", "x"]),
+                    "B11": xr.DataArray([[0.1]], dims=["y", "x"]),
+                    "B12": xr.DataArray([[0.1]], dims=["y", "x"]),
+                }
+            ),
             k_neighbors=0,
         )
     visible, visible_unc, visible_quality = database.predict_visible(
@@ -147,8 +159,15 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
     assert stac_mod._safe_float("bad") is None
     assert stac_mod._safe_float(np.inf) is None
     assert stac_mod._mean_deg(xr.DataArray(np.array([], dtype=np.float32), dims=["y"])) is None
-    assert stac_mod._mean_deg(xr.DataArray(np.array([np.nan], dtype=np.float32), dims=["y"])) is None
-    assert stac_mod._cloud_cover_percent(xr.DataArray(np.array([np.nan], dtype=np.float32), dims=["y"])) is None
+    assert (
+        stac_mod._mean_deg(xr.DataArray(np.array([np.nan], dtype=np.float32), dims=["y"])) is None
+    )
+    assert (
+        stac_mod._cloud_cover_percent(
+            xr.DataArray(np.array([np.nan], dtype=np.float32), dims=["y"])
+        )
+        is None
+    )
 
     first_band = SimpleNamespace(
         rio=SimpleNamespace(
@@ -168,7 +187,9 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         "proj:shape": [2, 3],
     }
     assert stac_mod._gsd(first_band) is None
-    assert "common_name" not in stac_mod._band_metadata(SimpleNamespace(name="UNK", wavelength_um=0.5, bandwidth=20.0))
+    assert "common_name" not in stac_mod._band_metadata(
+        SimpleNamespace(name="UNK", wavelength_um=0.5, bandwidth=20.0)
+    )
     assert stac_mod._file_size(tmp_path / "missing.bin") is None
     assert stac_mod._asset_dict("file.tif", title="T", media_type="image/tiff", roles=["data"]) == {
         "href": "file.tif",
@@ -177,7 +198,9 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         "roles": ["data"],
     }
 
-    template = xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0]})
+    template = xr.DataArray(
+        np.ones((1, 1), dtype=np.float32), dims=["y", "x"], coords={"y": [0], "x": [0]}
+    )
     obs = SimpleNamespace(
         bounds=(1.0, 2.0, 3.0, 4.0),
         crs="EPSG:4326",
@@ -204,9 +227,13 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         diagnostics=SimpleNamespace(processing_time_s=None),
     )
     with pytest.raises(TypeError, match="datetime observation_time"):
-        stac_mod.build_stac_item(obs, result, output_dir=tmp_path, boa_assets={"B02": tmp_path / "B02.tif"})
+        stac_mod.build_stac_item(
+            obs, result, output_dir=tmp_path, boa_assets={"B02": tmp_path / "B02.tif"}
+        )
 
-    good_obs = SimpleNamespace(**{**obs.__dict__, "metadata": {"observation_time": datetime(2024, 1, 1)}})
+    good_obs = SimpleNamespace(
+        **{**obs.__dict__, "metadata": {"observation_time": datetime(2024, 1, 1)}}
+    )
     path = stac_mod.write_stac_item(
         good_obs,
         result,
@@ -218,7 +245,9 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
     assert path == tmp_path / "custom.json"
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["id"] == "item-1"
-    assert written["links"] == [{"rel": "self", "href": "custom.json", "type": "application/geo+json"}]
+    assert written["links"] == [
+        {"rel": "self", "href": "custom.json", "type": "application/geo+json"}
+    ]
 
 
 def test_pipeline_helper_branches_cover_fallbacks_and_preload_failures(
@@ -244,7 +273,13 @@ def test_pipeline_helper_branches_cover_fallbacks_and_preload_failures(
     monkeypatch.setattr(
         pipeline,
         "_prepare_observation",
-        lambda *_args, **_kwargs: (mock_observation_bundle, mock_observation_bundle.bounds, mock_observation_bundle.crs, mock_observation_bundle.metadata["observation_time"], 1000.0),
+        lambda *_args, **_kwargs: (
+            mock_observation_bundle,
+            mock_observation_bundle.bounds,
+            mock_observation_bundle.crs,
+            mock_observation_bundle.metadata["observation_time"],
+            1000.0,
+        ),
     )
     monkeypatch.setattr(pipeline, "_run_tail", lambda *_args, **_kwargs: "ok")
 
@@ -289,7 +324,11 @@ def test_pipeline_helper_branches_cover_fallbacks_and_preload_failures(
             return mock_surface_prior
 
     with caplog.at_level("WARNING"):
-        monkeypatch.setattr(pipeline, "_maybe_submit_lut_preload", lambda *_args, **_kwargs: _Future(RuntimeError("boom")))
+        monkeypatch.setattr(
+            pipeline,
+            "_maybe_submit_lut_preload",
+            lambda *_args, **_kwargs: _Future(RuntimeError("boom")),
+        )
         out = pipeline._run_pipeline_thread(
             Path("/fake"),
             None,

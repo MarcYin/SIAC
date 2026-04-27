@@ -1,4 +1,5 @@
 """Atmospheric correction: TOA to BOA conversion."""
+
 from __future__ import annotations
 
 import logging
@@ -41,8 +42,7 @@ class AtmosphericCorrector:
     ):
         if not isinstance(rt_model, RTModelBackend):
             raise TypeError(
-                f"rt_model must implement RTModelBackend protocol, "
-                f"got {type(rt_model).__name__}"
+                f"rt_model must implement RTModelBackend protocol, got {type(rt_model).__name__}"
             )
         if correction_workers < 1:
             raise ValueError("correction_workers must be >= 1")
@@ -50,9 +50,14 @@ class AtmosphericCorrector:
         self.sensor_config = sensor_config
         self.correction_workers = int(correction_workers)
 
-    def correct(self, toa: xr.Dataset, geometry: GeometryAngles, atmo_state: AtmosphericState,
-                cloud_mask: xr.DataArray | None = None,
-                boa_band_writer: Callable[[str, xr.DataArray], xr.DataArray] | None = None) -> CorrectionResult:
+    def correct(
+        self,
+        toa: xr.Dataset,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        cloud_mask: xr.DataArray | None = None,
+        boa_band_writer: Callable[[str, xr.DataArray], xr.DataArray] | None = None,
+    ) -> CorrectionResult:
         t0 = time.monotonic()
         logger.info(
             "M6 correction starting: %d sensor bands, %d workers",
@@ -125,9 +130,7 @@ class AtmosphericCorrector:
             write_time_by_band[band_name] = write_s
             boa_vars[band_name] = masked_boa
             invalid_boa_mask = (
-                band_invalid
-                if invalid_boa_mask is None
-                else (invalid_boa_mask | band_invalid)
+                band_invalid if invalid_boa_mask is None else (invalid_boa_mask | band_invalid)
             )
 
             logger.info(
@@ -168,7 +171,9 @@ class AtmosphericCorrector:
 
         # cloud_mask contract: True = cloudy/invalid, preserved from M1
         if cloud_mask is not None:
-            final_cloud_mask = resample_mask_to_template(cloud_mask, invalid_boa_mask) | invalid_boa_mask.astype(bool)
+            final_cloud_mask = resample_mask_to_template(
+                cloud_mask, invalid_boa_mask
+            ) | invalid_boa_mask.astype(bool)
         else:
             final_cloud_mask = invalid_boa_mask.astype(bool)
         elapsed = time.monotonic() - t0

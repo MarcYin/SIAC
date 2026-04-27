@@ -24,7 +24,9 @@ def test_prepare_monthly_composites_orchestrates_provider_build_and_store(
 ) -> None:
     aoi = AOI.from_bounds((1.0, 2.0, 3.0, 4.0), crs="EPSG:4326")
     coords = {"band": ["B02"], "y": [3.5, 2.5], "x": [1.5, 2.5]}
-    cube = xr.DataArray(np.full((1, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    cube = xr.DataArray(
+        np.full((1, 2, 2), 0.2, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+    )
     collection = MonthlyCompositeCollection(
         composites=(
             MonthlyKernelWeightComposite(
@@ -74,7 +76,9 @@ def test_prepare_monthly_composites_orchestrates_provider_build_and_store(
 
     monkeypatch.setattr(workflow_mod, "resolve_run_config", _fake_resolve_run_config)
     monkeypatch.setattr(workflow_mod, "resolve_brdf_provider", _fake_resolve_brdf_provider)
-    monkeypatch.setattr(workflow_mod, "build_monthly_composites_from_brdf", _fake_build_monthly_composites_from_brdf)
+    monkeypatch.setattr(
+        workflow_mod, "build_monthly_composites_from_brdf", _fake_build_monthly_composites_from_brdf
+    )
 
     def _fake_write(collection_obj, output_path, *, grid=None):  # noqa: ANN001
         captured["write"] = (collection_obj, output_path, grid)
@@ -134,7 +138,9 @@ def test_prepare_monthly_composites_defaults_resolution_from_provider_source_ban
         source_name="provider",
     )
 
-    monkeypatch.setattr(workflow_mod, "resolve_run_config", lambda config_obj, **_kwargs: config_obj)
+    monkeypatch.setattr(
+        workflow_mod, "resolve_run_config", lambda config_obj, **_kwargs: config_obj
+    )
 
     def _fake_resolve_brdf_provider(config_obj, auth=None):  # noqa: ANN001
         _ = config_obj, auth
@@ -146,7 +152,9 @@ def test_prepare_monthly_composites_defaults_resolution_from_provider_source_ban
         captured["build_kwargs"] = kwargs
         return collection
 
-    monkeypatch.setattr(workflow_mod, "build_monthly_composites_from_brdf", _fake_build_monthly_composites_from_brdf)
+    monkeypatch.setattr(
+        workflow_mod, "build_monthly_composites_from_brdf", _fake_build_monthly_composites_from_brdf
+    )
 
     with pytest.raises(ValueError, match="No monthly composites with valid BRDF data"):
         workflow_mod.prepare_monthly_composites(
@@ -167,7 +175,9 @@ def test_prepare_monthly_composites_raises_when_all_requested_months_are_empty(
 ) -> None:
     aoi = AOI.from_bounds((1.0, 2.0, 3.0, 4.0), crs="EPSG:4326")
     coords = {"band": ["B02"], "y": [3.5, 2.5], "x": [1.5, 2.5]}
-    cube = xr.DataArray(np.full((1, 2, 2), np.nan, dtype=np.float32), dims=["band", "y", "x"], coords=coords)
+    cube = xr.DataArray(
+        np.full((1, 2, 2), np.nan, dtype=np.float32), dims=["band", "y", "x"], coords=coords
+    )
     collection = MonthlyCompositeCollection(
         composites=(
             MonthlyKernelWeightComposite(
@@ -197,14 +207,18 @@ def test_prepare_monthly_composites_raises_when_all_requested_months_are_empty(
         source_name="prepared-test",
     )
 
-    monkeypatch.setattr(workflow_mod, "resolve_run_config", lambda config_obj, **_kwargs: config_obj)
+    monkeypatch.setattr(
+        workflow_mod, "resolve_run_config", lambda config_obj, **_kwargs: config_obj
+    )
 
     def _fake_resolve_brdf_provider(config_obj, auth=None):  # noqa: ANN001
         _ = config_obj, auth
         return "provider"
 
     monkeypatch.setattr(workflow_mod, "resolve_brdf_provider", _fake_resolve_brdf_provider)
-    monkeypatch.setattr(workflow_mod, "build_monthly_composites_from_brdf", lambda **_kwargs: collection)
+    monkeypatch.setattr(
+        workflow_mod, "build_monthly_composites_from_brdf", lambda **_kwargs: collection
+    )
 
     write_called = {"value": False}
 

@@ -56,8 +56,7 @@ def _callable_supports_kwarg(target: Any, keyword: str) -> bool:
     with suppress(TypeError, ValueError):
         signature = inspect.signature(target)
         return keyword in signature.parameters or any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in signature.parameters.values()
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
         )
     return False
 
@@ -97,10 +96,7 @@ def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[s
             if preferred:
                 names.extend(preferred)
                 continue
-            names.extend(
-                band.name
-                for band in sensor_config.select_bands_in_range(wl_min, wl_max)
-            )
+            names.extend(band.name for band in sensor_config.select_bands_in_range(wl_min, wl_max))
 
     resolved = _ordered_unique_band_names(names)
     return resolved or None
@@ -164,7 +160,9 @@ def build_preprocessor_runtime(
             return cast("AOI", default_aoi_resolver(toa))
         return AOI.from_raster(toa[list(toa.data_vars)[0]])
 
-    def _clip_dataarray_to_aoi(field: object, *, bounds: tuple[float, float, float, float], crs: str) -> object:
+    def _clip_dataarray_to_aoi(
+        field: object, *, bounds: tuple[float, float, float, float], crs: str
+    ) -> object:
         rio = getattr(field, "rio", None)
         if rio is None:
             return field
@@ -194,7 +192,9 @@ def build_preprocessor_runtime(
             if all(hasattr(geometry, name) for name in field_names):
                 clipped["geometry"] = geometry.__class__(
                     **{
-                        name: _clip_dataarray_to_aoi(getattr(geometry, name), bounds=bounds, crs=crs)
+                        name: _clip_dataarray_to_aoi(
+                            getattr(geometry, name), bounds=bounds, crs=crs
+                        )
                         for name in field_names
                     }
                 )
@@ -276,7 +276,9 @@ def resolve_solver(config: Any) -> SolverFn:
             fixed_atmospheric_parameter=getattr(sc, "fixed_atmospheric_parameter", "none"),
             stages=tuple(getattr(sc, "stages", ()) or ()),
             quadratic_block_size=getattr(sc, "quadratic_block_size", 1),
-            quadratic_block_min_valid_fraction=getattr(sc, "quadratic_block_min_valid_fraction", 0.5),
+            quadratic_block_min_valid_fraction=getattr(
+                sc, "quadratic_block_min_valid_fraction", 0.5
+            ),
         )
         solver_stages = (
             solver_config.get("stages", ())
@@ -351,7 +353,9 @@ def resolve_corrector(config: Any) -> CorrectorFn:
             aot_unc=_resample_field_for_correction(atmo.aot_unc, atmo.aot, field_name="aot_unc"),
             tcwv_unc=_resample_field_for_correction(atmo.tcwv_unc, atmo.aot, field_name="tcwv_unc"),
             tco3_unc=_resample_field_for_correction(atmo.tco3_unc, atmo.aot, field_name="tco3_unc"),
-            elevation=_resample_field_for_correction(atmo.elevation, atmo.aot, field_name="elevation"),
+            elevation=_resample_field_for_correction(
+                atmo.elevation, atmo.aot, field_name="elevation"
+            ),
         )
         coeff_geometry = GeometryAngles(
             sza=_resample_field_for_correction(obs.geometry.sza, atmo.aot, field_name="sza"),
@@ -360,7 +364,9 @@ def resolve_corrector(config: Any) -> CorrectorFn:
             vaa=_resample_field_for_correction(obs.geometry.vaa, atmo.aot, field_name="vaa"),
         )
         correct_kwargs: dict[str, Any] = {}
-        if output_stream is not None and _callable_supports_kwarg(corrector_obj.correct, "boa_band_writer"):
+        if output_stream is not None and _callable_supports_kwarg(
+            corrector_obj.correct, "boa_band_writer"
+        ):
             correct_kwargs["boa_band_writer"] = output_stream.write_boa_band
         corrected = corrector_obj.correct(
             obs.toa,

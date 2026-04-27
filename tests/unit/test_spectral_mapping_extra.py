@@ -19,11 +19,21 @@ from siac.domain import SensorBand
 
 def _source_bands() -> tuple[SensorBand, ...]:
     return (
-        SensorBand("Band3", 469.0, 20.0, 500.0, 0, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B3"),
-        SensorBand("Band4", 555.0, 20.0, 500.0, 1, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B4"),
-        SensorBand("Band2", 858.5, 35.0, 500.0, 2, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B2"),
-        SensorBand("Band6", 1640.0, 24.0, 500.0, 3, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B6"),
-        SensorBand("Band7", 2130.0, 50.0, 500.0, 4, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B7"),
+        SensorBand(
+            "Band3", 469.0, 20.0, 500.0, 0, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B3"
+        ),
+        SensorBand(
+            "Band4", 555.0, 20.0, 500.0, 1, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B4"
+        ),
+        SensorBand(
+            "Band2", 858.5, 35.0, 500.0, 2, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B2"
+        ),
+        SensorBand(
+            "Band6", 1640.0, 24.0, 500.0, 3, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B6"
+        ),
+        SensorBand(
+            "Band7", 2130.0, 50.0, 500.0, 4, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B7"
+        ),
     )
 
 
@@ -60,11 +70,21 @@ def _sampled_band(
 
 def _target_bands() -> tuple[SensorBand, ...]:
     return (
-        _sampled_band("B02", 490.0, 65.0, 10.0, 0, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B02"),
-        _sampled_band("B03", 560.0, 35.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B03"),
-        _sampled_band("B08", 842.0, 115.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B08"),
-        _sampled_band("B11", 1610.0, 90.0, 20.0, 3, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B11"),
-        _sampled_band("B12", 2190.0, 180.0, 20.0, 4, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B12"),
+        _sampled_band(
+            "B02", 490.0, 65.0, 10.0, 0, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B02"
+        ),
+        _sampled_band(
+            "B03", 560.0, 35.0, 10.0, 1, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B03"
+        ),
+        _sampled_band(
+            "B08", 842.0, 115.0, 10.0, 2, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B08"
+        ),
+        _sampled_band(
+            "B11", 1610.0, 90.0, 20.0, 3, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B11"
+        ),
+        _sampled_band(
+            "B12", 2190.0, 180.0, 20.0, 4, sensor_unit_id="sentinel-2a_msi", rsrf_band_id="B12"
+        ),
     )
 
 
@@ -107,7 +127,9 @@ def test_split_mapping_inputs_accepts_config_and_rejects_invalid_input() -> None
 def test_source_schema_indices_ignore_unpublished_source_bands() -> None:
     schema_band_ids = ("blue", "green", "red", "nir", "swir1", "swir2")
     source_bands = _source_bands() + (
-        SensorBand("Band5", 1240.0, 20.0, 500.0, 5, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B5"),
+        SensorBand(
+            "Band5", 1240.0, 20.0, 500.0, 5, rsrf_sensor_unit_id="terra_modis", rsrf_band_id="B5"
+        ),
     )
 
     indices, ignored = spectral_mapping_mod._source_schema_indices_for_bands(

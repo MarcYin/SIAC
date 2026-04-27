@@ -29,8 +29,7 @@ logger = logging.getLogger(__name__)
 logger.addFilter(SecretRedactionFilter())
 
 _CDSE_TOKEN_URL = (
-    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
-    "protocol/openid-connect/token"
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 )
 _CDSE_S3_CREDENTIALS_URL = "https://s3-keys-manager.cloudferro.com/api/user/credentials"
 _CDSE_S3_ENDPOINT_URL = "https://eodata.dataspace.copernicus.eu"
@@ -440,7 +439,9 @@ def _cdse_token_exchange(username: str, password: str, timeout: int = 60) -> tup
     try:
         expires_in = int(expires_in_raw)
     except (TypeError, ValueError) as exc:
-        raise AuthenticationError("CDSE token response contains an invalid expires_in value.") from exc
+        raise AuthenticationError(
+            "CDSE token response contains an invalid expires_in value."
+        ) from exc
     return token, expires_in
 
 
@@ -453,7 +454,9 @@ def _load_from_auth_config(manager: CredentialManager, auth_config: Any) -> None
     gcs = getattr(auth_config, "gcs", None)
 
     if cdse is not None:
-        _maybe_set(manager, "cdse", getattr(cdse, "username", None), getattr(cdse, "password", None))
+        _maybe_set(
+            manager, "cdse", getattr(cdse, "username", None), getattr(cdse, "password", None)
+        )
     if cds is not None:
         _maybe_set(manager, "cds", getattr(cds, "api_key", None), None)
     if aws is not None:

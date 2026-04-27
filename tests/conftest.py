@@ -13,6 +13,7 @@ import xarray as xr
 # Path fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     """Path to test fixtures directory."""
@@ -28,6 +29,7 @@ def sample_data_dir(fixtures_dir: Path) -> Path:
 # =============================================================================
 # Geometry fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def sample_geometry() -> dict:
@@ -73,6 +75,7 @@ def sample_geometry_xr(sample_geometry: dict) -> dict:
 # Atmospheric state fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_atmo_state() -> dict:
     """Sample atmospheric state arrays."""
@@ -93,6 +96,7 @@ def sample_atmo_state() -> dict:
 # BRDF fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_brdf_weights() -> dict:
     """Sample BRDF kernel weights."""
@@ -112,6 +116,7 @@ def sample_brdf_weights() -> dict:
 # =============================================================================
 # TOA reflectance fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def sample_toa() -> xr.Dataset:
@@ -141,6 +146,7 @@ def sample_toa() -> xr.Dataset:
 # Emulator fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_emulator_weights(tmp_path: Path) -> Path:
     """Create sample emulator weights file."""
@@ -160,9 +166,12 @@ def sample_emulator_weights(tmp_path: Path) -> Path:
     path = tmp_path / "test_emulator.npz"
     np.savez(
         path,
-        w1=w1, b1=b1,
-        w2=w2, b2=b2,
-        w3=w3, b3=b3,
+        w1=w1,
+        b1=b1,
+        w2=w2,
+        b2=b2,
+        w3=w3,
+        b3=b3,
         input_scale=np.array([1.0, 0.0]),
         output_scale=np.array([1.0, 0.0]),
     )
@@ -173,6 +182,7 @@ def sample_emulator_weights(tmp_path: Path) -> Path:
 # =============================================================================
 # Configuration fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def sample_config_dict() -> dict:
@@ -210,12 +220,14 @@ def sample_config_dict() -> dict:
 # Mock RT model (shared across tests)
 # =============================================================================
 
+
 class MockRTModel:
     """Mock RT model that satisfies RTModelBackend protocol."""
 
     def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
         """Return mock coefficients."""
         from siac.runtime import RTCoefficients
+
         shape = geometry.sza.shape
 
         xap = xr.DataArray(np.full(shape, 0.95), dims=["y", "x"])
@@ -225,23 +237,28 @@ class MockRTModel:
         d_xap = d_xbp = d_xcp = None
         if compute_jacobian:
             d_xap = xr.concat(
-                [xr.DataArray(np.full(shape, -0.5), dims=["y", "x"]),
-                 xr.DataArray(np.full(shape, -0.01), dims=["y", "x"])],
+                [
+                    xr.DataArray(np.full(shape, -0.5), dims=["y", "x"]),
+                    xr.DataArray(np.full(shape, -0.01), dims=["y", "x"]),
+                ],
                 dim="param",
             ).assign_coords(param=["aot", "tcwv"])
             d_xbp = xr.concat(
-                [xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
-                 xr.DataArray(np.full(shape, 0.005), dims=["y", "x"])],
+                [
+                    xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
+                    xr.DataArray(np.full(shape, 0.005), dims=["y", "x"]),
+                ],
                 dim="param",
             ).assign_coords(param=["aot", "tcwv"])
             d_xcp = xr.concat(
-                [xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
-                 xr.DataArray(np.full(shape, 0.002), dims=["y", "x"])],
+                [
+                    xr.DataArray(np.full(shape, 0.05), dims=["y", "x"]),
+                    xr.DataArray(np.full(shape, 0.002), dims=["y", "x"]),
+                ],
                 dim="param",
             ).assign_coords(param=["aot", "tcwv"])
 
-        return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp,
-                              d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp)
+        return RTCoefficients(xap=xap, xbp=xbp, xcp=xcp, d_xap=d_xap, d_xbp=d_xbp, d_xcp=d_xcp)
 
     def supports_jacobian(self):
         return True
@@ -264,10 +281,12 @@ def mock_rt_model():
 # Pipeline contract fixtures (new)
 # =============================================================================
 
+
 @pytest.fixture
 def mock_sensor_config():
     """3-band sensor config (Blue, Green, Red) for pipeline contract tests."""
     from siac.domain import SensorBand, SensorConfig
+
     return SensorConfig(
         sensor_id="MOCK",
         satellite_id="TEST",
@@ -289,6 +308,7 @@ PIPELINE_SHAPE = (32, 32)
 def mock_geometry():
     """GeometryAngles at pipeline test resolution."""
     from siac.runtime import GeometryAngles
+
     shape = PIPELINE_SHAPE
     return GeometryAngles(
         sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
@@ -302,12 +322,24 @@ def mock_geometry():
 def mock_observation_bundle(mock_sensor_config, mock_geometry):
     """Complete valid ObservationBundle with 32x32 synthetic TOA."""
     from siac.runtime import ObservationBundle
+
     shape = PIPELINE_SHAPE
-    toa_ds = xr.Dataset({
-        "B02": xr.DataArray(np.random.RandomState(42).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-        "B03": xr.DataArray(np.random.RandomState(43).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-        "B04": xr.DataArray(np.random.RandomState(44).uniform(0.05, 0.3, shape).astype(np.float32), dims=["y", "x"]),
-    })
+    toa_ds = xr.Dataset(
+        {
+            "B02": xr.DataArray(
+                np.random.RandomState(42).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+            "B03": xr.DataArray(
+                np.random.RandomState(43).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+            "B04": xr.DataArray(
+                np.random.RandomState(44).uniform(0.05, 0.3, shape).astype(np.float32),
+                dims=["y", "x"],
+            ),
+        }
+    )
     cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
     return ObservationBundle(
         toa=toa_ds,
@@ -324,6 +356,7 @@ def mock_observation_bundle(mock_sensor_config, mock_geometry):
 def mock_atmospheric_state():
     """Spatially uniform AtmosphericState at 32x32."""
     from siac.runtime import AtmosphericState
+
     shape = PIPELINE_SHAPE
     return AtmosphericState(
         aot=xr.DataArray(np.full(shape, 0.15), dims=["y", "x"]),
@@ -340,6 +373,7 @@ def mock_atmospheric_state():
 def mock_surface_prior():
     """Uniform SurfacePrior at 32x32."""
     from siac.runtime import BRDFKernelWeights, SurfacePrior
+
     shape = PIPELINE_SHAPE
     brdf = BRDFKernelWeights(
         f0=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
@@ -361,6 +395,7 @@ def mock_surface_prior():
 def mock_solved_atmosphere(mock_atmospheric_state):
     """Dummy solved output (converged, 5 iterations)."""
     from siac.runtime import SolvedAtmosphere
+
     return SolvedAtmosphere(
         atmo_state=mock_atmospheric_state,
         aot=mock_atmospheric_state.aot,
@@ -382,12 +417,19 @@ def mock_solver_input_bundle(
 ):
     """Pre-assembled SolverInputBundle (skips M4)."""
     from siac.runtime import SolverInputBundle
+
     obs = mock_observation_bundle
     bands = obs.sensor_config.default_aerosol_solver_bands()
     band_names = [b.name for b in bands]
     toa_arrays = [obs.toa[bn] for bn in band_names if bn in obs.toa.data_vars]
-    toa_da = xr.concat(toa_arrays, dim="band") if toa_arrays else obs.toa[list(obs.toa.data_vars)[0]].expand_dims("band")
-    toa_da = toa_da.assign_coords(band=[data.name for data in toa_arrays] or [list(obs.toa.data_vars)[0]])
+    toa_da = (
+        xr.concat(toa_arrays, dim="band")
+        if toa_arrays
+        else obs.toa[list(obs.toa.data_vars)[0]].expand_dims("band")
+    )
+    toa_da = toa_da.assign_coords(
+        band=[data.name for data in toa_arrays] or [list(obs.toa.data_vars)[0]]
+    )
     return SolverInputBundle(
         toa=toa_da,
         geometry=obs.geometry,
@@ -406,28 +448,35 @@ def mock_solver_input_bundle(
 # Mock module callables for pipeline tests
 # =============================================================================
 
+
 @pytest.fixture
 def mock_preprocessor(mock_observation_bundle):
     """(Path, AOI) -> ObservationBundle. Returns fixed bundle."""
+
     def _preprocess(input_path, aoi=None):
         return mock_observation_bundle
+
     return _preprocess
 
 
 @pytest.fixture
 def mock_atmo_provider(mock_atmospheric_state):
     """(bounds, crs, time, res) -> AtmosphericState."""
+
     def _get_prior(bounds, crs, obs_time, resolution):
         return mock_atmospheric_state
+
     return _get_prior
 
 
 @pytest.fixture
 def mock_surface_prior_provider(mock_surface_prior):
     """(observation, atmo_prior|None, rt_model, res) -> SurfacePrior."""
+
     def _get_surface_prior(observation, atmo_prior, rt_model, resolution):
         _ = (observation, atmo_prior, rt_model, resolution)
         return mock_surface_prior
+
     _get_surface_prior.requires_atmo_prior = False
     return _get_surface_prior
 
@@ -435,6 +484,7 @@ def mock_surface_prior_provider(mock_surface_prior):
 @pytest.fixture
 def mock_grid_assembler(mock_solver_input_bundle):
     """Grid assembler that returns a pre-built SolverInputBundle."""
+
     def _assemble(
         obs,
         atmo,
@@ -446,14 +496,17 @@ def mock_grid_assembler(mock_solver_input_bundle):
     ):
         _ = (obs, atmo, surface, rt_model, aux_resolution_m, aerosol_resolution_m)
         return mock_solver_input_bundle
+
     return _assemble
 
 
 @pytest.fixture
 def mock_solver_fn(mock_solved_atmosphere):
     """Solver that returns a pre-built SolvedAtmosphere."""
+
     def _solve(inputs, config):
         return mock_solved_atmosphere
+
     return _solve
 
 
@@ -461,6 +514,7 @@ def mock_solver_fn(mock_solved_atmosphere):
 def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
     """Corrector that returns a synthetic CorrectionResult."""
     from siac.runtime import CorrectionDiagnostics, CorrectionResult
+
     def _correct(obs, solved, rt_model):
         return CorrectionResult(
             boa=obs.toa,
@@ -470,12 +524,14 @@ def mock_corrector_fn(mock_observation_bundle, mock_solved_atmosphere):
             cloud_mask=obs.cloud_mask,
             diagnostics=CorrectionDiagnostics(processing_time_s=0.01),
         )
+
     return _correct
 
 
 # =============================================================================
 # Cost function input fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def cost_function_inputs():
@@ -544,6 +600,7 @@ def cost_function_inputs():
 # =============================================================================
 # Markers
 # =============================================================================
+
 
 def pytest_configure(config):
     """Register custom markers."""

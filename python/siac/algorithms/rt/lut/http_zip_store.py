@@ -592,7 +592,9 @@ def _detect_zarr_prefix(zip_fs: _ReadOnlyZipFileSystem) -> str:
     return _detect_zarr_prefix_from_names(zip_fs._files.keys())
 
 
-def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> MutableMapping[str, bytes]:
+def build_readonly_zip_mapper(
+    path: str, storage_options: dict[str, Any]
+) -> MutableMapping[str, bytes]:
     """Build an FSMap for a ZIP-hosted Zarr store at local/HTTP/S3 path."""
     options = dict(storage_options)
 
@@ -624,7 +626,9 @@ def build_readonly_zip_mapper(path: str, storage_options: dict[str, Any]) -> Mut
     zip_fs = _ReadOnlyZipFileSystem(base_fs, zip_path)
     try:
         root = _detect_zarr_prefix(zip_fs)
-        return cast("MutableMapping[str, bytes]", FSMap(root=root, fs=zip_fs, check=False, create=False))
+        return cast(
+            "MutableMapping[str, bytes]", FSMap(root=root, fs=zip_fs, check=False, create=False)
+        )
     except ValueError as exc:
         message = str(exc).lower()
         if "not stored (uncompressed)" not in message:

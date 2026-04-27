@@ -209,7 +209,9 @@ def test_rsrf_kernel_covers_sparse_support_and_error_paths() -> None:
         )
 
 
-def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rust_compat_proxies_delegate_when_native_symbols_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: dict[str, object] = {}
 
     class _FakeKernel:
@@ -238,7 +240,11 @@ def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pyt
         ),
         evaluate_grid_search_candidate_cost=lambda *args, **kwargs: ("cand", args, kwargs),
         evaluate_grid_search_cost_cube_with_provider=lambda *args, **kwargs: ("cube", args, kwargs),
-        evaluate_grid_search_cost_cube_with_provider_qa=lambda *args, **kwargs: ("cube_qa", args, kwargs),
+        evaluate_grid_search_cost_cube_with_provider_qa=lambda *args, **kwargs: (
+            "cube_qa",
+            args,
+            kwargs,
+        ),
         interpolate_to_fine_grid=lambda *args, **kwargs: ("fine", args, kwargs),
         quadratic_refine_grid_search=lambda *args, **kwargs: ("quad", args, kwargs),
         quadratic_refine_grid_search_qa=lambda *args, **kwargs: ("quad_qa", args, kwargs),
@@ -275,7 +281,9 @@ def test_rust_compat_proxies_delegate_when_native_symbols_exist(monkeypatch: pyt
     assert rust_compat.whittaker_smooth_cube(7) == ("smooth", (7,), {})
 
 
-def test_rust_compat_missing_message_includes_original_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rust_compat_missing_message_includes_original_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(rust_compat, "_NATIVE_IMPORT_ERROR", ModuleNotFoundError("boom"))
     message = rust_compat._missing_message("PSFConvolver")
     assert "PSFConvolver" in message

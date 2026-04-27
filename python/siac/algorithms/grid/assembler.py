@@ -50,11 +50,7 @@ BoolArray: TypeAlias = npt.NDArray[np.bool_]
 def _template_coords(template: xr.DataArray | None) -> dict[str, xr.DataArray]:
     if template is None:
         return {}
-    return {
-        dim: template.coords[dim]
-        for dim in template.dims
-        if dim in template.coords
-    }
+    return {dim: template.coords[dim] for dim in template.dims if dim in template.coords}
 
 
 def _ensure_template_transform(template: xr.DataArray) -> xr.DataArray:
@@ -116,7 +112,8 @@ def _pil_resize(src: np.ndarray, w_out: int, h_out: int, method: str) -> np.ndar
     resampling = Image.NEAREST if method == "nearest" else Image.BILINEAR
     return np.array(
         Image.fromarray(src.astype(np.float32), mode="F").resize(
-            (w_out, h_out), resampling,
+            (w_out, h_out),
+            resampling,
         ),
         dtype=np.float32,
     )
@@ -149,9 +146,7 @@ def _resample_da(
         return copy_spatial_metadata_like(out, template) if template is not None else out
 
     if da.ndim != 2:
-        raise ValueError(
-            f"_resample_da expects 2D or banded 3D DataArray, got dims={da.dims}"
-        )
+        raise ValueError(f"_resample_da expects 2D or banded 3D DataArray, got dims={da.dims}")
 
     src = np.asarray(da.values, dtype=np.float32)
     h_out, w_out = target_shape
@@ -243,7 +238,9 @@ def _resample_da_gdal(
         return None
     if target_x_dim not in template.coords or target_y_dim not in template.coords:
         return None
-    if not _is_monotonic_axis(da.coords[source_x_dim]) or not _is_monotonic_axis(da.coords[source_y_dim]):
+    if not _is_monotonic_axis(da.coords[source_x_dim]) or not _is_monotonic_axis(
+        da.coords[source_y_dim]
+    ):
         logger.debug("Skipping GDAL resampling for non-monotonic source coordinates.")
         return None
 
@@ -270,7 +267,11 @@ def _resample_da_gdal(
         logger.debug("Skipping GDAL resampling: missing georeferencing metadata.")
         return None
     except (RuntimeError, ValueError, AttributeError) as exc:
-        logger.debug("GDAL reproject_match failed (%s); falling back to scipy.", type(exc).__name__, exc_info=True)
+        logger.debug(
+            "GDAL reproject_match failed (%s); falling back to scipy.",
+            type(exc).__name__,
+            exc_info=True,
+        )
         return None
 
     out = out.astype(np.float32).assign_attrs(da.attrs)
@@ -322,7 +323,12 @@ def _resample_cloud_mask(
             return geospatial
         out = cast(
             "BoolArray",
-            zoom(src.astype(np.uint8, copy=False), (h_out / src.shape[0], w_out / src.shape[1]), order=0) > 0,
+            zoom(
+                src.astype(np.uint8, copy=False),
+                (h_out / src.shape[0], w_out / src.shape[1]),
+                order=0,
+            )
+            > 0,
         )
         out = out[:h_out, :w_out]
 
@@ -383,7 +389,10 @@ def _shape_only_mask_remap_is_safe(
         abs(float(target_res[1])),
         1e-6,
     )
-    return all(abs(src_bound - dst_bound) <= tolerance for src_bound, dst_bound in zip(source_bounds, target_bounds))
+    return all(
+        abs(src_bound - dst_bound) <= tolerance
+        for src_bound, dst_bound in zip(source_bounds, target_bounds)
+    )
 
 
 def _resample_mask_geospatial(
@@ -443,7 +452,9 @@ def _dilate_mask_ellipse(mask: np.ndarray, radius: int) -> BoolArray:
     return cast("BoolArray", dilated.astype(bool, copy=False))
 
 
-def _sharp_transition_proxy_uint8(values: np.ndarray, valid_mask: np.ndarray) -> npt.NDArray[np.uint8]:
+def _sharp_transition_proxy_uint8(
+    values: np.ndarray, valid_mask: np.ndarray
+) -> npt.NDArray[np.uint8]:
     clipped = np.clip(
         np.nan_to_num(values, nan=0.0, posinf=1.0, neginf=0.0),
         0.0,
@@ -681,7 +692,9 @@ def _resolve_solver_bands(
     if not requested_band_names:
         return default_bands
 
-    requested = tuple(dict.fromkeys(str(name).strip() for name in requested_band_names if str(name).strip()))
+    requested = tuple(
+        dict.fromkeys(str(name).strip() for name in requested_band_names if str(name).strip())
+    )
     available_by_name = {band.name: band for band in sensor_config.bands}
     missing = [name for name in requested if name not in available_by_name]
     if missing:
@@ -696,6 +709,7 @@ def _resolve_solver_bands(
 
 
 # ── Public API ─────────────────────────────────────────────────────────
+
 
 def assemble_grids(
     obs: ObservationBundle,
@@ -765,7 +779,9 @@ def assemble_grids(
     band_names = [b.name for b in bands]
     sharp_transition_mask: xr.DataArray | None = None
     water_mask: xr.DataArray | None = None
-    if sharp_transition_filter is not None and bool(getattr(sharp_transition_filter, "enabled", False)):
+    if sharp_transition_filter is not None and bool(
+        getattr(sharp_transition_filter, "enabled", False)
+    ):
         native_solver_toa = _native_solver_band_stack(obs, band_names)
         native_mask = _detect_sharp_transition_mask_native(
             native_solver_toa,
@@ -801,7 +817,9 @@ def assemble_grids(
                 attrs=native_water_mask.attrs,
                 name=native_water_mask.name,
             )
-            native_water_mask = copy_spatial_metadata_like(native_water_mask, native_water_reference)
+            native_water_mask = copy_spatial_metadata_like(
+                native_water_mask, native_water_reference
+            )
         water_mask = _resample_external_exclusion_mask(
             native_water_mask,
             target_shape,
@@ -835,7 +853,9 @@ def assemble_grids(
 
     with ThreadPoolExecutor(max_workers=max(len(band_names) + 4, 6)) as pool:
         toa_futures = {bn: pool.submit(_resample_toa_band, bn) for bn in band_names}
-        geom_future = pool.submit(_resample_geometry, obs.geometry, target_shape, template=target_template)
+        geom_future = pool.submit(
+            _resample_geometry, obs.geometry, target_shape, template=target_template
+        )
         cloud_future = pool.submit(
             _resample_cloud_mask,
             obs.cloud_mask,
@@ -843,8 +863,12 @@ def assemble_grids(
             template=target_template,
             assume_aligned_native_grid=True,
         )
-        atmo_future = pool.submit(_resample_atmo_state, atmo, target_shape, template=target_template)
-        surface_future = pool.submit(_resample_surface_prior, surface_aligned, target_shape, template=target_template)
+        atmo_future = pool.submit(
+            _resample_atmo_state, atmo, target_shape, template=target_template
+        )
+        surface_future = pool.submit(
+            _resample_surface_prior, surface_aligned, target_shape, template=target_template
+        )
 
         toa_arrays = []
         resolved_band_names: list[str] = []
@@ -865,7 +889,9 @@ def assemble_grids(
     else:
         # Fallback: use first available variable
         first = list(obs.toa.data_vars)[0]
-        toa_da = _resample_da(obs.toa[first], target_shape, "area", template=target_template).expand_dims("band")
+        toa_da = _resample_da(
+            obs.toa[first], target_shape, "area", template=target_template
+        ).expand_dims("band")
         toa_da = toa_da.assign_coords(band=[first])
     toa_da = copy_spatial_metadata_like(toa_da, target_template)
 

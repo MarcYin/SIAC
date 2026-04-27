@@ -18,7 +18,9 @@ from siac.storage.readers import read_raster_window
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WATER_MASK_VRT_URL = "https://zenodo.org/records/14899246/files/landWater2020.vrt?download=1"
+DEFAULT_WATER_MASK_VRT_URL = (
+    "https://zenodo.org/records/14899246/files/landWater2020.vrt?download=1"
+)
 DEFAULT_WATER_MASK_CACHE_DIR = Path.home() / ".cache" / "siac" / "water-mask"
 
 _WGS84_CRS = "EPSG:4326"
@@ -84,7 +86,11 @@ def ensure_local_water_mask_source(
         local_source = resolved_source.expanduser()
     else:
         parsed = urlparse(str(resolved_source))
-        local_source = None if parsed.scheme.lower() in {"http", "https"} else Path(str(resolved_source)).expanduser()
+        local_source = (
+            None
+            if parsed.scheme.lower() in {"http", "https"}
+            else Path(str(resolved_source)).expanduser()
+        )
 
     if local_source is not None:
         if local_source.is_dir():
@@ -178,15 +184,25 @@ def _download_file(url: str, destination: Path, *, session: requests.Session | N
     logger.info("Downloading water-mask asset %s -> %s", url, destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     client = session or requests.Session()
-    with client.get(url, stream=True, timeout=120) as response:
-        response.raise_for_status()
-        with NamedTemporaryFile(delete=False, dir=destination.parent, suffix=".part") as handle:
-            temp_path = Path(handle.name)
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
-    shutil.move(str(temp_path), str(destination))
-    return destination
+    owns_client = session is None
+    temp_path: Path | None = None
+    try:
+        with client.get(url, stream=True, timeout=120) as response:
+            response.raise_for_status()
+            with NamedTemporaryFile(delete=False, dir=destination.parent, suffix=".part") as handle:
+                temp_path = Path(handle.name)
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+        assert temp_path is not None
+        shutil.move(str(temp_path), str(destination))
+        temp_path = None
+        return destination
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        if owns_client:
+            client.close()
 
 
 __all__ = [

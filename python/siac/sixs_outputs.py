@@ -126,7 +126,9 @@ SIXS_CORE_OUTPUT_SPECS: Final[tuple[SixSCoreOutputSpec, ...]] = (
     ("rooceaw", "rooceaw", "irapp.ge.0.and.idirec.eq.1.and.ibrdf.eq.6"),
 )
 
-SIXS_CORE_OUTPUT_NAMES: Final[tuple[str, ...]] = tuple(name for name, _, _ in SIXS_CORE_OUTPUT_SPECS)
+SIXS_CORE_OUTPUT_NAMES: Final[tuple[str, ...]] = tuple(
+    name for name, _, _ in SIXS_CORE_OUTPUT_SPECS
+)
 
 _all_names: list[str] = list(SIXS_BASE_OUTPUTS)
 for _name in SIXS_CORE_OUTPUT_NAMES:

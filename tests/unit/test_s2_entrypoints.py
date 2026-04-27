@@ -69,7 +69,9 @@ def test_resolve_s2_input_builds_auth_from_config_for_cdse(monkeypatch, tmp_path
         return safe
 
     monkeypatch.setattr(sentinel2_app.CredentialManager, "from_config", lambda _cfg: auth_obj)
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
+    monkeypatch.setattr(
+        "siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend
+    )
     monkeypatch.setattr("siac.adapters.data.s2_data_source.S2DataAccess.get", _fake_get)
 
     out = resolve_s2_input(
@@ -136,8 +138,13 @@ def test_search_sentinel2_builds_auth_from_config_for_cdse(monkeypatch):
             captured["auth"] = auth
 
     monkeypatch.setattr(sentinel2_app.CredentialManager, "from_config", lambda _cfg: auth_obj)
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend)
-    monkeypatch.setattr("siac.adapters.data.s2_data_source.search_s2", lambda backend, query: [fake_product])  # noqa: ARG005
+    monkeypatch.setattr(
+        "siac.adapters.data.copernicus_dataspace.CopernicusDataspaceBackend", _FakeBackend
+    )
+    monkeypatch.setattr(
+        "siac.adapters.data.s2_data_source.search_s2",
+        lambda _backend, _query: [fake_product],
+    )
 
     products = search_sentinel2(tile="31UDQ", date="2024-01-01", backend="cdse")
 
