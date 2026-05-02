@@ -441,9 +441,9 @@ class TestSixSConfig:
         assert cfg.rt_model.setup.atmosphere.profile == "tropical"
         assert cfg.rt_model.sixs.output_variables == ("xap", "xbp", "xcp", "tgasm", "sutott")
 
-    def test_py6s_backend_is_no_longer_supported(self):
+    def test_unknown_rt_backend_is_rejected(self):
         with pytest.raises(ValidationError, match="backend"):
-            SIACConfig(algorithms={"rt": {"backend": "py6s"}})
+            SIACConfig(algorithms={"rt": {"backend": "unsupported"}})
 
 
 class TestExecutionConfig:
