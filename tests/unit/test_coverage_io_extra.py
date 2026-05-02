@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +50,7 @@ from siac.storage.stac import build_stac_item, write_stac_item
 from siac.storage.writers import (
     _compute_overview_levels,
     _prepare_for_write,
+    ensure_writable_directory,
     write_aot_scatter_plot,
     write_auxiliary_products,
     write_boa_products,
@@ -467,6 +469,36 @@ class TestWritersExtra:
         assert raster_calls[1]["compress"] == "deflate"
         assert raster_calls[1]["level"] == 6
         assert "zlevel" not in raster_calls[1]
+
+    def test_ensure_writable_directory_repairs_missing_execute_bit(
+        self,
+        tmp_path: Path,
+    ):
+        directory = tmp_path / "locked"
+        directory.mkdir()
+        directory.chmod(0o600)
+
+        fixed = ensure_writable_directory(directory)
+
+        assert fixed == directory
+        assert fixed.stat().st_mode & 0o700 == 0o700
+        (fixed / "probe.txt").write_text("ok", encoding="utf-8")
+
+    def test_ensure_writable_directory_repairs_new_intermediate_directories(
+        self,
+        tmp_path: Path,
+    ):
+        old_umask = os.umask(0o177)
+        try:
+            nested = tmp_path / "monthly_composites" / "2021_02"
+            fixed = ensure_writable_directory(nested)
+        finally:
+            os.umask(old_umask)
+
+        assert fixed == nested
+        assert (tmp_path / "monthly_composites").stat().st_mode & 0o700 == 0o700
+        assert fixed.stat().st_mode & 0o700 == 0o700
+        (fixed / "probe.txt").write_text("ok", encoding="utf-8")
 
     def test_write_netcdf_preserves_grid_mapping_encoding(
         self,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
@@ -74,6 +75,51 @@ COG_SETTINGS = {
 }
 
 _NETCDF_DEFAULT = object()
+
+
+def _repair_directory_mode(directory: Path) -> None:
+    current_mode = stat.S_IMODE(directory.stat().st_mode)
+    required_owner_bits = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+    updated_mode = current_mode | required_owner_bits
+    if current_mode & stat.S_IRGRP:
+        updated_mode |= stat.S_IXGRP
+    if current_mode & stat.S_IROTH:
+        updated_mode |= stat.S_IXOTH
+    if updated_mode != current_mode:
+        directory.chmod(updated_mode)
+
+
+def ensure_writable_directory(path: str | Path) -> Path:
+    """Create a directory tree and make sure each level is owner-traversable."""
+    directory = Path(path).expanduser()
+    if directory.exists():
+        if not directory.is_dir():
+            raise NotADirectoryError(directory)
+        _repair_directory_mode(directory)
+        return directory
+
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    if not current.is_dir():
+        raise NotADirectoryError(current)
+    if current != Path(current.anchor) and current != Path():
+        _repair_directory_mode(current)
+
+    for current in reversed(missing):
+        try:
+            current.mkdir()
+        except FileExistsError as exc:
+            if not current.is_dir():
+                raise NotADirectoryError(current) from exc
+        _repair_directory_mode(current)
+    return directory
 
 
 def _netcdf_fill_value(data: xr.DataArray) -> Any:
@@ -144,7 +190,7 @@ def write_raster(
         >>> write_raster(da, "output.tif", compression="lzw", dtype="float32")
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(path.parent)
 
     # Prepare data
     data = _prepare_for_write(data, dtype, nodata)
@@ -199,7 +245,7 @@ def write_cog(
         Path to written file
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(path.parent)
 
     # Prepare data
     data = _prepare_for_write(data, dtype, nodata)
@@ -251,8 +297,7 @@ def write_dataset(
         >>> paths = write_dataset(ds, "/output/", prefix="S2A_BOA_")
         >>> print(paths)  # {"B02": Path("/output/S2A_BOA_B02.tif"), ...}
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = ensure_writable_directory(output_dir)
 
     write_fn = write_cog if as_cog else write_raster
     output_paths = {}
@@ -303,6 +348,7 @@ def write_zarr(
         Path to Zarr store
     """
     path = Path(path)
+    ensure_writable_directory(path.parent)
 
     if chunks is not None:
         data = data.chunk(chunks)
@@ -332,7 +378,7 @@ def write_netcdf(
         Path to NetCDF file
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(path.parent)
     payload: xr.DataArray | xr.Dataset
 
     # Default compression
@@ -427,8 +473,7 @@ def write_boa_products(
     Returns:
         Dictionary of output paths
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = ensure_writable_directory(output_dir)
 
     output_paths = {}
     prefix = f"{sensor}_{tile_id}_{datetime_str}"
@@ -472,8 +517,7 @@ def write_auxiliary_products(
     Returns:
         Dictionary with "aot" and "tcwv" paths
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = ensure_writable_directory(output_dir)
 
     prefix = f"{sensor}_{tile_id}_{datetime_str}"
 
@@ -511,7 +555,7 @@ def write_rgb_quicklook(
         Path to quicklook image
     """
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(output_path.parent)
 
     # Stack RGB bands
     rgb = xr.concat(
@@ -558,7 +602,7 @@ def write_aot_scatter_plot(
     from PIL import Image, ImageDraw, ImageFont
 
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(output_path.parent)
 
     image = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw = ImageDraw.Draw(image, "RGBA")
@@ -764,7 +808,7 @@ def write_false_colour_preview(
         else:
             return None
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(output_path.parent)
     r = _field_to_uint8(boa[red_band].values, scale[0], scale[1])
     g = _field_to_uint8(boa[green_band].values, scale[0], scale[1])
     b = _field_to_uint8(boa[blue_band].values, scale[0], scale[1])
@@ -790,7 +834,7 @@ def write_field_preview(
     from PIL import Image, ImageDraw, ImageFont
 
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(output_path.parent)
 
     values = np.asarray(field.values, dtype=np.float64)
     mask = None
@@ -870,7 +914,7 @@ def write_cloud_mask_preview(
     if not {red_band, green_band, blue_band} <= set(boa.data_vars):
         return None
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable_directory(output_path.parent)
     r = _field_to_uint8(boa[red_band].values, scale[0], scale[1])
     g = _field_to_uint8(boa[green_band].values, scale[0], scale[1])
     b = _field_to_uint8(boa[blue_band].values, scale[0], scale[1])

@@ -13,7 +13,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -30,9 +29,11 @@ from siac.storage.product_writers import (
 )
 from siac.storage.raster_writers import write_cog, write_raster, write_zarr
 from siac.storage.stac import build_stac_item_from_result
-from siac.storage.writers import write_netcdf
+from siac.storage.writers import ensure_writable_directory, write_netcdf
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from siac.config.schema import OutputDefaultsConfig
     from siac.runtime import CorrectionResult
 
@@ -160,8 +161,7 @@ class ConfiguredOutputWriter:
         result: CorrectionResult,
         output_dir: str | Path,
     ) -> dict[str, Path]:
-        destination = Path(output_dir)
-        destination.mkdir(parents=True, exist_ok=True)
+        destination = ensure_writable_directory(output_dir)
 
         prefix = _derive_scene_prefix(result.metadata)
 
@@ -189,8 +189,7 @@ class ConfiguredOutputWriter:
         if self.defaults.boa_dtype not in {"float32", "float64"}:
             return None
 
-        destination = Path(output_dir)
-        destination.mkdir(parents=True, exist_ok=True)
+        destination = ensure_writable_directory(output_dir)
         return _RasterCorrectionBoaStream(
             writer=self,
             output_dir=destination,
@@ -387,8 +386,7 @@ class ConfiguredOutputWriter:
                 output_dir / f"{prefix}_SURF_UNC.nc",
             )
         if result.monthly_composites:
-            monthly_root = output_dir / "monthly_composites"
-            monthly_root.mkdir(parents=True, exist_ok=True)
+            monthly_root = ensure_writable_directory(output_dir / "monthly_composites")
             for label, composite in sorted(result.monthly_composites.items()):
                 composite_ds = composite.reflectance.copy()
                 composite_ds["quality"] = composite.quality.astype(np.float32)
@@ -439,8 +437,7 @@ class ConfiguredOutputWriter:
                 output_dir / f"{prefix}_SURF_UNC.zarr",
             )
         if result.monthly_composites:
-            monthly_root = output_dir / "monthly_composites"
-            monthly_root.mkdir(parents=True, exist_ok=True)
+            monthly_root = ensure_writable_directory(output_dir / "monthly_composites")
             for label, composite in sorted(result.monthly_composites.items()):
                 composite_ds = composite.reflectance.copy()
                 composite_ds["quality"] = composite.quality.astype(np.float32)
