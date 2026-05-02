@@ -1825,13 +1825,35 @@ def _validate_extension_import(
     module_name: str, module_path: Path
 ) -> subprocess.CompletedProcess[str]:
     validation_code = """
+import ctypes
 import importlib.machinery
 import importlib.util
+import os
 import pathlib
 import sys
 
 module_name = sys.argv[1]
 module_path = pathlib.Path(sys.argv[2]).resolve()
+runtime_candidates = []
+env_runtime = os.getenv("SIAC_SIXS_OPENMP_RUNTIME")
+if env_runtime:
+    runtime_candidates.append(pathlib.Path(env_runtime).expanduser())
+for name in (
+    "libgomp.dylib",
+    "libgomp.1.dylib",
+    "libgomp.so.1",
+    "libgomp.so",
+    "libomp.dylib",
+    "libomp.so",
+):
+    runtime_candidates.append(pathlib.Path(sys.prefix) / "lib" / name)
+for runtime in runtime_candidates:
+    if runtime.exists():
+        try:
+            ctypes.CDLL(str(runtime), mode=ctypes.RTLD_GLOBAL)
+            break
+        except OSError:
+            pass
 loader = importlib.machinery.ExtensionFileLoader(module_name, str(module_path))
 spec = importlib.util.spec_from_file_location(module_name, module_path, loader=loader)
 if spec is None or spec.loader is None:

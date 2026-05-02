@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib.machinery
 import importlib.util
 import logging
@@ -101,6 +102,43 @@ _BRDF_MODEL_CODES: dict[str, int] = {
     "ross_li_maignan": 11,
 }
 _MODULE_CACHE: dict[tuple[Path, int, int], Any] = {}
+_OPENMP_RUNTIME_PRELOADED = False
+
+
+def _preload_openmp_runtime() -> None:
+    """Load OpenMP symbols globally for native 6S extensions built on macOS."""
+    global _OPENMP_RUNTIME_PRELOADED
+    if _OPENMP_RUNTIME_PRELOADED:
+        return
+
+    candidates: list[Path] = []
+    env_path = os.getenv("SIAC_SIXS_OPENMP_RUNTIME")
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    lib_dir = Path(sys.prefix) / "lib"
+    for name in (
+        "libgomp.dylib",
+        "libgomp.1.dylib",
+        "libgomp.so.1",
+        "libgomp.so",
+        "libomp.dylib",
+        "libomp.so",
+    ):
+        candidates.append(lib_dir / name)
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            ctypes.CDLL(os.fspath(candidate), mode=ctypes.RTLD_GLOBAL)
+        except OSError as exc:
+            logger.debug("Failed to preload OpenMP runtime %s: %s", candidate, exc)
+            continue
+        _OPENMP_RUNTIME_PRELOADED = True
+        return
+
+
 _CASE_ARRAY_NAMES: tuple[str, ...] = (
     "sza_deg",
     "saa_deg",
@@ -926,6 +964,7 @@ def _load_extension_module(module_path: Path) -> Any:
         _MODULE_CACHE.pop(stale_key, None)
 
     module_name = resolved_path.name.split(".", 1)[0]
+    _preload_openmp_runtime()
 
     loader = importlib.machinery.ExtensionFileLoader(
         module_name,
