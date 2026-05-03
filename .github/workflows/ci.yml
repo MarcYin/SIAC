@@ -67,7 +67,7 @@ jobs:
 
           from siac import SIAC, SIACConfig
           from siac.adapters.output import ConfiguredOutputWriter
-          from siac.config.schema import SixSAlgorithmConfig
+          from siac.config import SixSAlgorithmConfig
           from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
 
           print(siac.__version__)
@@ -103,7 +103,7 @@ jobs:
 
           from siac import SIAC, SIACConfig
           from siac.adapters.output import ConfiguredOutputWriter
-          from siac.config.schema import SixSAlgorithmConfig
+          from siac.config import SixSAlgorithmConfig
           from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
 
           print(siac.__version__)
@@ -137,7 +137,7 @@ jobs:
 
           from siac import SIAC, SIACConfig
           from siac.adapters.output import ConfiguredOutputWriter
-          from siac.config.schema import SixSAlgorithmConfig
+          from siac.config import SixSAlgorithmConfig
           from siac.sixs_outputs import SIXS_DEFAULT_OUTPUT_VARIABLES, SIXS_OUTPUT_VARIABLE_CHOICES
 
           print(siac.__version__)

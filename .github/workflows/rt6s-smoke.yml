@@ -11,7 +11,8 @@ on:
     paths:
       - ".github/workflows/rt6s-smoke.yml"
       - "python/siac/algorithms/rt/direct/**"
-      - "python/siac/config/schema.py"
+      - "python/siac/config/algorithms.py"
+      - "python/siac/config/types.py"
       - "python/siac/sixs_outputs.py"
       - "tools/build_6s_native.py"
       - "tools/rt6s_smoke.py"
@@ -21,7 +22,8 @@ on:
     paths:
       - ".github/workflows/rt6s-smoke.yml"
       - "python/siac/algorithms/rt/direct/**"
-      - "python/siac/config/schema.py"
+      - "python/siac/config/algorithms.py"
+      - "python/siac/config/types.py"
       - "python/siac/sixs_outputs.py"
       - "tools/build_6s_native.py"
       - "tools/rt6s_smoke.py"
