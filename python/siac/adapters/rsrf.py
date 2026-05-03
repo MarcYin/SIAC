@@ -169,18 +169,3 @@ def load_sensor_config_with_rsrf(
         default_ref_scale=resolved_base.default_ref_scale,
         default_ref_offset=resolved_base.default_ref_offset,
     )
-
-
-load_band_srf_from_rsrf = load_band_rsrf
-load_sensor_config_from_rsrf = load_sensor_config_with_rsrf
-
-
-__all__ = [
-    "band_convolution_weights",
-    "band_response_definition_input",
-    "coerce_band_rsrf",
-    "load_band_rsrf",
-    "load_sensor_config_with_rsrf",
-    "load_band_srf_from_rsrf",
-    "load_sensor_config_from_rsrf",
-]

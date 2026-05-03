@@ -24,7 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional write dependency
 
     tomli_w = _TomliWFallback()
 
-from siac.config.schema import SystemConfig
+from siac.config.system import SystemConfig
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

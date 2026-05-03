@@ -3,53 +3,113 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import xarray as xr
 
-import siac.app.assembly as assembly_mod
-from siac.app.assembly import (
+import siac.app._assembly_surface as surface_assembly_mod
+import siac.app.s2_backend as s2_backend_mod
+from siac.app._assembly_correction import resolve_corrector
+from siac.app._assembly_io import resolve_grid_assembler
+from siac.app._assembly_preprocessor import resolve_preprocessor
+from siac.app._assembly_providers import resolve_atmo_provider
+from siac.app._assembly_rt import resolve_rt_model_for_pipeline
+from siac.app._assembly_solver import resolve_solver
+from siac.app._assembly_surface import (
     _build_kernel_surface_prior,
     _build_monthly_surface_prior,
     _build_whittaker_surface_prior,
-    resolve_atmo_provider,
-    resolve_corrector,
-    resolve_grid_assembler,
-    resolve_preprocessor,
-    resolve_rt_model_for_pipeline,
-    resolve_s2_backend,
-    resolve_solver,
     resolve_surface_prior_provider,
 )
+from siac.app.s2_backend import resolve_s2_backend
+from siac.errors import SensorNotSupportedError
 from siac.geo.resample import resample_field_to_template as _resample_field_to_template
 from siac.observability import ExecutionObserver, bind_execution_observer
 
 
 def _monthly_surface_prior_test_config():
-    class _SpectralMapping:
-        enabled = True
-        k_neighbors = 5
-        neighbor_estimator = "distance_weighted_mean"
-        knn_backend = "numpy"
-        knn_eps = 0.0
-        min_valid_bands = 1
+    return SimpleNamespace(
+        algorithms=SimpleNamespace(
+            surface_prior=SimpleNamespace(
+                psf_sigma_x=29.75,
+                psf_sigma_y=39.0,
+                apply_psf=True,
+                spectral_mapping=_spectral_mapping(enabled=True),
+                monthly_database_filter=_monthly_database_filter(),
+                monthly_database_resolution_policy="provider_or_coarser",
+            )
+        ),
+        providers=SimpleNamespace(brdf=SimpleNamespace(temporal_window=16)),
+        paths=None,
+    )
 
-    class _SurfacePrior:
-        psf_sigma_x = 29.75
-        psf_sigma_y = 39.0
-        apply_psf = True
-        spectral_mapping = _SpectralMapping()
 
-    class _Brdf:
-        temporal_window = 16
+def _spectral_mapping(*, enabled: bool = False):
+    return SimpleNamespace(
+        enabled=enabled,
+        k_neighbors=5,
+        neighbor_estimator="distance_weighted_mean",
+        knn_backend="numpy",
+        knn_eps=0.0,
+        min_valid_bands=1,
+    )
 
-    class _Config:
-        surface_prior = _SurfacePrior()
-        brdf = _Brdf()
-        paths = None
 
-    return _Config()
+def _monthly_database_filter():
+    return SimpleNamespace(
+        enabled=True,
+        max_prediction_uncertainty=0.05,
+        max_composite_quality=0.05,
+        max_source_fit_rmse=0.05,
+        max_knn_feature_distance=0.05,
+    )
+
+
+def _surface_prior_config(*, method: str = "kernel_model", mapping_enabled: bool = False):
+    return SimpleNamespace(
+        method=method,
+        psf_sigma_x=29.75,
+        psf_sigma_y=39.0,
+        apply_psf=True,
+        whittaker_lambda=10.0,
+        spectral_mapping=_spectral_mapping(enabled=mapping_enabled),
+        monthly_database_filter=_monthly_database_filter(),
+        monthly_database_resolution_policy="provider_or_coarser",
+    )
+
+
+def _canonical_config(
+    *,
+    atmo_kind: str = "mcd19",
+    brdf_kind: str = "mcd43",
+    surface_method: str = "kernel_model",
+    s2_backend: str = "gcs",
+    rt_backend: str = "unknown",
+):
+    return SimpleNamespace(
+        sensor="s2",
+        algorithms=SimpleNamespace(
+            cloud_mask=SimpleNamespace(model_dump=lambda **_kwargs: {}),
+            surface_prior=_surface_prior_config(method=surface_method),
+            solver=SimpleNamespace(
+                aot_gamma=10.0,
+                tcwv_gamma=5.0,
+                aot_bounds=(0.0, 3.0),
+                tcwv_bounds=(0.0, 8.0),
+            ),
+            rt=SimpleNamespace(backend=rt_backend, lut_path=None),
+        ),
+        providers=SimpleNamespace(
+            atmo=SimpleNamespace(kind=atmo_kind, cache_dir=None),
+            brdf=SimpleNamespace(kind=brdf_kind, cache_dir=None, temporal_window=16),
+            s2=SimpleNamespace(backend=s2_backend),
+            monthly_composites=SimpleNamespace(kind="generated_brdf"),
+        ),
+        runtime=SimpleNamespace(execution=SimpleNamespace(max_workers=1)),
+        paths=None,
+    )
 
 
 def _surface_prior_with_mask(mock_surface_prior, *, valid: bool):
@@ -78,178 +138,45 @@ class TestResolveGridAssembler:
 
 class TestResolvePreprocessor:
     def test_unknown_sensor_raises(self):
-        class _FakeConfig:
-            sensor = "unknown_sensor_xyz"
-            cloud_mask = type("CloudMask", (), {"model_dump": lambda _self, **_kwargs: {}})()
-
-        with pytest.raises(ValueError, match="Unknown sensor"):
-            resolve_preprocessor(_FakeConfig())
+        config = _canonical_config()
+        config.sensor = "unknown_sensor_xyz"
+        with pytest.raises(SensorNotSupportedError, match="no registered scene preprocessor"):
+            resolve_preprocessor(config)
 
 
 class TestResolveAtmoProvider:
     def test_mcd19_provider_returns_callable(self):
-        class _FakeAtmo:
-            provider = "mcd19"
-            cache_dir = None
-
-        class _FakeConfig:
-            atmo_prior = _FakeAtmo()
-
-        assert callable(resolve_atmo_provider(_FakeConfig()))
+        assert callable(resolve_atmo_provider(_canonical_config(atmo_kind="mcd19")))
 
     def test_vnp19_provider_returns_callable(self):
-        class _FakeAtmo:
-            provider = "vnp19"
-            cache_dir = None
-
-        class _FakeConfig:
-            atmo_prior = _FakeAtmo()
-
-        assert callable(resolve_atmo_provider(_FakeConfig()))
+        assert callable(resolve_atmo_provider(_canonical_config(atmo_kind="vnp19")))
 
     def test_unknown_provider_raises(self):
-        class _FakeAtmo:
-            provider = "nonexistent_provider"
-
-        class _FakeConfig:
-            atmo_prior = _FakeAtmo()
-
         with pytest.raises(ValueError, match="Unknown atmo provider"):
-            resolve_atmo_provider(_FakeConfig())
+            resolve_atmo_provider(_canonical_config(atmo_kind="nonexistent_provider"))
 
 
 class TestResolveSurfacePriorProvider:
     def test_vnp43_returns_callable(self):
-        class _FakeBrdf:
-            provider = "vnp43"
-            cache_dir = None
-            temporal_window = 16
-
-        class _FakeSurfacePrior:
-            method = "kernel_model"
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-            spectral_mapping = type(
-                "SpectralMapping",
-                (),
-                {
-                    "enabled": False,
-                    "k_neighbors": 5,
-                    "neighbor_estimator": "distance_weighted_mean",
-                    "knn_backend": "numpy",
-                    "knn_eps": 0.0,
-                    "min_valid_bands": 1,
-                },
-            )()
-
-        class _FakeConfig:
-            brdf = _FakeBrdf()
-            surface_prior = _FakeSurfacePrior()
-            paths = None
-
-        fn = resolve_surface_prior_provider(_FakeConfig())
+        fn = resolve_surface_prior_provider(_canonical_config(brdf_kind="vnp43"))
         assert callable(fn)
         assert getattr(fn, "requires_atmo_prior", None) is False
 
     def test_mcd19_returns_callable(self):
-        class _FakeBrdf:
-            provider = "mcd19"
-            cache_dir = None
-            temporal_window = 16
-
-        class _FakeSurfacePrior:
-            method = "kernel_model"
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-            spectral_mapping = type(
-                "SpectralMapping",
-                (),
-                {
-                    "enabled": False,
-                    "k_neighbors": 5,
-                    "neighbor_estimator": "distance_weighted_mean",
-                    "knn_backend": "numpy",
-                    "knn_eps": 0.0,
-                    "min_valid_bands": 1,
-                },
-            )()
-
-        class _FakeConfig:
-            brdf = _FakeBrdf()
-            surface_prior = _FakeSurfacePrior()
-            paths = None
-
-        fn = resolve_surface_prior_provider(_FakeConfig())
+        fn = resolve_surface_prior_provider(_canonical_config(brdf_kind="mcd19"))
         assert callable(fn)
         assert getattr(fn, "requires_atmo_prior", None) is False
 
     def test_monthly_database_marks_atmo_dependency(self):
-        class _FakeBrdf:
-            provider = "mcd19"
-            cache_dir = None
-            temporal_window = 16
-
-        class _FakeSurfacePrior:
-            method = "monthly_database"
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-            whittaker_lambda = 10.0
-            spectral_mapping = type(
-                "SpectralMapping",
-                (),
-                {
-                    "enabled": False,
-                    "k_neighbors": 5,
-                    "neighbor_estimator": "distance_weighted_mean",
-                    "knn_backend": "numpy",
-                    "knn_eps": 0.0,
-                    "min_valid_bands": 1,
-                },
-            )()
-
-        class _FakeConfig:
-            brdf = _FakeBrdf()
-            surface_prior = _FakeSurfacePrior()
-            paths = None
-
-        fn = resolve_surface_prior_provider(_FakeConfig())
+        fn = resolve_surface_prior_provider(
+            _canonical_config(brdf_kind="mcd19", surface_method="monthly_database")
+        )
         assert callable(fn)
         assert getattr(fn, "requires_atmo_prior", None) is True
 
     def test_unknown_method_raises(self):
-        class _FakeBrdf:
-            provider = "mcd43"
-            cache_dir = None
-            temporal_window = 16
-
-        class _FakeSurfacePrior:
-            method = "nope"
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-            spectral_mapping = type(
-                "SpectralMapping",
-                (),
-                {
-                    "enabled": False,
-                    "k_neighbors": 5,
-                    "neighbor_estimator": "distance_weighted_mean",
-                    "knn_backend": "numpy",
-                    "knn_eps": 0.0,
-                    "min_valid_bands": 1,
-                },
-            )()
-
-        class _FakeConfig:
-            brdf = _FakeBrdf()
-            surface_prior = _FakeSurfacePrior()
-            paths = None
-
         with pytest.raises(ValueError, match="Unknown surface prior method: 'nope'"):
-            resolve_surface_prior_provider(_FakeConfig())
+            resolve_surface_prior_provider(_canonical_config(surface_method="nope"))
 
     def test_whittaker_builder_forwards_observation_time(
         self,
@@ -262,28 +189,7 @@ class TestResolveSurfacePriorProvider:
         )
         captured: dict[str, object] = {}
 
-        class _SpectralMapping:
-            enabled = False
-            k_neighbors = 5
-            neighbor_estimator = "distance_weighted_mean"
-            knn_backend = "numpy"
-            knn_eps = 0.0
-            min_valid_bands = 1
-
-        class _SurfacePrior:
-            whittaker_lambda = 10.0
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-            spectral_mapping = _SpectralMapping()
-
-        class _Brdf:
-            temporal_window = 16
-
-        class _Config:
-            surface_prior = _SurfacePrior()
-            brdf = _Brdf()
-            paths = None
+        config = _canonical_config()
 
         class _FakeBRDFProvider:
             def get_brdf_parameters(self, **_kwargs):
@@ -305,11 +211,11 @@ class TestResolveSurfacePriorProvider:
                 }
                 return mock_surface_prior
 
-        monkeypatch.setattr(assembly_mod, "BRDFWhittakerDeriver", _FakeWhittakerDeriver)
+        monkeypatch.setattr(surface_assembly_mod, "BRDFWhittakerDeriver", _FakeWhittakerDeriver)
 
         brdf_provider = _FakeBRDFProvider()
         brdf_provider.source_bands = source_bands
-        fn = _build_whittaker_surface_prior(_Config(), brdf_provider)
+        fn = _build_whittaker_surface_prior(config, brdf_provider)
         result = fn(mock_observation_bundle, None, object(), 500.0)
 
         assert result is mock_surface_prior
@@ -330,27 +236,7 @@ class TestResolveSurfacePriorProvider:
         )
         captured: dict[str, object] = {}
 
-        class _SpectralMapping:
-            enabled = False
-            k_neighbors = 5
-            neighbor_estimator = "distance_weighted_mean"
-            knn_backend = "numpy"
-            knn_eps = 0.0
-            min_valid_bands = 1
-
-        class _SurfacePrior:
-            psf_sigma_x = 29.75
-            psf_sigma_y = 39.0
-            apply_psf = True
-            spectral_mapping = _SpectralMapping()
-
-        class _Brdf:
-            temporal_window = 16
-
-        class _Config:
-            surface_prior = _SurfacePrior()
-            brdf = _Brdf()
-            paths = None
+        config = _canonical_config()
 
         class _FakeBRDFProvider:
             def get_brdf_parameters(self, **kwargs):
@@ -372,11 +258,11 @@ class TestResolveSurfacePriorProvider:
                 }
                 return mock_surface_prior
 
-        monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FakeKernelDeriver)
+        monkeypatch.setattr(surface_assembly_mod, "KernelModelDeriver", _FakeKernelDeriver)
 
         brdf_provider = _FakeBRDFProvider()
         brdf_provider.source_bands = source_bands
-        fn = _build_kernel_surface_prior(_Config(), brdf_provider)
+        fn = _build_kernel_surface_prior(config, brdf_provider)
         result = fn(mock_observation_bundle, None, object(), 500.0)
 
         target_bands = list(
@@ -408,6 +294,9 @@ class TestResolveSurfacePriorProvider:
         class _FakeBRDFProvider:
             source_bands = list(mock_observation_bundle.sensor_config.bands)
 
+            def get_monthly_composites(self, _observation, _resolution):
+                return SimpleNamespace(source_bands=tuple(self.source_bands), composites=())
+
             def get_brdf_parameters(self, **kwargs):
                 captured["fallback_brdf_kwargs"] = kwargs
                 return "fallback_weights"
@@ -436,16 +325,33 @@ class TestResolveSurfacePriorProvider:
             captured["query"] = kwargs
             return invalid_prior
 
-        monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FakeKernelDeriver)
+        real_prepare = surface_assembly_mod.prepare_monthly_surface_prior_runtime
+        real_query = surface_assembly_mod.query_monthly_surface_prior
+
+        def _fake_prepare(config, monthly_provider, *, observation, resolution):
+            return real_prepare(
+                config,
+                monthly_provider,
+                observation=observation,
+                resolution=resolution,
+                build_database_fn=_fake_build_database,
+                resample_geometry_fn=_fake_resample_geometry,
+            )
+
+        def _fake_query(observation, atmo_prior, rt_model, runtime):
+            return real_query(
+                observation,
+                atmo_prior,
+                rt_model,
+                runtime,
+                query_database_fn=_fake_query_database,
+            )
+
         monkeypatch.setattr(
-            assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry
+            surface_assembly_mod, "prepare_monthly_surface_prior_runtime", _fake_prepare
         )
-        monkeypatch.setattr(
-            assembly_mod, "build_monthly_surface_prior_database", _fake_build_database
-        )
-        monkeypatch.setattr(
-            assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database
-        )
+        monkeypatch.setattr(surface_assembly_mod, "query_monthly_surface_prior", _fake_query)
+        monkeypatch.setattr(surface_assembly_mod, "KernelModelDeriver", _FakeKernelDeriver)
 
         fn = _build_monthly_surface_prior(config, _FakeBRDFProvider())
         result = fn(mock_observation_bundle, mock_atmospheric_state, object(), 500.0)
@@ -498,6 +404,9 @@ class TestResolveSurfacePriorProvider:
         class _FakeBRDFProvider:
             source_bands = list(mock_observation_bundle.sensor_config.bands)
 
+            def get_monthly_composites(self, _observation, _resolution):
+                return SimpleNamespace(source_bands=tuple(self.source_bands), composites=())
+
             def get_brdf_parameters(self, **_kwargs):
                 raise AssertionError(
                     "monthly success path should not fall back to kernel BRDF fetches"
@@ -524,16 +433,33 @@ class TestResolveSurfacePriorProvider:
             captured["query"] = kwargs
             return valid_prior
 
-        monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FailKernelDeriver)
+        real_prepare = surface_assembly_mod.prepare_monthly_surface_prior_runtime
+        real_query = surface_assembly_mod.query_monthly_surface_prior
+
+        def _fake_prepare(config, monthly_provider, *, observation, resolution):
+            return real_prepare(
+                config,
+                monthly_provider,
+                observation=observation,
+                resolution=resolution,
+                build_database_fn=_fake_build_database,
+                resample_geometry_fn=_fake_resample_geometry,
+            )
+
+        def _fake_query(observation, atmo_prior, rt_model, runtime):
+            return real_query(
+                observation,
+                atmo_prior,
+                rt_model,
+                runtime,
+                query_database_fn=_fake_query_database,
+            )
+
         monkeypatch.setattr(
-            assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry
+            surface_assembly_mod, "prepare_monthly_surface_prior_runtime", _fake_prepare
         )
-        monkeypatch.setattr(
-            assembly_mod, "build_monthly_surface_prior_database", _fake_build_database
-        )
-        monkeypatch.setattr(
-            assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database
-        )
+        monkeypatch.setattr(surface_assembly_mod, "query_monthly_surface_prior", _fake_query)
+        monkeypatch.setattr(surface_assembly_mod, "KernelModelDeriver", _FailKernelDeriver)
 
         fn = _build_monthly_surface_prior(config, _FakeBRDFProvider())
         result = fn(mock_observation_bundle, mock_atmospheric_state, object(), 500.0)
@@ -577,6 +503,9 @@ class TestResolveSurfacePriorProvider:
         class _FakeBRDFProvider:
             source_bands = list(mock_observation_bundle.sensor_config.bands)
 
+            def get_monthly_composites(self, _observation, _resolution):
+                return SimpleNamespace(source_bands=tuple(self.source_bands), composites=())
+
             def get_brdf_parameters(self, **_kwargs):
                 raise AssertionError("monthly success path should not fall back")
 
@@ -597,16 +526,33 @@ class TestResolveSurfacePriorProvider:
         def _fake_query_database(**_kwargs):
             return valid_prior
 
-        monkeypatch.setattr(assembly_mod, "KernelModelDeriver", _FailKernelDeriver)
+        real_prepare = surface_assembly_mod.prepare_monthly_surface_prior_runtime
+        real_query = surface_assembly_mod.query_monthly_surface_prior
+
+        def _fake_prepare(config, monthly_provider, *, observation, resolution):
+            return real_prepare(
+                config,
+                monthly_provider,
+                observation=observation,
+                resolution=resolution,
+                build_database_fn=_fake_build_database,
+                resample_geometry_fn=_fake_resample_geometry,
+            )
+
+        def _fake_query(observation, atmo_prior, rt_model, runtime):
+            return real_query(
+                observation,
+                atmo_prior,
+                rt_model,
+                runtime,
+                query_database_fn=_fake_query_database,
+            )
+
         monkeypatch.setattr(
-            assembly_mod, "resample_geometry_for_surface_prior", _fake_resample_geometry
+            surface_assembly_mod, "prepare_monthly_surface_prior_runtime", _fake_prepare
         )
-        monkeypatch.setattr(
-            assembly_mod, "build_monthly_surface_prior_database", _fake_build_database
-        )
-        monkeypatch.setattr(
-            assembly_mod, "query_surface_prior_from_monthly_database", _fake_query_database
-        )
+        monkeypatch.setattr(surface_assembly_mod, "query_monthly_surface_prior", _fake_query)
+        monkeypatch.setattr(surface_assembly_mod, "KernelModelDeriver", _FailKernelDeriver)
 
         report_path = tmp_path / "execution_profile.json"
         observer = ExecutionObserver(
@@ -633,16 +579,7 @@ class TestResolveSurfacePriorProvider:
 
 class TestResolveSolver:
     def test_returns_callable(self):
-        class _FakeSolverCfg:
-            aot_gamma = 10.0
-            tcwv_gamma = 5.0
-            aot_bounds = (0.0, 3.0)
-            tcwv_bounds = (0.0, 8.0)
-
-        class _FakeConfig:
-            solver = _FakeSolverCfg()
-
-        assert callable(resolve_solver(_FakeConfig()))
+        assert callable(resolve_solver(_canonical_config()))
 
 
 class TestResolveCorrector:
@@ -689,16 +626,8 @@ class TestResolveCorrector:
 
 class TestResolveRTModel:
     def test_unknown_backend_raises(self):
-        class _FakeRTConfig:
-            backend = "unknown"
-            lut_path = None
-
-        class _FakeConfig:
-            rt_model = _FakeRTConfig()
-            sensor = "s2"
-
         with pytest.raises(ValueError, match="Cannot resolve RT model"):
-            resolve_rt_model_for_pipeline(_FakeConfig())
+            resolve_rt_model_for_pipeline(_canonical_config(rt_backend="unknown"))
 
 
 class TestResolveS2Backend:
@@ -710,16 +639,10 @@ class TestResolveS2Backend:
             calls.append(auth)
             return "backend"
 
-        class _FakeS2Data:
-            backend = "gcs"
-
-        class _FakeConfig:
-            s2_data = _FakeS2Data()
-
         auth = object()
-        monkeypatch.setattr(assembly_mod, "build_s2_backend", _fake_build_s2_backend)
+        monkeypatch.setattr(s2_backend_mod, "build_s2_backend", _fake_build_s2_backend)
 
-        resolved = resolve_s2_backend(_FakeConfig(), auth=auth)
+        resolved = resolve_s2_backend(_canonical_config(s2_backend="gcs"), auth=auth)
 
         assert resolved == "backend"
         assert calls == [auth]
@@ -732,25 +655,13 @@ class TestResolveS2Backend:
             calls.append(auth)
             return "backend"
 
-        class _FakeS2Data:
-            backend = "local"
+        monkeypatch.setattr(s2_backend_mod, "build_s2_backend", _fake_build_s2_backend)
 
-        class _FakeConfig:
-            s2_data = _FakeS2Data()
-
-        monkeypatch.setattr(assembly_mod, "build_s2_backend", _fake_build_s2_backend)
-
-        resolved = resolve_s2_backend(_FakeConfig(), auth=object())
+        resolved = resolve_s2_backend(_canonical_config(s2_backend="local"), auth=object())
 
         assert resolved == "backend"
         assert calls == [None]
 
     def test_unknown_backend_raises(self):
-        class _FakeS2Data:
-            backend = "nope"
-
-        class _FakeConfig:
-            s2_data = _FakeS2Data()
-
         with pytest.raises(ValueError, match="Unknown S2 backend: 'nope'"):
-            resolve_s2_backend(_FakeConfig())
+            resolve_s2_backend(_canonical_config(s2_backend="nope"))

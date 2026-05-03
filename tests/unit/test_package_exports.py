@@ -9,25 +9,17 @@ import siac.config as siac_config
 import siac.storage as siac_storage
 from siac.adapters import (
     load_band_rsrf,
-    load_band_srf_from_rsrf,
-    load_sensor_config_from_rsrf,
     load_sensor_config_with_rsrf,
 )
-from siac.algorithms.rt.lut.rsrf_kernel import (
-    AlignedRSRFKernel,
-    AlignedSRFKernel,
-    build_aligned_rsrf_kernel,
-    build_aligned_srf_kernel,
-)
-from siac.algorithms.surface import load_reference_rsr, load_reference_rsrf
-from siac.domain import RelativeSpectralResponse, SpectralResponseFunction
+from siac.algorithms.rt.lut.rsrf_kernel import AlignedRSRFKernel, build_aligned_rsrf_kernel
+from siac.algorithms.surface import load_reference_rsrf
+from siac.domain import RelativeSpectralResponse
 
 
 def test_siac_module_lazy_exports_and_unknown_attr():
     assert siac.SIAC.__name__ == "SIAC"
     assert siac.SIACConfig.__name__ == "SIACConfig"
     assert callable(siac.process_sentinel2)
-    assert callable(siac.process_landsat8)
     assert callable(siac.resolve_s2_input)
     assert callable(siac.siac_process_s2)
     assert callable(siac.search_sentinel2)
@@ -38,22 +30,21 @@ def test_siac_module_lazy_exports_and_unknown_attr():
 
 def test_siac_config_export_and_unknown_attr():
     assert siac_config.SIACConfig.__name__ == "SIACConfig"
-    assert siac_config.CredentialConfig is siac_config.AuthConfig
 
     with pytest.raises(AttributeError, match="has no attribute"):
         _ = siac_config.NOT_A_REAL_EXPORT
 
 
-def test_siac_storage_keeps_legacy_package_exports():
+def test_siac_storage_package_exports():
     assert callable(siac_storage.read_multiband)
     assert callable(siac_storage.write_dataset)
-    assert callable(siac_storage.build_stac_item)
+    assert callable(siac_storage.build_stac_item_from_result)
 
 
-def test_spectral_rename_keeps_legacy_aliases():
-    assert SpectralResponseFunction is RelativeSpectralResponse
-    assert load_band_srf_from_rsrf is load_band_rsrf
-    assert load_sensor_config_from_rsrf is load_sensor_config_with_rsrf
-    assert load_reference_rsr is load_reference_rsrf
-    assert AlignedSRFKernel is AlignedRSRFKernel
-    assert build_aligned_srf_kernel is build_aligned_rsrf_kernel
+def test_current_spectral_exports_are_available():
+    assert RelativeSpectralResponse.__name__ == "RelativeSpectralResponse"
+    assert callable(load_band_rsrf)
+    assert callable(load_sensor_config_with_rsrf)
+    assert callable(load_reference_rsrf)
+    assert AlignedRSRFKernel.__name__ == "AlignedRSRFKernel"
+    assert callable(build_aligned_rsrf_kernel)

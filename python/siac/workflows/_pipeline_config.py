@@ -9,7 +9,9 @@ layer (including tests) without side-effects.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from siac.config.system import ExecutionRuntimeConfig
 
 if TYPE_CHECKING:
     from siac.domain.sensors import SensorConfig
@@ -33,15 +35,27 @@ _EXECUTION_KEYS = (
 )
 
 
+class PipelineExecutionSettings(ExecutionRuntimeConfig):
+    """Validated pipeline execution settings used by pipeline orchestration."""
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
 def _config_scatter_limit(config: Any) -> int:
     """Read max_scatter_points_per_band from config, falling back to module default."""
-    execution = getattr(config, "execution", None)
+    runtime = getattr(config, "runtime", None)
+    execution = getattr(runtime, "execution", None)
     return int(getattr(execution, "max_scatter_points_per_band", _MAX_SCATTER_POINTS_PER_BAND))
 
 
 def _config_aux_resolution(config: Any) -> float:
     """Read default_aux_resolution_m from config, falling back to module default."""
-    execution = getattr(config, "execution", None)
+    runtime = getattr(config, "runtime", None)
+    execution = getattr(runtime, "execution", None)
     return float(getattr(execution, "default_aux_resolution_m", _DEFAULT_AUX_RESOLUTION_M))
 
 
@@ -64,7 +78,7 @@ def _resolve_execution_settings(
     *,
     execution: Any | None,
     max_workers: int | None,
-) -> dict[str, Any]:
+) -> PipelineExecutionSettings:
     """Resolve execution settings from config + call overrides."""
     settings: dict[str, Any] = {
         "backend": "thread",
@@ -80,7 +94,7 @@ def _resolve_execution_settings(
         "progress_heartbeat_s": 30.0,
     }
 
-    settings.update(_execution_values(getattr(config, "execution", None)))
+    settings.update(_execution_values(getattr(getattr(config, "runtime", None), "execution", None)))
     settings.update(_execution_values(execution))
     if max_workers is not None:
         settings["max_workers"] = max_workers
@@ -140,11 +154,11 @@ def _resolve_execution_settings(
     if heartbeat <= 0:
         raise ValueError("progress_heartbeat_s must be > 0")
     settings["progress_heartbeat_s"] = heartbeat
-    return settings
+    return cast("PipelineExecutionSettings", PipelineExecutionSettings.model_validate(settings))
 
 
 def _aerosol_resolution(config: Any) -> float:
-    solver_config = getattr(config, "solver", None)
+    solver_config = getattr(getattr(config, "algorithms", None), "solver", None)
     if solver_config is not None:
         return float(getattr(solver_config, "aerosol_resolution", 120.0))
     return 120.0
@@ -152,7 +166,7 @@ def _aerosol_resolution(config: Any) -> float:
 
 def _requested_solver_band_names(config: Any) -> tuple[str, ...] | None:
     """Return the union of stage-requested solver bands, if any."""
-    solver_config = getattr(config, "solver", None)
+    solver_config = getattr(getattr(config, "algorithms", None), "solver", None)
     if solver_config is None:
         return None
 

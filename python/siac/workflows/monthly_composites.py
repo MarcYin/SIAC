@@ -13,7 +13,7 @@ from siac.algorithms.surface.monthly_composite_store import (
     write_monthly_composite_collection,
 )
 from siac.algorithms.surface.swir_refine import build_monthly_composites_from_brdf
-from siac.app.assembly import resolve_brdf_provider
+from siac.app._assembly_providers import resolve_brdf_provider
 from siac.app.planning import coerce_aoi_spec, resolve_run_config
 from siac.domain.aoi import AOI
 from siac.public_models import PreparedMonthlyCompositeBuildResult
@@ -141,9 +141,3 @@ def _resolve_requested_resolution(
     raise ValueError(
         "resolution must be provided when the BRDF provider does not expose a positive source resolution"
     )
-
-
-__all__ = [
-    "PreparedMonthlyCompositeBuildResult",
-    "prepare_monthly_composites",
-]

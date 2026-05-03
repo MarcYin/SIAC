@@ -89,23 +89,19 @@ def _split_storage_options(
 
 
 def normalize_storage_options(path: str, storage_options: dict[str, Any]) -> dict[str, Any]:
-    """Normalize generic storage options, including S3 region/endpoint aliases."""
+    """Validate and return storage options for the selected backend."""
     options = dict(storage_options)
 
     if not path.startswith("s3://"):
         return options
 
-    region = options.pop("region", None)
-    endpoint_url = options.pop("endpoint_url", None)
-    client_kwargs = dict(options.get("client_kwargs", {}))
-
-    if region is not None and "region_name" not in client_kwargs:
-        client_kwargs["region_name"] = region
-    if endpoint_url is not None and "endpoint_url" not in client_kwargs:
-        client_kwargs["endpoint_url"] = endpoint_url
-
-    if client_kwargs:
-        options["client_kwargs"] = client_kwargs
+    unsupported = {"region", "endpoint_url"} & options.keys()
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise TypeError(
+            f"Top-level S3 storage option(s) are not supported: {names}. "
+            "Use storage_options['client_kwargs'] instead."
+        )
 
     return options
 

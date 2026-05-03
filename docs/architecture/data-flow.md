@@ -28,7 +28,7 @@ flowchart LR
 | Contract | Produced by | Consumed by | Key fields |
 | --- | --- | --- | --- |
 | `RunRequest` | caller-facing config resolution path | `config.resolve` | `input_path`, `output_path`, `sensor`, `aoi`, `s2_query` |
-| `ResolvedConfig` | `config.resolve` | `app.planning`, `app.assembly`, workflows | merged paths, auth, providers, algorithms, runtime, output settings |
+| `ResolvedConfig` | `config.resolve` | `app.planning`, focused assembly modules, workflows | merged paths, auth, providers, algorithms, runtime, output settings |
 | `ExecutionPlan` | `app.planning.build_execution_plan` | `workflows.scene.execute_plan` | bound callables plus input/output path, auth, AOI, RT model |
 | `ObservationBundle` | preprocessor runtime | atmospheric prior, surface prior, grid assembly, correction | TOA dataset, geometry, cloud mask, sensor config, metadata, CRS, bounds |
 | `AtmosphericState` | atmospheric prior provider and solver updates | surface prior, grid assembly, RT model, correction | AOT, TCWV, TCO3, uncertainties, elevation |

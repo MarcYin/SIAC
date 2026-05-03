@@ -638,15 +638,17 @@ class TestConcurrency:
         monkeypatch.setattr("siac.workflows.pipeline._run_pipeline_dask", _fake_dask)
 
         cfg_thread = SimpleNamespace(
-            execution=SimpleNamespace(
-                backend="thread",
-                max_workers=2,
-                retries=0,
-                stage_timeout_s=None,
-                dashboard=False,
-                dashboard_address=None,
-                performance_report_path=None,
-                show_progress=False,
+            runtime=SimpleNamespace(
+                execution=SimpleNamespace(
+                    backend="thread",
+                    max_workers=2,
+                    retries=0,
+                    stage_timeout_s=None,
+                    dashboard=False,
+                    dashboard_address=None,
+                    performance_report_path=None,
+                    show_progress=False,
+                )
             )
         )
         out_thread = run_pipeline(
@@ -665,15 +667,17 @@ class TestConcurrency:
         assert calls["backend"] == "thread"
 
         cfg_dask = SimpleNamespace(
-            execution=SimpleNamespace(
-                backend="dask",
-                max_workers=2,
-                retries=0,
-                stage_timeout_s=None,
-                dashboard=False,
-                dashboard_address=None,
-                performance_report_path=None,
-                show_progress=False,
+            runtime=SimpleNamespace(
+                execution=SimpleNamespace(
+                    backend="dask",
+                    max_workers=2,
+                    retries=0,
+                    stage_timeout_s=None,
+                    dashboard=False,
+                    dashboard_address=None,
+                    performance_report_path=None,
+                    show_progress=False,
+                )
             )
         )
         out_dask = run_pipeline(
@@ -699,7 +703,7 @@ class TestConcurrency:
             run_pipeline(
                 Path("/fake"),
                 None,
-                SimpleNamespace(execution=SimpleNamespace(backend="dask")),
+                SimpleNamespace(runtime=SimpleNamespace(execution=SimpleNamespace(backend="dask"))),
                 preprocessor=lambda _path, _aoi=None: None,
                 atmo_provider=lambda *_args, **_kwargs: None,
                 surface_prior_provider=lambda *_args, **_kwargs: None,

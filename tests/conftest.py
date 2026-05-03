@@ -607,4 +607,3 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "regression: marks tests as regression tests")
-    config.addinivalue_line("markers", "gee: marks tests requiring Google Earth Engine")

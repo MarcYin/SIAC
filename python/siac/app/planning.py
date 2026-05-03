@@ -98,23 +98,25 @@ def build_execution_plan(
     resolve_output_writer_fn: Any | None = None,
 ) -> ExecutionPlan:
     if build_preprocessor_runtime_fn is None:
-        from siac.app.assembly import build_preprocessor_runtime as build_preprocessor_runtime_fn
+        from siac.app._assembly_preprocessor import (
+            build_preprocessor_runtime as build_preprocessor_runtime_fn,
+        )
     if resolve_atmo_provider_fn is None:
-        from siac.app.assembly import resolve_atmo_provider as resolve_atmo_provider_fn
+        from siac.app._assembly_providers import resolve_atmo_provider as resolve_atmo_provider_fn
     if resolve_surface_prior_provider_fn is None:
-        from siac.app.assembly import (
+        from siac.app._assembly_surface import (
             resolve_surface_prior_provider as resolve_surface_prior_provider_fn,
         )
     if resolve_grid_assembler_fn is None:
-        from siac.app.assembly import resolve_grid_assembler as resolve_grid_assembler_fn
+        from siac.app._assembly_io import resolve_grid_assembler as resolve_grid_assembler_fn
     if resolve_solver_fn is None:
-        from siac.app.assembly import resolve_solver as resolve_solver_fn
+        from siac.app._assembly_solver import resolve_solver as resolve_solver_fn
     if resolve_corrector_fn is None:
-        from siac.app.assembly import resolve_corrector as resolve_corrector_fn
+        from siac.app._assembly_correction import resolve_corrector as resolve_corrector_fn
     if resolve_rt_model_fn is None:
-        from siac.app.assembly import resolve_rt_model_for_pipeline as resolve_rt_model_fn
+        from siac.app._assembly_rt import resolve_rt_model_for_pipeline as resolve_rt_model_fn
     if resolve_output_writer_fn is None:
-        from siac.app.assembly import resolve_output_writer as resolve_output_writer_fn
+        from siac.app._assembly_io import resolve_output_writer as resolve_output_writer_fn
 
     build_preprocessor_runtime = cast("Any", build_preprocessor_runtime_fn)
     resolve_atmo_provider = cast("Any", resolve_atmo_provider_fn)
@@ -172,11 +174,3 @@ def build_execution_plan(
             else None
         ),
     )
-
-
-__all__ = [
-    "ExecutionPlan",
-    "build_execution_plan",
-    "coerce_aoi_spec",
-    "resolve_run_config",
-]

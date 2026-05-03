@@ -121,6 +121,3 @@ class SixSBackend:
             xcp=outputs["xcp"],
             extras=extras,
         )
-
-
-__all__ = ["SixSBackend"]

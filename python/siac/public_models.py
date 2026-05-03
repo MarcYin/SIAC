@@ -17,6 +17,3 @@ class PreparedMonthlyCompositeBuildResult:
     source_name: str | None
     source_band_names: tuple[str, ...]
     representation: str
-
-
-__all__ = ["PreparedMonthlyCompositeBuildResult"]

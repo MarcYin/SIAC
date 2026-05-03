@@ -11,6 +11,11 @@ import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
+from siac.adapters.brdf._product_specs import (
+    MCD19_PRODUCT_BANDS,
+    MCD43_PRODUCT_BANDS,
+    VNP43_PRODUCT_BANDS,
+)
 from siac.adapters.data.earthaccess_source import EarthAccessSource
 from siac.adapters.earthdata import (
     _build_virtual_stack_vrt,
@@ -48,12 +53,6 @@ if TYPE_CHECKING:
 
     from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 
-__all__ = [
-    "MCD19EarthAccessProvider",
-    "MCD43EarthAccessProvider",
-    "VNP43EarthAccessProvider",
-]
-
 logger = logging.getLogger(__name__)
 
 # HDF4/HDF5 libraries raise their own exception types on I/O failures.
@@ -84,8 +83,8 @@ _BEST_QA_REFLECTANCE_UNCERTAINTY = 0.015
 _QA_UNCERTAINTY_POWER = 1.6
 _ORIGINAL_HDF4_READER = read_hdf4_dataset
 _ORIGINAL_HDF5_READER = read_hdf5_dataset
-_RequestedBand: TypeAlias = int | SensorBand
-_RequestedBandCoord: TypeAlias = int | str
+_RequestedBand: TypeAlias = SensorBand
+_RequestedBandCoord: TypeAlias = str
 _RequestedBandSpec: TypeAlias = tuple[_RequestedBandCoord, ProductBandDefinition]
 _PAYLOAD_FIELDS = ("f0", "f1", "f2", "unc")
 _FLOAT32_NBYTES = np.dtype(np.float32).itemsize
@@ -181,7 +180,6 @@ class _EarthAccessBRDFProvider:
     product_key: str = ""
     _source_name: str = ""
     _product_bands: tuple[ProductBandDefinition, ...] = ()
-    _legacy_band_map: dict[int, str] = {}
     _rsrf_sensor_unit_id: str | None = None
     _rsrf_representation_variant: str | None = "band_average"
 
@@ -241,7 +239,7 @@ class _EarthAccessBRDFProvider:
         crs: str,
         obs_time: datetime,
         target_resolution: float,
-        bands: Sequence[int] | Sequence[SensorBand],
+        bands: Sequence[SensorBand],
         temporal_window: int = 16,
     ) -> BRDFKernelWeights:
         """Return BRDF kernel weights on the requested grid."""
@@ -281,7 +279,7 @@ class _EarthAccessBRDFProvider:
         crs: str,
         obs_time: datetime,
         target_resolution: float,
-        bands: Sequence[int] | Sequence[SensorBand],
+        bands: Sequence[SensorBand],
         temporal_window: int = 16,
         sample_dates: Sequence[date | datetime | np.datetime64] | None = None,
     ) -> BRDFKernelWeights:
@@ -351,7 +349,7 @@ class _EarthAccessBRDFProvider:
         crs: str,
         obs_times: Sequence[datetime],
         target_resolution: float,
-        bands: Sequence[int] | Sequence[SensorBand],
+        bands: Sequence[SensorBand],
         temporal_windows: Sequence[int],
         sample_date_sets: Sequence[Sequence[date | datetime | np.datetime64] | None],
     ) -> list[BRDFKernelWeights]:
@@ -524,10 +522,7 @@ class _EarthAccessBRDFProvider:
                 resolved.append((band.name, match))
                 continue
 
-            label = self._legacy_band_map.get(int(band))
-            if label is None:
-                raise KeyError(f"Band {band!r} is not available in {self._source_name}")
-            resolved.append((int(band), self._bands_by_label[label]))
+            raise TypeError(f"Bands must be SensorBand instances, got {type(band).__name__}.")
         return resolved
 
     @staticmethod
@@ -798,7 +793,7 @@ class _EarthAccessBRDFProvider:
         self,
         paths: list[Path],
         *,
-        requested: list[tuple[int | str, ProductBandDefinition]],
+        requested: list[_RequestedBandSpec],
         bounds: tuple[float, float, float, float],
         crs: str,
         target_resolution: float,
@@ -1037,7 +1032,7 @@ class _EarthAccessBRDFProvider:
         self,
         bounds: tuple[float, float, float, float],
         resolution: float,
-        bands: list[int | str],
+        bands: list[str],
         time_axis: np.ndarray,
         *,
         crs: str | None = None,
@@ -1084,7 +1079,7 @@ class _EarthAccessBRDFProvider:
         self,
         bounds: tuple[float, float, float, float],
         resolution: float,
-        bands: list[int | str],
+        bands: list[str],
         time_axis: np.ndarray,
         *,
         crs: str | None = None,
@@ -1221,7 +1216,7 @@ class _EarthAccessBRDFProvider:
         self,
         paths: list[Path],
         *,
-        requested: list[tuple[int | str, ProductBandDefinition]],
+        requested: list[_RequestedBandSpec],
         bounds: tuple[float, float, float, float],
         crs: str,
         target_resolution: float,
@@ -1408,7 +1403,7 @@ class _EarthAccessBRDFProvider:
 
     def _constant_band_array(
         self,
-        bands: list[int | str],
+        bands: list[str],
         bounds: tuple[float, float, float, float],
         resolution: float,
         value: float,
@@ -1608,7 +1603,7 @@ class _EarthAccessBRDFProvider:
         self,
         bounds: tuple[float, float, float, float],
         resolution: float,
-        bands: list[int | str],
+        bands: list[str],
     ) -> BRDFKernelWeights:
         if not bands:
             raise ValueError("bands must be a non-empty sequence")
@@ -2141,65 +2136,7 @@ class MCD43EarthAccessProvider(_StackParameterProvider):
     product_key = "mcd43_brdf"
     _source_name = "MCD43"
     _rsrf_sensor_unit_id = "terra_modis"
-    _product_bands = (
-        ProductBandDefinition(
-            "Band1",
-            645.0,
-            50.0,
-            "BRDF_Albedo_Parameters_Band1",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band1",
-            rsrf_band_id="B1",
-        ),
-        ProductBandDefinition(
-            "Band2",
-            858.5,
-            35.0,
-            "BRDF_Albedo_Parameters_Band2",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band2",
-            rsrf_band_id="B2",
-        ),
-        ProductBandDefinition(
-            "Band3",
-            469.0,
-            20.0,
-            "BRDF_Albedo_Parameters_Band3",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band3",
-            rsrf_band_id="B3",
-        ),
-        ProductBandDefinition(
-            "Band4",
-            555.0,
-            20.0,
-            "BRDF_Albedo_Parameters_Band4",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band4",
-            rsrf_band_id="B4",
-        ),
-        ProductBandDefinition(
-            "Band5",
-            1240.0,
-            20.0,
-            "BRDF_Albedo_Parameters_Band5",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band5",
-            rsrf_band_id="B5",
-        ),
-        ProductBandDefinition(
-            "Band6",
-            1640.0,
-            24.0,
-            "BRDF_Albedo_Parameters_Band6",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band6",
-            rsrf_band_id="B6",
-        ),
-        ProductBandDefinition(
-            "Band7",
-            2130.0,
-            50.0,
-            "BRDF_Albedo_Parameters_Band7",
-            "BRDF_Albedo_Band_Mandatory_Quality_Band7",
-            rsrf_band_id="B7",
-        ),
-    )
-    _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
+    _product_bands = MCD43_PRODUCT_BANDS
 
 
 class VNP43EarthAccessProvider(_StackParameterProvider):
@@ -2209,80 +2146,7 @@ class VNP43EarthAccessProvider(_StackParameterProvider):
     _source_name = "VNP43"
     _rsrf_sensor_unit_id = "snpp_viirs"
     _read_dataset = staticmethod(read_hdf5_dataset)
-    _product_bands = (
-        ProductBandDefinition(
-            "M1",
-            412.0,
-            20.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M1",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M1",
-        ),
-        ProductBandDefinition(
-            "M2",
-            445.0,
-            18.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M2",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M2",
-        ),
-        ProductBandDefinition(
-            "M3",
-            488.0,
-            20.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M3",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M3",
-        ),
-        ProductBandDefinition(
-            "M4",
-            555.0,
-            20.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M4",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M4",
-        ),
-        ProductBandDefinition(
-            "M5",
-            672.0,
-            20.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M5",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M5",
-        ),
-        ProductBandDefinition(
-            "M7",
-            865.0,
-            39.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M7",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M7",
-        ),
-        ProductBandDefinition(
-            "M8",
-            1240.0,
-            20.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M8",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M8",
-        ),
-        ProductBandDefinition(
-            "M10",
-            1610.0,
-            60.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M10",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M10",
-        ),
-        ProductBandDefinition(
-            "M11",
-            2250.0,
-            50.0,
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Parameters_M11",
-            "HDFEOS/GRIDS/VIIRS_Grid_BRDF/Data Fields/BRDF_Albedo_Band_Mandatory_Quality_M11",
-        ),
-    )
-    _legacy_band_map = {
-        1: "M5",
-        2: "M7",
-        3: "M3",
-        4: "M4",
-        5: "M8",
-        6: "M10",
-        7: "M11",
-    }
+    _product_bands = VNP43_PRODUCT_BANDS
 
 
 class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
@@ -2291,17 +2155,7 @@ class MCD19EarthAccessProvider(_EarthAccessBRDFProvider):
     product_key = "mcd19_brdf"
     _source_name = "MCD19"
     _rsrf_sensor_unit_id = "terra_modis"
-    _product_bands = (
-        ProductBandDefinition("Band1", 645.0, 50.0, "Kiso_Band1", "Status_QA", rsrf_band_id="B1"),
-        ProductBandDefinition("Band2", 858.5, 35.0, "Kiso_Band2", "Status_QA", rsrf_band_id="B2"),
-        ProductBandDefinition("Band3", 469.0, 20.0, "Kiso_Band3", "Status_QA", rsrf_band_id="B3"),
-        ProductBandDefinition("Band4", 555.0, 20.0, "Kiso_Band4", "Status_QA", rsrf_band_id="B4"),
-        ProductBandDefinition("Band5", 1240.0, 20.0, "Kiso_Band5", "Status_QA", rsrf_band_id="B5"),
-        ProductBandDefinition("Band6", 1640.0, 24.0, "Kiso_Band6", "Status_QA", rsrf_band_id="B6"),
-        ProductBandDefinition("Band7", 2130.0, 50.0, "Kiso_Band7", "Status_QA", rsrf_band_id="B7"),
-        ProductBandDefinition("Band8", 412.0, 20.0, "Kiso_Band8", "Status_QA", rsrf_band_id="B8"),
-    )
-    _legacy_band_map = {index + 1: band.label for index, band in enumerate(_product_bands)}
+    _product_bands = MCD19_PRODUCT_BANDS
 
     def _load_native_band_stack(
         self,

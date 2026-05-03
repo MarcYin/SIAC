@@ -6,7 +6,7 @@ This page documents the stable public entry points exposed by the package and CL
 
 ## `siac.SIAC`
 
-User-facing session facade for local scene processing.
+User-facing session API for local scene processing.
 
 Typical use:
 
@@ -21,6 +21,9 @@ result = SIAC(config).process("/path/to/S2_SAFE/")
 Main method:
 
 - `process(input_path, output_path=None, *, aoi=None) -> CorrectionResult`
+
+Scene-processing configs accept `sensor="auto"` or `sensor="s2"`. Other sensor
+catalog entries are not end-to-end preprocessors.
 
 ## `siac.SIACConfig`
 
@@ -47,16 +50,6 @@ Signature shape:
 
 ```python
 process_sentinel2(input_path, output_path=None, **kwargs)
-```
-
-## `siac.process_landsat8`
-
-Convenience helper for Landsat-8 processing with a default Landsat configuration.
-
-Signature shape:
-
-```python
-process_landsat8(input_path, output_path=None, **kwargs)
 ```
 
 ## `siac.resolve_s2_input`
@@ -141,13 +134,12 @@ siac process-s2 S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433 \
 | `SIAC` | Python user | config plus local scene path | `CorrectionResult` |
 | `SIACConfig` | Python user | defaults, TOML, overrides | typed config |
 | `process_sentinel2` | Python user | local scene path | `CorrectionResult` |
-| `process_landsat8` | Python user | local scene path | `CorrectionResult` |
 | `resolve_s2_input` | Python user | query or path | local path |
 | `search_sentinel2` | Python user | search fields | list of products |
 | `siac_process_s2` | Python user | config plus query | `CorrectionResult` |
 | `siac process-s2` | CLI user | query/path and options | disk outputs plus CLI status |
 
-## Notes on compatibility
+## Boundary Notes
 
 - The API surface above is the supported public layer.
 - Lower-level packages such as `app`, `workflows`, `adapters`, `algorithms`, and `runtime` are documented for developers but should not be treated as stable end-user APIs.

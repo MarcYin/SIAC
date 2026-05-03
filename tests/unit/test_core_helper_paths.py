@@ -127,9 +127,6 @@ def test_relative_spectral_response_helpers_cover_validation_and_fwhm_paths(
     assert spectral_mod._fwhm(np.array([500.0, 510.0]), np.array([0.0, 0.0])) is None
     assert spectral_mod._fwhm(np.array([500.0, 510.0]), np.array([-1.0, -2.0])) is None
 
-    canonical = _rsrf()
-    assert canonical.centre_wavelength_nm == canonical.center_wavelength_nm
-
     with pytest.raises(ValueError, match="1-D"):
         RelativeSpectralResponse(
             sensor_id="MSI",

@@ -181,7 +181,7 @@ def test_brdf_earthaccess_provider_branches():
         crs="EPSG:4326",
         obs_time=datetime(2024, 1, 1),
         target_resolution=1000.0,
-        bands=[1, 2],
+        bands=p.source_bands[:2],
     )
     assert weights.f0.shape[0] == 2
 

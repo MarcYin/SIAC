@@ -522,7 +522,6 @@ def compute_laplacian_eigenvalues(nx: int, ny: int) -> np.ndarray:
 def apply_smoothness_filter(
     x: np.ndarray,
     gamma: float,
-    _lambda_vals: np.ndarray | None = None,
     *,
     delta: float = 0.02,
     n_iter: int = 20,
@@ -541,7 +540,6 @@ def apply_smoothness_filter(
     Args:
         x: Input 2-D array.
         gamma: Regularization strength.
-        lambda_vals: Unused (kept for backward compatibility).
         delta: Pseudo-Huber transition threshold.
         n_iter: Number of diffusion iterations.
 

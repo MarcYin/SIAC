@@ -44,16 +44,6 @@ if TYPE_CHECKING:
     from siac.domain import SensorBand
     from siac.runtime import SolverInputBundle
 
-__all__ = [
-    "MultiGridConfig",
-    "MultiGridSolver",
-    "SolverResult",
-    "SolverStageConfig",
-    "StagedMultiGridSolver",
-    "build_solver_valid_mask",
-    "solve_atmospheric_parameters",
-]
-
 logger = logging.getLogger(__name__)
 
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
@@ -155,8 +145,8 @@ class MultiGridConfig:
     # observation and surface-prior support before the block is solved.
     quadratic_block_min_valid_fraction: float = 0.5
 
-    # Optional sequence of solver stages. Empty preserves the legacy single
-    # AOT/TCWV solve configured by the fields above.
+    # Optional sequence of solver stages. Empty uses the single AOT/TCWV solve
+    # configured by the fields above.
     stages: tuple[SolverStageConfig, ...] = field(default_factory=tuple)
 
 

@@ -8,16 +8,15 @@ from types import SimpleNamespace
 import pytest
 
 from siac.adapters.rt import build_rt_model
-from siac.algorithms.rt.lut import srf_kernel
 from siac.api.requests import SceneProcessRequest, Sentinel2ProcessRequest, Sentinel2ResolveRequest
 from siac.config import RunRequest, SIACConfig
+from siac.config.algorithms import RTSetupConfig
 from siac.config.load import (
     CONFIG_PATH_ENV,
     load_system_config_from_default,
     write_default_system_config,
 )
 from siac.config.public import get_default_config
-from siac.config.schema import RTSetupConfig
 from siac.config.snapshot import (
     _normalize,
     snapshot_resolved_config,
@@ -208,8 +207,8 @@ def test_config_wrapper_helpers_and_loaders(
     toml_path = tmp_path / "config.toml"
     config.to_toml(toml_path)
 
-    loaded = SIACConfig.load(path=toml_path, sensor="l8")
-    assert loaded.sensor == "l8"
+    loaded = SIACConfig.load(path=toml_path, sensor="s2")
+    assert loaded.sensor == "s2"
 
     monkeypatch.setattr("siac.config.public.load_system_config_from_default", lambda: config)
     default_loaded = SIACConfig.load()
@@ -244,7 +243,7 @@ def test_load_helpers_cover_default_path_and_suffixless_output(
 def test_write_state_snapshot_delegates_to_runtime_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    config = SIACConfig(sensor="l8", aoi={"kind": "bbox"})
+    config = SIACConfig(sensor="s2", aoi={"kind": "bbox"})
     snapshot_path = tmp_path / "runtime.yaml"
     captured: dict[str, object] = {}
 
@@ -272,7 +271,7 @@ def test_write_state_snapshot_delegates_to_runtime_snapshot(
     assert resolved_input.aoi == config.aoi
 
     request = captured["resolve_config"]["request"]
-    assert request.sensor == "l8"
+    assert request.sensor == "s2"
     assert request.aoi == {"kind": "bbox"}
     assert captured["write_runtime_snapshot"]["config"] is resolved_config
     assert captured["write_runtime_snapshot"]["path"] == snapshot_path
@@ -335,11 +334,13 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(
     sensor_config = SimpleNamespace(sensor_id="MSI", satellite_id="S2C")
     emulator_config = SimpleNamespace(
         sensor="auto",
-        rt_model=SimpleNamespace(
-            backend="emulator",
-            fallback_to_lut=True,
-            lut_interpolation="linear",
-            lut_storage_options={},
+        algorithms=SimpleNamespace(
+            rt=SimpleNamespace(
+                backend="emulator",
+                fallback_to_lut=True,
+                lut_interpolation="linear",
+                lut_storage_options={},
+            )
         ),
         paths=SimpleNamespace(emulator_dir=Path("/tmp/emu"), lut_path="s3://bucket/lut.zarr"),
     )
@@ -351,11 +352,13 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(
 
     fallback_config = SimpleNamespace(
         sensor="l8",
-        rt_model=SimpleNamespace(
-            backend="emulator",
-            fallback_to_lut=True,
-            lut_interpolation="nearest",
-            lut_storage_options={"anon": True},
+        algorithms=SimpleNamespace(
+            rt=SimpleNamespace(
+                backend="emulator",
+                fallback_to_lut=True,
+                lut_interpolation="nearest",
+                lut_storage_options={"anon": True},
+            )
         ),
         paths=SimpleNamespace(lut_path="s3://bucket/lut.zarr"),
     )
@@ -375,19 +378,21 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(
 
     sixs_config = SimpleNamespace(
         sensor="auto",
-        rt_model=SimpleNamespace(
-            backend="sixs",
-            setup=RTSetupConfig(
-                atmosphere={"profile": "tropical", "columns_mode": "input_columns"},
-                aerosol={"profile": "continental"},
+        algorithms=SimpleNamespace(
+            rt=SimpleNamespace(
+                backend="sixs",
+                setup=RTSetupConfig(
+                    atmosphere={"profile": "tropical", "columns_mode": "input_columns"},
+                    aerosol={"profile": "continental"},
+                ),
+                sixs=SimpleNamespace(
+                    mode="direct",
+                    output_variables=("xap", "xbp", "xcp", "tgasm"),
+                ),
+                fallback_to_lut=False,
+                lut_interpolation="linear",
+                lut_storage_options={},
             ),
-            sixs=SimpleNamespace(
-                mode="direct",
-                output_variables=("xap", "xbp", "xcp", "tgasm"),
-            ),
-            fallback_to_lut=False,
-            lut_interpolation="linear",
-            lut_storage_options={},
         ),
         paths=SimpleNamespace(lut_path=None, emulator_dir=None),
     )
@@ -400,11 +405,13 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(
 
     no_fallback_config = SimpleNamespace(
         sensor="l8",
-        rt_model=SimpleNamespace(
-            backend="emulator",
-            fallback_to_lut=False,
-            lut_interpolation="nearest",
-            lut_storage_options={},
+        algorithms=SimpleNamespace(
+            rt=SimpleNamespace(
+                backend="emulator",
+                fallback_to_lut=False,
+                lut_interpolation="nearest",
+                lut_storage_options={},
+            )
         ),
         paths=SimpleNamespace(lut_path=None),
     )
@@ -415,22 +422,16 @@ def test_build_rt_model_covers_emulator_lut_and_error_paths(
 
     unknown_config = SimpleNamespace(
         sensor="auto",
-        rt_model=SimpleNamespace(
-            backend="bogus",
-            fallback_to_lut=False,
-            lut_interpolation="linear",
-            lut_storage_options={},
+        algorithms=SimpleNamespace(
+            rt=SimpleNamespace(
+                backend="bogus",
+                fallback_to_lut=False,
+                lut_interpolation="linear",
+                lut_storage_options={},
+            )
         ),
         paths=SimpleNamespace(lut_path=None, emulator_dir=None),
     )
 
     with pytest.raises(ValueError, match="Cannot resolve RT model"):
         build_rt_model(unknown_config)
-
-
-def test_srf_kernel_shim_reexports() -> None:
-    from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
-
-    assert srf_kernel.build_aligned_rsrf_kernel is build_aligned_rsrf_kernel
-    assert srf_kernel.build_aligned_srf_kernel is build_aligned_rsrf_kernel
-    assert srf_kernel.AlignedSRFKernel is srf_kernel.AlignedRSRFKernel

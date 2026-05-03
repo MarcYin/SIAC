@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +9,6 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.adapters.brdf.gee_stub import GEEBRDFProvider
 from siac.adapters.s2_backend import build_s2_backend
 from siac.algorithms.surface.brdf_monthly_composite import build_monthly_best_pixel_composite
 from siac.algorithms.surface.brdf_monthly_database import (
@@ -67,11 +65,9 @@ def _make_monthly_composites() -> list:
 
 def test_small_adapter_and_monthly_validation_paths() -> None:
     with pytest.raises(ValueError, match="Unknown S2 backend"):
-        build_s2_backend(SimpleNamespace(s2_data=SimpleNamespace(backend="weird")))
-
-    provider = GEEBRDFProvider("arg", option=True)
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        provider()
+        build_s2_backend(
+            SimpleNamespace(providers=SimpleNamespace(s2=SimpleNamespace(backend="weird")))
+        )
 
     reflectance, quality = _composite_inputs()
     with pytest.raises(ValueError, match="reflectance must have dims"):
@@ -225,29 +221,44 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         tcwv=template,
         cloud_mask=xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"]),
         diagnostics=SimpleNamespace(processing_time_s=None),
+        metadata={
+            "observation_time": "bad",
+            "geometry": obs.geometry,
+            "sensor_config": obs.sensor_config,
+            "crs": obs.crs,
+            "bounds": obs.bounds,
+        },
     )
-    with pytest.raises(TypeError, match="datetime observation_time"):
-        stac_mod.build_stac_item(
-            obs, result, output_dir=tmp_path, boa_assets={"B02": tmp_path / "B02.tif"}
-        )
+    item = stac_mod.build_stac_item_from_result(
+        result,
+        output_dir=tmp_path,
+        artifacts={"boa.B02": tmp_path / "B02.tif"},
+    )
+    assert item["properties"]["datetime"] is None
 
     good_obs = SimpleNamespace(
         **{**obs.__dict__, "metadata": {"observation_time": datetime(2024, 1, 1)}}
     )
-    path = stac_mod.write_stac_item(
-        good_obs,
-        result,
-        output_dir=tmp_path,
-        boa_assets={"B02": tmp_path / "B02.tif"},
-        item_id="item-1",
-        item_href=tmp_path / "custom.json",
+    good_result = SimpleNamespace(
+        **{
+            **result.__dict__,
+            "metadata": {
+                "observation_time": datetime(2024, 1, 1),
+                "geometry": good_obs.geometry,
+                "sensor_config": good_obs.sensor_config,
+                "crs": good_obs.crs,
+                "bounds": good_obs.bounds,
+            },
+        }
     )
-    assert path == tmp_path / "custom.json"
-    written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["id"] == "item-1"
-    assert written["links"] == [
-        {"rel": "self", "href": "custom.json", "type": "application/geo+json"}
-    ]
+    item = stac_mod.build_stac_item_from_result(
+        good_result,
+        output_dir=tmp_path,
+        artifacts={"boa.B02": tmp_path / "B02.tif"},
+        item_id="item-1",
+    )
+    assert item["id"] == "item-1"
+    assert item["links"] == [{"rel": "self", "href": "./", "type": "application/geo+json"}]
 
 
 def test_pipeline_helper_branches_cover_fallbacks_and_preload_failures(

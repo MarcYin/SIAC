@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import calendar
 import collections.abc
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 
 import numpy as np
@@ -50,28 +48,40 @@ from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
     from pathlib import Path
 
-__all__ = [
-    "build_monthly_composites_from_brdf",
-    "build_monthly_surface_prior_database",
-    "generate_monthly_composites_from_brdf",
-    "query_surface_prior_from_monthly_database",
-    "resample_geometry_for_surface_prior",
-]
-
-# Pure grid/resampling helpers live in a companion module; import them here
-# so the original call sites continue to work without changes.
-# F401 suppressions mark intentionally re-exported names (used transitively
-# by the resample helpers above) that may not appear in this file directly.
+# Pure grid/resampling helpers live in companion modules.
+from siac.algorithms.surface._swir_refine_months import (
+    _build_explicit_month_specs as _build_explicit_month_specs,
+)
+from siac.algorithms.surface._swir_refine_months import (
+    _iter_history_months as _iter_history_months,
+)
+from siac.algorithms.surface._swir_refine_months import (
+    _month_center_datetime as _month_center_datetime,
+)
+from siac.algorithms.surface._swir_refine_months import (
+    _MonthSpec as _MonthSpec,
+)
+from siac.algorithms.surface._swir_refine_months import (
+    _select_month_mask as _select_month_mask,
+)
+from siac.algorithms.surface._swir_refine_months import (
+    _weekly_sample_dates as _weekly_sample_dates,
+)
 from siac.algorithms.surface._swir_refine_resample import (  # noqa: E402
     _deduplicate_bands,
-    _is_coarser_target_grid,  # noqa: F401
     _monthly_composite_downsample_method,
     _resample_band_cube_to_template,
     _resample_brdf_weights_to_template,
     _resample_spatial_field_to_template,
-    _shares_spatial_grid,  # noqa: F401
+)
+from siac.algorithms.surface._swir_refine_resample import (
+    _is_coarser_target_grid as _is_coarser_target_grid,
+)
+from siac.algorithms.surface._swir_refine_resample import (
+    _shares_spatial_grid as _shares_spatial_grid,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,9 +89,6 @@ logger = logging.getLogger(__name__)
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
 
 
-_HISTORY_YEARS = 5
-_HISTORY_MONTH_OFFSETS = (-1, 0, 1)
-_WEEKLY_STEP_DAYS = 7
 _BRDF_BATCH_MONTHS = 3
 
 
@@ -121,21 +128,9 @@ class _PreparedMonthlyComposite:
     reflectance_unc: xr.DataArray | None
 
 
-@dataclass(frozen=True)
-class _MonthSpec:
-    year: int
-    month: int
-    center_time: datetime
-    temporal_window: int
-    sample_dates: tuple[datetime, ...]
-
-
 def build_monthly_surface_prior_database(
     *,
-    monthly_composites: MonthlyCompositeCollection | None = None,
-    observation: ObservationBundle | None = None,
-    brdf_provider: object | None = None,
-    resolution: float | None = None,
+    monthly_composites: MonthlyCompositeCollection,
     geometry: GeometryAngles,
     visible_bands: collections.abc.Sequence[SensorBand],
     query_bands: collections.abc.Sequence[SensorBand],
@@ -145,19 +140,6 @@ def build_monthly_surface_prior_database(
 ) -> MonthlyCompositeDatabase:
     """Build a Route-B database from prepared monthly composites."""
     target_bands = _deduplicate_bands([*visible_bands, *query_bands])
-    if monthly_composites is None:
-        if observation is None or brdf_provider is None or resolution is None:
-            raise TypeError(
-                "build_monthly_surface_prior_database requires monthly_composites=... "
-                "or the legacy observation=..., brdf_provider=..., resolution=... inputs"
-            )
-        monthly_composites = generate_monthly_composites_from_brdf(
-            observation=observation,
-            brdf_provider=brdf_provider,
-            resolution=resolution,
-            fallback_source_bands=target_bands,
-        )
-
     source_bands = tuple(monthly_composites.source_bands) or tuple(target_bands)
     if not monthly_composites.source_bands:
         logger.info(
@@ -630,67 +612,6 @@ def resample_geometry_for_surface_prior(
     )
 
 
-def _iter_history_months(obs_time: datetime) -> list[tuple[int, int]]:
-    months: list[tuple[int, int]] = []
-    for year_offset in range(1, _HISTORY_YEARS + 1):
-        base_year = obs_time.year - year_offset
-        for month_offset in _HISTORY_MONTH_OFFSETS:
-            month = obs_time.month + month_offset
-            year = base_year
-            while month < 1:
-                month += 12
-                year -= 1
-            while month > 12:
-                month -= 12
-                year += 1
-            months.append((year, month))
-    return months
-
-
-def _build_explicit_month_specs(
-    year_months: collections.abc.Sequence[tuple[int, int]],
-    *,
-    template_time: datetime | None,
-) -> list[_MonthSpec]:
-    if not year_months:
-        raise ValueError("year_months must not be empty")
-
-    specs: list[_MonthSpec] = []
-    seen: set[tuple[int, int]] = set()
-    for year, month in sorted((int(year), int(month)) for year, month in year_months):
-        if not 1 <= month <= 12:
-            raise ValueError(f"month must be between 1 and 12, got {month}")
-        key = (year, month)
-        if key in seen:
-            raise ValueError(f"Duplicate monthly composite selection: {year:04d}-{month:02d}")
-        seen.add(key)
-        center_template = template_time or datetime(year, month, 15, 12, 0, 0)
-        specs.append(
-            _MonthSpec(
-                year=year,
-                month=month,
-                center_time=_month_center_datetime(year, month, center_template),
-                temporal_window=max(1, calendar.monthrange(year, month)[1] // 2 + 1),
-                sample_dates=_weekly_sample_dates(year, month),
-            )
-        )
-    return specs
-
-
-def _month_center_datetime(year: int, month: int, template_time: datetime) -> datetime:
-    n_days = calendar.monthrange(year, month)[1]
-    center_day = int(np.ceil(n_days / 2.0))
-    return template_time.replace(year=year, month=month, day=center_day)
-
-
-def _weekly_sample_dates(year: int, month: int) -> tuple[datetime, ...]:
-    n_days = calendar.monthrange(year, month)[1]
-    days = list(range(1, n_days + 1, _WEEKLY_STEP_DAYS))
-    if days[-1] != n_days and (n_days - days[-1]) >= (_WEEKLY_STEP_DAYS // 2):
-        days.append(n_days)
-    return tuple(datetime(year, month, day) for day in days)
-
-
 def _forward_model_monthly_reflectance(
     temporal_weights: BRDFKernelWeights,
     *,
@@ -739,16 +660,6 @@ def _forward_model_monthly_reflectance(
         int(reflectance.sizes["time"]),
     )
     return reflectance.astype(np.float32), quality, reflectance_unc.astype(np.float32)
-
-
-def _select_month_mask(time_values: np.ndarray, *, year: int, month: int) -> np.ndarray:
-    month_strings = np.asarray(time_values, dtype="datetime64[D]").astype("datetime64[M]")
-    target = np.datetime64(f"{year:04d}-{month:02d}", "M")
-    month_mask = cast(
-        "np.ndarray[Any, np.dtype[np.bool_]]",
-        np.asarray(month_strings == target, dtype=np.bool_),
-    )
-    return month_mask
 
 
 def _collapse_repeated_temporal_samples(

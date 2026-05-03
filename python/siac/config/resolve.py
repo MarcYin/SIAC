@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from siac.config.schema import (
+from siac.config.resolved import (
     ResolvedAlgorithmsConfig,
     ResolvedAtmoProviderConfig,
     ResolvedAuthConfig,
@@ -26,12 +26,13 @@ from siac.config.schema import (
     ResolvedS2ProviderConfig,
     ResolvedSpectralMappingConfig,
     ResolvedSurfacePriorAlgorithmConfig,
-    RunRequest,
-    SystemConfig,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from siac.config.request import RunRequest
+    from siac.config.system import SystemConfig
 
 
 def _default_cache_path(root: Path | None, name: str) -> Path | None:

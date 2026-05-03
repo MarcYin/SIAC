@@ -33,15 +33,17 @@ def _adapter_config(sixs_config: SixSAlgorithmConfig, rt_setup: RTSetupConfig) -
     return SimpleNamespace(
         sensor="auto",
         paths=SimpleNamespace(emulator_dir=None, lut_path=None),
-        rt_model=SimpleNamespace(
-            backend="sixs",
-            setup=rt_setup,
-            sixs=sixs_config,
-            emulator_dir=None,
-            lut_path=None,
-            fallback_to_lut=False,
-            lut_storage_options={},
-            lut_interpolation="linear",
+        algorithms=SimpleNamespace(
+            rt=SimpleNamespace(
+                backend="sixs",
+                setup=rt_setup,
+                sixs=sixs_config,
+                emulator_dir=None,
+                lut_path=None,
+                fallback_to_lut=False,
+                lut_storage_options={},
+                lut_interpolation="linear",
+            )
         ),
     )
 

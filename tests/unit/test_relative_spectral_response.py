@@ -63,23 +63,15 @@ def test_rsrf_support_bounds_follow_trimmed_nonzero_extent():
     assert rsrf.support_max_nm == pytest.approx(460.0)
 
 
-def test_trapezoid_fallback_and_centre_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_trapezoid_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(spectral_mod.np, "trapezoid", raising=False)
 
     area = spectral_mod._trapezoid(  # noqa: SLF001
         np.array([0.0, 1.0, 0.0], dtype=np.float32),
         np.array([450.0, 460.0, 470.0], dtype=np.float32),
     )
-    rsrf = RelativeSpectralResponse.from_tabulated(
-        sensor_id="MSI",
-        satellite_id="S2A",
-        band_name="B02",
-        wavelengths_nm=np.array([450.0, 460.0, 470.0], dtype=np.float32),
-        response=np.array([0.0, 1.0, 0.0], dtype=np.float32),
-    )
 
     assert area == pytest.approx(10.0)
-    assert rsrf.centre_wavelength_nm == pytest.approx(rsrf.center_wavelength_nm)
 
 
 @pytest.mark.parametrize(

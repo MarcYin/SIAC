@@ -487,17 +487,3 @@ def _maybe_set(
 ) -> None:
     if key is not None or secret is not None:
         manager.set_credentials(provider, key=key, secret=secret)
-
-
-__all__ = [
-    "AWSAuth",
-    "CDSAuth",
-    "CDSEAuth",
-    "CDSES3Credentials",
-    "CredentialManager",
-    "CredentialSpec",
-    "EarthdataAuth",
-    "GCSAuth",
-    "OAuthToken",
-    "_cdse_token_exchange",
-]

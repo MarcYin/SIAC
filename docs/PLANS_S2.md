@@ -56,7 +56,7 @@ Implemented in code:
 - `S2Query`, `S2Product`, `S2DataAccess` orchestration (`python/siac/io/s2_data_source.py`)
 - `CopernicusDataspaceBackend` (`python/siac/io/copernicus_dataspace.py`)
 - `GCSSentinel2Backend` with real listing/download + retries (`python/siac/io/gcs_sentinel2.py`)
-- `S2DataAccessConfig` in `SIACConfig` (`python/siac/core/config.py`)
+- `S2ProviderConfig` in `SystemConfig.providers.s2`
 - S2 convenience entrypoints `resolve_s2_input()`, `search_sentinel2()`, `siac_process_s2()` (`python/siac/siac.py`)
 
 ### Context
@@ -105,7 +105,7 @@ siac/
   satellite/
     sentinel2.py               ← EXISTING (no changes needed)
   core/
-    config.py                  ← MODIFY: add S2DataAccessConfig
+    providers.py               ← MODIFY: add S2ProviderConfig
 ```
 
 #### Key Abstraction
@@ -270,7 +270,7 @@ directly with functions never need the protocol.
 #### Modify: `python/siac/core/config.py`
 
 ```python
-class S2DataAccessConfig(BaseModel):
+class S2ProviderConfig(BaseModel):
     """Configuration for Sentinel-2 data access."""
 
     backend: Literal["cdse", "gcs", "local"] = Field(
@@ -286,8 +286,8 @@ class S2DataAccessConfig(BaseModel):
 
 Add to `SIACConfig`:
 ```python
-s2_data: S2DataAccessConfig = Field(
-    default_factory=S2DataAccessConfig,
+providers.s2: S2ProviderConfig = Field(
+    default_factory=S2ProviderConfig,
     description="Sentinel-2 data access configuration",
 )
 ```
@@ -639,7 +639,7 @@ result = siac_process(config, input_path, surface_prior_provider=landsat_surface
 ### 6.4 Pre-Solved AOT (Override M5)
 
 ```python
-def my_aot_retrieval(inputs: SolverInputBundle, config: SolverConfig) -> SolvedAtmosphere:
+def my_aot_retrieval(inputs: SolverInputBundle, config: SolverAlgorithmConfig) -> SolvedAtmosphere:
     """Use AOT from AERONET or external retrieval."""
     aot_field = interpolate_aeronet(station_data, inputs.geometry)
     return SolvedAtmosphere(
@@ -676,7 +676,7 @@ write_to_stac(result.boa, result.metadata, output_dir)
 
 | File | Modification | Description |
 |------|-------------|-------------|
-| `python/siac/core/config.py` | Add `S2DataAccessConfig` | S2 data access configuration sub-model |
+| `python/siac/config/providers.py` | Add `S2ProviderConfig` | S2 data access configuration sub-model |
 | `python/siac/siac.py` | Add `siac_process_s2()`, `resolve_s2_input()` | S2 convenience entry points (pre-M1 resolution) |
 | `python/siac/satellite/sentinel2.py` | Update to export `Sentinel2Preprocessor` class | Return `ObservationBundle` via `.preprocess()` |
 

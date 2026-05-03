@@ -13,7 +13,7 @@ from rasterio.enums import Resampling as RasterioResampling
 import siac.algorithms.grid.assembler as assembler_mod
 from siac.algorithms.grid.assembler import assemble_grids
 from siac.catalog import SENTINEL2A_CONFIG
-from siac.config.schema import SharpTransitionFilterConfig
+from siac.config.algorithms import SharpTransitionFilterConfig
 from siac.domain import SensorBand, SensorConfig
 from siac.runtime import (
     AtmosphericState,
@@ -136,19 +136,24 @@ class TestAssembleGrids:
         )
         assert sib.aux_resolution_m == 500.0
 
-    def test_aux_resolution_falls_back_to_solver_grid_for_legacy_callers(
+    def test_aux_resolution_does_not_change_solver_grid(
         self,
         large_obs_bundle,
         large_atmo,
         large_surface,
         mock_rt_model,
     ):
+        from siac.algorithms.grid.assembler import _build_target_template
+
         sib = assemble_grids(
             large_obs_bundle, large_atmo, large_surface, mock_rt_model, aux_resolution_m=320.0
         )
+        template = _build_target_template(large_obs_bundle.bounds, large_obs_bundle.crs, 120.0)
+        expected_shape = (int(template.sizes["y"]), int(template.sizes["x"]))
 
-        assert sib.toa.shape[1:] == (2, 2)
-        assert sib.aerosol_resolution_m == 320.0
+        assert sib.toa.shape[1:] == expected_shape
+        assert sib.aux_resolution_m == pytest.approx(320.0)
+        assert sib.aerosol_resolution_m == pytest.approx(120.0)
 
     def test_band_selection(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Non-MSI sensors should keep the wavelength-based aerosol defaults."""
@@ -1092,20 +1097,14 @@ class TestAssembleGrids:
         np.testing.assert_array_equal(sib.surface_prior.boa_unc.values, unc_vals)
         np.testing.assert_array_equal(sib.surface_prior.mask.values, mask_vals)
 
-    def test_legacy_aux_resolution_override_resamples_surface_prior(
+    def test_aux_resolution_metadata_does_not_override_surface_prior_grid(
         self,
         large_obs_bundle,
         large_atmo,
         mock_rt_model,
     ):
-        """When aux_resolution != 500 and aerosol_resolution == 120, M4 uses aux_resolution.
-
-        This is the one scenario where M3 (querying at aerosol_resolution=120)
-        and M4 (gridding at aux_resolution) can differ, producing a real resample.
-        """
         from siac.algorithms.grid.assembler import _build_target_template
 
-        # Surface prior generated at 120m (M3 default)
         m3_template = _build_target_template(
             large_obs_bundle.bounds,
             large_obs_bundle.crs,
@@ -1141,7 +1140,6 @@ class TestAssembleGrids:
         )
         prior = SurfacePrior(boa=boa, boa_unc=unc, kernels=None, mask=mask)
 
-        # Trigger legacy override: aerosol_resolution=120 + aux_resolution=320
         sib = assemble_grids(
             large_obs_bundle,
             large_atmo,
@@ -1151,13 +1149,13 @@ class TestAssembleGrids:
             aerosol_resolution_m=120.0,
         )
 
-        # Grid should be at 320m (legacy override), not 120m
         m4_template = _build_target_template(
             large_obs_bundle.bounds,
             large_obs_bundle.crs,
-            320.0,
+            120.0,
         )
         expected_shape = (int(m4_template.sizes["y"]), int(m4_template.sizes["x"]))
         assert sib.toa.shape[1:] == expected_shape
         assert sib.surface_prior.boa.shape == expected_shape
-        assert sib.aerosol_resolution_m == pytest.approx(320.0)
+        assert sib.aux_resolution_m == pytest.approx(320.0)
+        assert sib.aerosol_resolution_m == pytest.approx(120.0)

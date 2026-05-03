@@ -16,9 +16,13 @@ from siac.api.requests import (
     Sentinel2SearchRequest,
 )
 from siac.app.sentinel2 import (
-    apply_s2_query_defaults,
-    coerce_date,
-    coerce_s2_query,
+    apply_s2_query_defaults as apply_s2_query_defaults,
+)
+from siac.app.sentinel2 import (
+    coerce_date as coerce_date,
+)
+from siac.app.sentinel2 import (
+    coerce_s2_query as coerce_s2_query,
 )
 from siac.app.sentinel2 import (
     resolve_s2_input as app_resolve_s2_input,
@@ -26,8 +30,10 @@ from siac.app.sentinel2 import (
 from siac.app.sentinel2 import (
     search_sentinel2 as app_search_sentinel2,
 )
-from siac.config import SIACConfig
-from siac.public_models import PreparedMonthlyCompositeBuildResult
+from siac.config import SensorName, SIACConfig
+from siac.public_models import (  # noqa: TC001
+    PreparedMonthlyCompositeBuildResult as PreparedMonthlyCompositeBuildResult,
+)
 from siac.workflows.monthly_composites import (
     prepare_monthly_composites as workflow_prepare_monthly_composites,
 )
@@ -41,12 +47,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from siac.adapters.data.s2_data_source import S2Product
-    from siac.config.schema import SensorName
     from siac.runtime import CorrectionResult
 
 
 class SIAC:
-    """User-facing SIAC session facade."""
+    """User-facing SIAC session API."""
 
     def __init__(self, config: SIACConfig):
         self.config = config
@@ -57,7 +62,7 @@ class SIAC:
         return cls(SIACConfig.from_file(config_path))
 
     @classmethod
-    def from_defaults(cls, sensor: SensorName = "auto") -> SIAC:
+    def from_defaults(cls, sensor: SensorName = SensorName.AUTO) -> SIAC:
         return cls(SIACConfig(sensor=sensor))
 
     def process(
@@ -122,15 +127,7 @@ def process_sentinel2(
     output_path: PathLike | None = None,
     **kwargs: Any,
 ) -> CorrectionResult:
-    return SIAC.from_defaults(sensor="s2").process(input_path, output_path, **kwargs)
-
-
-def process_landsat8(
-    input_path: PathLike,
-    output_path: PathLike | None = None,
-    **kwargs: Any,
-) -> CorrectionResult:
-    return SIAC.from_defaults(sensor="l8").process(input_path, output_path, **kwargs)
+    return SIAC.from_defaults(sensor=SensorName.S2).process(input_path, output_path, **kwargs)
 
 
 def siac_process_s2(
@@ -184,19 +181,3 @@ def prepare_monthly_composites(
         output_path=output_path,
         auth=auth,
     )
-
-
-__all__ = [
-    "PreparedMonthlyCompositeBuildResult",
-    "SIAC",
-    "apply_s2_query_defaults",
-    "coerce_date",
-    "coerce_s2_query",
-    "process_landsat8",
-    "prepare_monthly_composites",
-    "process_sentinel2",
-    "resolve_s2_input",
-    "search_sentinel2",
-    "siac_process",
-    "siac_process_s2",
-]

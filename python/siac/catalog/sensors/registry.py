@@ -25,6 +25,3 @@ def get_sensor_config(sensor_id: str, satellite_id: str) -> SensorConfig:
             f"Unknown sensor {sensor_id}/{satellite_id}. Available: {list(SENSOR_CONFIGS.keys())}"
         )
     return SENSOR_CONFIGS[key]
-
-
-__all__ = ["SENSOR_CONFIGS", "get_sensor_config"]

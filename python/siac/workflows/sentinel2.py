@@ -51,6 +51,3 @@ def process_s2(
             auth=auth_obj,
         )
     )
-
-
-__all__ = ["process_s2"]

@@ -24,7 +24,8 @@ The scientific reference for the method is:
 ## Supported Workflows
 
 - Sentinel-2 as the primary user-facing workflow
-- Landsat entry points in the Python API
+- Landsat sensor metadata for catalog and spectral work; end-to-end Landsat
+  scene processing is not implemented yet
 - Local SAFE input and remote Sentinel-2 resolution/search via configured backends
 - Output writing as GeoTIFF, COG, NetCDF, or Zarr
 

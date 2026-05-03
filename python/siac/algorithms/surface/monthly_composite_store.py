@@ -963,14 +963,3 @@ def _axis_resolution(values: np.ndarray) -> float | None:
     if not np.allclose(magnitudes, resolution, rtol=0.0, atol=1e-9):
         return None
     return resolution
-
-
-__all__ = [
-    "MonthlyCompositeStoreEntry",
-    "MonthlyCompositeStoreGridSpec",
-    "MonthlyCompositeStoreManifest",
-    "filter_materialized_monthly_composite_collection",
-    "read_monthly_composite_collection",
-    "read_monthly_composite_store_manifest",
-    "write_monthly_composite_collection",
-]

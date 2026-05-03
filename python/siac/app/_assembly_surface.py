@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
+from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
+from siac.algorithms.surface.kernel_model import KernelModelDeriver
+from siac.app._assembly_providers import (
+    resolve_brdf_provider,
+    resolve_monthly_composite_provider,
+)
+from siac.app.registry import SURFACE_PRIOR_METHOD_REGISTRY
+from siac.observability import current_execution_observer, observe_stage
+
 if TYPE_CHECKING:
+    from siac.adapters.auth import CredentialManager
     from siac.domain.sensors import SensorConfig
     from siac.runtime import AtmosphericState, ObservationBundle, SurfacePrior
     from siac.workflows.pipeline import SurfacePriorFn
 
+logger = logging.getLogger(__name__)
 
-def _select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]:
+
+def select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]:
     if sensor_config is None:
         return list(range(1, 8))
     selected: list[Any] = list(sensor_config.default_aerosol_solver_bands())
@@ -72,7 +85,7 @@ def _surface_spectral_mapping_runtime(
     target_bands: list[Any] | tuple[Any, ...] | None = None,
     context: str = "surface priors",
 ) -> tuple[Any | None, int]:
-    settings = config.surface_prior.spectral_mapping
+    settings = config.algorithms.surface_prior.spectral_mapping
 
     if source_bands is not None and target_bands is not None and not settings.enabled:
         from siac.algorithms.surface.spectral_mapping import needs_spectral_mapping
@@ -101,14 +114,14 @@ def _surface_spectral_mapping_runtime(
     )
 
 
-def _mark_surface_prior_metadata(
+def mark_surface_prior_metadata(
     provider: SurfacePriorFn, *, requires_atmo_prior: bool
 ) -> SurfacePriorFn:
-    provider.requires_atmo_prior = requires_atmo_prior  # type: ignore[attr-defined]
+    provider.requires_atmo_prior = requires_atmo_prior
     return provider
 
 
-def _surface_prior_mapping_state(
+def surface_prior_mapping_state(
     config: Any,
     *,
     source_bands: list[Any] | tuple[Any, ...],
@@ -124,7 +137,7 @@ def _surface_prior_mapping_state(
     )
 
 
-def _surface_prior_brdf_request(
+def surface_prior_brdf_request(
     observation: ObservationBundle,
     *,
     brdf_provider: Any,
@@ -143,7 +156,7 @@ def _surface_prior_brdf_request(
 
 
 @dataclass(frozen=True)
-class _MonthlySurfacePriorRuntime:
+class MonthlySurfacePriorRuntime:
     visible_bands: list[Any]
     query_bands: list[Any]
     geometry: Any
@@ -187,7 +200,7 @@ def _resolve_monthly_database_resolution(
     return max(requested, resolved)
 
 
-def _prepare_monthly_surface_prior_runtime(
+def prepare_monthly_surface_prior_runtime(
     config: Any,
     monthly_composite_provider: Any,
     *,
@@ -195,7 +208,7 @@ def _prepare_monthly_surface_prior_runtime(
     resolution: float,
     build_database_fn: Any | None = None,
     resample_geometry_fn: Any | None = None,
-) -> _MonthlySurfacePriorRuntime:
+) -> MonthlySurfacePriorRuntime:
     if build_database_fn is None or resample_geometry_fn is None:
         from siac.algorithms.surface.swir_refine import (
             build_monthly_surface_prior_database,
@@ -209,9 +222,7 @@ def _prepare_monthly_surface_prior_runtime(
 
     visible_bands = _select_visible_surface_prior_bands(observation.sensor_config)
     query_bands = _select_route_b_query_bands(observation.sensor_config)
-    monthly_filter = getattr(
-        getattr(config, "surface_prior", None), "monthly_database_filter", None
-    )
+    monthly_filter = config.algorithms.surface_prior.monthly_database_filter
     filter_enabled = bool(getattr(monthly_filter, "enabled", True))
     max_prediction_uncertainty = (
         float(getattr(monthly_filter, "max_prediction_uncertainty", 0.05))
@@ -230,13 +241,7 @@ def _prepare_monthly_surface_prior_runtime(
     database_resolution = _resolve_monthly_database_resolution(
         monthly_composite_provider,
         resolution,
-        policy=str(
-            getattr(
-                getattr(config, "surface_prior", None),
-                "monthly_database_resolution_policy",
-                "provider_or_coarser",
-            )
-        ),
+        policy=str(config.algorithms.surface_prior.monthly_database_resolution_policy),
     )
     query_resolution = float(resolution)
     database_geometry = resample_geometry_fn(observation, resolution=database_resolution)
@@ -245,45 +250,25 @@ def _prepare_monthly_surface_prior_runtime(
     else:
         query_geometry = resample_geometry_fn(observation, resolution=query_resolution)
     get_monthly_composites = getattr(monthly_composite_provider, "get_monthly_composites", None)
-    if callable(get_monthly_composites):
-        monthly_composites = get_monthly_composites(observation, database_resolution)
-        spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
-            config,
-            source_bands=tuple(monthly_composites.source_bands),
-            target_bands=[*visible_bands, *query_bands],
-            context="Route-B monthly-database surface priors",
-        )
-        database = build_database_fn(
-            monthly_composites=monthly_composites,
-            geometry=database_geometry,
-            visible_bands=visible_bands,
-            query_bands=query_bands,
-            spectral_library=spectral_library,
-            spectral_k_neighbors=spectral_k_neighbors,
-            max_source_fit_rmse=max_source_fit_rmse,
-        )
-    else:
-        source_bands = tuple(
-            getattr(monthly_composite_provider, "source_bands", [*visible_bands, *query_bands])
-        )
-        spectral_library, spectral_k_neighbors = _surface_prior_mapping_state(
-            config,
-            source_bands=source_bands,
-            target_bands=[*visible_bands, *query_bands],
-            context="Route-B monthly-database surface priors",
-        )
-        database = build_database_fn(
-            observation=observation,
-            brdf_provider=monthly_composite_provider,
-            resolution=database_resolution,
-            geometry=database_geometry,
-            visible_bands=visible_bands,
-            query_bands=query_bands,
-            spectral_library=spectral_library,
-            spectral_k_neighbors=spectral_k_neighbors,
-            max_source_fit_rmse=max_source_fit_rmse,
-        )
-    return _MonthlySurfacePriorRuntime(
+    if not callable(get_monthly_composites):
+        raise TypeError("Monthly composite providers must implement get_monthly_composites().")
+    monthly_composites = get_monthly_composites(observation, database_resolution)
+    spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
+        config,
+        source_bands=tuple(monthly_composites.source_bands),
+        target_bands=[*visible_bands, *query_bands],
+        context="Route-B monthly-database surface priors",
+    )
+    database = build_database_fn(
+        monthly_composites=monthly_composites,
+        geometry=database_geometry,
+        visible_bands=visible_bands,
+        query_bands=query_bands,
+        spectral_library=spectral_library,
+        spectral_k_neighbors=spectral_k_neighbors,
+        max_source_fit_rmse=max_source_fit_rmse,
+    )
+    return MonthlySurfacePriorRuntime(
         visible_bands=visible_bands,
         query_bands=query_bands,
         geometry=query_geometry,
@@ -299,11 +284,11 @@ def _prepare_monthly_surface_prior_runtime(
     )
 
 
-def _query_monthly_surface_prior(
+def query_monthly_surface_prior(
     observation: ObservationBundle,
     atmo_prior: AtmosphericState,
     rt_model: Any,
-    runtime: _MonthlySurfacePriorRuntime,
+    runtime: MonthlySurfacePriorRuntime,
     query_database_fn: Any | None = None,
 ) -> SurfacePrior:
     if query_database_fn is None:
@@ -331,15 +316,205 @@ def _query_monthly_surface_prior(
     return replace(prior, monthly_composites=composites)
 
 
-__all__ = [
-    "_MonthlySurfacePriorRuntime",
-    "_mark_surface_prior_metadata",
-    "_prepare_monthly_surface_prior_runtime",
-    "_query_monthly_surface_prior",
-    "_select_route_b_query_bands",
-    "_select_surface_prior_bands",
-    "_select_visible_surface_prior_bands",
-    "_surface_prior_brdf_request",
-    "_surface_prior_mapping_state",
-    "_surface_spectral_mapping_runtime",
-]
+def _build_surface_prior_component(
+    method: str,
+    config: Any,
+    brdf_provider: Any,
+) -> SurfacePriorFn:
+    """Resolve and invoke a registry-backed surface-prior factory."""
+    return cast(
+        "SurfacePriorFn",
+        SURFACE_PRIOR_METHOD_REGISTRY.get(method)(config, brdf_provider),
+    )
+
+
+@SURFACE_PRIOR_METHOD_REGISTRY.register("kernel_model")
+def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
+        _ = (atmo_prior, rt_model)
+        target_bands = select_surface_prior_bands(observation.sensor_config)
+        spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
+            config,
+            source_bands=tuple(brdf_prov.source_bands),
+            target_bands=target_bands,
+            context="surface priors",
+        )
+        brdf_weights = brdf_prov.get_brdf_parameters(
+            **surface_prior_brdf_request(
+                observation,
+                brdf_provider=brdf_prov,
+                target_resolution=resolution,
+                temporal_window=config.providers.brdf.temporal_window,
+            ),
+        )
+        deriver = KernelModelDeriver(
+            psf_sigma_x=config.algorithms.surface_prior.psf_sigma_x,
+            psf_sigma_y=config.algorithms.surface_prior.psf_sigma_y,
+            apply_psf=config.algorithms.surface_prior.apply_psf,
+        )
+        return deriver.compute_surface_prior(
+            brdf_weights,
+            observation.geometry,
+            source_bands=brdf_prov.source_bands,
+            target_bands=target_bands,
+            spectral_library=spectral_library,
+            spectral_k_neighbors=spectral_k_neighbors,
+        )
+
+    return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
+
+
+@SURFACE_PRIOR_METHOD_REGISTRY.register("whittaker")
+def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
+        _ = (atmo_prior, rt_model)
+        target_bands = select_surface_prior_bands(observation.sensor_config)
+        spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
+            config,
+            source_bands=tuple(brdf_prov.source_bands),
+            target_bands=target_bands,
+            context="Whittaker surface priors",
+        )
+        brdf_weights = brdf_prov.get_temporal_brdf_parameters(
+            **surface_prior_brdf_request(
+                observation,
+                brdf_provider=brdf_prov,
+                target_resolution=resolution,
+                temporal_window=config.providers.brdf.temporal_window,
+            ),
+        )
+        deriver = BRDFWhittakerDeriver(
+            temporal_lambda=config.algorithms.surface_prior.whittaker_lambda,
+            psf_sigma_x=config.algorithms.surface_prior.psf_sigma_x,
+            psf_sigma_y=config.algorithms.surface_prior.psf_sigma_y,
+            apply_psf=config.algorithms.surface_prior.apply_psf,
+        )
+        return deriver.compute_surface_prior(
+            brdf_weights,
+            observation.geometry,
+            obs_time=observation.metadata["observation_time"],
+            source_bands=brdf_prov.source_bands,
+            target_bands=target_bands,
+            spectral_library=spectral_library,
+            spectral_k_neighbors=spectral_k_neighbors,
+        )
+
+    return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
+
+
+@SURFACE_PRIOR_METHOD_REGISTRY.register("monthly_database")
+def _build_monthly_surface_prior(
+    config: Any,
+    monthly_composite_provider: Any,
+    *,
+    fallback_brdf_provider_factory: Any | None = None,
+) -> SurfacePriorFn:
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
+        if atmo_prior is None:
+            raise ValueError("Route-B monthly_database surface prior requires an atmospheric prior")
+
+        logger.info("M3: Building monthly surface-prior database...")
+        with observe_stage(
+            "M3.monthly_database.prepare_runtime",
+            details={"resolution_m": resolution},
+        ):
+            monthly_runtime = prepare_monthly_surface_prior_runtime(
+                config,
+                monthly_composite_provider,
+                observation=observation,
+                resolution=resolution,
+            )
+
+        observer = current_execution_observer()
+        if observer is not None:
+            observer.emit(
+                "progress",
+                stage="M3.monthly_database.prepare_runtime",
+                message="Monthly surface-prior database ready.",
+                query_band_count=len(monthly_runtime.query_bands),
+                visible_band_count=len(monthly_runtime.visible_bands),
+            )
+
+        logger.info("M3: Querying monthly surface-prior database...")
+        with observe_stage("M3.monthly_database.query"):
+            prior = query_monthly_surface_prior(observation, atmo_prior, rt_model, monthly_runtime)
+        if bool(np.asarray(prior.mask.values).any()):
+            return prior
+
+        logger.warning(
+            "Route-B monthly database produced no valid surface-prior pixels; "
+            "falling back to kernel-model BRDF priors."
+        )
+        if observer is not None:
+            observer.emit(
+                "warning",
+                stage="M3.monthly_database.query",
+                status="fallback",
+                message="Monthly database produced no valid pixels; falling back to kernel-model priors.",
+            )
+        with observe_stage("M3.monthly_database.fallback"):
+            if fallback_brdf_provider_factory is not None:
+                brdf_prov = fallback_brdf_provider_factory()
+            elif hasattr(monthly_composite_provider, "get_brdf_parameters"):
+                brdf_prov = monthly_composite_provider
+            else:
+                raise ValueError(
+                    "Route-B monthly_database fallback requires a BRDF provider factory"
+                )
+            brdf_weights = brdf_prov.get_brdf_parameters(
+                **surface_prior_brdf_request(
+                    observation,
+                    brdf_provider=brdf_prov,
+                    target_resolution=resolution,
+                    temporal_window=config.providers.brdf.temporal_window,
+                ),
+            )
+            fallback_deriver = KernelModelDeriver(
+                psf_sigma_x=config.algorithms.surface_prior.psf_sigma_x,
+                psf_sigma_y=config.algorithms.surface_prior.psf_sigma_y,
+                apply_psf=config.algorithms.surface_prior.apply_psf,
+            )
+            return fallback_deriver.compute_surface_prior(
+                brdf_weights,
+                monthly_runtime.geometry,
+                source_bands=brdf_prov.source_bands,
+                target_bands=monthly_runtime.visible_bands,
+                spectral_library=monthly_runtime.spectral_library,
+                spectral_k_neighbors=monthly_runtime.spectral_k_neighbors,
+            )
+
+    return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=True)
+
+
+def resolve_surface_prior_provider(
+    config: Any, auth: CredentialManager | None = None
+) -> SurfacePriorFn:
+    method = config.algorithms.surface_prior.method
+    if method == "monthly_database":
+        monthly_provider = resolve_monthly_composite_provider(config, auth=auth)
+        return cast(
+            "SurfacePriorFn",
+            _build_monthly_surface_prior(
+                config,
+                monthly_provider,
+                fallback_brdf_provider_factory=lambda: resolve_brdf_provider(config, auth=auth),
+            ),
+        )
+
+    brdf_prov = resolve_brdf_provider(config, auth=auth)
+    return _build_surface_prior_component(method, config, brdf_prov)

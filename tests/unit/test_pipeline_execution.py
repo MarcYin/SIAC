@@ -143,18 +143,20 @@ def test_execution_values_handles_dict_and_object() -> None:
 
 def test_resolve_execution_settings_applies_overrides_and_coercions(tmp_path: Path) -> None:
     cfg = SimpleNamespace(
-        execution=SimpleNamespace(
-            backend="THREAD",
-            max_workers=2,
-            retries=1,
-            stage_timeout_s="15",
-            stage_timeouts={"M2.atmospheric_prior": "8"},
-            dashboard=1,
-            dashboard_address=":8787",
-            performance_report_path=str(tmp_path / "reports" / "perf.html"),
-            show_progress=1,
-            profiling_sample_interval_s="2.5",
-            progress_heartbeat_s="12",
+        runtime=SimpleNamespace(
+            execution=SimpleNamespace(
+                backend="THREAD",
+                max_workers=2,
+                retries=1,
+                stage_timeout_s="15",
+                stage_timeouts={"M2.atmospheric_prior": "8"},
+                dashboard=1,
+                dashboard_address=":8787",
+                performance_report_path=str(tmp_path / "reports" / "perf.html"),
+                show_progress=1,
+                profiling_sample_interval_s="2.5",
+                progress_heartbeat_s="12",
+            )
         )
     )
 
@@ -200,7 +202,9 @@ def test_resolve_execution_settings_rejects_invalid_values(
 
 
 def test_aerosol_resolution_reads_solver_config() -> None:
-    cfg = SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=120.0))
+    cfg = SimpleNamespace(
+        algorithms=SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=120.0))
+    )
     assert pipeline._aerosol_resolution(cfg) == 120.0
 
 
@@ -221,13 +225,15 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
         return mock_solver_input_bundle
 
     cfg = SimpleNamespace(
-        solver=SimpleNamespace(
-            aerosol_resolution=120.0,
-            water_mask_buffer_pixels=3,
-            stages=(
-                SimpleNamespace(name="aot_pass", bands=("B01", "B02", "B04")),
-                SimpleNamespace(name="tcwv_pass", bands=("B02", "B04")),
-            ),
+        algorithms=SimpleNamespace(
+            solver=SimpleNamespace(
+                aerosol_resolution=120.0,
+                water_mask_buffer_pixels=3,
+                stages=(
+                    SimpleNamespace(name="aot_pass", bands=("B01", "B02", "B04")),
+                    SimpleNamespace(name="tcwv_pass", bands=("B02", "B04")),
+                ),
+            )
         )
     )
 
@@ -250,7 +256,7 @@ def test_run_tail_passes_configured_aerosol_resolution_to_grid_assembler(
     assert captured["kwargs"]["solver_band_names"] == ("B01", "B02", "B04")
 
 
-def test_call_grid_assembler_falls_back_when_filter_kwarg_is_unsupported(
+def test_call_grid_assembler_requires_standardized_kwargs(
     mock_observation_bundle,
     mock_atmospheric_state,
     mock_surface_prior,
@@ -275,30 +281,22 @@ def test_call_grid_assembler_falls_back_when_filter_kwarg_is_unsupported(
             )
             return "solver-inputs"
 
-    out = pipeline._call_grid_assembler(
-        _OpaqueAssembler(),
-        mock_observation_bundle,
-        mock_atmospheric_state,
-        mock_surface_prior,
-        mock_rt_model,
-        aerosol_resolution_m=120.0,
-        sharp_transition_filter=SimpleNamespace(enabled=True),
-        water_mask_path="https://example.com/water-mask.vrt",
-        water_mask_cache_dir=Path("/tmp/water-mask-cache"),
-        water_mask_buffer_pixels=2,
-        solver_band_names=("B01", "B02", "B04"),
-    )
+    with pytest.raises(TypeError, match="sharp_transition_filter"):
+        pipeline._call_grid_assembler(
+            _OpaqueAssembler(),
+            mock_observation_bundle,
+            mock_atmospheric_state,
+            mock_surface_prior,
+            mock_rt_model,
+            aerosol_resolution_m=120.0,
+            sharp_transition_filter=SimpleNamespace(enabled=True),
+            water_mask_path="https://example.com/water-mask.vrt",
+            water_mask_cache_dir=Path("/tmp/water-mask-cache"),
+            water_mask_buffer_pixels=2,
+            solver_band_names=("B01", "B02", "B04"),
+        )
 
-    assert out == "solver-inputs"
-    assert calls == [
-        {
-            "obs": mock_observation_bundle,
-            "atmo": mock_atmospheric_state,
-            "surface": mock_surface_prior,
-            "rt_model": mock_rt_model,
-            "aerosol_resolution_m": 120.0,
-        }
-    ]
+    assert calls == []
 
 
 def test_select_solver_bands_for_preload_includes_stage_requested_bands(mock_sensor_config) -> None:
@@ -363,8 +361,10 @@ def test_run_pipeline_lut_preload_includes_stage_requested_bands(
         Path("/fake"),
         None,
         SimpleNamespace(
-            solver=SimpleNamespace(
-                stages=(SimpleNamespace(name="aot_pass", bands=("B01", "B02", "B04")),),
+            algorithms=SimpleNamespace(
+                solver=SimpleNamespace(
+                    stages=(SimpleNamespace(name="aot_pass", bands=("B01", "B02", "B04")),),
+                )
             )
         ),
         preprocessor=mock_preprocessor,
@@ -416,7 +416,9 @@ def test_run_tail_attaches_surface_prior_and_monthly_composite_outputs(
         mock_observation_bundle,
         mock_atmospheric_state,
         surface_with_monthly,
-        SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0)),
+        SimpleNamespace(
+            algorithms=SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0))
+        ),
         grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
         solver=mock_solver_fn,
         corrector=mock_corrector_fn,
@@ -444,7 +446,9 @@ def test_run_tail_attaches_aot_scatter_diagnostics(
         mock_observation_bundle,
         mock_atmospheric_state,
         mock_surface_prior,
-        SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0)),
+        SimpleNamespace(
+            algorithms=SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0))
+        ),
         grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
         solver=mock_solver_fn,
         corrector=mock_corrector_fn,

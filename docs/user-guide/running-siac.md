@@ -43,7 +43,7 @@ siac process-s2 S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433 \
   --aoi-crs EPSG:32650
 ```
 
-## Python facade
+## Python API
 
 For local scene processing:
 

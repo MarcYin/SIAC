@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def _trapezoid(y: np.ndarray, x: np.ndarray) -> float:
-    """Compatibility wrapper for NumPy trapezoid integration."""
+    """Return trapezoid integration for a spectral curve."""
     return float(np.trapezoid(y, x))
 
 
@@ -106,15 +106,3 @@ def build_aligned_rsrf_kernel(
         response_on_lut=response_interp.astype(np.float32),
         solar_weighted_response_on_lut=solar_weighted,
     )
-
-
-AlignedSRFKernel = AlignedRSRFKernel
-build_aligned_srf_kernel = build_aligned_rsrf_kernel
-
-
-__all__ = [
-    "AlignedRSRFKernel",
-    "build_aligned_rsrf_kernel",
-    "AlignedSRFKernel",
-    "build_aligned_srf_kernel",
-]

@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 import xarray as xr
 
-import siac.adapters.brdf.gee_stub as gee_stub_mod
 import siac.adapters.s2_backend as s2_backend_mod
 import siac.storage.stac as stac_mod
 from siac.domain import SensorBand
@@ -258,24 +257,31 @@ def test_build_stac_item_uses_fallbacks_and_omits_optional_fields(
         obs,
         mock_solved_atmosphere,
         cloud_mask=xr.ones_like(obs.cloud_mask, dtype=bool),
+        metadata={
+            **obs.metadata,
+            "satellite": "TEST",
+            "sensor_config": obs.sensor_config,
+            "geometry": obs.geometry,
+            "crs": obs.crs,
+            "bounds": obs.bounds,
+        },
         processing_time_s=None,
     )
 
-    item = stac_mod.build_stac_item(
-        obs,
+    item = stac_mod.build_stac_item_from_result(
         result,
         output_dir=tmp_path,
-        boa_assets={"B02": tmp_path / "missing_b02.tif"},
-        qa_assets={"preview": tmp_path / "preview.tif"},
+        artifacts={
+            "boa.B02": tmp_path / "missing_b02.tif",
+            "preview.false_colour": tmp_path / "preview.tif",
+        },
         item_id="custom-item",
-        item_href=tmp_path / "nested" / "item.json",
     )
 
     assert item["id"] == "custom-item"
     assert item["properties"]["siac:satellite"] == "TEST"
     assert item["properties"]["siac:tile_id"] == 7
     assert item["properties"]["siac:sensor"] == "MOCK"
-    assert item["properties"]["siac:masked_pixel_percent"] == 0.0
     assert "platform" not in item["properties"]
     assert "constellation" not in item["properties"]
     assert "gsd" not in item["properties"]
@@ -286,13 +292,13 @@ def test_build_stac_item_uses_fallbacks_and_omits_optional_fields(
     assert item["links"] == [
         {
             "rel": "self",
-            "href": "nested/item.json",
+            "href": "./",
             "type": "application/geo+json",
         }
     ]
 
 
-def test_write_stac_item_includes_optional_assets_and_derived_link(
+def test_build_stac_item_from_result_includes_optional_assets_and_derived_link(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mock_observation_bundle,
@@ -312,49 +318,46 @@ def test_write_stac_item_includes_optional_assets_and_derived_link(
         obs,
         mock_solved_atmosphere,
         cloud_mask=xr.zeros_like(obs.cloud_mask, dtype=bool),
+        metadata={
+            **obs.metadata,
+            "input_path": tmp_path
+            / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
+            "sensor_config": obs.sensor_config,
+            "geometry": obs.geometry,
+            "crs": obs.crs,
+            "bounds": obs.bounds,
+        },
         processing_time_s=12.5,
     )
 
     boa_path = tmp_path / "boa" / "B02.tif"
     qa_path = tmp_path / "qa" / "cloud_mask.tif"
-    atmosphere_path = tmp_path / "atmosphere.nc"
-    summary_path = tmp_path / "summary.json"
     boa_path.parent.mkdir()
     qa_path.parent.mkdir()
     boa_path.write_bytes(b"boa")
     qa_path.write_bytes(b"mask")
-    atmosphere_path.write_text("state", encoding="utf-8")
-    summary_path.write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(stac_mod, "_gsd", lambda _first_band: 10.0)
 
-    item_path = stac_mod.write_stac_item(
-        obs,
+    item = stac_mod.build_stac_item_from_result(
         result,
         output_dir=tmp_path,
-        boa_assets={"B02": boa_path},
-        atmosphere_asset=atmosphere_path,
-        qa_assets={"cloud_mask": qa_path},
-        summary_asset=summary_path,
-        input_href=tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
-        item_href=tmp_path / "item.json",
+        artifacts={
+            "boa.B02": boa_path,
+            "auxiliary.cloud_mask": qa_path,
+        },
     )
 
-    payload = item_path.read_text(encoding="utf-8")
-    item = stac_mod.json.loads(payload)
     assert item["properties"]["platform"] == "sentinel-2c"
     assert item["properties"]["constellation"] == "sentinel-2"
     assert item["properties"]["gsd"] == 10.0
     assert item["properties"]["eo:cloud_cover"] == 0.0
-    assert item["properties"]["siac:masked_pixel_percent"] == 100.0
     assert item["properties"]["siac:processing_time_s"] == 12.5
-    assert item["assets"]["atmosphere"]["href"] == "atmosphere.nc"
     assert item["assets"]["cloud-mask"]["href"] == "qa/cloud_mask.tif"
-    assert item["assets"]["summary"]["href"] == "summary.json"
     assert item["links"][1]["rel"] == "derived_from"
 
 
-def test_build_stac_item_rejects_non_datetime_observation_time(
+def test_build_stac_item_from_result_handles_non_datetime_observation_time(
     tmp_path: Path,
     mock_observation_bundle,
     mock_solved_atmosphere,
@@ -363,15 +366,25 @@ def test_build_stac_item_rejects_non_datetime_observation_time(
         mock_observation_bundle,
         metadata={"observation_time": "2026-01-02T03:04:05"},
     )
-    result = _make_result(obs, mock_solved_atmosphere)
+    result = _make_result(
+        obs,
+        mock_solved_atmosphere,
+        metadata={
+            **obs.metadata,
+            "sensor_config": obs.sensor_config,
+            "geometry": obs.geometry,
+            "crs": obs.crs,
+            "bounds": obs.bounds,
+        },
+    )
 
-    with pytest.raises(TypeError, match="datetime observation_time"):
-        stac_mod.build_stac_item(
-            obs,
-            result,
-            output_dir=tmp_path,
-            boa_assets={"B02": tmp_path / "B02.tif"},
-        )
+    item = stac_mod.build_stac_item_from_result(
+        result,
+        output_dir=tmp_path,
+        artifacts={"boa.B02": tmp_path / "B02.tif"},
+    )
+
+    assert item["properties"]["datetime"] is None
 
 
 def test_spatial_shape_and_observation_validation_error_branches(
@@ -489,10 +502,10 @@ def test_build_s2_backend_selects_expected_adapter(monkeypatch: pytest.MonkeyPat
     )
 
     auth = object()
-    cdse_config = SimpleNamespace(s2_data=SimpleNamespace(backend="cdse"))
-    gcs_config = SimpleNamespace(s2_data=SimpleNamespace(backend="gcs"))
-    local_config = SimpleNamespace(s2_data=SimpleNamespace(backend="local"))
-    bad_config = SimpleNamespace(s2_data=SimpleNamespace(backend="mystery"))
+    cdse_config = SimpleNamespace(providers=SimpleNamespace(s2=SimpleNamespace(backend="cdse")))
+    gcs_config = SimpleNamespace(providers=SimpleNamespace(s2=SimpleNamespace(backend="gcs")))
+    local_config = SimpleNamespace(providers=SimpleNamespace(s2=SimpleNamespace(backend="local")))
+    bad_config = SimpleNamespace(providers=SimpleNamespace(s2=SimpleNamespace(backend="mystery")))
 
     cdse_backend = s2_backend_mod.build_s2_backend(cdse_config, auth=auth)
     gcs_backend = s2_backend_mod.build_s2_backend(gcs_config)
@@ -503,10 +516,3 @@ def test_build_s2_backend_selects_expected_adapter(monkeypatch: pytest.MonkeyPat
     assert s2_backend_mod.build_s2_backend(local_config) is None
     with pytest.raises(ValueError, match="Unknown S2 backend"):
         s2_backend_mod.build_s2_backend(bad_config)
-
-
-def test_gee_stub_provider_accepts_init_and_raises_on_call() -> None:
-    provider = gee_stub_mod.GEEBRDFProvider("scene", retries=2)
-
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        provider("tile")

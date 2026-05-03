@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 def build_s2_backend(config, *, auth: CredentialManager | None = None):
     """Build the configured Sentinel-2 backend adapter."""
-    backend_name = config.s2_data.backend
+    backend_name = config.providers.s2.backend
     if backend_name == "cdse":
         from siac.adapters.data.copernicus_dataspace import CopernicusDataspaceBackend
 
@@ -22,6 +22,3 @@ def build_s2_backend(config, *, auth: CredentialManager | None = None):
     if backend_name == "local":
         return None
     raise ValueError(f"Unknown S2 backend: {backend_name!r}")
-
-
-__all__ = ["build_s2_backend"]

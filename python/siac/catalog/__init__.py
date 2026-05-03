@@ -1,21 +1,23 @@
 """Static catalog data for built-in SIAC assets."""
 
 from siac.catalog.sensors import (
-    LANDSAT8_OLI_CONFIG,
-    LANDSAT9_OLI2_CONFIG,
-    SENSOR_CONFIGS,
-    SENTINEL2A_CONFIG,
-    SENTINEL2B_CONFIG,
-    SENTINEL2C_CONFIG,
-    get_sensor_config,
+    LANDSAT8_OLI_CONFIG as LANDSAT8_OLI_CONFIG,
 )
-
-__all__ = [
-    "SENTINEL2A_CONFIG",
-    "SENTINEL2B_CONFIG",
-    "SENTINEL2C_CONFIG",
-    "LANDSAT8_OLI_CONFIG",
-    "LANDSAT9_OLI2_CONFIG",
-    "SENSOR_CONFIGS",
-    "get_sensor_config",
-]
+from siac.catalog.sensors import (
+    LANDSAT9_OLI2_CONFIG as LANDSAT9_OLI2_CONFIG,
+)
+from siac.catalog.sensors import (
+    SENSOR_CONFIGS as SENSOR_CONFIGS,
+)
+from siac.catalog.sensors import (
+    SENTINEL2A_CONFIG as SENTINEL2A_CONFIG,
+)
+from siac.catalog.sensors import (
+    SENTINEL2B_CONFIG as SENTINEL2B_CONFIG,
+)
+from siac.catalog.sensors import (
+    SENTINEL2C_CONFIG as SENTINEL2C_CONFIG,
+)
+from siac.catalog.sensors import (
+    get_sensor_config as get_sensor_config,
+)

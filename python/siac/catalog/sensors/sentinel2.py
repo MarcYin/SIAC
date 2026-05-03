@@ -68,6 +68,3 @@ SENTINEL2C_CONFIG = SensorConfig(
     default_ref_scale=1.0 / 10000.0,
     default_ref_offset=0.0,
 )
-
-
-__all__ = ["SENTINEL2A_CONFIG", "SENTINEL2B_CONFIG", "SENTINEL2C_CONFIG"]

@@ -2,7 +2,7 @@
 
 Status note (2026-03-19): the package has been cut over to the new layered
 layout. The old `siac.core.*` modules, the old top-level `siac.pipeline`
-module, and the transitional `siac.siac` / `siac.io` facades have been removed.
+module, and the transitional `siac.siac` / `siac.io` modules have been removed.
 
 Naming rules for new code live in
 [`docs/naming-conventions.md`](/Users/fengyin/Documents/SIAC/docs/naming-conventions.md).
@@ -16,7 +16,7 @@ siac/
 │
 ├── api/                         # Public API layer
 │   ├── __init__.py
-│   ├── public.py                # Canonical SIAC facade and entrypoints
+│   ├── public.py                # Canonical SIAC API and entrypoints
 │   └── requests.py              # Public request-model re-exports
 │
 ├── runtime/                     # Xarray-backed execution payloads

@@ -276,7 +276,7 @@ Each validator has a **happy path** (valid fixture passes) and a set of
 | `test_validate_sib_happy` | None | No error |
 | `test_validate_sib_misaligned_grids` | `toa` on different spatial grid than `atmo_prior.aot` | Grid alignment error |
 | `test_validate_sib_bands_not_in_config` | `bands` contains band not in `sensor_config` | Subset validation |
-| `test_validate_sib_rt_unsupported_band` | `rt_model.is_available_for_sensor()` returns False | RT compatibility |
+| `test_validate_sib_rt_unsupported_band` | `rt_model.is_available_for_sensor()` returns False | RT availability |
 
 ---
 
@@ -457,13 +457,13 @@ into module callables.
 |---------|------|--------|
 | `test_resolve_preprocessor_sentinel2` | `config.sensor = "sentinel2"` | Returns `Sentinel2Preprocessor().preprocess` (callable) |
 | `test_resolve_preprocessor_unknown` | `config.sensor = "unknown"` | `ValueError` |
-| `test_resolve_atmo_cams` | `config.atmo_prior.provider = "cams"` | Returns callable that wraps `CAMSProvider` |
-| `test_resolve_atmo_merra2` | `config.atmo_prior.provider = "merra2"` | Returns callable that wraps `MERRA2Provider` |
-| `test_resolve_atmo_unknown` | `config.atmo_prior.provider = "xxx"` | `ValueError` |
-| `test_resolve_surface_prior_brdf` | `config.surface_prior.method = "brdf"` | Returns callable wrapping `BRDFDerivedPriorProvider` |
-| `test_resolve_surface_prior_store` | `config.surface_prior.method = "store"` | Returns callable wrapping `PrebuiltPriorStore` |
-| `test_resolve_rt_model_emulator` | `config.rt_model.backend = "emulator"` | Returns `EmulatorBackend` instance |
-| `test_resolve_rt_model_lut` | `config.rt_model.backend = "lut"` | Returns `LUTBackend` instance |
+| `test_resolve_atmo_cams` | `config.providers.atmo.kind = "cams"` | Returns callable that wraps `CAMSProvider` |
+| `test_resolve_atmo_merra2` | `config.providers.atmo.kind = "merra2"` | Returns callable that wraps `MERRA2Provider` |
+| `test_resolve_atmo_unknown` | `config.providers.atmo.kind = "xxx"` | `ValueError` |
+| `test_resolve_surface_prior_brdf` | `config.algorithms.surface_prior.method = "kernel_model"` | Returns callable wrapping kernel-model surface priors |
+| `test_resolve_surface_prior_store` | `config.algorithms.surface_prior.method = "monthly_database"` | Returns callable wrapping monthly database priors |
+| `test_resolve_rt_model_emulator` | `config.algorithms.rt.backend = "emulator"` | Returns `EmulatorBackend` instance |
+| `test_resolve_rt_model_lut` | `config.algorithms.rt.backend = "lut"` | Returns `LUTBackend` instance |
 | `test_resolve_returns_callable` | All `_resolve_*` helpers | Return value is `callable()` |
 
 ---

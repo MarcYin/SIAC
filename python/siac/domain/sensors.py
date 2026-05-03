@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 
 @dataclass(frozen=True, init=False)
@@ -34,26 +36,7 @@ class SensorBand:
         rsrf_sensor_unit_id: str | None = None,
         rsrf_representation_variant: str | None = None,
         rsrf_band_id: str | None = None,
-        *,
-        srf_wavelengths_nm: np.ndarray | None = None,
-        srf_response: np.ndarray | None = None,
     ) -> None:
-        if rsrf_wavelengths_nm is None:
-            rsrf_wavelengths_nm = srf_wavelengths_nm
-        elif srf_wavelengths_nm is not None and not np.array_equal(
-            np.asarray(rsrf_wavelengths_nm),
-            np.asarray(srf_wavelengths_nm),
-        ):
-            raise ValueError("Specify either rsrf_wavelengths_nm or srf_wavelengths_nm, not both.")
-
-        if rsrf_response is None:
-            rsrf_response = srf_response
-        elif srf_response is not None and not np.array_equal(
-            np.asarray(rsrf_response),
-            np.asarray(srf_response),
-        ):
-            raise ValueError("Specify either rsrf_response or srf_response, not both.")
-
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "center_wavelength", center_wavelength)
         object.__setattr__(self, "bandwidth", bandwidth)
@@ -72,18 +55,6 @@ class SensorBand:
     @property
     def has_rsrf(self) -> bool:
         return self.rsrf_wavelengths_nm is not None and self.rsrf_response is not None
-
-    @property
-    def has_srf(self) -> bool:
-        return self.has_rsrf
-
-    @property
-    def srf_wavelengths_nm(self) -> np.ndarray | None:
-        return self.rsrf_wavelengths_nm
-
-    @property
-    def srf_response(self) -> np.ndarray | None:
-        return self.rsrf_response
 
 
 @dataclass(frozen=True)
@@ -191,6 +162,3 @@ class SensorConfig:
             and not (1350.0 <= b.center_wavelength <= 1420.0)
             and not (1800.0 <= b.center_wavelength <= 1950.0)
         ]
-
-
-__all__ = ["SensorBand", "SensorConfig"]

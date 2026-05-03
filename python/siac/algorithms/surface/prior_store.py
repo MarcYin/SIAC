@@ -197,8 +197,8 @@ class PrebuiltPriorStore:
 
         (bounds, crs, obs_time, sensor_config, geometry, resolution) -> SurfacePrior
 
-    The ``geometry`` argument is accepted for interface compatibility but is
-    **ignored** — the prior is climatological and does not depend on viewing
+    The ``geometry`` argument is part of the surface-prior provider interface
+    but is **ignored** because climatological priors do not depend on viewing
     geometry.
 
     Args:

@@ -163,8 +163,10 @@ def test_build_s3_fs_and_mapper_validation_paths(monkeypatch):
 
     _ = zip_store._build_s3_filesystem(
         {
-            "region": "eu-west-1",
-            "endpoint_url": "https://example.invalid",
+            "client_kwargs": {
+                "region_name": "eu-west-1",
+                "endpoint_url": "https://example.invalid",
+            },
             "anon": False,
             "key": "AK",
             "secret": "SK",
@@ -175,6 +177,9 @@ def test_build_s3_fs_and_mapper_validation_paths(monkeypatch):
     assert captured["anon"] is False
     assert captured["key"] == "AK"
     assert captured["secret"] == "SK"
+
+    with pytest.raises(TypeError, match="Top-level S3 storage option"):
+        zip_store._build_s3_filesystem({"region": "eu-west-1"})
 
     with pytest.raises(TypeError, match="Unsupported HTTP zip storage option"):
         zip_store.build_readonly_zip_mapper("https://example.com/lut.zip", {"foo": 1})

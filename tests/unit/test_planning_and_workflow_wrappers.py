@@ -47,7 +47,7 @@ def test_package_submodules_are_lazy_and_listed_in_dir(
         assert module_name not in sys.modules
         assert "__getattr__" in dir(package)
         assert submodule_name in dir(package)
-        assert submodule_name not in package.__all__
+        assert not hasattr(package, "__all__")
 
         submodule = getattr(package, submodule_name)
 

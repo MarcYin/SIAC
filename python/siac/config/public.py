@@ -1,6 +1,4 @@
-"""
-Public config facade built on the categorized SIAC config package.
-"""
+"""Public SIAC configuration helpers."""
 
 from __future__ import annotations
 
@@ -9,6 +7,7 @@ from typing import Any, cast
 
 from pydantic import Field
 
+from siac.config.algorithms import AlgorithmsConfig, RTAlgorithmConfig
 from siac.config.load import (
     DEFAULT_CONFIG_PATH,
     load_system_config,
@@ -17,29 +16,17 @@ from siac.config.load import (
     write_default_system_config,
     write_system_config,
 )
-from siac.config.resolve import resolve_config
-from siac.config.schema import (
-    DEFAULT_LUT_URL,
-    AlgorithmsConfig,
+from siac.config.providers import (
     AtmoProviderConfig,
-    AuthConfig,
     BRDFProviderConfig,
-    CloudMaskAlgorithmConfig,
-    ExecutionRuntimeConfig,
-    MonthlyCompositeProviderConfig,
-    OutputDefaultsConfig,
     PathsConfig,
     ProvidersConfig,
-    RTAlgorithmConfig,
-    RunRequest,
-    RuntimeConfig,
-    S2ProviderConfig,
-    SensorName,
-    SolverAlgorithmConfig,
-    SurfacePriorAlgorithmConfig,
-    SystemConfig,
 )
+from siac.config.request import RunRequest
+from siac.config.resolve import resolve_config
 from siac.config.snapshot import snapshot_system_config, write_runtime_snapshot
+from siac.config.system import RuntimeConfig, SystemConfig
+from siac.config.types import SensorName
 
 
 def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -61,7 +48,7 @@ class SIACConfig(SystemConfig):
     still set those without encoding them into the file format.
     """
 
-    sensor: SensorName = "auto"
+    sensor: SensorName = SensorName.AUTO
     aoi: dict[str, Any] | Path | str | tuple[float, float, float, float] | list[float] | None = (
         Field(default=None)
     )
@@ -145,19 +132,6 @@ class SIACConfig(SystemConfig):
         )
 
 
-AtmoPriorConfig = AtmoProviderConfig
-BRDFConfig = BRDFProviderConfig
-S2DataAccessConfig = S2ProviderConfig
-MonthlyCompositeConfig = MonthlyCompositeProviderConfig
-SurfacePriorConfig = SurfacePriorAlgorithmConfig
-RTModelConfig = RTAlgorithmConfig
-SolverConfig = SolverAlgorithmConfig
-CloudMaskConfig = CloudMaskAlgorithmConfig
-ExecutionConfig = ExecutionRuntimeConfig
-CredentialConfig = AuthConfig
-OutputConfig = OutputDefaultsConfig
-
-
 def get_default_config() -> SIACConfig:
     return SIACConfig()
 
@@ -186,27 +160,3 @@ def get_lut_config(lut_path: str | Path) -> SIACConfig:
         algorithms=AlgorithmsConfig(rt=RTAlgorithmConfig(backend="lut")),
         paths=PathsConfig(lut_path=lut_path),
     )
-
-
-__all__ = [
-    "DEFAULT_LUT_URL",
-    "DEFAULT_CONFIG_PATH",
-    "SIACConfig",
-    "SystemConfig",
-    "RunRequest",
-    "PathsConfig",
-    "AuthConfig",
-    "AtmoPriorConfig",
-    "BRDFConfig",
-    "S2DataAccessConfig",
-    "MonthlyCompositeConfig",
-    "RTModelConfig",
-    "SolverConfig",
-    "CloudMaskConfig",
-    "ExecutionConfig",
-    "CredentialConfig",
-    "OutputConfig",
-    "get_default_config",
-    "get_jasmin_config",
-    "get_lut_config",
-]

@@ -861,7 +861,7 @@ def default_parity_cases() -> tuple[SixSParityCase, ...]:
                 atmosphere={"profile": "midlatitude_summer", "columns_mode": "input_columns"},
                 aerosol={
                     "profile": "user_mixture",
-                    "mixture": {"dust": 0.3, "water": 0.4, "oceanic": 0.2, "soot": 0.1},
+                    "mixture": (0.3, 0.4, 0.2, 0.1),
                 },
                 surface={
                     "mode": "homogeneous_lambertian",
@@ -1084,17 +1084,3 @@ def write_upstream_parity_report(report: dict[str, Any], path: Path) -> None:
     """Write the parity report as JSON."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-
-
-__all__ = [
-    "CaseReport",
-    "ComparedMetric",
-    "ParsedMetric",
-    "SixSParityCase",
-    "build_original_sixs_executable",
-    "default_parity_cases",
-    "parse_original_sixs_stdout",
-    "render_original_sixs_input",
-    "run_upstream_parity_suite",
-    "write_upstream_parity_report",
-]

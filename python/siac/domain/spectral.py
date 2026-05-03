@@ -113,11 +113,6 @@ class RelativeSpectralResponse:
         """Last wavelength stored in the canonical support."""
         return float(self.wavelengths_nm[-1])
 
-    @property
-    def centre_wavelength_nm(self) -> float | None:
-        """Backward-compatible alias for the American-spelled field name."""
-        return self.center_wavelength_nm
-
     @classmethod
     def from_tabulated(
         cls,
@@ -183,9 +178,3 @@ class RelativeSpectralResponse:
             effective_wavelength_nm=float(effective),
             fwhm_nm=None if width is None else float(width),
         )
-
-
-SpectralResponseFunction = RelativeSpectralResponse
-
-
-__all__ = ["RelativeSpectralResponse", "SpectralResponseFunction"]

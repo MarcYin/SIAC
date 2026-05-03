@@ -24,9 +24,9 @@ flowchart TD
 | Package | Owns | Does not own | Notes |
 | --- | --- | --- | --- |
 | `api` | Stable user-facing entry points such as `SIAC`, `siac_process_s2`, and search helpers | Configuration loading internals, orchestration details, remote backends | Treat this as the canonical public surface. |
-| `config` | Typed schema, TOML loading, environment overlays, config resolution, snapshots | Sensor preprocessing, solver math, remote I/O | Converts machine and project settings into a resolved runtime config. |
-| `app` | Typed workflow requests, registry lookup, dependency assembly, execution planning, Sentinel-2 query coercion | Numerical algorithms, output persistence | Bridges configuration into runnable callables. |
-| `workflows` | End-to-end scene and Sentinel-2 orchestration | Schema validation, file format definitions | Owns stage order, retries, timeouts, and dispatch to output writing. |
+| `config` | Typed schema sections, TOML loading, environment overlays, config resolution, snapshots | Sensor preprocessing, solver math, remote I/O | Section models live in focused modules such as `providers.py`, `algorithms.py`, `system.py`, `request.py`, and `resolved.py`. |
+| `app` | Typed workflow requests, registry lookup, dependency assembly, execution planning, Sentinel-2 query coercion | Numerical algorithms, output persistence | Bridges configuration into runnable callables through focused preprocessor, provider, surface, solver, correction, RT, I/O, and S2 backend modules. |
+| `workflows` | End-to-end scene and Sentinel-2 orchestration | Schema validation, file format definitions | Owns stage order and delegates prior fetching/backend execution to `_pipeline_priors.py` and `_pipeline_executors.py`. |
 | `adapters` | External services, credentials, data-source backends, output adapter assembly, sensor-specific preprocessors | Public API stability, core retrieval math | Isolate remote systems and backend-specific behavior here. |
 | `algorithms` | BRDF, cloud masking, RT backends, solver, grid assembly, correction, surface prior logic | Auth, filesystem discovery, CLI parsing | Numerical core of SIAC. |
 | `runtime` | Xarray-backed payload types and validators | Config loading, remote access | Provides the typed contracts passed between workflow stages. |
@@ -52,23 +52,23 @@ Document these as stable entry points:
 - `siac.SIAC`
 - `siac.SIACConfig`
 - `siac.process_sentinel2`
-- `siac.process_landsat8`
 - `siac.resolve_s2_input`
 - `siac.siac_process_s2`
 - `siac.search_sentinel2`
 - `siac process-s2`
 
 Everything else should be treated as internal package structure, even when it is
-important to developers. Internal modules are still worth documenting, but as
-implementation layers rather than compatibility promises.
+important to developers. Internal modules are still worth documenting as
+implementation layers.
 
 ## Where To Start Reading The Code
 
 - Start at `python/siac/api/public.py` for the public entry points.
-- Move to `python/siac/app/planning.py` and `python/siac/app/assembly.py` to see
-  how configuration becomes a runnable execution plan.
+- Move to `python/siac/app/planning.py` and the focused `python/siac/app/_assembly_*.py`
+  modules to see how configuration becomes a runnable execution plan.
 - Use `python/siac/workflows/scene.py`, `python/siac/workflows/sentinel2.py`,
-  and `python/siac/workflows/pipeline.py` for orchestration.
+  and `python/siac/workflows/pipeline.py` for orchestration; execution-backend
+  details live in `python/siac/workflows/_pipeline_executors.py`.
 - Use `python/siac/runtime/models.py` for the payload contracts passed between
   stages.
 - Dive into `python/siac/adapters/` and `python/siac/algorithms/` once you need

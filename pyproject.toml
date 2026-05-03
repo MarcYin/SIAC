@@ -85,9 +85,6 @@ dev = [
     "ruff>=0.2.0",
     "pre-commit>=3.6.0",
 ]
-gee = [
-    "earthengine-api>=0.1.390",
-]
 docs = [
     "mkdocs>=1.6.0,<2.0",
     "mkdocs-material>=9.5.0,<10.0",
@@ -97,7 +94,7 @@ dask = [
     "dask[distributed]>=2024.1.0",
 ]
 all = [
-    "siac[dev,gee,docs,dask]",
+    "siac[dev,docs,dask]",
 ]
 
 [project.urls]
@@ -139,7 +136,6 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "regression: marks tests as regression tests requiring golden outputs",
-    "gee: marks tests requiring Google Earth Engine access",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
@@ -202,7 +198,6 @@ module = [
     "sklearn.*",
     "h5py.*",
     "zarr.*",
-    "ee.*",
     "cv2",
     "cv2.*",
 ]

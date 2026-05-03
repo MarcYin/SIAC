@@ -44,7 +44,6 @@ scene path. Typical entry points:
 
 - `SIAC.process(...)`
 - `siac.process_sentinel2(...)`
-- `siac.process_landsat8(...)`
 - `siac_process(...)`
 
 ### Sentinel-2 query path
@@ -85,7 +84,7 @@ execution.
 
 | Stage | Main owner | Input | Output | Purpose |
 | --- | --- | --- | --- | --- |
-| `M1` preprocessing | preprocessor runtime from `app.assembly` | local input path + AOI | `ObservationBundle` | Read TOA data, geometry, cloud mask, metadata, and sensor config. |
+| `M1` preprocessing | preprocessor runtime from `app._assembly_preprocessor` | local input path + AOI | `ObservationBundle` | Read TOA data, geometry, cloud mask, metadata, and sensor config. |
 | `M2` atmospheric prior | adapter/provider callable | scene bounds, CRS, observation time, solver resolution | `AtmosphericState` | Provide AOT, TCWV, TCO3, uncertainty, elevation priors. |
 | `M3` surface prior | algorithm/provider callable | `ObservationBundle`, optional atmospheric prior, RT model | `SurfacePrior` | Build BRDF-derived BOA prior and uncertainty. |
 | `M4` grid assembly | `algorithms.grid` | observation + priors + RT model | `SolverInputBundle` | Resample inputs to solver grids and select bands. |
@@ -106,8 +105,10 @@ The workflow also supports:
 - optional Dask dashboard and performance report paths
 - opportunistic LUT scene preloading in parallel with surface-prior work
 
-Those knobs are resolved inside `workflows.pipeline._resolve_execution_settings`
-and applied inside `run_pipeline(...)`.
+Those knobs are resolved inside `workflows.pipeline._resolve_execution_settings`.
+`run_pipeline(...)` keeps the orchestration boundary, while thread/Dask backend
+mechanics live in `workflows._pipeline_executors` and prior fetch concurrency
+lives in `workflows._pipeline_priors`.
 
 ## Output Dispatch
 
@@ -127,6 +128,8 @@ If you need to trace a real run, read the code in this order:
 1. `python/siac/api/public.py`
 2. `python/siac/app/sentinel2.py` for S2-specific resolution
 3. `python/siac/app/planning.py`
-4. `python/siac/app/assembly.py`
+4. `python/siac/app/_assembly_*.py` and `python/siac/app/s2_backend.py`
 5. `python/siac/workflows/scene.py`
 6. `python/siac/workflows/pipeline.py`
+7. `python/siac/workflows/_pipeline_executors.py` only when debugging backend
+   behavior

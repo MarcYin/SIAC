@@ -25,6 +25,3 @@ def rsrf_band(
         rsrf_representation_variant=representation_variant,
         rsrf_band_id=rsrf_band_id or name,
     )
-
-
-__all__ = ["rsrf_band"]

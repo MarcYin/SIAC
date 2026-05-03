@@ -75,25 +75,6 @@ class TestSensorBand:
         assert result[1] > result[0]
         assert result[1] > result[2]
 
-    def test_legacy_srf_names_remain_supported(self):
-        """Backward-compatible SRF aliases should map onto the renamed RSRF fields."""
-        wl = np.array([480.0, 490.0, 500.0])
-        resp = np.array([0.2, 1.0, 0.3])
-        b = SensorBand(
-            "B02",
-            490.0,
-            65.0,
-            10.0,
-            0,
-            srf_wavelengths_nm=wl,
-            srf_response=resp,
-        )
-
-        assert b.has_srf
-        assert b.has_rsrf
-        assert np.array_equal(b.srf_wavelengths_nm, wl)
-        assert np.array_equal(b.srf_response, resp)
-
 
 # ── Reference RSRF loading ────────────────────────────────────────────
 

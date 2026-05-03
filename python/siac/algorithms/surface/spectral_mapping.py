@@ -833,12 +833,3 @@ def map_multispectral_reflectance(
         source_uncertainty=source_uncertainty,
     )
     return mapped_reflectance, mapped_uncertainty
-
-
-__all__ = [
-    "SpectralMappingConfig",
-    "SpectralMapper",
-    "convolve_hyperspectral_reflectance",
-    "map_multispectral_reflectance",
-    "needs_spectral_mapping",
-]

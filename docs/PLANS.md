@@ -647,13 +647,13 @@ GridAssemblerFn = Callable[
 ```python
 def solve_aerosol(
     inputs: SolverInputBundle,
-    config: SolverConfig,
+    config: SolverAlgorithmConfig,
 ) -> SolvedAtmosphere:
     """Multi-grid L-BFGS-B solver (default implementation)."""
     ...
 
 # Type alias for user-provided alternatives
-SolverFn = Callable[[SolverInputBundle, SolverConfig], SolvedAtmosphere]
+SolverFn = Callable[[SolverInputBundle, SolverAlgorithmConfig], SolvedAtmosphere]
 ```
 
 **Key design rule**: the solver receives a **single `SolverInputBundle`** — it never fetches or aligns data itself. All data is pre-assembled and validated.
@@ -663,7 +663,7 @@ SolverFn = Callable[[SolverInputBundle, SolverConfig], SolvedAtmosphere]
 **User injection example**:
 ```python
 # User bypasses the solver entirely with pre-computed AOT
-def precomputed_solver(inputs: SolverInputBundle, config: SolverConfig) -> SolvedAtmosphere:
+def precomputed_solver(inputs: SolverInputBundle, config: SolverAlgorithmConfig) -> SolvedAtmosphere:
     precomputed_aot = xr.open_dataarray("my_aot.tif")
     return SolvedAtmosphere(
         atmo_state=inputs.atmo_prior.with_updated_aot_tcwv(precomputed_aot, inputs.atmo_prior.tcwv),
@@ -857,7 +857,7 @@ directly. Each `None` argument is resolved to the config-driven default.
 For each module, the pipeline resolves the implementation in this order:
 
 1. **Explicit injection** (constructor argument) — highest priority
-2. **Config-driven factory** (e.g. `config.atmo_prior.provider = "cams"`) — default
+2. **Config-driven factory** (e.g. `config.providers.atmo.kind = "cams"`) — default
 3. **Auto-detection** (e.g. sensor auto-detect) — fallback
 
 ### 5.3 Contract Validation
@@ -1109,7 +1109,7 @@ The corrector upsamples solved AOT/TCWV to native band resolutions for per-pixel
 `python/siac/pipeline.py` should dispatch by execution backend:
 
 ```python
-def run_pipeline(..., execution: ExecutionConfig) -> CorrectionResult:
+def run_pipeline(..., execution: ExecutionRuntimeConfig) -> CorrectionResult:
     if execution.backend == "dask":
         return _run_pipeline_dask(..., execution=execution)
     return _run_pipeline_thread(..., execution=execution)
@@ -2018,7 +2018,7 @@ All atmospheric providers must return `AtmosphericState`. How they acquire the d
 All surface prior providers must return `SurfacePrior`. Two internal architectures are supported,
 but both produce the same output contract:
 
-1. **BRDF-derived** (legacy / transitional):
+1. **BRDF-derived**:
    - Fetch `BRDFKernelWeights` from MODIS/VIIRS
    - Apply kernel model with geometry → `SurfacePrior`
 
@@ -2110,7 +2110,7 @@ This keeps secret discovery centralised while preventing provider-specific auth 
 | `AWSAuth` | `core/auth.py` | S3 / fsspec storage option builder |
 | `GCSAuth` | `core/auth.py` | GCS / fsspec storage option builder |
 | `EarthdataAuth` | `core/auth.py` | Earthdata env activation + `EarthAccessSource` factory |
-| `AuthConfig` | `config/schema.py` | Pydantic model for centralized auth config |
+| `AuthConfig` | `config/system.py` | Pydantic model for centralized auth config |
 | `AuthenticationError` | `core/exceptions.py` | Raised on missing/failed auth |
 
 ### Credential resolution order (in `from_config`)

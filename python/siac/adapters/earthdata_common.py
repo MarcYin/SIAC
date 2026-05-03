@@ -584,13 +584,13 @@ def read_hdf5_datasets_attrs(
 
 
 def gdal_available() -> bool:
-    """Return whether the Python GDAL bindings are importable."""
+    """Return whether the Python GDAL bindings can be initialized."""
     try:
         from osgeo import gdal  # type: ignore[import-untyped]
-    except ImportError:
-        return False
 
-    gdal.UseExceptions()
+        gdal.UseExceptions()
+    except Exception:
+        return False
     return True
 
 

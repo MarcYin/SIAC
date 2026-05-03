@@ -12,6 +12,10 @@ SIAC uses a typed TOML configuration model backed by `SIACConfig`, `SystemConfig
 | Per-run request inputs | Input path, output path, AOI, sensor, and S2 query |
 | Resolved runtime config | Final merged configuration used by the pipeline |
 
+For scene processing, the per-run `sensor` value is limited to `auto` or `s2`.
+Landsat sensor metadata exists in the catalog for spectral and RT components,
+but Landsat scenes are not accepted by the end-to-end preprocessing pipeline.
+
 ## Default config location
 
 SIAC looks for configuration in the default path exported by `siac.config.DEFAULT_CONFIG_PATH`, unless overridden by the `SIAC_CONFIG_FILE` environment variable.

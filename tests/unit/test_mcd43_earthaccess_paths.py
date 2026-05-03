@@ -54,7 +54,6 @@ class _DummyProvider(mcd_mod._EarthAccessBRDFProvider):
         ProductBandDefinition("Band3", 469.0, 20.0, "params_3", "qa_3"),
         ProductBandDefinition("Band4", 555.0, 20.0, "params_4", "qa_4"),
     )
-    _legacy_band_map = {1: "Band3", 2: "Band4"}
 
     def _load_native_band_stack(
         self,
@@ -192,21 +191,14 @@ def test_provider_validation_band_resolution_and_time_helpers(
     _install_runtime(monkeypatch)
     provider = _DummyProvider(probe_earthdata=False)
 
-    resolved = provider._resolve_requested_bands(
-        [
-            1,
-            SensorBand("B02", 490.0, 65.0, 10.0, 1),
-        ]
-    )
-    assert resolved[0][0] == 1
+    resolved = provider._resolve_requested_bands([SensorBand("B02", 490.0, 65.0, 10.0, 1)])
+    assert resolved[0][0] == "B02"
     assert resolved[0][1].label == "Band3"
-    assert resolved[1][0] == "B02"
-    assert resolved[1][1].label == "Band3"
 
     with pytest.raises(ValueError, match="non-empty sequence"):
         provider._resolve_requested_bands([])
-    with pytest.raises(KeyError, match="not available"):
-        provider._resolve_requested_bands([99])
+    with pytest.raises(TypeError, match="SensorBand"):
+        provider._resolve_requested_bands([1])
 
     assert provider._resolved_short_name() == "SN:dummy_brdf"
     assert mcd_mod._EarthAccessBRDFProvider._coerce_sample_day(
@@ -247,7 +239,7 @@ def test_provider_validation_band_resolution_and_time_helpers(
                 crs="EPSG:4326",
                 obs_time=datetime(2024, 1, 1, 12, 0, 0),
                 target_resolution=0.0,
-                bands=[1],
+                bands=[provider.source_bands[0]],
             )
         with pytest.raises(ValueError, match="non-empty sequence"):
             fn(
@@ -264,7 +256,7 @@ def test_provider_validation_band_resolution_and_time_helpers(
             crs="EPSG:4326",
             obs_times=[datetime(2024, 1, 1, 12, 0, 0)],
             target_resolution=0.0,
-            bands=[1],
+            bands=[provider.source_bands[0]],
             temporal_windows=[1],
             sample_date_sets=[[datetime(2024, 1, 1)]],
         )
@@ -284,7 +276,7 @@ def test_provider_validation_band_resolution_and_time_helpers(
             crs="EPSG:4326",
             obs_times=[datetime(2024, 1, 1, 12, 0, 0)],
             target_resolution=500.0,
-            bands=[1],
+            bands=[provider.source_bands[0]],
             temporal_windows=[1, 2],
             sample_date_sets=[[datetime(2024, 1, 1)]],
         )
@@ -444,7 +436,7 @@ def test_temporal_batch_loader_reads_combined_stack_once_and_slices_per_request(
         crs="EPSG:4326",
         obs_times=[datetime(2024, 1, 4, 12, 0, 0), datetime(2024, 2, 4, 12, 0, 0)],
         target_resolution=500.0,
-        bands=[1],
+        bands=[provider.source_bands[0]],
         temporal_windows=[10, 10],
         sample_date_sets=[
             [datetime(2024, 1, 1), datetime(2024, 1, 8)],

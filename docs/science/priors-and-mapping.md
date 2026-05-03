@@ -10,8 +10,6 @@ The repository supports multiple atmospheric-prior kinds through configuration, 
 - `merra2`
 - `mcd19`
 - `vnp19`
-- `era5`
-- `user`
 
 These are represented in `AtmoProviderConfig` and resolved through the atmospheric provider assembly path. In the workflow, the atmospheric prior produces an `AtmosphericState` containing:
 
@@ -30,8 +28,6 @@ Configured surface-prior methods currently include:
 - `kernel_model`
 - `whittaker`
 - `monthly_database`
-- `neural`
-- `direct`
 
 Main implementation areas:
 

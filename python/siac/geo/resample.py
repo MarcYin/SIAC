@@ -396,15 +396,3 @@ def should_resample_for_policy(
             return True  # downsample finer to coarser
         return current_resolution_m > target_resolution_m + 1e-6 and allow_upsample
     raise ValueError(f"resolution_policy must be 'auto' or 'force', got {policy!r}")
-
-
-__all__ = [
-    "axis_resolution",
-    "should_resample_for_policy",
-    "fill_nonfinite_like_template",
-    "resample_coefficients_to_template",
-    "resample_field_for_correction",
-    "resample_field_to_template",
-    "resample_mask_to_template",
-    "shares_template_grid",
-]

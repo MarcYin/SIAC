@@ -111,6 +111,21 @@ def _atmo(shape: tuple[int, int]) -> AtmosphericState:
     )
 
 
+def _monthly_composites_from_provider(
+    observation: ObservationBundle,
+    provider: object,
+    *,
+    resolution: float = 500.0,
+    fallback_source_bands: tuple[SensorBand, ...] = (),
+):
+    return swir_refine_mod.generate_monthly_composites_from_brdf(
+        observation=observation,
+        brdf_provider=provider,
+        resolution=resolution,
+        fallback_source_bands=fallback_source_bands,
+    )
+
+
 def _database():
     bands = ["B02", "B03", "B08", "B11", "B12"]
     composites: list[MonthlyBestPixelComposite] = []
@@ -865,9 +880,7 @@ def test_build_monthly_surface_prior_database_requests_weekly_brdf_samples(
     ]
 
     database = build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=provider,
-        resolution=500.0,
+        monthly_composites=_monthly_composites_from_provider(obs, provider),
         geometry=_geometry((2, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1003,10 +1016,9 @@ def test_build_monthly_surface_prior_database_preserves_target_grid_metadata(
         sensor_config.get_band("B11"),
         sensor_config.get_band("B12"),
     ]
+    provider = _CoarseBRDFProvider()
     database = build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=_CoarseBRDFProvider(),
-        resolution=500.0,
+        monthly_composites=_monthly_composites_from_provider(obs, provider),
         geometry=geometry,
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1132,10 +1144,9 @@ def test_build_monthly_surface_prior_database_maps_source_basis_to_target_basis(
         sensor_config.get_band("B11"),
         sensor_config.get_band("B12"),
     ]
+    provider = _MappedSourceBRDFProvider()
     database = build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=_MappedSourceBRDFProvider(),
-        resolution=500.0,
+        monthly_composites=_monthly_composites_from_provider(obs, provider),
         geometry=_geometry((1, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1352,10 +1363,9 @@ def test_build_monthly_surface_prior_database_maps_kernel_composites_to_target_b
         sensor_config.get_band("B11"),
         sensor_config.get_band("B12"),
     ]
+    provider = _TwoSampleProvider()
     build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=_TwoSampleProvider(),
-        resolution=500.0,
+        monthly_composites=_monthly_composites_from_provider(obs, provider),
         geometry=_geometry((1, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1415,7 +1425,10 @@ def test_normalize_monthly_composites_uses_area_when_target_grid_is_coarser(
             coords={"y": template.coords["y"], "x": template.coords["x"]},
         )
 
-    monkeypatch.setattr(swir_refine_mod, "_resample_da", _fake_resample_da)
+    monkeypatch.setattr(
+        "siac.algorithms.surface._swir_refine_resample._resample_da",
+        _fake_resample_da,
+    )
 
     normalized = swir_refine_mod._normalize_monthly_composites_to_target_basis(
         (composite,),
@@ -1482,7 +1495,10 @@ def test_normalize_monthly_kernel_composites_uses_area_when_target_grid_is_coars
             coords={"y": template.coords["y"], "x": template.coords["x"]},
         )
 
-    monkeypatch.setattr(swir_refine_mod, "_resample_da", _fake_resample_da)
+    monkeypatch.setattr(
+        "siac.algorithms.surface._swir_refine_resample._resample_da",
+        _fake_resample_da,
+    )
 
     normalized = swir_refine_mod._normalize_monthly_composites_to_target_basis(
         (composite,),
@@ -1710,10 +1726,9 @@ def test_build_monthly_surface_prior_database_reuses_cached_spectral_mapping_for
         sensor_config.get_band("B11"),
         sensor_config.get_band("B12"),
     ]
+    provider = _ConstantSourceBRDFProvider()
     database = build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=_ConstantSourceBRDFProvider(),
-        resolution=500.0,
+        monthly_composites=_monthly_composites_from_provider(obs, provider),
         geometry=_geometry((1, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1808,10 +1823,9 @@ def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_ban
                 )
             return outputs
 
+    provider = _SequenceBRDFProvider()
     database = build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=_SequenceBRDFProvider(),
-        resolution=500.0,
+        monthly_composites=_monthly_composites_from_provider(obs, provider),
         geometry=_geometry((1, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1821,7 +1835,7 @@ def test_build_monthly_surface_prior_database_accepts_custom_sequence_source_ban
     assert database.visible_band_names == ("B02", "B03")
 
 
-def test_build_monthly_surface_prior_database_falls_back_to_target_bands_when_provider_has_no_source_bands(
+def test_monthly_composite_generation_uses_explicit_fallback_source_bands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_kernel_to_reflectance(monkeypatch)
@@ -1852,7 +1866,7 @@ def test_build_monthly_surface_prior_database_falls_back_to_target_bands_when_pr
     ]
     batch_band_calls: list[list[str]] = []
 
-    class _LegacyBRDFProvider:
+    class _FallbackSourceBRDFProvider:
         def get_temporal_brdf_parameters_batch(self, **kwargs):  # noqa: ANN003
             bands = [band.name for band in kwargs["bands"]]
             batch_band_calls.append(bands)
@@ -1882,10 +1896,14 @@ def test_build_monthly_surface_prior_database_falls_back_to_target_bands_when_pr
                 )
             return outputs
 
+    provider = _FallbackSourceBRDFProvider()
+    monthly_composites = _monthly_composites_from_provider(
+        obs,
+        provider,
+        fallback_source_bands=(*visible_bands, *query_bands),
+    )
     database = build_monthly_surface_prior_database(
-        observation=obs,
-        brdf_provider=_LegacyBRDFProvider(),
-        resolution=500.0,
+        monthly_composites=monthly_composites,
         geometry=_geometry((1, 1)),
         visible_bands=visible_bands,
         query_bands=query_bands,
@@ -1924,11 +1942,9 @@ def test_build_monthly_surface_prior_database_requires_batch_method() -> None:
     ]
 
     with pytest.raises(TypeError, match="get_temporal_brdf_parameters_batch"):
-        build_monthly_surface_prior_database(
-            observation=obs,
-            brdf_provider=object(),
+        _monthly_composites_from_provider(
+            obs,
+            object(),
+            fallback_source_bands=(*visible_bands, *query_bands),
             resolution=500.0,
-            geometry=_geometry((1, 1)),
-            visible_bands=visible_bands,
-            query_bands=query_bands,
         )

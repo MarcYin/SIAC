@@ -121,7 +121,7 @@ def test_split_mapping_inputs_accepts_config_and_rejects_invalid_input() -> None
     assert config.knn_backend == "numpy"
 
     with pytest.raises(TypeError, match="SpectralMappingConfig"):
-        spectral_mapping_mod._split_mapping_inputs({"legacy": True})
+        spectral_mapping_mod._split_mapping_inputs({"extra": True})
 
 
 def test_source_schema_indices_ignore_unpublished_source_bands() -> None:

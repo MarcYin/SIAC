@@ -330,6 +330,10 @@ def test_earthdata_attribute_readers_and_gdal_subdataset_resolution(
         == 'HDF4_SDS:UNKNOWN:"scene.hdf":7'
     )
 
+    fake_broken_gdal = SimpleNamespace(UseExceptions=lambda: (_ for _ in ()).throw(RuntimeError))
+    monkeypatch.setitem(sys.modules, "osgeo", SimpleNamespace(gdal=fake_broken_gdal))
+    assert not earth_mod.gdal_available()
+
     earth_mod.resolve_gdal_subdataset_path.cache_clear()
     fake_empty_gdal = SimpleNamespace(
         UseExceptions=lambda: None,

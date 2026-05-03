@@ -262,13 +262,13 @@ def test_mcd43_provider_returns_default_weights_without_probe():
         crs="EPSG:4326",
         obs_time=datetime(2024, 1, 1, 12, 0, 0),
         target_resolution=500.0,
-        bands=[1, 2],
+        bands=provider.source_bands[:2],
         temporal_window=16,
     )
 
     assert provider.source_name == "MCD43"
     assert weights.f0.shape == (2, 2, 2)
-    assert list(weights.f0.coords["band"].values) == [1, 2]
+    assert list(weights.f0.coords["band"].values) == ["Band1", "Band2"]
     assert float(weights.f0.mean()) == pytest.approx(0.20)
 
 
@@ -293,7 +293,7 @@ def test_vnp43_provider_returns_default_weights_without_probe():
         crs="EPSG:4326",
         obs_time=datetime(2024, 1, 1, 12, 0, 0),
         target_resolution=500.0,
-        bands=[3],
+        bands=[provider.source_bands[2]],
         temporal_window=16,
     )
 
@@ -321,7 +321,7 @@ def test_mcd43_provider_falls_back_to_default_weights_when_granule_parsing_fails
         crs="EPSG:4326",
         obs_time=datetime(2024, 1, 1, 12, 0, 0),
         target_resolution=500.0,
-        bands=[1],
+        bands=[provider.source_bands[0]],
         temporal_window=16,
     )
 

@@ -2,7 +2,8 @@
 SIAC - Sensor-Invariant Atmospheric Correction
 
 A modular framework for atmospheric correction of satellite imagery.
-Supports Sentinel-2, Landsat 8, and extensible to other sensors.
+Supports Sentinel-2 end-to-end scene processing and keeps sensor catalogs
+extensible for additional optical sensors.
 
 Example usage:
     >>> from siac import SIAC
@@ -30,7 +31,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "PreparedMonthlyCompositeBuildResult": ("siac.api", "PreparedMonthlyCompositeBuildResult"),
     "process_sentinel2": ("siac.api", "process_sentinel2"),
     "prepare_monthly_composites": ("siac.api", "prepare_monthly_composites"),
-    "process_landsat8": ("siac.api", "process_landsat8"),
     "resolve_s2_input": ("siac.api", "resolve_s2_input"),
     "siac_process_s2": ("siac.api", "siac_process_s2"),
     "search_sentinel2": ("siac.api", "search_sentinel2"),
@@ -42,17 +42,3 @@ def __getattr__(name: str) -> Any:
         module_path, attr_name = _LAZY_IMPORTS[name]
         return getattr(import_module(module_path), attr_name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-__all__ = [
-    "__version__",
-    "PreparedMonthlyCompositeBuildResult",
-    "SIAC",
-    "SIACConfig",
-    "prepare_monthly_composites",
-    "process_sentinel2",
-    "process_landsat8",
-    "resolve_s2_input",
-    "siac_process_s2",
-    "search_sentinel2",
-]

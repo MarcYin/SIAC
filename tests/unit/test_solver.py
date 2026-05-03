@@ -294,17 +294,6 @@ class TestSmoothnessFilter:
         assert smoothed[1, 1] < 0.25
         assert smoothed[1, 1] != pytest.approx(values[1, 1])
 
-    def test_backward_compat_lambda_vals(self):
-        """lambda_vals positional parameter is accepted but ignored."""
-        x = np.random.default_rng(0).standard_normal((20, 20))
-        lambda_vals = compute_laplacian_eigenvalues(20, 20)
-
-        # Pass lambda_vals positionally (backward compat)
-        x1 = apply_smoothness_filter(x, 2.0, lambda_vals)
-        x2 = apply_smoothness_filter(x, 2.0, None)
-
-        np.testing.assert_allclose(x1, x2)
-
 
 class TestCostFunctionConfig:
     """Tests for CostFunctionConfig."""
@@ -2235,7 +2224,7 @@ class TestMultiGridSolver:
         assert lower_aot_boundary_mask[0, 1]
 
     def test_rust_cost_cube_provider_qa_reproduces_prior_only_floor_case(self):
-        """Zero observation support plus a low prior should collapse to the AOT floor in the legacy refiner."""
+        """Zero observation support plus a low prior should collapse to the AOT floor."""
         aot_axis = np.linspace(0.001, 2.5, 11, dtype=np.float32)
         tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         valid_mask = np.array([[True]], dtype=bool)

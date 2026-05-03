@@ -19,11 +19,17 @@ from siac.algorithms.surface.monthly_composite_store import (
     MonthlyCompositeStoreManifest,
     write_monthly_composite_collection,
 )
+from siac.app import _assembly_correction as correction_mod
+from siac.app import _assembly_io as io_mod
+from siac.app import _assembly_preprocessor as preprocessor_mod
 from siac.app import _assembly_providers as providers_mod
-from siac.app import _assembly_runtime as runtime_mod
+from siac.app import _assembly_rt as rt_mod
+from siac.app import _assembly_solver as solver_mod
 from siac.app import _assembly_surface as surface_mod
 from siac.catalog import SENTINEL2A_CONFIG
 from siac.domain import SensorBand, SensorConfig
+from siac.errors import SensorNotSupportedError
+from siac.geo import resample as resample_mod
 from siac.runtime import BRDFKernelWeights, SolvedAtmosphere, SolverInputBundle
 
 
@@ -31,7 +37,48 @@ def _cloud_mask_config() -> object:
     return SimpleNamespace(model_dump=lambda **_kwargs: {"method": "mock"})
 
 
-def test_build_preprocessor_runtime_supports_auto_sensor_and_typeerror_fallback(
+def _spectral_mapping_config(*, enabled: bool = True, k_neighbors: int = 5) -> object:
+    return SimpleNamespace(
+        enabled=enabled,
+        k_neighbors=k_neighbors,
+        neighbor_estimator="distance_weighted_mean",
+        knn_backend="numpy",
+        knn_eps=0.0,
+        min_valid_bands=1,
+    )
+
+
+def _monthly_database_filter() -> object:
+    return SimpleNamespace(
+        enabled=True,
+        max_prediction_uncertainty=0.05,
+        max_composite_quality=0.05,
+        max_source_fit_rmse=0.05,
+        max_knn_feature_distance=0.05,
+    )
+
+
+def _surface_prior_config(
+    *,
+    spectral_mapping: object | None = None,
+    monthly_database_resolution_policy: str = "provider_or_coarser",
+) -> object:
+    return SimpleNamespace(
+        spectral_mapping=spectral_mapping or _spectral_mapping_config(),
+        monthly_database_filter=_monthly_database_filter(),
+        monthly_database_resolution_policy=monthly_database_resolution_policy,
+    )
+
+
+def _monthly_provider_config(**kwargs: object) -> object:
+    return SimpleNamespace(
+        providers=SimpleNamespace(
+            monthly_composites=SimpleNamespace(kind="prepared_store", **kwargs)
+        )
+    )
+
+
+def test_build_preprocessor_runtime_supports_auto_sensor_and_configured_preprocessor(
     mock_sensor_config,
 ) -> None:
     toa = xr.Dataset({"B02": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
@@ -50,23 +97,21 @@ def test_build_preprocessor_runtime_supports_auto_sensor_and_typeerror_fallback(
 
     def _detect_sensor(path: Path) -> str:
         calls["detect"] = path
-        return "sentinel2"
+        return "s2"
 
     def _get_preprocessor(sensor_name: str, config: dict[str, object] | None = None) -> object:
-        calls.setdefault("configs", []).append(config)
-        if config is not None:
-            raise TypeError("legacy signature")
         calls["sensor_name"] = sensor_name
+        calls["config"] = config
         return fake_preprocessor
 
     config = SimpleNamespace(
         sensor="auto",
-        cloud_mask=_cloud_mask_config(),
+        algorithms=SimpleNamespace(cloud_mask=_cloud_mask_config()),
         paths=SimpleNamespace(rsrf_root="/tmp/rsrf"),
     )
     default_aoi = SimpleNamespace(crs="EPSG:4326", get_bounds=lambda: (1.0, 2.0, 3.0, 4.0))
 
-    runtime = runtime_mod.build_preprocessor_runtime(
+    runtime = preprocessor_mod.build_preprocessor_runtime(
         config,
         input_path=Path("scene.zip"),
         default_aoi_resolver=lambda _toa: default_aoi,
@@ -77,7 +122,11 @@ def test_build_preprocessor_runtime_supports_auto_sensor_and_typeerror_fallback(
 
     assert runtime.sensor_config is mock_sensor_config
     assert calls["detect"] == Path("scene.zip")
-    assert calls["sensor_name"] == "sentinel2"
+    assert calls["sensor_name"] == "s2"
+    assert calls["config"] == {
+        "cloud_mask": {"method": "mock"},
+        "rsrf_root": "/tmp/rsrf",
+    }
     assert fake_preprocessor.config["cloud_mask"] == {"method": "mock"}
     assert fake_preprocessor.config["rsrf_root"] == "/tmp/rsrf"
     assert result.crs == "EPSG:4326"
@@ -85,10 +134,14 @@ def test_build_preprocessor_runtime_supports_auto_sensor_and_typeerror_fallback(
 
 
 def test_build_preprocessor_runtime_requires_input_path_for_auto_sensor() -> None:
-    config = SimpleNamespace(sensor="auto", cloud_mask=_cloud_mask_config(), paths=None)
+    config = SimpleNamespace(
+        sensor="auto",
+        algorithms=SimpleNamespace(cloud_mask=_cloud_mask_config()),
+        paths=None,
+    )
 
     with pytest.raises(ValueError, match="without an input path"):
-        runtime_mod.build_preprocessor_runtime(config)
+        preprocessor_mod.build_preprocessor_runtime(config)
 
 
 def test_build_preprocessor_runtime_uses_module_defaults_and_explicit_aoi(
@@ -111,19 +164,23 @@ def test_build_preprocessor_runtime_uses_module_defaults_and_explicit_aoi(
         calls["detect"] = path
         return "s2"
 
-    monkeypatch.setattr(runtime_mod, "detect_sensor", _detect_sensor)
+    monkeypatch.setattr(preprocessor_mod, "detect_sensor", _detect_sensor)
 
     def _get_preprocessor(sensor_name: str, config: dict[str, object] | None = None) -> object:
         calls["sensor_name"] = sensor_name
         calls["config"] = config
         return fake_preprocessor
 
-    monkeypatch.setattr(runtime_mod, "get_preprocessor", _get_preprocessor)
+    monkeypatch.setattr(preprocessor_mod, "get_preprocessor", _get_preprocessor)
 
-    config = SimpleNamespace(sensor="auto", cloud_mask=_cloud_mask_config(), paths=None)
+    config = SimpleNamespace(
+        sensor="auto",
+        algorithms=SimpleNamespace(cloud_mask=_cloud_mask_config()),
+        paths=None,
+    )
     explicit_aoi = SimpleNamespace(crs="EPSG:4326", get_bounds=lambda: (4.0, 5.0, 6.0, 7.0))
 
-    runtime = runtime_mod.build_preprocessor_runtime(config, input_path=Path("scene.zip"))
+    runtime = preprocessor_mod.build_preprocessor_runtime(config, input_path=Path("scene.zip"))
     result = runtime.preprocessor(Path("scene.zip"), aoi=explicit_aoi)
 
     assert calls["detect"] == Path("scene.zip")
@@ -157,10 +214,14 @@ def test_build_preprocessor_runtime_default_aoi_and_unknown_sensor(
     def _raise_unknown(sensor_name: str, config: dict[str, object] | None = None) -> object:  # noqa: ARG001
         raise KeyError(sensor_name)
 
-    config = SimpleNamespace(sensor="s2", cloud_mask=_cloud_mask_config(), paths=None)
-    monkeypatch.setattr(runtime_mod.AOI, "from_raster", _default_aoi)
+    config = SimpleNamespace(
+        sensor="s2",
+        algorithms=SimpleNamespace(cloud_mask=_cloud_mask_config()),
+        paths=None,
+    )
+    monkeypatch.setattr("siac.adapters.satellite.observation.AOI.from_raster", _default_aoi)
 
-    runtime = runtime_mod.build_preprocessor_runtime(
+    runtime = preprocessor_mod.build_preprocessor_runtime(
         config,
         get_preprocessor_fn=_build_preprocessor,
     )
@@ -168,8 +229,8 @@ def test_build_preprocessor_runtime_default_aoi_and_unknown_sensor(
     assert result.crs == "EPSG:3857"
     assert result.bounds == (0, 1, 2, 3)
 
-    with pytest.raises(ValueError, match="Unknown sensor"):
-        runtime_mod.build_preprocessor_runtime(
+    with pytest.raises(SensorNotSupportedError, match="no registered scene preprocessor"):
+        preprocessor_mod.build_preprocessor_runtime(
             config,
             get_preprocessor_fn=_raise_unknown,
         )
@@ -204,9 +265,13 @@ def test_build_preprocessor_runtime_primes_path_sensitive_sensor_config() -> Non
             return raw
 
     fake_preprocessor = _PathSensitivePreprocessor()
-    config = SimpleNamespace(sensor="s2", cloud_mask=_cloud_mask_config(), paths=None)
+    config = SimpleNamespace(
+        sensor="s2",
+        algorithms=SimpleNamespace(cloud_mask=_cloud_mask_config()),
+        paths=None,
+    )
 
-    runtime = runtime_mod.build_preprocessor_runtime(
+    runtime = preprocessor_mod.build_preprocessor_runtime(
         config,
         input_path=Path("scene.safe"),
         get_preprocessor_fn=lambda *_args, **_kwargs: fake_preprocessor,
@@ -234,12 +299,16 @@ def test_build_preprocessor_runtime_sets_s2_preload_band_plan() -> None:
     )
     config = SimpleNamespace(
         sensor="s2",
-        cloud_mask=SimpleNamespace(model_dump=lambda **_kwargs: {"method": "mock"}, mode="auto"),
-        surface_prior=SimpleNamespace(method="monthly_database"),
+        algorithms=SimpleNamespace(
+            cloud_mask=SimpleNamespace(
+                model_dump=lambda **_kwargs: {"method": "mock"}, mode="auto"
+            ),
+            surface_prior=SimpleNamespace(method="monthly_database"),
+        ),
         paths=None,
     )
 
-    runtime_mod.build_preprocessor_runtime(
+    preprocessor_mod.build_preprocessor_runtime(
         config,
         input_path=Path("scene.safe"),
         get_preprocessor_fn=lambda *_args, **_kwargs: fake_preprocessor,
@@ -278,25 +347,27 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
                 success=True,
             )
 
-    monkeypatch.setattr(runtime_mod, "MultiGridConfig", lambda **kwargs: kwargs)
-    monkeypatch.setattr(runtime_mod, "MultiGridSolver", _FakeSolver)
+    monkeypatch.setattr(solver_mod, "MultiGridConfig", lambda **kwargs: kwargs)
+    monkeypatch.setattr(solver_mod, "MultiGridSolver", _FakeSolver)
     monkeypatch.setattr(
-        runtime_mod,
+        rt_mod,
         "build_rt_model",
         lambda config, auth=None, sensor_config=None: ("rt", config, auth, sensor_config),
     )
 
     config = SimpleNamespace(
-        solver=SimpleNamespace(
-            aot_gamma=1.0,
-            tcwv_gamma=2.0,
-            aot_bounds=(0.0, 1.0),
-            tcwv_bounds=(0.0, 5.0),
-            grid_search_aot_points=7,
-            grid_search_tcwv_points=5,
-            fixed_atmospheric_parameter="tcwv",
-            quadratic_block_size=5,
-            quadratic_block_min_valid_fraction=0.6,
+        algorithms=SimpleNamespace(
+            solver=SimpleNamespace(
+                aot_gamma=1.0,
+                tcwv_gamma=2.0,
+                aot_bounds=(0.0, 1.0),
+                tcwv_bounds=(0.0, 5.0),
+                grid_search_aot_points=7,
+                grid_search_tcwv_points=5,
+                fixed_atmospheric_parameter="tcwv",
+                quadratic_block_size=5,
+                quadratic_block_min_valid_fraction=0.6,
+            )
         )
     )
     toa = mock_observation_bundle.toa["B02"]
@@ -313,8 +384,8 @@ def test_resolve_solver_and_rt_model_forward_expected_inputs(
         aerosol_resolution_m=1000.0,
     )
 
-    solved = runtime_mod.resolve_solver(config)(bundle, config)
-    rt_model = runtime_mod.resolve_rt_model_for_pipeline(
+    solved = solver_mod.resolve_solver(config)(bundle, config)
+    rt_model = rt_mod.resolve_rt_model_for_pipeline(
         config,
         auth="auth",
         sensor_config=mock_observation_bundle.sensor_config,
@@ -346,13 +417,13 @@ def test_resolve_output_writer_and_grid_assembler_use_runtime_entrypoints(
     def _fake_assemble(*args, **kwargs):  # noqa: ANN002, ANN003
         return args, kwargs
 
-    monkeypatch.setattr(runtime_mod, "ConfiguredOutputWriter", _FakeWriter)
+    monkeypatch.setattr(io_mod, "ConfiguredOutputWriter", _FakeWriter)
     monkeypatch.setattr(grid_assembler_mod, "assemble_grids", _fake_assemble)
 
-    writer = runtime_mod.resolve_output_writer(
+    writer = io_mod.resolve_output_writer(
         SimpleNamespace(output=SimpleNamespace(defaults={"format": "netcdf"}))
     )
-    assembler = runtime_mod.resolve_grid_assembler()
+    assembler = io_mod.resolve_grid_assembler()
 
     assert isinstance(writer, _FakeWriter)
     assert captured["defaults"] == {"format": "netcdf"}
@@ -368,8 +439,8 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
     same = xr.DataArray(
         np.ones(template.shape, dtype=np.float32), dims=template.dims, coords=template.coords
     )
-    assert runtime_mod._shares_template_grid(same, template) is True
-    assert runtime_mod._resample_field_to_template(same, template) is same
+    assert resample_mod.shares_template_grid(same, template) is True
+    assert resample_mod.resample_field_to_template(same, template) is same
 
     field = xr.DataArray(
         np.array([[0.0, 2.0], [10.0, 12.0]], dtype=np.float32),
@@ -381,10 +452,10 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
         dims=["y", "x"],
         coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
     )
-    interp = runtime_mod._resample_field_to_template(field, interp_template)
+    interp = resample_mod.resample_field_to_template(field, interp_template)
     assert float(interp.sel(y=1.0, x=1.0)) == pytest.approx(1.0)
 
-    zoomed = runtime_mod._resample_field_to_template(
+    zoomed = resample_mod.resample_field_to_template(
         xr.DataArray(np.array([[1.0, 2.0]], dtype=np.float32), dims=["y", "x"]),
         template,
     )
@@ -397,7 +468,7 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
             "longitude": [-1.0, 0.0, 1.0],
         },
     )
-    latlon_zoomed = runtime_mod._resample_field_to_template(
+    latlon_zoomed = resample_mod.resample_field_to_template(
         xr.DataArray(np.array([[1.0, 2.0]], dtype=np.float32), dims=["y", "x"]),
         latlon_template,
     )
@@ -405,7 +476,7 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
     assert latlon_zoomed.dims == latlon_template.dims
     assert latlon_zoomed.coords["latitude"].identical(latlon_template.coords["latitude"])
     assert latlon_zoomed.coords["longitude"].identical(latlon_template.coords["longitude"])
-    empty = runtime_mod._resample_field_to_template(
+    empty = resample_mod.resample_field_to_template(
         xr.DataArray(np.empty((0, 0), dtype=np.float32), dims=["y", "x"]),
         template,
     )
@@ -413,7 +484,7 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
     assert np.all(empty.values == 0.0)
 
     three_d = xr.DataArray(np.ones((1, 2, 2), dtype=np.float32), dims=["band", "y", "x"])
-    assert runtime_mod._resample_field_to_template(three_d, template) is three_d
+    assert resample_mod.resample_field_to_template(three_d, template) is three_d
 
     captured: dict[str, object] = {}
 
@@ -432,7 +503,7 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
             }
             return "corrected"
 
-    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+    monkeypatch.setattr(correction_mod, "AtmosphericCorrector", _FakeCorrector)
 
     small = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
     solved = SolvedAtmosphere(
@@ -454,7 +525,7 @@ def test_resample_helpers_and_corrector_cover_interpolation_zoom_and_passthrough
         converged=True,
     )
 
-    result = runtime_mod.resolve_corrector(SimpleNamespace())(
+    result = correction_mod.resolve_corrector(SimpleNamespace())(
         mock_observation_bundle,
         solved,
         "rt-model",
@@ -518,9 +589,9 @@ def test_resolve_corrector_preserves_coarse_atmo_outputs(
                 cloud_mask=cloud_mask,
             )
 
-    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+    monkeypatch.setattr(correction_mod, "AtmosphericCorrector", _FakeCorrector)
 
-    result = runtime_mod.resolve_corrector(SimpleNamespace())(
+    result = correction_mod.resolve_corrector(SimpleNamespace())(
         mock_observation_bundle,
         solved,
         "rt-model",
@@ -556,7 +627,7 @@ def test_resolve_corrector_passes_configured_correction_workers(
             _ = (toa, geometry, atmo, cloud_mask)
             return "corrected"
 
-    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+    monkeypatch.setattr(correction_mod, "AtmosphericCorrector", _FakeCorrector)
 
     small = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
     solved = SolvedAtmosphere(
@@ -578,9 +649,11 @@ def test_resolve_corrector_passes_configured_correction_workers(
         converged=True,
     )
 
-    result = runtime_mod.resolve_corrector(
+    result = correction_mod.resolve_corrector(
         SimpleNamespace(
-            execution=SimpleNamespace(max_workers=8, correction_max_workers=3),
+            runtime=SimpleNamespace(
+                execution=SimpleNamespace(max_workers=8, correction_max_workers=3)
+            ),
         )
     )(
         mock_observation_bundle,
@@ -646,10 +719,10 @@ def test_resolve_corrector_fills_nonfinite_upsampled_atmo_for_lut_inputs(
                 cloud_mask=mock_observation_bundle.cloud_mask,
             )
 
-    monkeypatch.setattr(runtime_mod, "AtmosphericCorrector", _FakeCorrector)
+    monkeypatch.setattr(correction_mod, "AtmosphericCorrector", _FakeCorrector)
 
     caplog.set_level(logging.WARNING, logger="siac.geo.resample")
-    runtime_mod.resolve_corrector(SimpleNamespace())(
+    correction_mod.resolve_corrector(SimpleNamespace())(
         mock_observation_bundle,
         solved,
         "rt-model",
@@ -673,30 +746,30 @@ def test_shares_template_grid_false_cases_cover_mismatch_paths() -> None:
     )
 
     assert (
-        runtime_mod._shares_template_grid(
+        resample_mod.shares_template_grid(
             xr.DataArray(np.ones((1, 2), dtype=np.float32), dims=["y", "x"]), template
         )
         is False
     )
     assert (
-        runtime_mod._shares_template_grid(
+        resample_mod.shares_template_grid(
             xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["x", "y"]), template
         )
         is False
     )
 
     missing_coords = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
-    assert runtime_mod._shares_template_grid(missing_coords, template) is False
+    assert resample_mod.shares_template_grid(missing_coords, template) is False
 
     different_coords = xr.DataArray(
         np.ones((2, 2), dtype=np.float32),
         dims=["y", "x"],
         coords={"y": [0.0, 1.0], "x": [0.0, 1.0]},
     )
-    assert runtime_mod._shares_template_grid(different_coords, template) is False
+    assert resample_mod.shares_template_grid(different_coords, template) is False
 
     coordless = xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])
-    assert runtime_mod._shares_template_grid(coordless, coordless) is True
+    assert resample_mod.shares_template_grid(coordless, coordless) is True
 
 
 def test_resample_field_to_template_falls_back_after_interp_error_and_pads_zoom(
@@ -722,7 +795,7 @@ def test_resample_field_to_template_falls_back_after_interp_error_and_pads_zoom(
     monkeypatch.setattr(xr.DataArray, "interp", _raise_interp)
     monkeypatch.setattr("scipy.ndimage.zoom", _short_zoom)
 
-    out = runtime_mod._resample_field_to_template(field, template)
+    out = resample_mod.resample_field_to_template(field, template)
 
     assert out.shape == (3, 3)
     np.testing.assert_allclose(out.values[0, :2], np.array([5.0, 6.0], dtype=np.float32))
@@ -772,8 +845,8 @@ def test_surface_helper_selection_and_mapping_runtime(
         default_ref_offset=0.0,
     )
 
-    assert surface_mod._select_surface_prior_bands(None) == list(range(1, 8))
-    assert [band.name for band in surface_mod._select_surface_prior_bands(mock_sensor_config)] == [
+    assert surface_mod.select_surface_prior_bands(None) == list(range(1, 8))
+    assert [band.name for band in surface_mod.select_surface_prior_bands(mock_sensor_config)] == [
         "B01",
         "B02",
     ]
@@ -795,14 +868,16 @@ def test_surface_helper_selection_and_mapping_runtime(
     assert len(surface_mod._select_route_b_query_bands(mock_sensor_config)) == 3
 
     config = SimpleNamespace(
-        surface_prior=SimpleNamespace(
-            spectral_mapping=SimpleNamespace(
-                enabled=False,
-                k_neighbors=4,
-                neighbor_estimator="distance_weighted_mean",
-                knn_backend="numpy",
-                knn_eps=0.0,
-                min_valid_bands=1,
+        algorithms=SimpleNamespace(
+            surface_prior=SimpleNamespace(
+                spectral_mapping=SimpleNamespace(
+                    enabled=False,
+                    k_neighbors=4,
+                    neighbor_estimator="distance_weighted_mean",
+                    knn_backend="numpy",
+                    knn_eps=0.0,
+                    min_valid_bands=1,
+                )
             )
         ),
         paths=None,
@@ -825,7 +900,7 @@ def test_surface_helper_selection_and_mapping_runtime(
         def __init__(self, **kwargs) -> None:
             self.kwargs = kwargs
 
-    config.surface_prior.spectral_mapping.enabled = True
+    config.algorithms.surface_prior.spectral_mapping.enabled = True
     monkeypatch.setattr(
         "siac.algorithms.surface.spectral_mapping.SpectralMappingConfig",
         _RuntimeConfig,
@@ -872,35 +947,36 @@ def test_surface_monthly_runtime_and_query_helpers(
         _fake_query_database,
     )
 
-    provider = SimpleNamespace(source_bands=list(mock_observation_bundle.sensor_config.bands))
+    provider = SimpleNamespace(
+        source_bands=list(mock_observation_bundle.sensor_config.bands),
+        get_monthly_composites=lambda _observation, _resolution: SimpleNamespace(
+            source_bands=tuple(mock_observation_bundle.sensor_config.bands),
+            composites=(),
+        ),
+    )
     config = SimpleNamespace(
-        surface_prior=SimpleNamespace(
-            spectral_mapping=SimpleNamespace(
-                enabled=True,
-                k_neighbors=7,
-                neighbor_estimator="distance_weighted_mean",
-                knn_backend="numpy",
-                knn_eps=0.0,
-                min_valid_bands=1,
+        algorithms=SimpleNamespace(
+            surface_prior=_surface_prior_config(
+                spectral_mapping=_spectral_mapping_config(enabled=True, k_neighbors=7)
             )
         ),
-        brdf=SimpleNamespace(temporal_window=16),
+        providers=SimpleNamespace(brdf=SimpleNamespace(temporal_window=16)),
         paths=None,
     )
 
-    runtime = surface_mod._prepare_monthly_surface_prior_runtime(
+    runtime = surface_mod.prepare_monthly_surface_prior_runtime(
         config,
         provider,
         observation=mock_observation_bundle,
         resolution=500.0,
     )
-    result = surface_mod._query_monthly_surface_prior(
+    result = surface_mod.query_monthly_surface_prior(
         mock_observation_bundle,
         mock_atmospheric_state,
         "rt-model",
         runtime,
     )
-    request = surface_mod._surface_prior_brdf_request(
+    request = surface_mod.surface_prior_brdf_request(
         mock_observation_bundle,
         brdf_provider=provider,
         target_resolution=500.0,
@@ -920,7 +996,7 @@ def test_surface_monthly_runtime_and_query_helpers(
     assert result == "prior"
     assert request["obs_time"] == mock_observation_bundle.metadata["observation_time"]
     assert (
-        surface_mod._mark_surface_prior_metadata(provider_fn, requires_atmo_prior=True)
+        surface_mod.mark_surface_prior_metadata(provider_fn, requires_atmo_prior=True)
         is provider_fn
     )
     assert provider_fn.requires_atmo_prior is True
@@ -942,17 +1018,27 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
         ),
     )
     config = SimpleNamespace(
-        surface_prior=SimpleNamespace(
-            spectral_mapping=SimpleNamespace(
-                enabled=True,
-                k_neighbors=5,
-                neighbor_estimator="distance_weighted_mean",
-                knn_backend="numpy",
-                knn_eps=0.0,
-                min_valid_bands=1,
+        algorithms=SimpleNamespace(
+            surface_prior=SimpleNamespace(
+                spectral_mapping=SimpleNamespace(
+                    enabled=True,
+                    k_neighbors=5,
+                    neighbor_estimator="distance_weighted_mean",
+                    knn_backend="numpy",
+                    knn_eps=0.0,
+                    min_valid_bands=1,
+                ),
+                monthly_database_filter=SimpleNamespace(
+                    enabled=True,
+                    max_prediction_uncertainty=0.05,
+                    max_composite_quality=0.05,
+                    max_source_fit_rmse=0.05,
+                    max_knn_feature_distance=0.05,
+                ),
+                monthly_database_resolution_policy="provider_or_coarser",
             )
         ),
-        brdf=SimpleNamespace(temporal_window=16),
+        providers=SimpleNamespace(brdf=SimpleNamespace(temporal_window=16)),
         paths=None,
     )
 
@@ -965,7 +1051,7 @@ def test_prepare_monthly_surface_prior_runtime_prefers_provider_resolution(
         captured["monthly_composites"] = kwargs["monthly_composites"]
         return "db"
 
-    runtime = surface_mod._prepare_monthly_surface_prior_runtime(
+    runtime = surface_mod.prepare_monthly_surface_prior_runtime(
         config,
         provider,
         observation=mock_observation_bundle,
@@ -1002,18 +1088,10 @@ def test_prepare_monthly_surface_prior_runtime_can_force_aerosol_resolution(
         ),
     )
     config = SimpleNamespace(
-        surface_prior=SimpleNamespace(
-            monthly_database_resolution_policy="aerosol",
-            spectral_mapping=SimpleNamespace(
-                enabled=True,
-                k_neighbors=5,
-                neighbor_estimator="distance_weighted_mean",
-                knn_backend="numpy",
-                knn_eps=0.0,
-                min_valid_bands=1,
-            ),
+        algorithms=SimpleNamespace(
+            surface_prior=_surface_prior_config(monthly_database_resolution_policy="aerosol")
         ),
-        brdf=SimpleNamespace(temporal_window=16),
+        providers=SimpleNamespace(brdf=SimpleNamespace(temporal_window=16)),
         paths=None,
     )
 
@@ -1026,7 +1104,7 @@ def test_prepare_monthly_surface_prior_runtime_can_force_aerosol_resolution(
         captured["monthly_composites"] = kwargs["monthly_composites"]
         return "db"
 
-    runtime = surface_mod._prepare_monthly_surface_prior_runtime(
+    runtime = surface_mod.prepare_monthly_surface_prior_runtime(
         config,
         provider,
         observation=mock_observation_bundle,
@@ -1063,17 +1141,8 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
         ),
     )
     config = SimpleNamespace(
-        surface_prior=SimpleNamespace(
-            spectral_mapping=SimpleNamespace(
-                enabled=True,
-                k_neighbors=5,
-                neighbor_estimator="distance_weighted_mean",
-                knn_backend="numpy",
-                knn_eps=0.0,
-                min_valid_bands=1,
-            )
-        ),
-        brdf=SimpleNamespace(temporal_window=16),
+        algorithms=SimpleNamespace(surface_prior=_surface_prior_config()),
+        providers=SimpleNamespace(brdf=SimpleNamespace(temporal_window=16)),
         paths=None,
     )
 
@@ -1086,7 +1155,7 @@ def test_prepare_monthly_surface_prior_runtime_aggregates_to_coarser_requested_r
         captured["monthly_composites"] = kwargs["monthly_composites"]
         return "db"
 
-    runtime = surface_mod._prepare_monthly_surface_prior_runtime(
+    runtime = surface_mod.prepare_monthly_surface_prior_runtime(
         config,
         provider,
         observation=mock_observation_bundle,
@@ -1136,24 +1205,24 @@ def test_provider_builders_cover_registry_and_source_resolution(
     monkeypatch.setattr(
         "siac.adapters.brdf.mcd43_earthaccess.MCD19EarthAccessProvider", _FakePriorProvider
     )
-    monkeypatch.setattr("siac.adapters.brdf.gee_stub.GEEBRDFProvider", lambda: "gee")
 
     config = SimpleNamespace(
-        atmo_prior=SimpleNamespace(
-            provider="merra2",
-            data_path="/tmp/cams.nc",
-            temporal_interpolation="linear",
-            download_missing=True,
-            cache_dir="/tmp/cache",
+        providers=SimpleNamespace(
+            atmo=SimpleNamespace(
+                kind="merra2",
+                data_path="/tmp/cams.nc",
+                temporal_interpolation="linear",
+                download_missing=True,
+                cache_dir="/tmp/cache",
+            ),
+            brdf=SimpleNamespace(kind="mcd43", cache_dir="/tmp/cache"),
         ),
-        brdf=SimpleNamespace(provider="gee", cache_dir="/tmp/cache"),
     )
 
     providers_mod._build_cams_provider(config, auth="token")
     merra = providers_mod._build_merra2_provider(config, auth="earth")
     mcd19 = providers_mod._build_mcd19_provider(config, auth="earth")
     vnp19 = providers_mod._build_vnp19_provider(config, auth="earth")
-    gee = providers_mod._build_gee_brdf_provider(config)
     brdf = providers_mod.resolve_brdf_provider(config, auth="earth")
     get_prior = providers_mod.resolve_atmo_provider(config, auth="earth")
 
@@ -1162,8 +1231,7 @@ def test_provider_builders_cover_registry_and_source_resolution(
     assert merra.kwargs["source"] == "source:earth"
     assert mcd19.kwargs["source"] == "source:earth"
     assert vnp19.kwargs["source"] == "source:earth"
-    assert gee == "gee"
-    assert brdf == "gee"
+    assert brdf.kwargs["source"] == "source:earth"
     assert callable(get_prior)
 
 
@@ -1217,10 +1285,12 @@ def test_prepared_store_monthly_provider_loads_collection(tmp_path) -> None:
     )
     store_path = write_monthly_composite_collection(collection, tmp_path / "prepared_store")
     config = SimpleNamespace(
-        monthly_composites=SimpleNamespace(
-            provider="prepared_store",
-            store_path=store_path,
-            strict_coverage=False,
+        providers=SimpleNamespace(
+            monthly_composites=SimpleNamespace(
+                kind="prepared_store",
+                store_path=store_path,
+                strict_coverage=False,
+            )
         )
     )
 
@@ -1265,12 +1335,9 @@ def test_prepared_store_monthly_provider_is_lazy_until_first_use(
         _fake_read_collection,
     )
 
-    config = SimpleNamespace(
-        monthly_composites=SimpleNamespace(
-            provider="prepared_store",
-            store_path=tmp_path / "prepared_store",
-            strict_coverage=False,
-        )
+    config = _monthly_provider_config(
+        store_path=tmp_path / "prepared_store",
+        strict_coverage=False,
     )
 
     provider = providers_mod.resolve_monthly_composite_provider(config)
@@ -1326,12 +1393,9 @@ def test_prepared_store_monthly_provider_rejects_mismatched_grid_when_strict(tmp
             (0.0, 0.0, 1000.0, 1000.0), crs="EPSG:32632", resolution=500.0
         ),
     )
-    config = SimpleNamespace(
-        monthly_composites=SimpleNamespace(
-            provider="prepared_store",
-            store_path=store_path,
-            strict_coverage=True,
-        )
+    config = _monthly_provider_config(
+        store_path=store_path,
+        strict_coverage=True,
     )
 
     provider = providers_mod.resolve_monthly_composite_provider(config)
@@ -1411,12 +1475,9 @@ def test_prepared_store_monthly_provider_accepts_finer_grid_when_strict(tmp_path
             (0.0, 0.0, 2000.0, 1000.0), crs="EPSG:32632", resolution=500.0
         ),
     )
-    config = SimpleNamespace(
-        monthly_composites=SimpleNamespace(
-            provider="prepared_store",
-            store_path=store_path,
-            strict_coverage=True,
-        )
+    config = _monthly_provider_config(
+        store_path=store_path,
+        strict_coverage=True,
     )
 
     provider = providers_mod.resolve_monthly_composite_provider(config)

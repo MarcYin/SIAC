@@ -6,17 +6,6 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "build_preprocessor_runtime": ("siac.app.assembly", "build_preprocessor_runtime"),
-    "resolve_atmo_provider": ("siac.app.assembly", "resolve_atmo_provider"),
-    "resolve_brdf_provider": ("siac.app.assembly", "resolve_brdf_provider"),
-    "resolve_corrector": ("siac.app.assembly", "resolve_corrector"),
-    "resolve_grid_assembler": ("siac.app.assembly", "resolve_grid_assembler"),
-    "resolve_output_writer": ("siac.app.assembly", "resolve_output_writer"),
-    "resolve_preprocessor": ("siac.app.assembly", "resolve_preprocessor"),
-    "resolve_rt_model_for_pipeline": ("siac.app.assembly", "resolve_rt_model_for_pipeline"),
-    "resolve_s2_backend": ("siac.app.assembly", "resolve_s2_backend"),
-    "resolve_solver": ("siac.app.assembly", "resolve_solver"),
-    "resolve_surface_prior_provider": ("siac.app.assembly", "resolve_surface_prior_provider"),
     "ExecutionPlan": ("siac.app.planning", "ExecutionPlan"),
     "build_execution_plan": ("siac.app.planning", "build_execution_plan"),
     "coerce_aoi_spec": ("siac.app.planning", "coerce_aoi_spec"),
@@ -33,11 +22,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "coerce_date": ("siac.app.sentinel2", "coerce_date"),
     "coerce_s2_query": ("siac.app.sentinel2", "coerce_s2_query"),
     "resolve_s2_input": ("siac.app.sentinel2", "resolve_s2_input"),
+    "resolve_s2_backend": ("siac.app.s2_backend", "resolve_s2_backend"),
     "search_sentinel2": ("siac.app.sentinel2", "search_sentinel2"),
 }
-_SUBMODULES = frozenset({"assembly", "planning", "requests", "sentinel2"})
-
-__all__ = list(_EXPORTS)
+_SUBMODULES = frozenset({"planning", "requests", "s2_backend", "sentinel2"})
 
 
 def __getattr__(name: str) -> Any:
@@ -57,4 +45,4 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals()) + __all__ + list(_SUBMODULES))
+    return sorted(list(globals()) + list(_EXPORTS) + list(_SUBMODULES))

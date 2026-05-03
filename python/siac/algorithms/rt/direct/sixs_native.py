@@ -31,7 +31,7 @@ from siac.sixs_outputs import (
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from siac.config.schema import RTSetupConfig, SixSAlgorithmConfig
+    from siac.config.algorithms import RTSetupConfig, SixSAlgorithmConfig
     from siac.domain.sensors import SensorBand, SensorConfig
     from siac.runtime import AtmosphericState, GeometryAngles
 
@@ -1633,6 +1633,3 @@ class SixSNativeRunner:
                 for name, values in result.outputs.items():
                     outputs[name][start:stop] = values
         return _NativeBatchResult(outputs=outputs, status=status)
-
-
-__all__ = ["SixSNativeRunner"]

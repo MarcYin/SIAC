@@ -88,7 +88,7 @@ the relevant log tails in the workflow output, emits targeted GitHub
 annotations for the Meson or distutils stderr tails plus the aggregated build
 summary, and uploads the full `tmp/rt6s_ci_smoke` tree as a workflow artifact
 so Linux-only builder failures can be inspected after the run. Changes under
-`python/siac/algorithms/rt/direct/`, `python/siac/config/schema.py`,
+`python/siac/algorithms/rt/direct/`, `python/siac/config/`,
 `python/siac/sixs_outputs.py`, and the native 6S tools/workflow files should be
 validated against that workflow before landing.
 

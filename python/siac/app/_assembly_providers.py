@@ -40,14 +40,15 @@ def _build_cams_provider(
     config: Any,
     auth: CredentialManager | None = None,
 ) -> AtmosphericPriorProvider:
+    atmo_config = config.providers.atmo
     return cast(
         "AtmosphericPriorProvider",
         CAMSProvider(
-            config.atmo_prior.data_path,
-            temporal_interp=config.atmo_prior.temporal_interpolation == "linear",
-            download_missing=config.atmo_prior.download_missing,
+            atmo_config.data_path,
+            temporal_interp=atmo_config.temporal_interpolation == "linear",
+            download_missing=atmo_config.download_missing,
             auth=auth,
-            cache_dir=config.atmo_prior.cache_dir,
+            cache_dir=atmo_config.cache_dir,
         ),
     )
 
@@ -62,7 +63,7 @@ def _build_merra2_provider(
     return cast(
         "AtmosphericPriorProvider",
         MERRA2Provider(
-            cache_dir=config.atmo_prior.cache_dir,
+            cache_dir=config.providers.atmo.cache_dir,
             source=earthaccess_source_from_auth(auth),
         ),
     )
@@ -78,7 +79,7 @@ def _build_mcd19_provider(
     return cast(
         "AtmosphericPriorProvider",
         MCD19AODProvider(
-            cache_dir=config.atmo_prior.cache_dir,
+            cache_dir=config.providers.atmo.cache_dir,
             source=earthaccess_source_from_auth(auth),
         ),
     )
@@ -94,7 +95,7 @@ def _build_vnp19_provider(
     return cast(
         "AtmosphericPriorProvider",
         VNP19AODProvider(
-            cache_dir=config.atmo_prior.cache_dir,
+            cache_dir=config.providers.atmo.cache_dir,
             source=earthaccess_source_from_auth(auth),
         ),
     )
@@ -105,7 +106,7 @@ def _build_mcd43_provider(config: Any, auth: CredentialManager | None = None) ->
     from siac.adapters.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
 
     return MCD43EarthAccessProvider(
-        cache_dir=config.brdf.cache_dir,
+        cache_dir=config.providers.brdf.cache_dir,
         source=earthaccess_source_from_auth(auth),
     )
 
@@ -115,7 +116,7 @@ def _build_vnp43_provider(config: Any, auth: CredentialManager | None = None) ->
     from siac.adapters.brdf.mcd43_earthaccess import VNP43EarthAccessProvider
 
     return VNP43EarthAccessProvider(
-        cache_dir=config.brdf.cache_dir,
+        cache_dir=config.providers.brdf.cache_dir,
         source=earthaccess_source_from_auth(auth),
     )
 
@@ -125,20 +126,13 @@ def _build_mcd19_brdf_provider(config: Any, auth: CredentialManager | None = Non
     from siac.adapters.brdf.mcd43_earthaccess import MCD19EarthAccessProvider
 
     return MCD19EarthAccessProvider(
-        cache_dir=config.brdf.cache_dir,
+        cache_dir=config.providers.brdf.cache_dir,
         source=earthaccess_source_from_auth(auth),
     )
 
 
-@BRDF_PROVIDER_REGISTRY.register("gee")
-def _build_gee_brdf_provider(_config: Any, _auth: CredentialManager | None = None) -> Any:
-    from siac.adapters.brdf.gee_stub import GEEBRDFProvider
-
-    return GEEBRDFProvider()
-
-
 def resolve_brdf_provider(config: Any, *, auth: CredentialManager | None = None) -> Any:
-    provider_name = getattr(config.brdf, "provider", "mcd43")
+    provider_name = config.providers.brdf.kind
     return _build_registered_component(BRDF_PROVIDER_REGISTRY, provider_name, config, auth)
 
 
@@ -181,7 +175,7 @@ def _build_user_callable_monthly_composite_provider(
     config: Any,
     _auth: CredentialManager | None = None,
 ) -> Any:
-    provider = getattr(config.monthly_composites, "user_callable", None)
+    provider = getattr(config.providers.monthly_composites, "user_callable", None)
     if provider is None:
         raise ValueError(
             "monthly_composites.user_callable must be provided when kind='user_callable'"
@@ -224,13 +218,13 @@ def _build_prepared_store_monthly_composite_provider(
         read_monthly_composite_store_manifest,
     )
 
-    store_path = getattr(config.monthly_composites, "store_path", None)
+    store_path = getattr(config.providers.monthly_composites, "store_path", None)
     if store_path is None:
         raise ValueError(
             "monthly_composites.store_path must be provided when kind='prepared_store'"
         )
     resolved_store_path = cast("str | Path", store_path)
-    strict_coverage = bool(getattr(config.monthly_composites, "strict_coverage", True))
+    strict_coverage = bool(getattr(config.providers.monthly_composites, "strict_coverage", True))
 
     def _validate_store_grid(
         manifest: MonthlyCompositeStoreManifest,
@@ -241,7 +235,7 @@ def _build_prepared_store_monthly_composite_provider(
         if grid is None:
             raise ValueError(
                 f"Prepared monthly composite store {store_path} is missing grid metadata; "
-                "set monthly_composites.strict_coverage=false to bypass compatibility checks."
+                "set monthly_composites.strict_coverage=false to bypass grid checks."
             )
         _assert_matching_store_grid(
             grid,
@@ -346,8 +340,7 @@ def resolve_monthly_composite_provider(
     *,
     auth: CredentialManager | None = None,
 ) -> MonthlyCompositeProvider:
-    provider_config = getattr(config, "monthly_composites", None)
-    provider_name = getattr(provider_config, "provider", "generated_brdf")
+    provider_name = config.providers.monthly_composites.kind
     return cast(
         "MonthlyCompositeProvider",
         _build_registered_component(
@@ -357,14 +350,6 @@ def resolve_monthly_composite_provider(
 
 
 def resolve_atmo_provider(config: Any, auth: CredentialManager | None = None) -> AtmoPriorFn:
-    provider_name = config.atmo_prior.provider
+    provider_name = config.providers.atmo.kind
     provider = _build_registered_component(ATMO_PROVIDER_REGISTRY, provider_name, config, auth)
     return cast("AtmosphericPriorProvider", provider).get_prior
-
-
-__all__ = [
-    "_build_registered_component",
-    "resolve_atmo_provider",
-    "resolve_brdf_provider",
-    "resolve_monthly_composite_provider",
-]

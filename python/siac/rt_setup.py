@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from siac.config.schema import (
+from siac.config.algorithms import (
     RTAerosolSetupConfig,
     RTAlgorithmConfig,
     RTAtmosphereSetupConfig,
@@ -187,12 +187,3 @@ def validate_lut_requested_setup(requested: RTSetupConfig) -> None:
             "The requested generic RT setup is incompatible with the fixed packaged remote libRadtran LUT preset: "
             + detail
         )
-
-
-__all__ = [
-    "DEFAULT_LUT_RT_SETUP",
-    "DEFAULT_SIXS_RT_SETUP",
-    "resolve_backend_rt_setup",
-    "resolve_effective_rt_setup",
-    "validate_lut_requested_setup",
-]

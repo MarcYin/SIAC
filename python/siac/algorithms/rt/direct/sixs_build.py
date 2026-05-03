@@ -27,7 +27,7 @@ import requests
 from siac.sixs_outputs import SIXS_CORE_OUTPUT_SPECS
 
 if TYPE_CHECKING:
-    from siac.config.schema import SixSAlgorithmConfig
+    from siac.config.algorithms import SixSAlgorithmConfig
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,64 @@ def _core_output_assignment_lines() -> list[str]:
         else:
             lines.append(f"      if ({condition}) {target}={expression}")
     return lines
+
+
+def _main_subroutine_signature() -> str:
+    return "\n".join(
+        [
+            "      subroutine sixs_case_core(iwr_unit,asol_in,phi0_in,avis_in,",
+            "     s phiv_in,month_in,jday_in,idatm_in,",
+            "     s atmospheric_columns_mode_in,uw_in,uo3_in,",
+            "     s radiosonde_altitude_in,radiosonde_pressure_in,",
+            "     s radiosonde_temperature_in,radiosonde_water_in,",
+            "     s radiosonde_ozone_in,iaer_in,aerosol_mixture_in,",
+            "     s aerosol_dist_rmin_in,aerosol_dist_rmax_in,",
+            "     s aerosol_dist_icp_in,aerosol_dist_x1_in,",
+            "     s aerosol_dist_x2_in,aerosol_dist_x3_in,",
+            "     s aerosol_dist_cij_in,aerosol_dist_rn_in,",
+            "     s aerosol_dist_ri_in,aerosol_sun_count_in,",
+            "     s aerosol_sun_radius_in,aerosol_sun_dvlogr_in,",
+            "     s aerosol_layer_count_in,aerosol_layer_height_in,",
+            "     s aerosol_layer_aot_in,aerosol_layer_type_in,",
+            "     s aerosol_filename_in,taer55_in,elevation_km_in,",
+            "     s wlinf_in,wlsup_in,spectral_response_in,",
+            "     s surface_inhomo_in,surface_idirec_in,",
+            "     s surface_target_mode_in,surface_target_constant_in,",
+            "     s surface_target_spectrum_in,surface_env_mode_in,",
+            "     s surface_env_constant_in,surface_env_spectrum_in,",
+            "     s surface_radius_km_in,surface_brdf_model_in,",
+            "     s surface_brdf_params_in,surface_brdf_options_in,",
+            "     s surface_brdf_struct_in,surface_brdf_optics_in,",
+            "     s surface_brdf_table_solar_in,surface_brdf_table_view_in,",
+            "     s surface_brdf_spherical_albedo_in,",
+            "     s surface_brdf_directional_reflectance_in,",
+            "     s reference_reflectance_in,irapp_in,rapp_in,ier_out,",
+            "     s output_values_out)",
+        ]
+    )
+
+
+def _main_runtime_initialization() -> str:
+    return "\n".join(
+        [
+            "      iwr=iwr_unit",
+            "      ier=.FALSE.",
+            "      ier_out=.FALSE.",
+            "      iinf=1",
+            "      rpfet_report=0.",
+            "      plumet_report=0.",
+            "      xpol_report=0.",
+            "      rpfet_over_refet_report=0.",
+            "      rocave_report=0.",
+            "      robar1_over_xnorm1_report=0.",
+            "      robar2_over_xnorm2_report=0.",
+            "      rbard_report=0.",
+            "      albbrdf_report=0.",
+            "      rfoamave_report=0.",
+            "      rwatave_report=0.",
+            "      rglitave_report=0.",
+        ]
+    )
 
 
 def shared_library_suffix() -> str:
@@ -449,38 +507,7 @@ def patch_main_source(text: str) -> str:
     text = _replace_once(
         text,
         "      program ssssss",
-        "\n".join(
-            [
-                "      subroutine sixs_case_core(iwr_unit,asol_in,phi0_in,avis_in,",
-                "     s phiv_in,month_in,jday_in,idatm_in,",
-                "     s atmospheric_columns_mode_in,uw_in,uo3_in,",
-                "     s radiosonde_altitude_in,radiosonde_pressure_in,",
-                "     s radiosonde_temperature_in,radiosonde_water_in,",
-                "     s radiosonde_ozone_in,iaer_in,aerosol_mixture_in,",
-                "     s aerosol_dist_rmin_in,aerosol_dist_rmax_in,",
-                "     s aerosol_dist_icp_in,aerosol_dist_x1_in,",
-                "     s aerosol_dist_x2_in,aerosol_dist_x3_in,",
-                "     s aerosol_dist_cij_in,aerosol_dist_rn_in,",
-                "     s aerosol_dist_ri_in,aerosol_sun_count_in,",
-                "     s aerosol_sun_radius_in,aerosol_sun_dvlogr_in,",
-                "     s aerosol_layer_count_in,aerosol_layer_height_in,",
-                "     s aerosol_layer_aot_in,aerosol_layer_type_in,",
-                "     s aerosol_filename_in,taer55_in,elevation_km_in,",
-                "     s wlinf_in,wlsup_in,spectral_response_in,",
-                "     s surface_inhomo_in,surface_idirec_in,",
-                "     s surface_target_mode_in,surface_target_constant_in,",
-                "     s surface_target_spectrum_in,surface_env_mode_in,",
-                "     s surface_env_constant_in,surface_env_spectrum_in,",
-                "     s surface_radius_km_in,surface_brdf_model_in,",
-                "     s surface_brdf_params_in,surface_brdf_options_in,",
-                "     s surface_brdf_struct_in,surface_brdf_optics_in,",
-                "     s surface_brdf_table_solar_in,surface_brdf_table_view_in,",
-                "     s surface_brdf_spherical_albedo_in,",
-                "     s surface_brdf_directional_reflectance_in,",
-                "     s reference_reflectance_in,irapp_in,rapp_in,ier_out,",
-                "     s output_values_out)",
-            ]
-        ),
+        _main_subroutine_signature(),
         "main.f program entrypoint",
     )
     text = _replace_once(
@@ -554,26 +581,7 @@ def patch_main_source(text: str) -> str:
                 "      iinf=1",
             ]
         ),
-        "\n".join(
-            [
-                "      iwr=iwr_unit",
-                "      ier=.FALSE.",
-                "      ier_out=.FALSE.",
-                "      iinf=1",
-                "      rpfet_report=0.",
-                "      plumet_report=0.",
-                "      xpol_report=0.",
-                "      rpfet_over_refet_report=0.",
-                "      rocave_report=0.",
-                "      robar1_over_xnorm1_report=0.",
-                "      robar2_over_xnorm2_report=0.",
-                "      rbard_report=0.",
-                "      albbrdf_report=0.",
-                "      rfoamave_report=0.",
-                "      rwatave_report=0.",
-                "      rglitave_report=0.",
-            ]
-        ),
+        _main_runtime_initialization(),
         "main.f runtime initialization",
     )
     text = _replace_once(text, "      read(iread,*) igeom", "      igeom=0", "geometry mode input")
@@ -1453,11 +1461,6 @@ def ensure_native_sixs_module(config: SixSAlgorithmConfig) -> Path:
     return build_native_sixs_module(config)
 
 
-def ensure_native_sixs_library(config: SixSAlgorithmConfig) -> Path:
-    """Backward-compatible alias for the compiled Python extension path."""
-    return ensure_native_sixs_module(config)
-
-
 def build_native_sixs_module(config: SixSAlgorithmConfig) -> Path:
     """Fetch, patch, and compile the 6SV2.1 Python extension."""
     paths = resolve_build_paths(config)
@@ -1481,11 +1484,6 @@ def build_native_sixs_module(config: SixSAlgorithmConfig) -> Path:
     if built_module is None:
         raise RuntimeError("F2PY completed but the compiled 6S Python extension was not found.")
     return built_module
-
-
-def build_native_sixs_library(config: SixSAlgorithmConfig) -> Path:
-    """Backward-compatible alias for the compiled Python extension path."""
-    return build_native_sixs_module(config)
 
 
 def find_built_extension(paths: SixSBuildPaths) -> Path | None:
@@ -2098,24 +2096,3 @@ def _summarize_build_output(stdout: str, stderr: str, *, max_chars: int = 1200) 
     if len(summary) > max_chars:
         return f"...{summary[-max_chars:]}"
     return summary
-
-
-__all__ = [
-    "SixSBuildPaths",
-    "build_native_sixs_library",
-    "build_native_sixs_module",
-    "default_build_root",
-    "ensure_native_sixs_library",
-    "ensure_native_sixs_module",
-    "find_built_extension",
-    "native_module_suffixes",
-    "parse_makefile_sources",
-    "patch_aeroso_source",
-    "patch_discom_source",
-    "patch_kernelpol_source",
-    "patch_main_source",
-    "patch_mie_source",
-    "patch_threadprivate_directives",
-    "resolve_build_paths",
-    "shared_library_suffix",
-]

@@ -11,7 +11,7 @@ import xarray as xr
 
 import siac.adapters.output as output_module
 from siac.adapters.output import ConfiguredOutputWriter, _derive_scene_prefix
-from siac.config.schema import OutputDefaultsConfig
+from siac.config.system import OutputDefaultsConfig
 from siac.runtime import (
     AOTScatterBandDiagnostics,
     CorrectionDiagnostics,

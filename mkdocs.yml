@@ -118,3 +118,4 @@ nav:
   - Developer:
       - Dev Setup: developer/dev-setup.md
       - Extending SIAC: developer/extending-siac.md
+      - Refactor Inventory: developer/refactor-inventory.md

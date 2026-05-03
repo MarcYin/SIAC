@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from siac.api.public import SIAC, process_landsat8, process_sentinel2, siac_process
+from siac.api.public import SIAC, process_sentinel2, siac_process
 from siac.api.requests import SceneProcessRequest
 from siac.config import SIACConfig
 from siac.runtime import CorrectionResult
@@ -42,11 +42,11 @@ def test_siac_from_helpers(monkeypatch):
     )
 
     siac_from_file = SIAC.from_config("dummy.toml")
-    siac_default = SIAC.from_defaults(sensor="l8")
+    siac_default = SIAC.from_defaults(sensor="s2")
 
     assert isinstance(siac_from_file, SIAC)
     assert siac_from_file.config is cfg
-    assert siac_default.config.sensor == "l8"
+    assert siac_default.config.sensor == "s2"
 
 
 def test_siac_process_delegates_with_scene_request(monkeypatch, tmp_path):
@@ -108,7 +108,5 @@ def test_sensor_wrappers_delegate(monkeypatch):
     )
 
     assert process_sentinel2("in1", "out1", aoi="a.geojson") == "ok"
-    assert process_landsat8("in2", "out2") == "ok"
     assert calls[0] == "s2"
-    assert calls[2] == "l8"
     assert calls[1][2]["aoi"] == "a.geojson"

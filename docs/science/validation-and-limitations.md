@@ -32,8 +32,8 @@ From the current codebase, the following are directly visible:
 | Area | Caution |
 | --- | --- |
 | Scientific claims | Use the paper for validated scientific claims, not only the code structure. |
-| Sensor coverage | Sentinel-2 is the clearest user-facing path in the current repo; Landsat is present in the API but should be documented carefully. |
-| Backend maturity | The schema supports multiple providers and backends, but not every option should automatically be treated as equally mature operationally. |
+| Sensor coverage | Sentinel-2 is the end-to-end user-facing path in the current repo; Landsat catalogs exist, but Landsat scene processing is not implemented. |
+| Backend maturity | The schema now exposes only provider and surface-prior options that the runtime can build. |
 | Uncertainty interpretation | The repository carries uncertainty fields, but the paper remains the main source for the derivation and interpretation of uncertainty behavior. |
 | Operational assumptions | Credentials, caches, remote access, and optional dependencies introduce real environment-dependent behavior. |
 

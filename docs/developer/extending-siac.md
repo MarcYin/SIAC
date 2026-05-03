@@ -29,12 +29,12 @@ flowchart TD
 | Extension type | Primary location | Supporting locations |
 | --- | --- | --- |
 | new sensor preprocessor | `python/siac/adapters/satellite/` | `catalog/sensors/`, `domain/sensors.py`, tests |
-| new atmospheric provider | `python/siac/adapters/atmo/` | `app/registry.py`, `app/assembly.py`, config schema if new options are needed |
-| new BRDF/provider backend | `python/siac/adapters/brdf/` | `app/registry.py`, `app/assembly.py`, tests |
-| new Sentinel-2 backend | `python/siac/adapters/data/` and `python/siac/adapters/s2_backend.py` | `app/assembly.py`, tests |
+| new atmospheric provider | `python/siac/adapters/atmo/` | `app/registry.py`, `app/_assembly_providers.py`, config schema if new options are needed |
+| new BRDF/provider backend | `python/siac/adapters/brdf/` | `app/registry.py`, `app/_assembly_providers.py`, tests |
+| new Sentinel-2 backend | `python/siac/adapters/data/` and `python/siac/adapters/s2_backend.py` | `app/s2_backend.py`, tests |
 | new RT backend | `python/siac/algorithms/rt/` plus `python/siac/adapters/rt.py` | config schema, tests |
-| new surface-prior method | `python/siac/algorithms/surface/` | `app/registry.py`, `app/assembly.py`, config schema, tests |
-| new solver behavior | `python/siac/algorithms/solver/` | `app/assembly.py`, runtime tests |
+| new surface-prior method | `python/siac/algorithms/surface/` | `app/registry.py`, `app/_assembly_surface.py`, config schema, tests |
+| new solver behavior | `python/siac/algorithms/solver/` | `app/_assembly_solver.py`, runtime tests |
 | new output behavior | `python/siac/storage/` and `python/siac/adapters/output.py` | config schema, tests |
 
 ## Registries And Assembly
@@ -43,8 +43,8 @@ The `app` layer is the bridge between configuration and concrete runtime
 objects. When you add a pluggable implementation, update both:
 
 - `python/siac/app/registry.py` for named factories
-- `python/siac/app/assembly.py` for selection, configuration, and callable
-  binding
+- the focused `python/siac/app/_assembly_*.py` module for selection,
+  configuration, and callable binding
 
 Use the existing registries as the standard pattern:
 
@@ -54,7 +54,8 @@ Use the existing registries as the standard pattern:
 - `SURFACE_PRIOR_METHOD_REGISTRY`
 
 If the new feature is configurable, also extend the schema in
-`python/siac/config/schema.py` so it can be selected through `SIACConfig`.
+the focused `python/siac/config/` section module so it can be selected through
+`SIACConfig`.
 
 ## RTModelBackend Protocol
 
@@ -112,7 +113,7 @@ When adding a new external provider:
 
 1. create the adapter in the correct `adapters/` subpackage
 2. isolate credentials and remote calls inside the adapter
-3. register or resolve it through `app.assembly`
+3. register or resolve it through the focused assembly module for that stage
 4. expose any needed config fields through the schema
 5. add tests for auth, query behavior, and failure modes
 

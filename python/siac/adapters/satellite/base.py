@@ -219,15 +219,12 @@ class BaseSatellitePreprocessor(ABC):
         Returns:
             A fully populated :class:`ObservationBundle`.
         """
-        from siac.runtime import ObservationBundle
+        from siac.adapters.satellite.observation import observation_bundle_from_raw
 
         raw = self.preprocess(input_path)
-        return ObservationBundle(
-            toa=raw["toa"],
-            geometry=raw["geometry"],
-            cloud_mask=raw["cloud_mask"],
+        return observation_bundle_from_raw(
+            raw,
             sensor_config=self.sensor_config,
-            metadata=raw["metadata"],
             crs=crs,
             bounds=bounds,
         )

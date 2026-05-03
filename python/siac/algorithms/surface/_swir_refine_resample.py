@@ -1,10 +1,4 @@
-"""Resampling/alignment helpers extracted from :mod:`swir_refine`.
-
-Pure DataArray grid-alignment utilities that don't depend on the Route-B
-orchestration state.  Kept private (underscore) because they are implementation
-details; swir_refine re-exports the names it uses so existing call sites keep
-working.
-"""
+"""Resampling/alignment helpers extracted from :mod:`swir_refine`."""
 
 from __future__ import annotations
 
@@ -13,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from siac.algorithms.grid.assembler import _resample_da
 from siac.runtime import BRDFKernelWeights
 from siac.runtime.models import copy_spatial_metadata_like
 
@@ -33,15 +28,7 @@ def _resample_da_indirect(
     *,
     template: xr.DataArray | None = None,
 ) -> xr.DataArray:
-    """Call into swir_refine._resample_da so monkey-patches applied to the
-    swir_refine module surface remain effective after this refactor.
-
-    The indirection lives in its own helper rather than at module import time
-    to avoid a circular import (swir_refine -> this module -> swir_refine).
-    """
-    from siac.algorithms.surface import swir_refine
-
-    return swir_refine._resample_da(data, target_shape, method, template=template)
+    return _resample_da(data, target_shape, method, template=template)
 
 
 def _shares_spatial_grid(data: xr.DataArray, template: xr.DataArray) -> bool:

@@ -35,7 +35,7 @@ def build_rt_model(
     sensor_config: SensorConfig | None = None,
 ) -> Any:
     """Build the RT backend for the resolved config."""
-    rt_config = config.rt_model
+    rt_config = config.algorithms.rt
     if sensor_config is not None:
         sensor_id, satellite_id = sensor_config.sensor_id, sensor_config.satellite_id
     else:
@@ -98,6 +98,3 @@ def build_rt_model(
         )
 
     raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")
-
-
-__all__ = ["build_rt_model"]

@@ -110,7 +110,7 @@ class TestAtmosphericState:
 
         updated = sample_state.with_updated_parameters(
             {"tco3": new_tco3},
-            {"tco3_unc": new_tco3_unc},
+            {"tco3": new_tco3_unc},
         )
 
         xr.testing.assert_equal(updated.get_parameter("tco3"), new_tco3)

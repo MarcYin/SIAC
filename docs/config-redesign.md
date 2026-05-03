@@ -413,7 +413,7 @@ Rules:
 
 Create:
 
-- `python/siac/config/schema.py`
+- focused `python/siac/config/` section modules
 - `python/siac/config/load.py`
 - `python/siac/config/resolve.py`
 - `python/siac/config/snapshot.py`

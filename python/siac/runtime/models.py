@@ -248,9 +248,8 @@ class AtmosphericState:
     ) -> AtmosphericState:
         """Return a state with selected atmospheric parameters replaced.
 
-        ``values`` keys are canonical parameter names: ``aot``, ``tcwv``,
-        and ``tco3``. ``uncertainties`` accepts either those same keys or
-        ``*_unc`` keys for compatibility with existing result fields.
+        ``values`` and ``uncertainties`` keys are canonical parameter names:
+        ``aot``, ``tcwv``, and ``tco3``.
         """
         allowed = {"aot", "tcwv", "tco3"}
         fields = {name: getattr(self, name) for name in allowed}
@@ -263,12 +262,11 @@ class AtmosphericState:
 
         if uncertainties is not None:
             for name, value in uncertainties.items():
-                param_name = name[:-4] if name.endswith("_unc") else name
-                if param_name not in allowed:
+                if name not in allowed:
                     raise KeyError(f"Unknown atmospheric uncertainty {name!r}")
-                uncs[param_name] = copy_spatial_metadata_like(
+                uncs[name] = copy_spatial_metadata_like(
                     value,
-                    getattr(self, f"{param_name}_unc"),
+                    getattr(self, f"{name}_unc"),
                 )
 
         return AtmosphericState(
@@ -525,20 +523,3 @@ class CorrectionResult:
     monthly_composites: dict[str, MonthlyCompositeOutput] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     diagnostics: CorrectionDiagnostics = field(default_factory=CorrectionDiagnostics)
-
-
-__all__ = [
-    "AtmosphericState",
-    "AOTScatterBandDiagnostics",
-    "BRDFKernelWeights",
-    "copy_spatial_metadata_like",
-    "CorrectionDiagnostics",
-    "CorrectionResult",
-    "GeometryAngles",
-    "MonthlyCompositeOutput",
-    "ObservationBundle",
-    "RTCoefficients",
-    "SolvedAtmosphere",
-    "SolverInputBundle",
-    "SurfacePrior",
-]

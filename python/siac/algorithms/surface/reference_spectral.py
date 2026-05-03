@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def _trapezoid(y: NDArray, x: NDArray) -> float:
-    """Compatibility wrapper for NumPy 1.x/2.x integration API."""
+    """Return trapezoid integration for a spectral curve."""
     if hasattr(np, "trapezoid"):
         return float(np.trapezoid(y, x))
     return float(np.add.reduce((y[1:] + y[:-1]) * np.diff(x) * 0.5))
@@ -135,14 +135,3 @@ def reference_to_sensor(
     flat = ref_reflectance.reshape(ref_reflectance.shape[0], -1)
     sensor_flat = pinv @ flat
     return sensor_flat.reshape(len(target_bands), *spatial_shape)
-
-
-load_reference_rsr = load_reference_rsrf
-
-
-__all__ = [
-    "load_reference_rsrf",
-    "load_reference_rsr",
-    "sensor_to_reference",
-    "reference_to_sensor",
-]

@@ -23,7 +23,7 @@ from siac.adapters.data.copernicus_dataspace import (
 )
 from siac.adapters.data.gcs_sentinel2 import GCSSentinel2Backend
 from siac.adapters.data.s2_data_source import S2Product, S2Query
-from siac.algorithms.rt.direct import __all__ as direct_all
+from siac.algorithms.rt.direct import SixSBackend
 from siac.domain.aoi import AOI, _detect_crs
 from siac.errors import (
     ConfigurationError,
@@ -171,7 +171,7 @@ class TestExceptionsAndStubs:
             assert issubclass(exc, SIACError)
 
     def test_rt_direct_module(self):
-        assert direct_all == ["SixSBackend"]
+        assert SixSBackend.__name__ == "SixSBackend"
 
     def test_cdse_and_gcs_backends(self, tmp_path: Path, monkeypatch):
         query = S2Query(

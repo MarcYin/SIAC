@@ -1,6 +1,8 @@
 # Configuration Reference
 
-This page documents the public configuration surface driven by `SIACConfig`, `SystemConfig`, and the typed schema in `python/siac/config/schema.py`.
+This page documents the public configuration surface driven by `SIACConfig`,
+`SystemConfig`, and the typed config models in `config.providers`,
+`config.algorithms`, `config.system`, `config.request`, and `config.resolved`.
 
 ## Precedence model
 
@@ -23,6 +25,10 @@ flowchart TD
 ```
 
 ## Top-level sections
+
+Per-run `sensor` currently accepts `auto` or `s2` for scene processing. The
+sensor catalog contains additional optical sensor definitions for spectral/RT
+work, but they are not registered end-to-end scene preprocessors.
 
 ## `paths`
 
@@ -74,11 +80,8 @@ Main fields:
 - `cache_dir`
 - `download_missing`
 - `temporal_interpolation`
-- `user_aot`
-- `user_tcwv`
-- `user_tco3`
 
-Supported kinds include `cams`, `merra2`, `mcd19`, `vnp19`, `era5`, and `user`.
+Supported kinds are `cams`, `merra2`, `mcd19`, and `vnp19`.
 
 ### `providers.brdf`
 
@@ -89,10 +92,8 @@ Main fields:
 - `cache_dir`
 - `temporal_window`
 - `use_cache`
-- `gee_project`
-- `zarr_url`
 
-Supported kinds include `mcd43`, `vnp43`, `mcd19`, `gee`, `zarr`, and `user`.
+Supported kinds are `mcd43`, `vnp43`, and `mcd19`.
 
 ### `providers.s2`
 
@@ -129,8 +130,6 @@ Supported methods:
 - `kernel_model`
 - `whittaker`
 - `monthly_database`
-- `neural`
-- `direct`
 
 ### `algorithms.rt`
 

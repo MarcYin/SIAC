@@ -34,7 +34,7 @@ from siac.storage.writers import ensure_writable_directory, write_netcdf
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from siac.config.schema import OutputDefaultsConfig
+    from siac.config.system import OutputDefaultsConfig
     from siac.runtime import CorrectionResult
 
 logger = logging.getLogger(__name__)
@@ -598,6 +598,3 @@ class _RasterCorrectionBoaStream:
 
     def finish(self, result: CorrectionResult) -> dict[str, Path]:
         return self.writer._finish_correction_boa_stream(result, self)
-
-
-__all__ = ["ConfiguredOutputWriter"]

@@ -31,11 +31,11 @@ Solver and corrector currently apply boolean operations (`~cloud_mask`), so dire
 Introduce a dual-mask strategy:
 
 1. **Categorical cloud classes** (new): `cloud_classes: xr.DataArray[uint8]` with values in `{0,1,2,3}`.
-2. **Boolean compatibility mask** (existing): `cloud_mask: xr.DataArray[bool]` derived as:
+2. **Boolean cloud mask**: `cloud_mask: xr.DataArray[bool]` derived as:
    - `True` for classes in `{0,2,3}`
    - `False` for class `1`
 
-This preserves compatibility with existing M4/M5/M6 code while exposing richer cloud semantics for outputs and QA.
+This keeps a single boolean M4/M5/M6 contract while exposing richer cloud semantics for outputs and QA.
 
 ## 4. Module API
 
@@ -55,19 +55,19 @@ build_cloud_classes(
     geometry: GeometryAngles | None,
     sensor_config: SensorConfig,
     *,
-    config: CloudMaskConfig,
+    config: CloudMaskAlgorithmConfig,
     input_path: Path | None = None,
 ) -> xr.DataArray
 ```
 
 ```python
-# compatibility conversion
+# cloud-class conversion
 classes_to_bool_mask(cloud_classes: xr.DataArray) -> xr.DataArray
 ```
 
 ## 5. Configuration Model
 
-Add `CloudMaskConfig` to `SIACConfig`:
+Add `CloudMaskAlgorithmConfig` to `AlgorithmsConfig`:
 
 - `mode`: `"auto" | "external_file" | "user_callable" | "none"`
 - `provider`: `"omnicloudmask" | "custom"`
@@ -184,9 +184,9 @@ Option A (minimal-risk):
 Option B (cleaner long-term):
 
 - Add optional `cloud_classes: xr.DataArray | None` to `ObservationBundle`.
-- Keep `cloud_mask` for backward compatibility.
+- Keep `cloud_mask` as the canonical boolean processing mask.
 
-Recommended: Option B with backward-compatible default `None`.
+Recommended: Option B with default `None`.
 
 ### 10.3 Output writing
 
@@ -213,7 +213,7 @@ Add unit tests for:
 6. Resolution policy behavior (`auto` vs `force`).
 7. External mask reproject/mapping path.
 8. User callable path.
-9. Boolean compatibility conversion (`{0,2,3}` => `True`).
+9. Boolean cloud-mask conversion (`{0,2,3}` => `True`).
 
 Integration tests:
 

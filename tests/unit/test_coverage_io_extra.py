@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -46,7 +45,7 @@ from siac.storage.readers import (
     read_raster_window,
     read_zarr_array,
 )
-from siac.storage.stac import build_stac_item, write_stac_item
+from siac.storage.stac import build_stac_item_from_result
 from siac.storage.writers import (
     _compute_overview_levels,
     _prepare_for_write,
@@ -246,7 +245,7 @@ class TestWritersExtra:
         levels = _compute_overview_levels(_make_da((2048, 2048)))
         assert levels and levels[0] == 2
 
-    def test_build_and_write_stac_item(self, tmp_path: Path):
+    def test_build_stac_item_from_result(self, tmp_path: Path):
         template = _make_da((16, 16))
         toa = xr.Dataset({"B02": template.copy(), "B08": (template + 0.1).rename("B08")})
         geometry = GeometryAngles(
@@ -276,12 +275,21 @@ class TestWritersExtra:
             crs="EPSG:32632",
             bounds=tuple(map(float, template.rio.bounds())),
         )
+        input_href = tmp_path / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE"
         result = CorrectionResult(
             boa=xr.Dataset({"B02": template.copy(), "B08": (template + 0.1).rename("B08")}),
             boa_unc=None,
             aot=xr.full_like(template, 0.12),
             tcwv=xr.full_like(template, 1.8),
-            cloud_mask=xr.full_like(template, True, dtype=bool),
+            cloud_mask=cloud_mask,
+            metadata={
+                **obs.metadata,
+                "input_path": input_href,
+                "sensor_config": obs.sensor_config,
+                "geometry": obs.geometry,
+                "crs": obs.crs,
+                "bounds": obs.bounds,
+            },
             diagnostics=CorrectionDiagnostics(processing_time_s=12.5),
         )
 
@@ -290,25 +298,19 @@ class TestWritersExtra:
         boa_assets = {"B02": boa_dir / "B02.tif", "B08": boa_dir / "B08.tif"}
         for path in boa_assets.values():
             path.write_bytes(b"boa")
-        atmosphere_path = tmp_path / "atmosphere.nc"
-        atmosphere_path.write_bytes(b"netcdf")
         qa_dir = tmp_path / "qa"
         qa_dir.mkdir()
         qa_assets = {"cloud_mask": qa_dir / "cloud_mask.tif"}
         qa_assets["cloud_mask"].write_bytes(b"mask")
-        summary_path = tmp_path / "run_summary.json"
-        summary_path.write_text("{}", encoding="utf-8")
 
-        item = build_stac_item(
-            obs,
+        item = build_stac_item_from_result(
             result,
             output_dir=tmp_path,
-            boa_assets=boa_assets,
-            atmosphere_asset=atmosphere_path,
-            qa_assets=qa_assets,
-            summary_asset=summary_path,
-            input_href=tmp_path
-            / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
+            artifacts={
+                "boa.B02": boa_assets["B02"],
+                "boa.B08": boa_assets["B08"],
+                "auxiliary.cloud_mask": qa_assets["cloud_mask"],
+            },
         )
 
         assert item["stac_version"] == "1.1.0"
@@ -324,26 +326,10 @@ class TestWritersExtra:
         assert item["properties"]["proj:epsg"] == 32632
         assert item["assets"]["B02"]["href"] == "boa/B02.tif"
         assert item["assets"]["B02"]["eo:bands"][0]["common_name"] == "blue"
-        assert item["assets"]["atmosphere"]["href"] == "atmosphere.nc"
         assert item["assets"]["cloud-mask"]["href"] == "qa/cloud_mask.tif"
-        assert item["assets"]["summary"]["href"] == "run_summary.json"
-        assert item["links"][0]["href"] == "item.json"
+        assert item["links"][0]["href"] == "./"
         assert item["links"][1]["rel"] == "derived_from"
-
-        item_path = write_stac_item(
-            obs,
-            result,
-            output_dir=tmp_path,
-            boa_assets=boa_assets,
-            atmosphere_asset=atmosphere_path,
-            qa_assets=qa_assets,
-            summary_asset=summary_path,
-            input_href=tmp_path
-            / "S2C_MSIL1C_20260102T024121_N0511_R089_T50QLD_20260102T035433.SAFE",
-        )
-        assert item_path.exists()
-        written = json.loads(item_path.read_text(encoding="utf-8"))
-        assert written["assets"]["B08"]["eo:bands"][0]["name"] == "B08"
+        assert item["assets"]["B08"]["eo:bands"][0]["name"] == "B08"
 
     def test_write_netcdf_and_siac_product_writers(self, tmp_path: Path):
         da = _make_da((16, 16))

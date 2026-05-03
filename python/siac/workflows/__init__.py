@@ -13,8 +13,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
 }
 _SUBMODULES = frozenset({"pipeline", "scene", "sentinel2"})
 
-__all__ = list(_EXPORTS)
-
 
 def __getattr__(name: str) -> Any:
     if name in _SUBMODULES:
@@ -33,4 +31,4 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals()) + __all__ + list(_SUBMODULES))
+    return sorted(list(globals()) + list(_EXPORTS) + list(_SUBMODULES))

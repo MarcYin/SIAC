@@ -24,8 +24,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "modland_tile_coords": ("siac.adapters.earthdata_common", "modland_tile_coords"),
     "ConfiguredOutputWriter": ("siac.adapters.output", "ConfiguredOutputWriter"),
     "load_band_rsrf": ("siac.adapters.rsrf", "load_band_rsrf"),
-    "load_band_srf_from_rsrf": ("siac.adapters.rsrf", "load_band_srf_from_rsrf"),
-    "load_sensor_config_from_rsrf": ("siac.adapters.rsrf", "load_sensor_config_from_rsrf"),
     "load_sensor_config_with_rsrf": ("siac.adapters.rsrf", "load_sensor_config_with_rsrf"),
     "BaseSatellitePreprocessor": ("siac.adapters.satellite", "BaseSatellitePreprocessor"),
     "Sentinel2Preprocessor": ("siac.adapters.satellite", "Sentinel2Preprocessor"),
@@ -51,8 +49,6 @@ _SUBMODULES = frozenset(
     }
 )
 
-__all__ = list(_EXPORTS)
-
 
 def __getattr__(name: str) -> Any:
     if name in _SUBMODULES:
@@ -71,4 +67,4 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals()) + __all__ + list(_SUBMODULES))
+    return sorted(list(globals()) + list(_EXPORTS) + list(_SUBMODULES))

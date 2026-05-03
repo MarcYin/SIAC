@@ -75,7 +75,6 @@ Use this only when you specifically want a non-Pixi environment.
 
 - `.[dev]` for development tools
 - `.[docs]` for the documentation stack
-- `.[gee]` for Google Earth Engine support
 
 ## Native 6S Backend Setup
 

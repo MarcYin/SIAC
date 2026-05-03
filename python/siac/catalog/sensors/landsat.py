@@ -34,6 +34,3 @@ LANDSAT9_OLI2_CONFIG = SensorConfig(
     default_ref_scale=2.75e-5,
     default_ref_offset=-0.2,
 )
-
-
-__all__ = ["LANDSAT8_OLI_CONFIG", "LANDSAT9_OLI2_CONFIG"]

@@ -13,7 +13,8 @@ from urllib.parse import urlparse
 yaml = cast("Any", import_module("yaml"))
 
 if TYPE_CHECKING:
-    from siac.config.schema import ResolvedConfig, SystemConfig
+    from siac.config.resolved import ResolvedConfig
+    from siac.config.system import SystemConfig
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 _REDACTION_TOKEN = "<redacted>"

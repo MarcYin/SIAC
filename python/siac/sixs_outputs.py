@@ -140,12 +140,3 @@ SIXS_DEFAULT_OUTPUT_VARIABLES: Final[tuple[str, ...]] = SIXS_OUTPUT_VARIABLE_CHO
 SIXS_NATIVE_OUTPUT_NAMES: Final[tuple[str, ...]] = tuple(
     name for name in SIXS_OUTPUT_VARIABLE_CHOICES if name not in {"xbp", "xcp"}
 )
-
-__all__ = [
-    "SIXS_BASE_OUTPUTS",
-    "SIXS_CORE_OUTPUT_NAMES",
-    "SIXS_CORE_OUTPUT_SPECS",
-    "SIXS_DEFAULT_OUTPUT_VARIABLES",
-    "SIXS_NATIVE_OUTPUT_NAMES",
-    "SIXS_OUTPUT_VARIABLE_CHOICES",
-]

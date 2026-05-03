@@ -23,8 +23,6 @@ from scipy.ndimage import (
     zoom,
 )
 
-__all__ = ["assemble_grids"]
-
 from siac.adapters.data.water_mask import load_water_mask_subset
 from siac.geo.resample import shares_template_grid
 from siac.runtime import (
@@ -738,7 +736,7 @@ def assemble_grids(
         atmo: M2 output (atmospheric prior, possibly at coarse resolution).
         surface: M3 output (surface prior).
         rt_model: RT model backend (passed through, not resampled).
-        aux_resolution_m: Legacy metadata field retained for compatibility.
+        aux_resolution_m: Auxiliary product resolution metadata.
         aerosol_resolution_m: Target resolution for AOT/TCWV retrieval (default 120 m).
 
     Returns:
@@ -758,15 +756,8 @@ def assemble_grids(
     logger.info(f"Selected {len(bands)} solver bands: {[b.name for b in bands]}")
 
     # 2. Determine the solver grid from the configured aerosol retrieval
-    #    resolution and scene bounds. If callers still set only the legacy
-    #    aux-resolution knob, preserve that behavior.
+    #    resolution and scene bounds.
     resolved_aerosol_resolution = float(aerosol_resolution_m)
-    if aerosol_resolution_m == 120.0 and aux_resolution_m != 500.0:
-        resolved_aerosol_resolution = float(aux_resolution_m)
-        logger.info(
-            "assemble_grids: using aux_resolution_m=%s as the solver grid for legacy compatibility",
-            aux_resolution_m,
-        )
     first_var = list(obs.toa.data_vars)[0]
     native_shape = obs.toa[first_var].shape  # (y, x)
     target_template = _build_target_template(obs.bounds, obs.crs, resolved_aerosol_resolution)

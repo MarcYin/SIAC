@@ -107,6 +107,3 @@ def process_scene(
     ):
         write_output(result, plan.output_path, output_writer=plan.output_writer)
     return result
-
-
-__all__ = ["execute_plan", "process_scene", "write_output"]

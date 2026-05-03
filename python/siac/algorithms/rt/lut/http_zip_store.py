@@ -538,14 +538,14 @@ def _build_s3_filesystem(storage_options: dict[str, Any]) -> AsyncFileSystem:
     key = options.pop("key", None)
     secret = options.pop("secret", None)
     anon = options.pop("anon", None)
-    region = options.pop("region", None)
-    endpoint_url = options.pop("endpoint_url", None)
+    unsupported = {"region", "endpoint_url"} & options.keys()
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise TypeError(
+            f"Top-level S3 storage option(s) are not supported: {names}. "
+            "Use storage_options['client_kwargs'] instead."
+        )
     client_kwargs = dict(options.pop("client_kwargs", {}))
-
-    if region is not None and "region_name" not in client_kwargs:
-        client_kwargs["region_name"] = region
-    if endpoint_url is not None and "endpoint_url" not in client_kwargs:
-        client_kwargs["endpoint_url"] = endpoint_url
 
     s3_kwargs: dict[str, Any] = {
         "asynchronous": True,

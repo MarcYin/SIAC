@@ -36,9 +36,9 @@ def _purge_modules(*module_names: str) -> None:
         (
             "siac.app",
             (
-                "siac.app.assembly",
                 "siac.app.planning",
                 "siac.app.requests",
+                "siac.app.s2_backend",
                 "siac.app.sentinel2",
             ),
             "resolve_run_config",

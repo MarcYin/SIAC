@@ -44,11 +44,6 @@ def _year_month(value: str) -> tuple[int, int]:
 def _add_aoi_arguments(parser: argparse.ArgumentParser, *, required: bool = False) -> None:
     aoi_group = parser.add_mutually_exclusive_group(required=required)
     aoi_group.add_argument(
-        "--aoi",
-        type=_non_empty_text,
-        help="Deprecated alias for --aoi-file.",
-    )
-    aoi_group.add_argument(
         "--aoi-file",
         type=Path,
         help="Path to an AOI GeoJSON file.",
@@ -189,10 +184,6 @@ def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
         return AOI.from_geojson(
             args.aoi_wkt, crs=cast("str | None", getattr(args, "aoi_crs", None))
         )
-    if getattr(args, "aoi", None) is not None:
-        return AOI.from_geojson(
-            Path(args.aoi), crs=cast("str | None", getattr(args, "aoi_crs", None))
-        )
     return None
 
 
@@ -228,7 +219,7 @@ def _run_process_s2(args: argparse.Namespace) -> int:
     from siac.api.public import siac_process_s2
 
     config = _load_config(args.config)
-    _configure_logging(config.log_level)
+    _configure_logging(config.runtime.log_level)
     result = siac_process_s2(config, args.query, **_process_kwargs(args))
     print(f"Sentinel-2 processing complete. Mean AOT: {float(result.aot.mean()):.3f}")
     return 0
@@ -238,7 +229,7 @@ def _run_prepare_monthly_composites(args: argparse.Namespace) -> int:
     from siac.api.public import prepare_monthly_composites
 
     config = _load_config(args.config)
-    _configure_logging(config.log_level)
+    _configure_logging(config.runtime.log_level)
     aoi = _resolve_cli_aoi(args)
     if not isinstance(aoi, AOI):
         if aoi is None:

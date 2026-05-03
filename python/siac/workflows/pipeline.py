@@ -8,20 +8,15 @@ import inspect
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from contextlib import nullcontext, suppress
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import numpy as np
 import xarray as xr
-from numpy import typing as npt
 
 from siac.adapters.data.water_mask import DEFAULT_WATER_MASK_VRT_URL
-from siac.algorithms.solver import build_solver_valid_mask
 from siac.errors import ValidationError as SIACValidationError
 from siac.observability import (
     ExecutionObserver,
@@ -32,17 +27,14 @@ from siac.observability import (
     resolve_execution_observer,
 )
 from siac.runtime import (
-    AOTScatterBandDiagnostics,
     AtmosphericState,
     CorrectionResult,
     GeometryAngles,
-    MonthlyCompositeOutput,
     ObservationBundle,
     SolvedAtmosphere,
     SolverInputBundle,
     SurfacePrior,
 )
-from siac.runtime.models import copy_spatial_metadata_like
 from siac.runtime.validation import (
     validate_atmospheric_state,
     validate_correction_result,
@@ -51,20 +43,45 @@ from siac.runtime.validation import (
     validate_solver_input_bundle,
     validate_surface_prior,
 )
+from siac.workflows._pipeline_config import (
+    _DEFAULT_AUX_RESOLUTION_M as _DEFAULT_AUX_RESOLUTION_M,
+)
+from siac.workflows._pipeline_config import (
+    _EXECUTION_KEYS as _EXECUTION_KEYS,
+)
+from siac.workflows._pipeline_config import (
+    PipelineExecutionSettings,
+    _aerosol_resolution,
+    _requested_solver_band_names,
+    _resolve_execution_settings,
+    _select_solver_bands_for_preload,
+    _should_capture_aot_scatter,
+    _should_skip_correction,
+)
+from siac.workflows._pipeline_config import (
+    _config_aux_resolution as _config_aux_resolution,
+)
+from siac.workflows._pipeline_config import (
+    _config_scatter_limit as _config_scatter_limit,
+)
+from siac.workflows._pipeline_config import (
+    _execution_values as _execution_values,
+)
+from siac.workflows._pipeline_diagnostics import (
+    build_aot_scatter_diagnostics as _build_aot_scatter_diagnostics,
+)
+from siac.workflows._pipeline_outputs import (
+    banded_dataarray_to_dataset as _banded_dataarray_to_dataset,
+)
+from siac.workflows._pipeline_outputs import (
+    monthly_composite_outputs as _monthly_composite_outputs,
+)
+from siac.workflows._pipeline_outputs import (
+    surface_template as _surface_template,
+)
 
 if TYPE_CHECKING:
     from siac.domain.aoi import AOI
-    from siac.domain.sensors import SensorConfig  # noqa: F401
-
-__all__ = [
-    "AtmoPriorFn",
-    "CorrectorFn",
-    "GridAssemblerFn",
-    "PreprocessorFn",
-    "SolverFn",
-    "SurfacePriorFn",
-    "run_pipeline",
-]
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +94,6 @@ _NON_RETRYABLE_EXCEPTIONS = (
     KeyError,
     NotImplementedError,
 )
-
-Float32Array: TypeAlias = npt.NDArray[np.float32]
 
 PreprocessorFn = Callable[[Path, Any], ObservationBundle]
 AtmoPriorFn = Callable[
@@ -95,7 +110,7 @@ def _is_retryable_exception(exc: BaseException) -> bool:
     return not isinstance(exc, _NON_RETRYABLE_EXCEPTIONS)
 
 
-def _stage_timeout(settings: dict[str, Any], *stage_names: str) -> float | None:
+def _stage_timeout(settings: PipelineExecutionSettings, *stage_names: str) -> float | None:
     stage_timeouts = settings.get("stage_timeouts", {})
     if isinstance(stage_timeouts, dict):
         for stage_name in stage_names:
@@ -107,167 +122,6 @@ def _stage_timeout(settings: dict[str, Any], *stage_names: str) -> float | None:
 
 
 _OUTPUTS_WRITTEN_METADATA_KEY = "_siac_outputs_written"
-
-# Pure config-extraction helpers live in a companion module; re-export them
-# here so existing imports from ``siac.workflows.pipeline`` keep working.
-# The F401 suppressions mark these as intentional re-exports, not unused.
-from siac.workflows._pipeline_config import (  # noqa: E402
-    _DEFAULT_AUX_RESOLUTION_M,  # noqa: F401
-    _EXECUTION_KEYS,  # noqa: F401
-    _MAX_SCATTER_POINTS_PER_BAND,
-    _aerosol_resolution,
-    _config_aux_resolution,  # noqa: F401
-    _config_scatter_limit,  # noqa: F401
-    _execution_values,  # noqa: F401
-    _requested_solver_band_names,
-    _resolve_execution_settings,
-    _select_solver_bands_for_preload,
-    _should_capture_aot_scatter,
-    _should_skip_correction,
-)
-
-
-def _sample_scatter_values(values: np.ndarray, *, max_points: int) -> Float32Array:
-    if values.size <= max_points:
-        return cast("Float32Array", values.astype(np.float32, copy=False))
-    indices = np.linspace(0, values.size - 1, max_points, dtype=np.int64)
-    return cast("Float32Array", values[indices].astype(np.float32, copy=False))
-
-
-def _select_band_slice(
-    data: xr.DataArray,
-    *,
-    band_name: str,
-    band_index: int,
-) -> xr.DataArray | None:
-    if "band" not in data.dims:
-        return data
-    band_coord = data.coords.get("band")
-    if band_coord is not None:
-        band_values = [str(value) for value in np.asarray(band_coord.values).tolist()]
-        if band_name in band_values:
-            return cast("xr.DataArray", data.sel(band=band_name, drop=True))
-        if np.asarray(band_coord.values).dtype.kind in {"U", "S", "O"}:
-            return None
-    return cast("xr.DataArray", data.isel(band=band_index, drop=True))
-
-
-def _finite_diagnostic_field(
-    values: xr.DataArray,
-    fallback: xr.DataArray,
-) -> xr.DataArray:
-    source = np.asarray(values.values, dtype=np.float32)
-    if np.all(np.isfinite(source)):
-        return values
-
-    filled = source.copy()
-    missing = ~np.isfinite(filled)
-    if fallback.shape == values.shape:
-        fallback_values = np.asarray(fallback.values, dtype=np.float32)
-        fallback_finite = missing & np.isfinite(fallback_values)
-        filled[fallback_finite] = fallback_values[fallback_finite]
-        missing = ~np.isfinite(filled)
-
-    if np.any(missing):
-        finite_values = filled[np.isfinite(filled)]
-        fill_value = float(np.mean(finite_values)) if finite_values.size else 0.0
-        filled[missing] = np.float32(fill_value)
-
-    return xr.DataArray(
-        filled,
-        dims=values.dims,
-        coords=values.coords,
-        attrs=values.attrs,
-        name=values.name,
-    )
-
-
-def _build_aot_scatter_diagnostics(
-    solver_inputs: SolverInputBundle,
-    solved: SolvedAtmosphere,
-    *,
-    max_points_per_band: int = _MAX_SCATTER_POINTS_PER_BAND,
-) -> tuple[AOTScatterBandDiagnostics, ...]:
-    valid_mask = build_solver_valid_mask(
-        solver_inputs.cloud_mask,
-        solver_inputs.toa,
-        solver_inputs.surface_prior,
-        sharp_transition_mask=solver_inputs.sharp_transition_mask,
-        water_mask=solver_inputs.water_mask,
-    ).values.astype(bool)
-    atmo_state = solved.atmo_state
-    atmo_finite_mask = (
-        np.isfinite(atmo_state.aot.values)
-        & np.isfinite(atmo_state.tcwv.values)
-        & np.isfinite(atmo_state.tco3.values)
-        & np.isfinite(atmo_state.elevation.values)
-    )
-    valid_mask = valid_mask & atmo_finite_mask
-    diagnostic_atmo_state = AtmosphericState(
-        aot=_finite_diagnostic_field(atmo_state.aot, solver_inputs.atmo_prior.aot),
-        tcwv=_finite_diagnostic_field(atmo_state.tcwv, solver_inputs.atmo_prior.tcwv),
-        tco3=_finite_diagnostic_field(atmo_state.tco3, solver_inputs.atmo_prior.tco3),
-        elevation=_finite_diagnostic_field(
-            atmo_state.elevation, solver_inputs.atmo_prior.elevation
-        ),
-        aot_unc=atmo_state.aot_unc,
-        tcwv_unc=atmo_state.tcwv_unc,
-        tco3_unc=atmo_state.tco3_unc,
-    )
-    diagnostics: list[AOTScatterBandDiagnostics] = []
-
-    for band_index, band in enumerate(solver_inputs.bands):
-        toa_band = _select_band_slice(solver_inputs.toa, band_name=band.name, band_index=band_index)
-        surface_band = _select_band_slice(
-            solver_inputs.surface_prior.boa,
-            band_name=band.name,
-            band_index=band_index,
-        )
-        if toa_band is None or surface_band is None:
-            continue
-        coeffs = solver_inputs.rt_model.compute_coefficients(
-            solver_inputs.geometry,
-            diagnostic_atmo_state,
-            band,
-            False,
-        )
-        simulated_toa = coeffs.simulate_toa(surface_band)
-
-        band_valid = (
-            valid_mask
-            & np.isfinite(surface_band.values)
-            & np.isfinite(toa_band.values)
-            & np.isfinite(simulated_toa.values)
-        )
-        if not np.any(band_valid):
-            continue
-
-        surface_values = surface_band.values[band_valid].astype(np.float32, copy=False)
-        observed_values = toa_band.values[band_valid].astype(np.float32, copy=False)
-        simulated_values = simulated_toa.values[band_valid].astype(np.float32, copy=False)
-
-        if surface_values.size > max_points_per_band:
-            order = np.argsort(surface_values, kind="mergesort")
-            surface_values = surface_values[order]
-            observed_values = observed_values[order]
-            simulated_values = simulated_values[order]
-        diagnostics.append(
-            AOTScatterBandDiagnostics(
-                band_name=band.name,
-                surface_reflectance=_sample_scatter_values(
-                    surface_values, max_points=max_points_per_band
-                ),
-                observed_toa=_sample_scatter_values(
-                    observed_values, max_points=max_points_per_band
-                ),
-                simulated_toa=_sample_scatter_values(
-                    simulated_values, max_points=max_points_per_band
-                ),
-                total_valid_count=int(np.count_nonzero(band_valid)),
-            )
-        )
-
-    return tuple(diagnostics)
 
 
 def _geometry_for_atmo_grid(
@@ -340,72 +194,6 @@ def _surface_prior_requires_atmo(provider: SurfacePriorFn) -> bool:
     return bool(getattr(provider, "requires_atmo_prior", False))
 
 
-def _surface_template(data: xr.DataArray) -> xr.DataArray:
-    if "band" in data.dims:
-        band_coord = data.coords["band"].values[0] if "band" in data.coords else 0
-        return data.sel(band=band_coord, drop=True)
-    return data
-
-
-def _band_name(value: object, index: int) -> str:
-    if hasattr(value, "item"):
-        with suppress(Exception):
-            value = value.item()
-    name = getattr(value, "name", None)
-    if isinstance(name, str) and name:
-        return name
-    text = str(value)
-    return text if text else f"band_{index + 1:02d}"
-
-
-def _banded_dataarray_to_dataset(
-    data: xr.DataArray,
-    *,
-    default_name: str,
-    template: xr.DataArray,
-) -> xr.Dataset:
-    if "band" not in data.dims:
-        return xr.Dataset({default_name: copy_spatial_metadata_like(data, template)})
-
-    band_values = (
-        data.coords["band"].values if "band" in data.coords else np.arange(data.sizes["band"])
-    )
-    return xr.Dataset(
-        {
-            _band_name(band, index): copy_spatial_metadata_like(
-                data.sel(band=band, drop=True),
-                template,
-            )
-            for index, band in enumerate(band_values)
-        }
-    )
-
-
-def _monthly_composite_outputs(
-    composites: tuple[Any, ...],
-    *,
-    template: xr.DataArray,
-) -> dict[str, MonthlyCompositeOutput] | None:
-    if not composites:
-        return None
-
-    outputs: dict[str, MonthlyCompositeOutput] = {}
-    for composite in composites:
-        label = f"{int(composite.year):04d}_{int(composite.month):02d}"
-        outputs[label] = MonthlyCompositeOutput(
-            reflectance=_banded_dataarray_to_dataset(
-                composite.reflectance,
-                default_name="reflectance",
-                template=template,
-            ),
-            quality=copy_spatial_metadata_like(composite.quality.astype(np.float32), template),
-            sample_index=copy_spatial_metadata_like(
-                composite.sample_index.astype(np.int16), template
-            ),
-        )
-    return outputs
-
-
 def _call_grid_assembler(
     grid_assembler: GridAssemblerFn,
     obs: ObservationBundle,
@@ -420,54 +208,19 @@ def _call_grid_assembler(
     water_mask_buffer_pixels: int = 0,
     solver_band_names: tuple[str, ...] | None = None,
 ) -> SolverInputBundle:
-    """Call the grid assembler with a standardised interface.
-
-    The assembler is expected to accept the signature::
-
-        (obs, atmo, surface, rt_model, *, aerosol_resolution_m, sharp_transition_filter=None)
-
-    For backwards compatibility with assemblers that do not accept the
-    ``sharp_transition_filter`` keyword, a single fallback attempt is made
-    without it.
-    """
-    kwargs = {
-        "aerosol_resolution_m": aerosol_resolution_m,
-        "sharp_transition_filter": sharp_transition_filter,
-        "water_mask_path": water_mask_path,
-        "water_mask_cache_dir": water_mask_cache_dir,
-        "water_mask_buffer_pixels": water_mask_buffer_pixels,
-        "solver_band_names": solver_band_names,
-    }
-    try:
-        signature = inspect.signature(grid_assembler)
-    except (TypeError, ValueError):
-        signature = None
-
-    if signature is not None:
-        accepts_kwargs = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
-        )
-        supported_kwargs = (
-            kwargs
-            if accepts_kwargs
-            else {key: value for key, value in kwargs.items() if key in signature.parameters}
-        )
-        return grid_assembler(obs, atmo, surface, rt_model, **supported_kwargs)
-
-    try:
-        return grid_assembler(obs, atmo, surface, rt_model, **kwargs)
-    except TypeError:
-        logger.debug(
-            "Grid assembler rejected optional keyword(s); retrying with aerosol_resolution only",
-            exc_info=True,
-        )
-        return grid_assembler(
-            obs,
-            atmo,
-            surface,
-            rt_model,
-            aerosol_resolution_m=aerosol_resolution_m,
-        )
+    """Call the grid assembler with the current standardized interface."""
+    return grid_assembler(
+        obs,
+        atmo,
+        surface,
+        rt_model,
+        aerosol_resolution_m=aerosol_resolution_m,
+        sharp_transition_filter=sharp_transition_filter,
+        water_mask_path=water_mask_path,
+        water_mask_cache_dir=water_mask_cache_dir,
+        water_mask_buffer_pixels=water_mask_buffer_pixels,
+        solver_band_names=solver_band_names,
+    )
 
 
 def _call_with_retries(
@@ -618,7 +371,7 @@ def _run_tail(
     validate_atmospheric_state(atmo)
     validate_surface_prior(surface)
     aerosol_resolution = _aerosol_resolution(config)
-    solver_config = getattr(config, "solver", None)
+    solver_config = getattr(getattr(config, "algorithms", None), "solver", None)
     paths_config = getattr(config, "paths", None)
     water_mask_path = getattr(paths_config, "water_mask", None) or DEFAULT_WATER_MASK_VRT_URL
     cache_root = getattr(paths_config, "cache_root", None)
@@ -795,185 +548,33 @@ def _fetch_priors(
     atmo_provider: AtmoPriorFn,
     surface_prior_provider: SurfacePriorFn,
     rt_model: Any,
-    settings: dict[str, Any],
+    settings: PipelineExecutionSettings,
     backend_label: str,
     timeout_errors: tuple[type[BaseException], ...] = (FuturesTimeoutError,),
 ) -> tuple[AtmosphericState, SurfacePrior]:
-    """Fetch atmospheric and surface priors using the provided submit callable.
+    from siac.workflows._pipeline_priors import fetch_priors
 
-    ``submit_fn(fn, args, *, retries, stage_name, observer_id)`` must return a
-    future whose ``.result(timeout=...)`` / ``.cancel()`` interface matches
-    ``concurrent.futures.Future``.
-    """
-    observer = current_execution_observer()
-    observer_id = observer.run_id if observer is not None else None
-    m2_timeout = _stage_timeout(settings, "M2.atmospheric_prior", "M2", "atmospheric_prior")
-    m3_timeout = _stage_timeout(settings, "M3.surface_prior", "M3", "surface_prior")
-    lut_timeout = _stage_timeout(settings, "LUT.preload", "LUT", "lut_preload")
-    retries = settings["retries"]
-    resolution = _aerosol_resolution(config)
-    requires_atmo = _surface_prior_requires_atmo(surface_prior_provider)
-    solver_band_names = _requested_solver_band_names(config)
-
-    f_m2 = submit_fn(
-        _call_with_retries,
-        atmo_provider,
-        (obs.bounds, obs.crs, obs.metadata["observation_time"], resolution),
-        retries=retries,
-        stage_name="M2.atmospheric_prior",
-        observer_id=observer_id,
-    )
-    if observer is not None:
-        observer.increment_counter("m2_started", stage="M2.atmospheric_prior")
-        observer.emit(
-            "progress", stage="M2.atmospheric_prior", message="Atmospheric prior submitted."
-        )
-
-    f_m3 = None
-    if not requires_atmo:
-        logger.info("M2+M3: Fetching atmospheric & surface priors...")
-        f_m3 = submit_fn(
-            _call_with_retries,
-            surface_prior_provider,
-            (obs, None, rt_model, resolution),
-            retries=retries,
-            stage_name="M3.surface_prior",
-            observer_id=observer_id,
-        )
-        if observer is not None:
-            observer.increment_counter("m3_started", stage="M3.surface_prior")
-            observer.emit(
-                "progress",
-                stage="M3.surface_prior",
-                message="Surface prior submitted in parallel with atmospheric prior.",
-            )
-    else:
-        logger.info("M2: Fetching atmospheric prior...")
-
-    f_lut = None
-    timeout_stage = "M2/M3"
-    active_timeout: float | None = None
-    try:
-        timeout_stage = "M2.atmospheric_prior"
-        active_timeout = m2_timeout
-        atmo = f_m2.result(timeout=m2_timeout)
-        if observer is not None:
-            observer.increment_counter("m2_done", stage="M2.atmospheric_prior")
-            observer.emit(
-                "progress",
-                stage="M2.atmospheric_prior",
-                message="Atmospheric prior ready.",
-            )
-        if f_m3 is None:
-            logger.info("M3: Deriving surface prior from observation + atmospheric prior...")
-            f_m3 = submit_fn(
-                _call_with_retries,
-                surface_prior_provider,
-                (obs, atmo, rt_model, resolution),
-                retries=retries,
-                stage_name="M3.surface_prior",
-                observer_id=observer_id,
-            )
-            if observer is not None:
-                observer.increment_counter("m3_started", stage="M3.surface_prior")
-                observer.emit(
-                    "progress",
-                    stage="M3.surface_prior",
-                    message="Surface prior submitted after atmospheric prior.",
-                )
-        _submit_fn = lut_submit_fn if lut_submit_fn is not None else submit_fn
-        f_lut = _maybe_submit_lut_preload(
-            _SubmitAdapter(_submit_fn),
-            rt_model,
+    return cast(
+        "tuple[AtmosphericState, SurfacePrior]",
+        fetch_priors(
+            submit_fn=submit_fn,
+            lut_submit_fn=lut_submit_fn,
             obs=obs,
-            atmo=atmo,
-            requested_band_names=solver_band_names,
-            retries=retries,
-            observer_id=observer_id,
-        )
-        timeout_stage = "M3.surface_prior"
-        active_timeout = m3_timeout
-        surface = f_m3.result(timeout=m3_timeout)
-        if observer is not None:
-            observer.increment_counter("m3_done", stage="M3.surface_prior")
-            observer.emit(
-                "progress",
-                stage="M3.surface_prior",
-                message="Surface prior ready.",
-            )
-        if f_lut is not None:
-            try:
-                f_lut.result(timeout=lut_timeout)
-                if observer is not None:
-                    observer.increment_counter("lut_preload_done", stage="LUT.preload")
-                    observer.emit(
-                        "progress",
-                        stage="LUT.preload",
-                        message="LUT preload complete.",
-                    )
-            except FuturesTimeoutError:
-                if observer is not None and lut_timeout is not None:
-                    observer.record_timeout(
-                        stage="LUT.preload",
-                        timeout_s=float(lut_timeout),
-                        backend=backend_label,
-                    )
-                if lut_timeout is not None:
-                    logger.warning(
-                        "LUT preload timed out after %.1fs; proceeding with on-demand LUT reads.",
-                        float(lut_timeout),
-                    )
-                else:
-                    logger.warning("LUT preload timed out; proceeding with on-demand LUT reads.")
-            except (OSError, RuntimeError, ValueError) as exc:
-                if observer is not None:
-                    observer.record_error(
-                        stage="LUT.preload",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                    )
-                logger.warning(
-                    "LUT preload failed (%s: %s); proceeding with on-demand LUT reads.",
-                    type(exc).__name__,
-                    exc,
-                )
-    except timeout_errors as exc:
-        f_m2.cancel()
-        if f_m3 is not None:
-            f_m3.cancel()
-        if f_lut is not None:
-            f_lut.cancel()
-        if observer is not None and active_timeout is not None:
-            observer.record_timeout(
-                stage=timeout_stage,
-                timeout_s=float(active_timeout),
-                backend=backend_label,
-            )
-        timeout_description = (
-            f" after {float(active_timeout):.1f}s" if active_timeout is not None else ""
-        )
-        raise TimeoutError(
-            f"{timeout_stage} timed out{timeout_description} ({backend_label} backend)"
-        ) from exc
-    except Exception:
-        f_m2.cancel()
-        if f_m3 is not None:
-            f_m3.cancel()
-        if f_lut is not None:
-            f_lut.cancel()
-        raise
-
-    return atmo, surface
-
-
-class _SubmitAdapter:
-    """Adapt a bare submit callable to look like an Executor for _maybe_submit_lut_preload."""
-
-    def __init__(self, submit_fn: Callable[..., Any]) -> None:
-        self._submit_fn = submit_fn
-
-    def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        return self._submit_fn(fn, *args, **kwargs)
+            config=config,
+            atmo_provider=atmo_provider,
+            surface_prior_provider=surface_prior_provider,
+            rt_model=rt_model,
+            settings=settings,
+            backend_label=backend_label,
+            call_with_retries_fn=_call_with_retries,
+            maybe_submit_lut_preload_fn=_maybe_submit_lut_preload,
+            stage_timeout_fn=_stage_timeout,
+            aerosol_resolution_fn=_aerosol_resolution,
+            surface_prior_requires_atmo_fn=_surface_prior_requires_atmo,
+            requested_solver_band_names_fn=_requested_solver_band_names,
+            timeout_errors=timeout_errors,
+        ),
+    )
 
 
 def _run_pipeline_thread(
@@ -988,42 +589,35 @@ def _run_pipeline_thread(
     solver: SolverFn,
     corrector: CorrectorFn,
     rt_model: Any,
-    settings: dict[str, Any],
+    settings: PipelineExecutionSettings,
     output_path: Path | str | None = None,
     output_writer: Any | None = None,
 ) -> CorrectionResult:
-    obs, bounds, crs, obs_time, resolution = _prepare_observation(
-        input_path,
-        aoi,
-        config,
-        preprocessor=preprocessor,
-    )
-    _set_rt_observation_time(rt_model, obs_time)
+    from siac.workflows._pipeline_executors import PipelineExecutionContext, run_pipeline_thread
 
-    with ThreadPoolExecutor(max_workers=settings["max_workers"]) as executor:
-        atmo, surface = _fetch_priors(
-            submit_fn=executor.submit,
-            lut_submit_fn=None,
-            obs=obs,
-            config=config,
-            atmo_provider=atmo_provider,
-            surface_prior_provider=surface_prior_provider,
-            rt_model=rt_model,
-            settings=settings,
-            backend_label="thread",
-        )
-
-    return _run_tail(
-        obs,
-        atmo,
-        surface,
-        config,
-        grid_assembler=grid_assembler,
-        solver=solver,
-        corrector=corrector,
-        rt_model=rt_model,
-        output_path=output_path,
-        output_writer=output_writer,
+    return cast(
+        "CorrectionResult",
+        run_pipeline_thread(
+            input_path,
+            aoi,
+            config,
+            context=PipelineExecutionContext(
+                preprocessor=preprocessor,
+                atmo_provider=atmo_provider,
+                surface_prior_provider=surface_prior_provider,
+                grid_assembler=grid_assembler,
+                solver=solver,
+                corrector=corrector,
+                rt_model=rt_model,
+                settings=settings,
+                output_path=output_path,
+                output_writer=output_writer,
+                prepare_observation=_prepare_observation,
+                set_rt_observation_time=_set_rt_observation_time,
+                fetch_priors=_fetch_priors,
+                run_tail=_run_tail,
+            ),
+        ),
     )
 
 
@@ -1039,85 +633,35 @@ def _run_pipeline_dask(
     solver: SolverFn,
     corrector: CorrectorFn,
     rt_model: Any,
-    settings: dict[str, Any],
+    settings: PipelineExecutionSettings,
     output_path: Path | str | None = None,
     output_writer: Any | None = None,
 ) -> CorrectionResult:
-    try:
-        from dask.distributed import (  # type: ignore[import-not-found]
-            Client,
-            LocalCluster,
-            performance_report,
-        )
-        from dask.distributed import TimeoutError as DaskTimeoutError
-    except Exception as exc:
-        raise RuntimeError(
-            "Dask backend requested but dask.distributed is not installed. "
-            "Install dask/distributed or set execution.backend='thread'."
-        ) from exc
+    from siac.workflows._pipeline_executors import PipelineExecutionContext, run_pipeline_dask
 
-    cluster_kwargs: dict[str, Any] = {
-        "n_workers": settings["max_workers"],
-        "threads_per_worker": 1,
-        "processes": False,
-        "dashboard_address": settings["dashboard_address"] if settings["dashboard"] else None,
-    }
-    observer = current_execution_observer()
-
-    with LocalCluster(**cluster_kwargs) as cluster, Client(cluster) as client:
-        if settings["show_progress"] and getattr(client, "dashboard_link", None):
-            logger.info("Dask dashboard: %s", client.dashboard_link)
-            if observer is not None:
-                observer.emit(
-                    "progress",
-                    stage="dask.cluster",
-                    message="Dask dashboard available.",
-                    dashboard_link=client.dashboard_link,
-                )
-
-        report_ctx = nullcontext()
-        report_path = settings["performance_report_path"]
-        if report_path is not None:
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            report_ctx = performance_report(filename=str(report_path))
-
-        with report_ctx:
-            obs, bounds, crs, obs_time, resolution = _prepare_observation(
-                input_path,
-                aoi,
-                config,
+    return cast(
+        "CorrectionResult",
+        run_pipeline_dask(
+            input_path,
+            aoi,
+            config,
+            context=PipelineExecutionContext(
                 preprocessor=preprocessor,
-            )
-            _set_rt_observation_time(rt_model, obs_time)
-
-            preload_executor = ThreadPoolExecutor(max_workers=1)
-            try:
-                atmo, surface = _fetch_priors(
-                    submit_fn=client.submit,
-                    lut_submit_fn=preload_executor.submit,
-                    obs=obs,
-                    config=config,
-                    atmo_provider=atmo_provider,
-                    surface_prior_provider=surface_prior_provider,
-                    rt_model=rt_model,
-                    settings=settings,
-                    backend_label="dask",
-                    timeout_errors=(FuturesTimeoutError, DaskTimeoutError),
-                )
-            finally:
-                preload_executor.shutdown(wait=True, cancel_futures=False)
-
-    return _run_tail(
-        obs,
-        atmo,
-        surface,
-        config,
-        grid_assembler=grid_assembler,
-        solver=solver,
-        corrector=corrector,
-        rt_model=rt_model,
-        output_path=output_path,
-        output_writer=output_writer,
+                atmo_provider=atmo_provider,
+                surface_prior_provider=surface_prior_provider,
+                grid_assembler=grid_assembler,
+                solver=solver,
+                corrector=corrector,
+                rt_model=rt_model,
+                settings=settings,
+                output_path=output_path,
+                output_writer=output_writer,
+                prepare_observation=_prepare_observation,
+                set_rt_observation_time=_set_rt_observation_time,
+                fetch_priors=_fetch_priors,
+                run_tail=_run_tail,
+            ),
+        ),
     )
 
 

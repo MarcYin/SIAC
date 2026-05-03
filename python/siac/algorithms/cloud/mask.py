@@ -38,7 +38,7 @@ _PREFERRED_CLOUD_MASK_BANDS = {
 
 
 def classes_to_bool_mask(cloud_classes: xr.DataArray) -> xr.DataArray:
-    """Convert standardized cloud classes to boolean cloud mask compatibility form."""
+    """Convert standardized cloud classes to the pipeline boolean cloud-mask form."""
     classes = apply_class_mapping(cloud_classes, None, unmapped_to_missing=False)
     bool_mask = xr.where(classes == 1, False, True).astype(bool)
     bool_mask.name = "cloud_mask"

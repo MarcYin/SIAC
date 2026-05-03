@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from siac.config.schema import RTAlgorithmConfig
+from siac.config.algorithms import RTAlgorithmConfig
 from siac.rt_setup import (
     DEFAULT_LUT_RT_SETUP,
     DEFAULT_SIXS_RT_SETUP,

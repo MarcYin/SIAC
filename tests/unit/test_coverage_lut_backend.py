@@ -433,7 +433,7 @@ class TestZarrLUTBackend:
         b = ZarrLUTBackend(zip_path, interpolation_method="nearest")
         assert "path_reflectance" in b.lut
 
-    def test_s3_storage_options_are_normalized(self, tmp_path: Path, monkeypatch):
+    def test_s3_storage_options_use_canonical_client_kwargs(self, tmp_path: Path, monkeypatch):
         import fsspec
 
         lut_path = _write_small_lut(tmp_path / "lut_mapper.zarr")
@@ -450,8 +450,10 @@ class TestZarrLUTBackend:
         b = ZarrLUTBackend(
             "s3://example/lut.zarr",
             storage_options={
-                "region": "eu-west-2",
-                "endpoint_url": "https://s3.eu-west-2.amazonaws.com",
+                "client_kwargs": {
+                    "region_name": "eu-west-2",
+                    "endpoint_url": "https://s3.eu-west-2.amazonaws.com",
+                },
                 "anon": True,
             },
         )
@@ -1463,12 +1465,16 @@ class TestZipStoreUtilities:
         assert local_path is not None
         assert str(local_path).endswith("lut.zarr")
 
+        with pytest.raises(TypeError, match="Top-level S3 storage option"):
+            lut_store.normalize_storage_options("s3://bucket/key", {"region": "eu-west-1"})
+
         opts = lut_store.normalize_storage_options(
             "s3://bucket/key",
             {
-                "region": "eu-west-1",
-                "endpoint_url": "https://example.invalid",
-                "client_kwargs": {"region_name": "keep-me"},
+                "client_kwargs": {
+                    "region_name": "keep-me",
+                    "endpoint_url": "https://example.invalid",
+                },
             },
         )
         assert opts["client_kwargs"]["region_name"] == "keep-me"

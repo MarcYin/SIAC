@@ -11,7 +11,7 @@ import siac.adapters.earthdata as earthdata_mod
 import siac.adapters.output as output_mod
 import siac.algorithms.cloud.providers.omnicloudmask as omnicloudmask_mod
 from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
-from siac.config.schema import OutputDefaultsConfig
+from siac.config.system import OutputDefaultsConfig
 from siac.runtime import CorrectionResult
 
 if TYPE_CHECKING:

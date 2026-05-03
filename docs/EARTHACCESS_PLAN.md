@@ -100,7 +100,7 @@ Planned modules:
 - `python/siac/priors/atmospheric/mcd19_earthaccess.py`
 - `python/siac/priors/atmospheric/merra2.py` (or equivalent Earthaccess atmo source)
 - `python/siac/priors/brdf/mcd43_earthaccess.py`
-- `python/siac/priors/brdf/vnp43_earthaccess.py`
+- `python/siac/adapters/brdf/mcd43_earthaccess.py` (`VNP43EarthAccessProvider`)
 
 Responsibilities:
 
@@ -136,12 +136,12 @@ nasa:
     provider: null       # optional CMR provider constraint
 
 atmo_prior:
-  provider: mcd19        # cams | merra2 | mcd19 | user
+  provider: mcd19        # cams | merra2 | mcd19 | vnp19
   mcd19:
     short_name: null     # resolved/validated default
 
 brdf:
-  provider: mcd43        # mcd43 | vnp43 | gee | zarr | user
+  provider: mcd43        # mcd43 | vnp43 | mcd19
   mcd43:
     short_name: null
   vnp43:

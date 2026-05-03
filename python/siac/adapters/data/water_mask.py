@@ -203,13 +203,3 @@ def _download_file(url: str, destination: Path, *, session: requests.Session | N
             temp_path.unlink(missing_ok=True)
         if owns_client:
             client.close()
-
-
-__all__ = [
-    "DEFAULT_WATER_MASK_CACHE_DIR",
-    "DEFAULT_WATER_MASK_VRT_URL",
-    "default_water_mask_cache_dir",
-    "ensure_local_water_mask_source",
-    "load_water_mask_subset",
-    "required_water_mask_tiles",
-]

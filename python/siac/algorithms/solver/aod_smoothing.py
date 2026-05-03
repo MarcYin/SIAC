@@ -507,21 +507,3 @@ def score_holdout(
         bias=float(np.mean(delta)),
         corr=corr,
     )
-
-
-__all__ = [
-    "HoldoutMetrics",
-    "SEED_EXCLUSION_QA_NAMES",
-    "build_trusted_aod_seed_mask",
-    "distance_to_seed_pixels",
-    "harmonic_surface",
-    "idw_knn_surface",
-    "median_from_seed_surface",
-    "multiscale_normalized_gaussian_surface",
-    "nearest_seed_fill",
-    "normalized_gaussian_surface",
-    "preserve_seed_values",
-    "sample_holdout_mask",
-    "score_holdout",
-    "whittaker_xy_surface",
-]

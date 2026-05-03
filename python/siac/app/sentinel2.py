@@ -27,10 +27,11 @@ def coerce_date(value: date | datetime | str | None) -> date | None:
 
 
 def apply_s2_query_defaults(query: S2Query, *, config: Any) -> S2Query:
+    s2_config = config.providers.s2
     if query.max_cloud_cover == 100.0:
-        query.max_cloud_cover = config.s2_data.max_cloud_cover
-    if query.processing_level == "L1C" and config.s2_data.processing_level != "L1C":
-        query.processing_level = config.s2_data.processing_level
+        query.max_cloud_cover = s2_config.max_cloud_cover
+    if query.processing_level == "L1C" and s2_config.processing_level != "L1C":
+        query.processing_level = s2_config.processing_level
     return query
 
 
@@ -66,7 +67,7 @@ def resolve_s2_input(
         return local_candidate
 
     if resolve_s2_backend_fn is None:
-        from siac.app.assembly import resolve_s2_backend as resolve_s2_backend_fn
+        from siac.app.s2_backend import resolve_s2_backend as resolve_s2_backend_fn
     resolve_s2_backend = cast("Any", resolve_s2_backend_fn)
 
     resolved_config = resolve_run_config(
@@ -79,12 +80,12 @@ def resolve_s2_input(
     if backend is None:
         raise DataNotFoundError(
             "S2 backend is 'local', but input path does not exist. "
-            "Provide a local SAFE path or switch config.s2_data.backend to 'cdse' or 'gcs'."
+            "Provide a local SAFE path or switch config.providers.s2.backend to 'cdse' or 'gcs'."
         )
 
     from siac.adapters.data.s2_data_source import S2DataAccess
 
-    cache_dir = resolved_config.s2_data.cache_dir
+    cache_dir = resolved_config.providers.s2.cache_dir
     accessor = S2DataAccess(backend=backend, cache_dir=cache_dir)
     query = coerce_s2_query(request.query, config=resolved_config)
     return cast("Path", accessor.get(query, dest_dir=cache_dir))
@@ -110,7 +111,7 @@ def search_sentinel2(
     auth_obj = request.auth or CredentialManager.from_config(resolved_config)
 
     if resolve_s2_backend_fn is None:
-        from siac.app.assembly import resolve_s2_backend as resolve_s2_backend_fn
+        from siac.app.s2_backend import resolve_s2_backend as resolve_s2_backend_fn
     resolve_s2_backend = cast("Any", resolve_s2_backend_fn)
 
     backend_obj = resolve_s2_backend(resolved_config, auth=auth_obj)
@@ -124,15 +125,6 @@ def search_sentinel2(
         end_date=coerce_date(request.end_date),
         bbox=request.bbox,
         max_cloud_cover=request.max_cloud_cover,
-        processing_level=resolved_config.s2_data.processing_level,
+        processing_level=resolved_config.providers.s2.processing_level,
     )
     return cast("list[S2Product]", search_s2(backend_obj, query))
-
-
-__all__ = [
-    "apply_s2_query_defaults",
-    "coerce_date",
-    "coerce_s2_query",
-    "resolve_s2_input",
-    "search_sentinel2",
-]

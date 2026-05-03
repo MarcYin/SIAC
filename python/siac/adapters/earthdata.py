@@ -159,7 +159,7 @@ def constant_target_array(
 
 
 def constant_target_band_array(
-    bands: list[int | str],
+    bands: Sequence[str],
     bounds: tuple[float, float, float, float],
     resolution: float,
     value: float,
@@ -1052,18 +1052,3 @@ def _empty_target_like(
     empty = xr.DataArray(values, dims=reference.dims, coords=coords)
     empty = empty.rio.set_spatial_dims(x_dim="x", y_dim="y")
     return empty.rio.write_crs(target.rio.crs)
-
-
-__all__ = [
-    "EarthAccessRuntime",
-    "build_source_aligned_target_template",
-    "build_earthaccess_runtime",
-    "constant_target_array",
-    "constant_target_band_array",
-    "earthaccess_cache_dir",
-    "earthaccess_source_from_auth",
-    "merge_reprojected_tiles",
-    "read_virtual_stack_to_target",
-    "select_candidate_paths",
-    "target_grid_coords",
-]
