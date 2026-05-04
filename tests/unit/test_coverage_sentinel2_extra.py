@@ -39,22 +39,26 @@ def _safe_tree(tmp_path: Path, safe_name: str = "S2A_TEST.SAFE") -> Path:
     return safe
 
 
+def _install_sensor_config_loader(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _load_config(sensor_id: str, satellite_id: str, *, rsrf_root=None) -> SensorConfig:
+        _ = rsrf_root
+        return SensorConfig(
+            sensor_id=sensor_id,
+            satellite_id=satellite_id,
+            bands=SENTINEL2A_CONFIG.bands,
+            default_ref_scale=SENTINEL2A_CONFIG.default_ref_scale,
+            default_ref_offset=SENTINEL2A_CONFIG.default_ref_offset,
+        )
+
+    monkeypatch.setattr(
+        "siac.adapters.satellite.sentinel2.load_sensor_config_with_rsrf",
+        _load_config,
+    )
+
+
 class TestSentinel2Internals:
     def test_resolve_paths_variants(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        def _load_config(sensor_id: str, satellite_id: str, *, rsrf_root=None) -> SensorConfig:
-            _ = rsrf_root
-            return SensorConfig(
-                sensor_id=sensor_id,
-                satellite_id=satellite_id,
-                bands=SENTINEL2A_CONFIG.bands,
-                default_ref_scale=SENTINEL2A_CONFIG.default_ref_scale,
-                default_ref_offset=SENTINEL2A_CONFIG.default_ref_offset,
-            )
-
-        monkeypatch.setattr(
-            "siac.adapters.satellite.sentinel2.load_sensor_config_with_rsrf",
-            _load_config,
-        )
+        _install_sensor_config_loader(monkeypatch)
 
         p = Sentinel2Preprocessor()
 
@@ -86,7 +90,10 @@ class TestSentinel2Internals:
         with pytest.raises(FileNotFoundError):
             p4._resolve_paths(bad)
 
-    def test_resolve_paths_refreshes_cached_state_for_new_input(self, tmp_path: Path):
+    def test_resolve_paths_refreshes_cached_state_for_new_input(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _install_sensor_config_loader(monkeypatch)
         p = Sentinel2Preprocessor()
 
         safe_a = _safe_tree(tmp_path, "S2A_FIRST.SAFE")
@@ -161,6 +168,21 @@ class TestSentinel2Internals:
             "satellite_id": "S2C",
             "rsrf_root": "/tmp/rsrf-root",
         }
+
+    def test_sensor_config_requires_rsrf_lookup_success(self, monkeypatch: pytest.MonkeyPatch):
+        p = Sentinel2Preprocessor(config={"rsrf_root": "/tmp/rsrf-root"})
+        p._satellite_id = "S2B"
+
+        def _load(*_args, **_kwargs):
+            raise KeyError("sensor representation not found: sentinel-2b_msi/band_average")
+
+        monkeypatch.setattr(
+            "siac.adapters.satellite.sentinel2.load_sensor_config_with_rsrf",
+            _load,
+        )
+
+        with pytest.raises(RuntimeError, match="Unable to load Sentinel-2 RSRF metadata for S2B"):
+            _ = p.sensor_config
 
     def test_metadata_parsers_and_finders(self, tmp_path: Path):
         p = Sentinel2Preprocessor()
@@ -259,6 +281,7 @@ class TestSentinel2Internals:
             p.extract_geometry(safe)
 
     def test_load_toa_extract_geometry_cloud_and_metadata(self, tmp_path: Path, monkeypatch):
+        _install_sensor_config_loader(monkeypatch)
         safe = _safe_tree(tmp_path)
         p = Sentinel2Preprocessor()
         img_data = safe / "GRANULE" / "L1C_TILE" / "IMG_DATA"
@@ -327,6 +350,7 @@ class TestSentinel2Internals:
         assert geom.vza.size > 0
 
     def test_cloud_mask_error_paths_and_settings(self, tmp_path: Path, monkeypatch):
+        _install_sensor_config_loader(monkeypatch)
         safe = _safe_tree(tmp_path)
         p = Sentinel2Preprocessor(config={"cloud_mask": {"external_mask_path": "masks/cloud.tif"}})
 

@@ -24,7 +24,6 @@ from siac.adapters.satellite.base import (
     register_preprocessor,
 )
 from siac.algorithms.cloud import build_cloud_classes, classes_to_bool_mask
-from siac.catalog import SENTINEL2A_CONFIG, get_sensor_config
 from siac.geo import reproject_match
 from siac.runtime import GeometryAngles
 from siac.storage.readers import read_raster, read_raster_window
@@ -107,29 +106,27 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     @property
     def sensor_config(self) -> SensorConfig:
-        """Return sensor configuration based on satellite platform."""
+        """Return RSRF-backed sensor configuration based on satellite platform."""
+        satellite_id = self._satellite_id or "S2A"
         if (
             self._sensor_config_cache is not None
-            and self._sensor_config_cache_satellite_id == self._satellite_id
+            and self._sensor_config_cache_satellite_id == satellite_id
         ):
             return self._sensor_config_cache
-        if self._satellite_id is None:
-            return SENTINEL2A_CONFIG
         try:
             sensor_config = load_sensor_config_with_rsrf(
                 "MSI",
-                self._satellite_id,
+                satellite_id,
                 rsrf_root=self.config.get("rsrf_root"),
             )
         except Exception as exc:
-            logger.warning(
-                "Falling back to built-in Sentinel-2 band metadata for %s because RSRF lookup failed (%s)",
-                self._satellite_id,
-                exc,
-            )
-            sensor_config = get_sensor_config("MSI", self._satellite_id)
+            raise RuntimeError(
+                "Unable to load Sentinel-2 RSRF metadata for "
+                f"{satellite_id}. Configure paths.rsrf_root to a catalog containing "
+                f"{satellite_id} MSI band responses."
+            ) from exc
         self._sensor_config_cache = sensor_config
-        self._sensor_config_cache_satellite_id = self._satellite_id
+        self._sensor_config_cache_satellite_id = satellite_id
         return sensor_config
 
     def load_toa(

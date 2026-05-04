@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import rsrf
+import rsrf.registry as rsrf_registry
 from rsrf.convolve import convolution_weights as _convolution_weights
 
 from siac.catalog import get_sensor_config
@@ -15,8 +16,27 @@ from siac.domain.spectral import RelativeSpectralResponse
 
 def _normalize_rsrf_root(rsrf_root: Path | str | None) -> Path | None:
     if rsrf_root is None:
-        return None
+        return _default_rsrf_root()
     return Path(rsrf_root).expanduser().resolve()
+
+
+def _default_rsrf_root() -> Path | None:
+    root = rsrf_registry.discover_repo_root(None)
+    if _has_runtime_rsrf_assets(root):
+        return root
+    runtime_root = rsrf_registry._runtime_release_root()
+    if _has_runtime_rsrf_assets(runtime_root):
+        return runtime_root
+    return root
+
+
+def _has_runtime_rsrf_assets(root: Path) -> bool:
+    data_root = root / "data"
+    return (
+        (data_root / "registry" / "sensors.parquet").exists()
+        and (data_root / "registry" / "bands.parquet").exists()
+        and (data_root / "canonical").is_dir()
+    )
 
 
 def _curve_from_response_definition(

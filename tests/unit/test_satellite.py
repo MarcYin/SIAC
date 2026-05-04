@@ -24,6 +24,18 @@ from siac.adapters.satellite.base import (
     degrees_to_radians,
     radians_to_degrees,
 )
+from siac.catalog import SENTINEL2A_CONFIG
+
+
+def _install_s2_rsrf_loader(monkeypatch):
+    def _load_config(sensor_id, satellite_id, *, rsrf_root=None):  # noqa: ANN001
+        _ = (sensor_id, satellite_id, rsrf_root)
+        return SENTINEL2A_CONFIG
+
+    monkeypatch.setattr(
+        "siac.adapters.satellite.sentinel2.load_sensor_config_with_rsrf",
+        _load_config,
+    )
 
 
 class TestUtilityFunctions:
@@ -74,8 +86,9 @@ class TestSensorRegistry:
         assert isinstance(sensors, list)
         assert "s2" in sensors
 
-    def test_get_preprocessor_s2(self):
+    def test_get_preprocessor_s2(self, monkeypatch):
         """Should get Sentinel-2 preprocessor."""
+        _install_s2_rsrf_loader(monkeypatch)
         preprocessor = get_preprocessor("s2")
 
         assert preprocessor is not None
@@ -114,8 +127,9 @@ class TestSensorRegistry:
 class TestSentinel2Preprocessor:
     """Tests for Sentinel-2 preprocessor."""
 
-    def test_sensor_config(self):
+    def test_sensor_config(self, monkeypatch):
         """Should return correct sensor config."""
+        _install_s2_rsrf_loader(monkeypatch)
         preprocessor = get_preprocessor("s2")
 
         config = preprocessor.sensor_config
@@ -416,7 +430,8 @@ class TestSentinel2Preprocessor:
             "T50QLD_TEST_B02.jp2",
         ]
 
-    def test_extract_cloud_mask_auto_requires_green_band(self, tmp_path):
+    def test_extract_cloud_mask_auto_requires_green_band(self, tmp_path, monkeypatch):
+        _install_s2_rsrf_loader(monkeypatch)
         pre = get_preprocessor("s2")
         toa = xr.Dataset(
             {

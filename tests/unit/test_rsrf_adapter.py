@@ -97,6 +97,55 @@ def test_load_sensor_config_with_rsrf_realizes_band_spec(
     assert band.bandwidth == pytest.approx(28.0)
 
 
+def test_load_band_rsrf_uses_runtime_root_when_discovered_root_is_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovered_root = tmp_path / "project"
+    discovered_registry = discovered_root / "data" / "registry"
+    discovered_registry.mkdir(parents=True)
+    (discovered_registry / "sensors.parquet").touch()
+
+    runtime_root = tmp_path / "rsrf-runtime"
+    runtime_registry = runtime_root / "data" / "registry"
+    runtime_registry.mkdir(parents=True)
+    (runtime_registry / "sensors.parquet").touch()
+    (runtime_registry / "bands.parquet").touch()
+    (runtime_root / "data" / "canonical").mkdir()
+
+    seen: dict[str, object] = {}
+
+    def _load(sensor_unit_id: str, band_id: str, representation_variant: str, *, root=None):
+        seen["sensor_unit_id"] = sensor_unit_id
+        seen["band_id"] = band_id
+        seen["representation_variant"] = representation_variant
+        seen["root"] = root
+        return SampledCurve(
+            band_id=band_id,
+            wavelength_nm=[440.0, 450.0, 460.0, 470.0, 480.0],
+            response=[0.0, 0.5, 1.0, 0.5, 0.0],
+            source_variant=representation_variant,
+        )
+
+    monkeypatch.setattr(
+        "siac.adapters.rsrf.rsrf_registry.discover_repo_root",
+        lambda _root: discovered_root,
+    )
+    monkeypatch.setattr(
+        "siac.adapters.rsrf.rsrf_registry._runtime_release_root",
+        lambda: runtime_root,
+    )
+    monkeypatch.setattr("siac.adapters.rsrf.rsrf.load_response_definition", _load)
+
+    load_band_rsrf(
+        SENTINEL2C_CONFIG.get_band("B02"),
+        sensor_id="MSI",
+        satellite_id="S2C",
+    )
+
+    assert seen["root"] == runtime_root
+
+
 def test_load_band_rsrf_rejects_missing_identity() -> None:
     band = SensorBand(
         name="B02",
