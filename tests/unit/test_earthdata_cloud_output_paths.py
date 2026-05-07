@@ -54,12 +54,16 @@ def _correction_result(
         if include_uncertainty
         else None
     )
+    from datetime import datetime, timezone
+
     return CorrectionResult(
         boa=boa,
         boa_unc=boa_unc,
         aot=xr.DataArray(np.full((2, 2), 0.2, dtype=np.float32), dims=["y", "x"], coords=coords),
         tcwv=xr.DataArray(np.full((2, 2), 2.0, dtype=np.float32), dims=["y", "x"], coords=coords),
         cloud_mask=xr.DataArray(np.zeros((2, 2), dtype=bool), dims=["y", "x"], coords=coords),
+        # REVIEW.md §3.7: STAC requires a real ``observation_time`` since W3.
+        metadata={"observation_time": datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)},
     )
 
 
@@ -265,7 +269,7 @@ def test_output_writer_array_formats_cover_uncertainty_aux_and_quicklook(
         _correction_result(include_uncertainty=True, include_rgb=True), tmp_path
     )
 
-    prefix = "SAT_L2A_00000000T000000"
+    prefix = "SAT_L2A_20260102T120000"
     assert artifacts["boa"] == tmp_path / f"{prefix}_BOA{ext}"
     assert "boa_unc" in artifacts
     assert "auxiliary" in artifacts
@@ -310,7 +314,7 @@ def test_output_writer_raster_skips_optional_products_when_absent(
 
 
 def test_output_writer_rgb_helper_returns_none_when_disabled_or_missing_bands(tmp_path) -> None:
-    prefix = "SAT_L2A_00000000T000000"
+    prefix = "SAT_L2A_20260102T120000"
     defaults = OutputDefaultsConfig(include_rgb=False)
     writer = output_mod.ConfiguredOutputWriter(defaults)
     assert (

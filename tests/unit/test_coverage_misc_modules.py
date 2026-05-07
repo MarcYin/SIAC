@@ -207,6 +207,18 @@ class TestExceptionsAndStubs:
                 for i in range(0, len(self._raw), chunk_size):
                     yield self._raw[i : i + chunk_size]
 
+            # REVIEW.md §2.6: download_cdse now wraps session.get(stream=True)
+            # in a ``with`` block (W2 connection-lifecycle fix), so the
+            # response mock needs context-manager methods.
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def close(self):
+                return None
+
         item = {
             "id": "S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000",
             "properties": {
@@ -238,8 +250,20 @@ class TestExceptionsAndStubs:
                 return _Resp(raw=payload)
             return _Resp(json_data=page)
 
-        monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
-        monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+        # REVIEW.md §2.6: copernicus_dataspace now goes through a shared
+        # retry-enabled ``requests.Session`` (W2). Patch the session factory
+        # rather than ``requests.post``/``requests.get`` at the module level.
+        class _Session:
+            def get(self, url, **kwargs):
+                return _fake_get(url, **kwargs)
+
+            def post(self, url, **kwargs):
+                return _fake_post(url, **kwargs)
+
+        monkeypatch.setattr(
+            "siac.adapters.data.copernicus_dataspace._get_session",
+            lambda: _Session(),
+        )
 
         found = search_cdse(query)
         assert len(found) == 1

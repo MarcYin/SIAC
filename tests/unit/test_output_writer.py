@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 import rioxarray  # noqa: F401
 import xarray as xr
@@ -36,6 +38,8 @@ def test_configured_output_writer_writes_netcdf_and_quicklook(tmp_path):
         aot=_spatial_da(0.12),
         tcwv=_spatial_da(1.8),
         cloud_mask=_spatial_da(0.0).astype(bool),
+        # REVIEW.md §3.7: STAC requires a real ``observation_time`` since W3.
+        metadata={"observation_time": datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)},
         diagnostics=CorrectionDiagnostics(processing_time_s=1.5),
     )
     writer = ConfiguredOutputWriter(

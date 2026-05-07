@@ -327,8 +327,12 @@ class TestWritersExtra:
         assert item["assets"]["B02"]["href"] == "boa/B02.tif"
         assert item["assets"]["B02"]["eo:bands"][0]["common_name"] == "blue"
         assert item["assets"]["cloud-mask"]["href"] == "qa/cloud_mask.tif"
-        assert item["links"][0]["href"] == "./"
-        assert item["links"][1]["rel"] == "derived_from"
+        # REVIEW.md §3.7 stac.py:540-545 — link[0] is now self ({item_id}.json),
+        # link with rel="root" carries href "./".
+        rels = {link["rel"]: link for link in item["links"]}
+        assert rels["self"]["href"].endswith(".json")
+        assert rels["root"]["href"] == "./"
+        assert "derived_from" in rels
         assert item["assets"]["B08"]["eo:bands"][0]["name"] == "B08"
 
     def test_write_netcdf_and_siac_product_writers(self, tmp_path: Path):
