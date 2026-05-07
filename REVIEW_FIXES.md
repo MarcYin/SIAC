@@ -281,4 +281,52 @@ Unchanged: 16 failed / 1200 passed / 7 skipped / 8 errors. All remaining failure
 
 ---
 
+## Wave 6 — ftol doc + prior_store sentinel + `siac.constants` (`e15ded0`)
+
+Three small follow-ups, plus another false-positive trace.
+
+1. **`multigrid.py:113` `ftol`** (REVIEW.md §1.1 #6). The value `1e-7 * eps` (~2.2e-23) IS the intended behaviour — convergence is gradient-only (`gtol=1e-2`). Added a multi-line comment so the false positive doesn't recur. Switching to a non-zero ftol would change retrievals; should be done with paired numerical verification.
+
+2. **`prior_store.py` BRDF kernel sentinel** (REVIEW.md §3.5 prior_store.py:292-301). The dummy zero-filled BRDF kernel return was a footgun: any downstream consumer that used the fields would see "apparent zeros with zero uncertainty". Now fills weights with NaN and uncertainties with `+inf` so accidental use surfaces as obvious "no data" sentinels.
+
+3. **`siac.constants` module** (REVIEW.md §2.4). First pass at the magic-constants problem. Collects high-impact, multi-callsite constants:
+   - `ATMOSPHERIC_SCALE_HEIGHT_KM = 8.5` (LUT altitude correction)
+   - `DEFAULT_JACOBIAN_DELTA_AOT = 0.01`, `DEFAULT_JACOBIAN_DELTA_TCWV = 0.1` (numerical Jacobian step sizes)
+   - `BOA_VALID_MIN = -0.05`, `BOA_VALID_MAX = 1.5` (reflectance acceptance window)
+   
+   Each constant has a unit, a citation (where one exists), and a note on what changes if you tune it. Wired into `algorithms/rt/lut/backend.py` and `algorithms/correction/atmospheric.py`. The module is the canonical home for future cross-module constants.
+
+### Bonus finding: REVIEW.md §1.1 #7 is also a false positive
+
+Traced the multigrid fixed-parameter cost/grad code (`multigrid.py:1648-1666`) plus the cost function definition (`cost.py:329-460`):
+
+- The prior cost is `j_aot + j_tcwv` (separable, no AOT↔TCWV cross terms).
+- The smoothness cost is computed per-field separately (no cross terms).
+- The observation cost couples both, but its gradient w.r.t. the free variable is correctly extracted via `grad[n:]` / `grad[:n]`.
+- When AOT is fixed, the AOT-only prior and smoothness contributions to the cost are *constants* w.r.t. the free TCWV vector — they add a fixed offset to `cost`. Wolfe line search compares `f(x_k + α*d_k)` against `f(x_k) + c*α*∇f^T*d_k`; both have the same offset, which cancels.
+
+So there's no actual bug — Wolfe is undisturbed. The implementation is correct.
+
+### Recurring lesson
+
+Three of REVIEW.md's "highest-impact issues" turned out to be false positives after tracing them in detail (§1.1 #7, §1.1 #8, §3.1 sixs_outputs.py:69). The review catalogue is generated from a quick-pass reading; it identifies *suspicions* that need verification, not confirmed bugs. Each fix should be traced before "fixing".
+
+### Cumulative across all six waves
+
+- 41 source files modified, plus 6 new (`REVIEW.md`, `REVIEW_FIXES.md`, `tests/regression/README.md`, `tests/unit/test_tool_imports.py`, `python/siac/geo/_crs_compat.py`, `python/siac/constants.py`).
+- 13 commits on the working branch since `4878ef1`.
+- Test delta vs original baseline (20 failed / 1097 passed): **−4 failures / +103 passes / 0 new regressions**.
+
+### Genuinely deferred (carry-over)
+
+| Item | Why deferred |
+|---|---|
+| `multigrid.py:113` ftol value | Intentional design (now documented); changing would alter retrievals — needs regression scene |
+| Solver fixed-param cost/grad | Verified false positive (wave 6) — closed |
+| `cost.py` Laplacian | Verified false positive (wave 5) — closed |
+| Layering inversion `siac.runtime ↔ siac.geo/storage` | Multi-file refactor; needs a clean commit boundary |
+| Magic constants | First pass shipped (wave 6); the long tail is mechanical work for a future PR |
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
