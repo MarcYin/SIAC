@@ -93,48 +93,54 @@ pub fn whittaker_smooth_cube<'py>(
     let penalty_flat: Vec<f64> = penalty.as_slice().to_vec();
     let series_count = n_band * ny * nx;
 
-    let smoothed_series: Vec<Vec<f32>> = (0..series_count)
-        .into_par_iter()
-        .map(|flat_idx| {
-            let band = flat_idx / (ny * nx);
-            let rem = flat_idx % (ny * nx);
-            let y = rem / nx;
-            let x = rem % nx;
+    // Heavy compute uses only Rust-owned buffers (`values`/`weights` are
+    // `PyReadonlyArray` views over the underlying NumPy buffers, safe to
+    // access without the GIL because we hold the readonly guard). Release
+    // the GIL while the rayon pool runs so other Python threads can progress.
+    let smoothed_series: Vec<Vec<f32>> = py.allow_threads(|| {
+        (0..series_count)
+            .into_par_iter()
+            .map(|flat_idx| {
+                let band = flat_idx / (ny * nx);
+                let rem = flat_idx % (ny * nx);
+                let y = rem / nx;
+                let x = rem % nx;
 
-            let mut rhs = DVector::<f64>::zeros(n_time);
-            // Reconstruct from flat vec – avoids nalgebra clone overhead.
-            let mut system = DMatrix::from_column_slice(n_time, n_time, &penalty_flat);
-            let mut has_valid = false;
+                let mut rhs = DVector::<f64>::zeros(n_time);
+                // Reconstruct from flat vec – avoids nalgebra clone overhead.
+                let mut system = DMatrix::from_column_slice(n_time, n_time, &penalty_flat);
+                let mut has_valid = false;
 
-            for t in 0..n_time {
-                let value = values[[t, band, y, x]] as f64;
-                let weight = weights[[t, band, y, x]] as f64;
-                if value.is_finite() && weight.is_finite() && weight > 0.0 {
-                    system[(t, t)] += weight;
-                    rhs[t] = weight * value;
-                    has_valid = true;
+                for t in 0..n_time {
+                    let value = values[[t, band, y, x]] as f64;
+                    let weight = weights[[t, band, y, x]] as f64;
+                    if value.is_finite() && weight.is_finite() && weight > 0.0 {
+                        system[(t, t)] += weight;
+                        rhs[t] = weight * value;
+                        has_valid = true;
+                    }
                 }
-            }
 
-            if !has_valid {
-                return vec![f32::NAN; n_time];
-            }
+                if !has_valid {
+                    return vec![f32::NAN; n_time];
+                }
 
-            // System is symmetric positive-definite → Cholesky is ~2× faster than LU.
-            if let Some(chol) = system.clone().cholesky() {
-                let solution = chol.solve(&rhs);
-                solution.iter().map(|value| *value as f32).collect()
-            } else {
-                // Fallback to LU if Cholesky fails (e.g. near-zero lambda).
-                let lu = system.lu();
-                if let Some(solution) = lu.solve(&rhs) {
+                // System is symmetric positive-definite → Cholesky is ~2× faster than LU.
+                if let Some(chol) = system.clone().cholesky() {
+                    let solution = chol.solve(&rhs);
                     solution.iter().map(|value| *value as f32).collect()
                 } else {
-                    vec![f32::NAN; n_time]
+                    // Fallback to LU if Cholesky fails (e.g. near-zero lambda).
+                    let lu = system.lu();
+                    if let Some(solution) = lu.solve(&rhs) {
+                        solution.iter().map(|value| *value as f32).collect()
+                    } else {
+                        vec![f32::NAN; n_time]
+                    }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect()
+    });
 
     let mut out = Array4::<f32>::from_elem((n_time, n_band, ny, nx), f32::NAN);
     for (flat_idx, series) in smoothed_series.iter().enumerate().take(series_count) {

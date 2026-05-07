@@ -60,17 +60,21 @@ impl RossThickLiSparse {
         let mut ross = Array2::<f64>::zeros(shape);
         let mut li = Array2::<f64>::zeros(shape);
 
-        // Parallel computation using rayon
-        Zip::from(&mut ross)
-            .and(&mut li)
-            .and(&vza)
-            .and(&sza)
-            .and(&raa)
-            .par_for_each(|r, l, &v, &s, &a| {
-                let (ross_val, li_val) = self.compute_single(v, s, a);
-                *r = ross_val;
-                *l = li_val;
-            });
+        // Release the GIL while running the rayon-parallel kernel computation
+        // so other Python threads can make progress. All buffers are Rust-owned;
+        // we only touch Python again to construct the return arrays below.
+        py.allow_threads(|| {
+            Zip::from(&mut ross)
+                .and(&mut li)
+                .and(&vza)
+                .and(&sza)
+                .and(&raa)
+                .par_for_each(|r, l, &v, &s, &a| {
+                    let (ross_val, li_val) = self.compute_single(v, s, a);
+                    *r = ross_val;
+                    *l = li_val;
+                });
+        });
 
         Ok((ross.into_pyarray(py), li.into_pyarray(py)))
     }

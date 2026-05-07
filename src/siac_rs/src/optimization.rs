@@ -13,14 +13,18 @@ use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FixedParameter {
-    None,
+    /// Both AOT and TCWV are free parameters in the retrieval.
+    ///
+    /// Renamed from `None` to avoid shadowing `Option::None` at call sites,
+    /// which made `FixedParameter::None` ambiguous to readers.
+    NoFixed,
     Aot,
     Tcwv,
 }
 
 fn parse_fixed_parameter(value: &str) -> PyResult<FixedParameter> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "" | "none" | "false" | "no" => Ok(FixedParameter::None),
+        "" | "none" | "false" | "no" => Ok(FixedParameter::NoFixed),
         "aot" => Ok(FixedParameter::Aot),
         "tcwv" => Ok(FixedParameter::Tcwv),
         _ => Err(PyValueError::new_err(
@@ -124,112 +128,117 @@ pub fn evaluate_grid_search_candidate_cost<'py>(
 
     let mut cost = Array2::<f32>::zeros((ny, nx));
 
-    // Parallel observation cost: compute per-row slices in parallel.
-    let row_costs: Vec<Vec<f32>> = (0..ny)
-        .into_par_iter()
-        .map(|iy| {
-            let mut row = vec![0.0f32; nx];
-            for ix in 0..nx {
-                if !valid[[iy, ix]] {
-                    continue;
+    let aot_val = aot_val as f64;
+    let tcwv_val = tcwv_val as f64;
+
+    // Heavy compute is pure Rust on `as_array()` views; release the GIL so
+    // other Python threads can run while rayon parallelises observation +
+    // prior cost evaluation.
+    py.allow_threads(|| {
+        // Parallel observation cost: compute per-row slices in parallel.
+        let row_costs: Vec<Vec<f32>> = (0..ny)
+            .into_par_iter()
+            .map(|iy| {
+                let mut row = vec![0.0f32; nx];
+                for ix in 0..nx {
+                    if !valid[[iy, ix]] {
+                        continue;
+                    }
+                    let mut pixel_cost = 0.0_f64;
+                    for ib in 0..n_band {
+                        let band_w = band_weights[ib] as f64;
+                        let unc = boa_unc[[ib, iy, ix]] as f64;
+                        if !unc.is_finite() || unc <= 0.0 {
+                            continue;
+                        }
+
+                        let toa_v = toa[[ib, iy, ix]] as f64;
+                        let xap_v = xap[[ib, iy, ix]] as f64;
+                        let xbp_v = xbp[[ib, iy, ix]] as f64;
+                        let xcp_v = xcp[[ib, iy, ix]] as f64;
+                        let prior_v = boa_prior[[ib, iy, ix]] as f64;
+                        if !toa_v.is_finite()
+                            || !xap_v.is_finite()
+                            || !xbp_v.is_finite()
+                            || !xcp_v.is_finite()
+                            || !prior_v.is_finite()
+                        {
+                            continue;
+                        }
+
+                        let y = xap_v * toa_v - xbp_v;
+                        let denom = 1.0 + xcp_v * y;
+                        if !denom.is_finite() || denom.abs() < 1e-12 {
+                            continue;
+                        }
+
+                        let boa_model = y / denom;
+                        let diff = boa_model - prior_v;
+                        if !diff.is_finite() {
+                            continue;
+                        }
+
+                        let w = band_w / (unc * unc).max(1e-12);
+                        if !w.is_finite() {
+                            continue;
+                        }
+                        let add = 0.5 * w * diff * diff;
+                        if add.is_finite() {
+                            pixel_cost += add;
+                        }
+                    }
+                    row[ix] = pixel_cost as f32;
                 }
-                let mut pixel_cost = 0.0_f64;
-                for ib in 0..n_band {
-                    let band_w = band_weights[ib] as f64;
-                    let unc = boa_unc[[ib, iy, ix]] as f64;
-                    if !unc.is_finite() || unc <= 0.0 {
+                row
+            })
+            .collect();
+
+        for (iy, row) in row_costs.into_iter().enumerate() {
+            for (ix, val) in row.into_iter().enumerate() {
+                cost[[iy, ix]] = val;
+            }
+        }
+
+        // Parallel prior cost: compute per-row in parallel.
+        let prior_costs: Vec<Vec<f32>> = (0..ny)
+            .into_par_iter()
+            .map(|iy| {
+                let mut row = vec![0.0f32; nx];
+                for ix in 0..nx {
+                    if !valid[[iy, ix]] {
                         continue;
                     }
 
-                    let toa_v = toa[[ib, iy, ix]] as f64;
-                    let xap_v = xap[[ib, iy, ix]] as f64;
-                    let xbp_v = xbp[[ib, iy, ix]] as f64;
-                    let xcp_v = xcp[[ib, iy, ix]] as f64;
-                    let prior_v = boa_prior[[ib, iy, ix]] as f64;
-                    if !toa_v.is_finite()
-                        || !xap_v.is_finite()
-                        || !xbp_v.is_finite()
-                        || !xcp_v.is_finite()
-                        || !prior_v.is_finite()
+                    let aot_p = aot_prior[[iy, ix]] as f64;
+                    let tcwv_p = tcwv_prior[[iy, ix]] as f64;
+                    let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
+                    let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
+                    if !aot_p.is_finite()
+                        || !tcwv_p.is_finite()
+                        || !aot_u.is_finite()
+                        || !tcwv_u.is_finite()
                     {
                         continue;
                     }
 
-                    let y = xap_v * toa_v - xbp_v;
-                    let denom = 1.0 + xcp_v * y;
-                    if !denom.is_finite() || denom.abs() < 1e-12 {
-                        continue;
-                    }
-
-                    let boa_model = y / denom;
-                    let diff = boa_model - prior_v;
-                    if !diff.is_finite() {
-                        continue;
-                    }
-
-                    let w = band_w / (unc * unc).max(1e-12);
-                    if !w.is_finite() {
-                        continue;
-                    }
-                    let add = 0.5 * w * diff * diff;
-                    if add.is_finite() {
-                        pixel_cost += add;
+                    let prior = 0.5
+                        * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
+                            + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p))
+                                / (tcwv_u * tcwv_u).max(1e-12));
+                    if prior.is_finite() {
+                        row[ix] = prior as f32;
                     }
                 }
-                row[ix] = pixel_cost as f32;
+                row
+            })
+            .collect();
+
+        for (iy, row) in prior_costs.into_iter().enumerate() {
+            for (ix, val) in row.into_iter().enumerate() {
+                cost[[iy, ix]] += val;
             }
-            row
-        })
-        .collect();
-
-    for (iy, row) in row_costs.into_iter().enumerate() {
-        for (ix, val) in row.into_iter().enumerate() {
-            cost[[iy, ix]] = val;
         }
-    }
-
-    let aot_val = aot_val as f64;
-    let tcwv_val = tcwv_val as f64;
-
-    // Parallel prior cost: compute per-row in parallel.
-    let prior_costs: Vec<Vec<f32>> = (0..ny)
-        .into_par_iter()
-        .map(|iy| {
-            let mut row = vec![0.0f32; nx];
-            for ix in 0..nx {
-                if !valid[[iy, ix]] {
-                    continue;
-                }
-
-                let aot_p = aot_prior[[iy, ix]] as f64;
-                let tcwv_p = tcwv_prior[[iy, ix]] as f64;
-                let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
-                let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
-                if !aot_p.is_finite()
-                    || !tcwv_p.is_finite()
-                    || !aot_u.is_finite()
-                    || !tcwv_u.is_finite()
-                {
-                    continue;
-                }
-
-                let prior = 0.5
-                    * (((aot_val - aot_p) * (aot_val - aot_p)) / (aot_u * aot_u).max(1e-12)
-                        + ((tcwv_val - tcwv_p) * (tcwv_val - tcwv_p))
-                            / (tcwv_u * tcwv_u).max(1e-12));
-                if prior.is_finite() {
-                    row[ix] = prior as f32;
-                }
-            }
-            row
-        })
-        .collect();
-
-    for (iy, row) in prior_costs.into_iter().enumerate() {
-        for (ix, val) in row.into_iter().enumerate() {
-            cost[[iy, ix]] += val;
-        }
-    }
+    });
 
     Ok(cost.into_pyarray(py))
 }
@@ -434,7 +443,7 @@ fn evaluate_candidate_pixel_cost(
     let aot_u = (aot_prior_unc[[iy, ix]] as f64).abs();
     let tcwv_u = (tcwv_prior_unc[[iy, ix]] as f64).abs();
     match fixed_parameter {
-        FixedParameter::None => {
+        FixedParameter::NoFixed => {
             if aot_p.is_finite() && tcwv_p.is_finite() && aot_u.is_finite() && tcwv_u.is_finite() {
                 let prior = 0.5
                     * (((aot_val_f64 - aot_p) * (aot_val_f64 - aot_p))
@@ -605,55 +614,62 @@ pub fn evaluate_block_grid_search_cost_cube_with_provider_qa<'py>(
             let tcwv_val_f64 = *tcwv_val as f64;
             let mut cost_slice = costs.slice_mut(s![ia, it, .., ..]);
             let mut count_slice = obs_counts.slice_mut(s![ia, it, .., ..]);
-            cost_slice
-                .axis_iter_mut(Axis(0))
-                .into_par_iter()
-                .zip(count_slice.axis_iter_mut(Axis(0)).into_par_iter())
-                .enumerate()
-                .for_each(|(by, (mut cost_row, mut count_row))| {
-                    let y0 = by * block_size;
-                    let y1 = ((by + 1) * block_size).min(ny);
-                    for bx in 0..block_cols {
-                        let x0 = bx * block_size;
-                        let x1 = ((bx + 1) * block_size).min(nx);
-                        let mut block_cost = 0.0_f64;
-                        let mut block_obs_count = 0u16;
+            // The coefficient extraction above touched Python; the rayon
+            // section below operates only on Rust ndarray views and slices,
+            // so we drop the GIL while it runs.
+            py.allow_threads(|| {
+                cost_slice
+                    .axis_iter_mut(Axis(0))
+                    .into_par_iter()
+                    .zip(count_slice.axis_iter_mut(Axis(0)).into_par_iter())
+                    .enumerate()
+                    .for_each(|(by, (mut cost_row, mut count_row))| {
+                        let y0 = by * block_size;
+                        let y1 = ((by + 1) * block_size).min(ny);
+                        for bx in 0..block_cols {
+                            let x0 = bx * block_size;
+                            let x1 = ((bx + 1) * block_size).min(nx);
+                            let mut block_cost = 0.0_f64;
+                            let mut block_obs_count = 0u16;
 
-                        for iy in y0..y1 {
-                            for ix in x0..x1 {
-                                let coeff_y = if coeffs_are_block_grid { by } else { iy };
-                                let coeff_x = if coeffs_are_block_grid { bx } else { ix };
-                                let (pixel_cost, pixel_obs_count) = evaluate_candidate_pixel_cost(
-                                    iy,
-                                    ix,
-                                    coeff_y,
-                                    coeff_x,
-                                    n_band,
-                                    aot_val_f64,
-                                    tcwv_val_f64,
-                                    toa,
-                                    boa_prior,
-                                    boa_unc,
-                                    band_weights,
-                                    valid,
-                                    aot_prior,
-                                    tcwv_prior,
-                                    aot_prior_unc,
-                                    tcwv_prior_unc,
-                                    xap,
-                                    xbp,
-                                    xcp,
-                                    fixed_parameter,
-                                );
-                                block_cost += pixel_cost as f64;
-                                block_obs_count = block_obs_count.saturating_add(pixel_obs_count);
+                            for iy in y0..y1 {
+                                for ix in x0..x1 {
+                                    let coeff_y = if coeffs_are_block_grid { by } else { iy };
+                                    let coeff_x = if coeffs_are_block_grid { bx } else { ix };
+                                    let (pixel_cost, pixel_obs_count) =
+                                        evaluate_candidate_pixel_cost(
+                                            iy,
+                                            ix,
+                                            coeff_y,
+                                            coeff_x,
+                                            n_band,
+                                            aot_val_f64,
+                                            tcwv_val_f64,
+                                            toa,
+                                            boa_prior,
+                                            boa_unc,
+                                            band_weights,
+                                            valid,
+                                            aot_prior,
+                                            tcwv_prior,
+                                            aot_prior_unc,
+                                            tcwv_prior_unc,
+                                            xap,
+                                            xbp,
+                                            xcp,
+                                            fixed_parameter,
+                                        );
+                                    block_cost += pixel_cost as f64;
+                                    block_obs_count =
+                                        block_obs_count.saturating_add(pixel_obs_count);
+                                }
                             }
-                        }
 
-                        cost_row[bx] = block_cost as f32;
-                        count_row[bx] = block_obs_count;
-                    }
-                });
+                            cost_row[bx] = block_cost as f32;
+                            count_row[bx] = block_obs_count;
+                        }
+                    });
+            });
         }
     }
 
@@ -764,39 +780,44 @@ fn compute_grid_search_cost_cube<'py>(
             let tcwv_val_f64 = *tcwv_val as f64;
             let mut cost_slice = costs.slice_mut(s![ia, it, .., ..]);
             let mut count_slice = obs_counts.slice_mut(s![ia, it, .., ..]);
-            cost_slice
-                .axis_iter_mut(Axis(0))
-                .into_par_iter()
-                .zip(count_slice.axis_iter_mut(Axis(0)).into_par_iter())
-                .enumerate()
-                .for_each(|(iy, (mut cost_row, mut count_row))| {
-                    for ix in 0..nx {
-                        let (pixel_cost, pixel_obs_count) = evaluate_candidate_pixel_cost(
-                            iy,
-                            ix,
-                            iy,
-                            ix,
-                            n_band,
-                            aot_val_f64,
-                            tcwv_val_f64,
-                            toa,
-                            boa_prior,
-                            boa_unc,
-                            band_weights,
-                            valid,
-                            aot_prior,
-                            tcwv_prior,
-                            aot_prior_unc,
-                            tcwv_prior_unc,
-                            xap,
-                            xbp,
-                            xcp,
-                            fixed_parameter,
-                        );
-                        cost_row[ix] = pixel_cost;
-                        count_row[ix] = pixel_obs_count;
-                    }
-                });
+            // The coefficient extraction above used the GIL; the rayon section
+            // operates purely on Rust ndarray views, so we release the GIL
+            // for the duration of this slice's parallel evaluation.
+            py.allow_threads(|| {
+                cost_slice
+                    .axis_iter_mut(Axis(0))
+                    .into_par_iter()
+                    .zip(count_slice.axis_iter_mut(Axis(0)).into_par_iter())
+                    .enumerate()
+                    .for_each(|(iy, (mut cost_row, mut count_row))| {
+                        for ix in 0..nx {
+                            let (pixel_cost, pixel_obs_count) = evaluate_candidate_pixel_cost(
+                                iy,
+                                ix,
+                                iy,
+                                ix,
+                                n_band,
+                                aot_val_f64,
+                                tcwv_val_f64,
+                                toa,
+                                boa_prior,
+                                boa_unc,
+                                band_weights,
+                                valid,
+                                aot_prior,
+                                tcwv_prior,
+                                aot_prior_unc,
+                                tcwv_prior_unc,
+                                xap,
+                                xbp,
+                                xcp,
+                                fixed_parameter,
+                            );
+                            cost_row[ix] = pixel_cost;
+                            count_row[ix] = pixel_obs_count;
+                        }
+                    });
+            });
         }
     }
 
@@ -834,6 +855,7 @@ pub fn quadratic_refine_grid_search<'py>(
         _lower_aot_boundary,
         _zero_obs,
     ) = refine_grid_search_with_qa(
+        py,
         costs.as_array(),
         None,
         aot_axis.as_array(),
@@ -890,6 +912,7 @@ pub fn quadratic_refine_grid_search_qa<'py>(
         lower_aot_boundary_mask,
         zero_obs_mask,
     ) = refine_grid_search_with_qa(
+        py,
         costs.as_array(),
         Some(obs_counts.as_array()),
         aot_axis.as_array(),
@@ -911,6 +934,7 @@ pub fn quadratic_refine_grid_search_qa<'py>(
 }
 
 fn refine_grid_search_with_qa(
+    py: Python<'_>,
     costs: ArrayView4<'_, f32>,
     obs_counts: Option<ArrayView4<'_, u16>>,
     aot_axis: ArrayView1<'_, f32>,
@@ -976,180 +1000,60 @@ fn refine_grid_search_with_qa(
     aot_unc.fill(da);
     tcwv_unc.fill(dt);
 
-    for iy in 0..ny {
-        for ix in 0..nx {
-            if !valid[[iy, ix]] {
-                continue;
-            }
+    // Parallel per-row refinement: each iy writes to disjoint rows of the
+    // eight output arrays, with no shared mutable state. ndarray's `Zip`
+    // caps at six producers, so we group the four f32 outputs and four
+    // bool masks via rayon's parallel iterator zips and pair them with
+    // `enumerate` to recover `iy`. Each thread receives exclusive mutable
+    // rows of all eight outputs; read-only inputs (`costs`, `obs_counts`,
+    // `valid`, axes) are shared by reference and are `Sync`.
+    py.allow_threads(|| {
+        let f32_rows = aot_best
+            .axis_iter_mut(Axis(0))
+            .into_par_iter()
+            .zip(tcwv_best.axis_iter_mut(Axis(0)).into_par_iter())
+            .zip(aot_unc.axis_iter_mut(Axis(0)).into_par_iter())
+            .zip(tcwv_unc.axis_iter_mut(Axis(0)).into_par_iter());
+        let bool_rows = invalid_mask
+            .axis_iter_mut(Axis(0))
+            .into_par_iter()
+            .zip(boundary_mask.axis_iter_mut(Axis(0)).into_par_iter())
+            .zip(lower_aot_boundary_mask.axis_iter_mut(Axis(0)).into_par_iter())
+            .zip(zero_obs_mask.axis_iter_mut(Axis(0)).into_par_iter());
 
-            // Discrete minimum.
-            let mut best_ia = 0usize;
-            let mut best_it = 0usize;
-            let mut best_cost = f32::INFINITY;
-            for ia in 0..n_aot {
-                for it in 0..n_tcwv {
-                    let c = costs[[ia, it, iy, ix]];
-                    if c.is_finite() && c < best_cost {
-                        best_cost = c;
-                        best_ia = ia;
-                        best_it = it;
-                    }
-                }
-            }
-
-            aot_best[[iy, ix]] = aot_axis[best_ia];
-            tcwv_best[[iy, ix]] = tcwv_axis[best_it];
-
-            if !best_cost.is_finite() {
-                invalid_mask[[iy, ix]] = true;
-                continue;
-            }
-
-            if let Some(obs_counts) = obs_counts {
-                if obs_counts[[best_ia, best_it, iy, ix]] == 0 {
-                    invalid_mask[[iy, ix]] = true;
-                    zero_obs_mask[[iy, ix]] = true;
-                    continue;
-                }
-            }
-
-            if fixed_parameter == FixedParameter::Tcwv {
-                if best_ia == 0 || best_ia + 1 >= n_aot {
-                    boundary_mask[[iy, ix]] = true;
-                    if best_ia == 0 {
-                        lower_aot_boundary_mask[[iy, ix]] = true;
-                    }
-                    continue;
-                }
-
-                let ia = best_ia;
-                let f00 = costs[[ia, 0, iy, ix]] as f64;
-                let fxm = costs[[ia - 1, 0, iy, ix]] as f64;
-                let fxp = costs[[ia + 1, 0, iy, ix]] as f64;
-                if !f00.is_finite() || !fxm.is_finite() || !fxp.is_finite() {
-                    continue;
-                }
-
-                let da64 = da as f64;
-                let dfdx = (fxp - fxm) / (2.0 * da64);
-                let d2fdx2 = (fxp - 2.0 * f00 + fxm) / (da64 * da64);
-                if d2fdx2 > 1e-6 {
-                    let delta_a = dfdx / d2fdx2;
-                    let mut a_fit = (aot_axis[ia] as f64) - delta_a;
-                    let a_lo = aot_axis[ia - 1] as f64;
-                    let a_hi = aot_axis[ia + 1] as f64;
-                    a_fit = a_fit.clamp(a_lo.min(a_hi), a_lo.max(a_hi));
-                    aot_best[[iy, ix]] = a_fit as f32;
-                    aot_unc[[iy, ix]] = (1.0 / d2fdx2).max(1e-12).sqrt() as f32;
-                }
-                continue;
-            }
-
-            if fixed_parameter == FixedParameter::Aot {
-                if best_it == 0 || best_it + 1 >= n_tcwv {
-                    boundary_mask[[iy, ix]] = true;
-                    continue;
-                }
-
-                let it = best_it;
-                let f00 = costs[[0, it, iy, ix]] as f64;
-                let fym = costs[[0, it - 1, iy, ix]] as f64;
-                let fyp = costs[[0, it + 1, iy, ix]] as f64;
-                if !f00.is_finite() || !fym.is_finite() || !fyp.is_finite() {
-                    continue;
-                }
-
-                let dt64 = dt as f64;
-                let dfdy = (fyp - fym) / (2.0 * dt64);
-                let d2fdy2 = (fyp - 2.0 * f00 + fym) / (dt64 * dt64);
-                if d2fdy2 > 1e-6 {
-                    let delta_t = dfdy / d2fdy2;
-                    let mut t_fit = (tcwv_axis[it] as f64) - delta_t;
-                    let t_lo = tcwv_axis[it - 1] as f64;
-                    let t_hi = tcwv_axis[it + 1] as f64;
-                    t_fit = t_fit.clamp(t_lo.min(t_hi), t_lo.max(t_hi));
-                    tcwv_best[[iy, ix]] = t_fit as f32;
-                    tcwv_unc[[iy, ix]] = (1.0 / d2fdy2).max(1e-12).sqrt() as f32;
-                }
-                continue;
-            }
-
-            // Need interior point for finite-difference Hessian.
-            if best_ia == 0 || best_ia + 1 >= n_aot || best_it == 0 || best_it + 1 >= n_tcwv {
-                boundary_mask[[iy, ix]] = true;
-                if best_ia == 0 {
-                    lower_aot_boundary_mask[[iy, ix]] = true;
-                }
-                continue;
-            }
-
-            let ia = best_ia;
-            let it = best_it;
-
-            let f00 = costs[[ia, it, iy, ix]] as f64;
-            let fxm = costs[[ia - 1, it, iy, ix]] as f64;
-            let fxp = costs[[ia + 1, it, iy, ix]] as f64;
-            let fym = costs[[ia, it - 1, iy, ix]] as f64;
-            let fyp = costs[[ia, it + 1, iy, ix]] as f64;
-            let fmm = costs[[ia - 1, it - 1, iy, ix]] as f64;
-            let fmp = costs[[ia - 1, it + 1, iy, ix]] as f64;
-            let fpm = costs[[ia + 1, it - 1, iy, ix]] as f64;
-            let fpp = costs[[ia + 1, it + 1, iy, ix]] as f64;
-
-            if !f00.is_finite()
-                || !fxm.is_finite()
-                || !fxp.is_finite()
-                || !fym.is_finite()
-                || !fyp.is_finite()
-                || !fmm.is_finite()
-                || !fmp.is_finite()
-                || !fpm.is_finite()
-                || !fpp.is_finite()
-            {
-                continue;
-            }
-
-            let da64 = da as f64;
-            let dt64 = dt as f64;
-            let dfdx = (fxp - fxm) / (2.0 * da64);
-            let dfdy = (fyp - fym) / (2.0 * dt64);
-            let d2fdx2 = (fxp - 2.0 * f00 + fxm) / (da64 * da64);
-            let d2fdy2 = (fyp - 2.0 * f00 + fym) / (dt64 * dt64);
-            let d2fdxdy = (fpp - fpm - fmp + fmm) / (4.0 * da64 * dt64);
-
-            let a = d2fdx2;
-            let b = d2fdxdy;
-            let c = d2fdy2;
-            let det = a * c - b * b;
-            // Use 1e-6 threshold: data originates from f32, so tighter bounds
-            // cause spurious NaN/inf from ill-conditioned Hessians.
-            if !(a > 1e-6 && c > 1e-6 && det > 1e-6) {
-                continue;
-            }
-
-            // Newton update x* = x0 - H^{-1} g for [aot, tcwv].
-            let delta_a = (c * dfdx - b * dfdy) / det;
-            let delta_t = (-b * dfdx + a * dfdy) / det;
-            let mut a_fit = (aot_axis[ia] as f64) - delta_a;
-            let mut t_fit = (tcwv_axis[it] as f64) - delta_t;
-
-            let a_lo = aot_axis[ia - 1] as f64;
-            let a_hi = aot_axis[ia + 1] as f64;
-            let t_lo = tcwv_axis[it - 1] as f64;
-            let t_hi = tcwv_axis[it + 1] as f64;
-            a_fit = a_fit.clamp(a_lo.min(a_hi), a_lo.max(a_hi));
-            t_fit = t_fit.clamp(t_lo.min(t_hi), t_lo.max(t_hi));
-
-            aot_best[[iy, ix]] = a_fit as f32;
-            tcwv_best[[iy, ix]] = t_fit as f32;
-
-            // Diagonal of inverse Hessian as variance proxy.
-            let var_a = (c / det).max(1e-12);
-            let var_t = (a / det).max(1e-12);
-            aot_unc[[iy, ix]] = var_a.sqrt() as f32;
-            tcwv_unc[[iy, ix]] = var_t.sqrt() as f32;
-        }
-    }
+        f32_rows.zip(bool_rows).enumerate().for_each(
+            |(
+                iy,
+                (
+                    (((aot_best_row, tcwv_best_row), aot_unc_row), tcwv_unc_row),
+                    (((invalid_row, boundary_row), lower_aot_row), zero_obs_row),
+                ),
+            )| {
+                refine_one_row(
+                    iy,
+                    nx,
+                    n_aot,
+                    n_tcwv,
+                    da,
+                    dt,
+                    costs,
+                    obs_counts,
+                    aot_axis,
+                    tcwv_axis,
+                    valid,
+                    fixed_parameter,
+                    aot_best_row,
+                    tcwv_best_row,
+                    aot_unc_row,
+                    tcwv_unc_row,
+                    invalid_row,
+                    boundary_row,
+                    lower_aot_row,
+                    zero_obs_row,
+                );
+            },
+        );
+    });
 
     Ok((
         aot_best,
@@ -1161,6 +1065,204 @@ fn refine_grid_search_with_qa(
         lower_aot_boundary_mask,
         zero_obs_mask,
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn refine_one_row(
+    iy: usize,
+    nx: usize,
+    n_aot: usize,
+    n_tcwv: usize,
+    da: f32,
+    dt: f32,
+    costs: ArrayView4<'_, f32>,
+    obs_counts: Option<ArrayView4<'_, u16>>,
+    aot_axis: ArrayView1<'_, f32>,
+    tcwv_axis: ArrayView1<'_, f32>,
+    valid: ArrayView2<'_, bool>,
+    fixed_parameter: FixedParameter,
+    mut aot_best: ndarray::ArrayViewMut1<'_, f32>,
+    mut tcwv_best: ndarray::ArrayViewMut1<'_, f32>,
+    mut aot_unc: ndarray::ArrayViewMut1<'_, f32>,
+    mut tcwv_unc: ndarray::ArrayViewMut1<'_, f32>,
+    mut invalid_mask: ndarray::ArrayViewMut1<'_, bool>,
+    mut boundary_mask: ndarray::ArrayViewMut1<'_, bool>,
+    mut lower_aot_boundary_mask: ndarray::ArrayViewMut1<'_, bool>,
+    mut zero_obs_mask: ndarray::ArrayViewMut1<'_, bool>,
+) {
+    for ix in 0..nx {
+        if !valid[[iy, ix]] {
+            continue;
+        }
+
+        // Discrete minimum.
+        let mut best_ia = 0usize;
+        let mut best_it = 0usize;
+        let mut best_cost = f32::INFINITY;
+        for ia in 0..n_aot {
+            for it in 0..n_tcwv {
+                let c = costs[[ia, it, iy, ix]];
+                if c.is_finite() && c < best_cost {
+                    best_cost = c;
+                    best_ia = ia;
+                    best_it = it;
+                }
+            }
+        }
+
+        aot_best[ix] = aot_axis[best_ia];
+        tcwv_best[ix] = tcwv_axis[best_it];
+
+        if !best_cost.is_finite() {
+            invalid_mask[ix] = true;
+            continue;
+        }
+
+        if let Some(obs_counts) = obs_counts {
+            if obs_counts[[best_ia, best_it, iy, ix]] == 0 {
+                invalid_mask[ix] = true;
+                zero_obs_mask[ix] = true;
+                continue;
+            }
+        }
+
+        if fixed_parameter == FixedParameter::Tcwv {
+            if best_ia == 0 || best_ia + 1 >= n_aot {
+                boundary_mask[ix] = true;
+                if best_ia == 0 {
+                    lower_aot_boundary_mask[ix] = true;
+                }
+                continue;
+            }
+
+            let ia = best_ia;
+            let f00 = costs[[ia, 0, iy, ix]] as f64;
+            let fxm = costs[[ia - 1, 0, iy, ix]] as f64;
+            let fxp = costs[[ia + 1, 0, iy, ix]] as f64;
+            if !f00.is_finite() || !fxm.is_finite() || !fxp.is_finite() {
+                continue;
+            }
+
+            let da64 = da as f64;
+            let dfdx = (fxp - fxm) / (2.0 * da64);
+            let d2fdx2 = (fxp - 2.0 * f00 + fxm) / (da64 * da64);
+            if d2fdx2 > 1e-6 {
+                let delta_a = dfdx / d2fdx2;
+                let mut a_fit = (aot_axis[ia] as f64) - delta_a;
+                let a_lo = aot_axis[ia - 1] as f64;
+                let a_hi = aot_axis[ia + 1] as f64;
+                a_fit = a_fit.clamp(a_lo.min(a_hi), a_lo.max(a_hi));
+                aot_best[ix] = a_fit as f32;
+                aot_unc[ix] = (1.0 / d2fdx2).max(1e-12).sqrt() as f32;
+            }
+            continue;
+        }
+
+        if fixed_parameter == FixedParameter::Aot {
+            if best_it == 0 || best_it + 1 >= n_tcwv {
+                boundary_mask[ix] = true;
+                continue;
+            }
+
+            let it = best_it;
+            let f00 = costs[[0, it, iy, ix]] as f64;
+            let fym = costs[[0, it - 1, iy, ix]] as f64;
+            let fyp = costs[[0, it + 1, iy, ix]] as f64;
+            if !f00.is_finite() || !fym.is_finite() || !fyp.is_finite() {
+                continue;
+            }
+
+            let dt64 = dt as f64;
+            let dfdy = (fyp - fym) / (2.0 * dt64);
+            let d2fdy2 = (fyp - 2.0 * f00 + fym) / (dt64 * dt64);
+            if d2fdy2 > 1e-6 {
+                let delta_t = dfdy / d2fdy2;
+                let mut t_fit = (tcwv_axis[it] as f64) - delta_t;
+                let t_lo = tcwv_axis[it - 1] as f64;
+                let t_hi = tcwv_axis[it + 1] as f64;
+                t_fit = t_fit.clamp(t_lo.min(t_hi), t_lo.max(t_hi));
+                tcwv_best[ix] = t_fit as f32;
+                tcwv_unc[ix] = (1.0 / d2fdy2).max(1e-12).sqrt() as f32;
+            }
+            continue;
+        }
+
+        // Need interior point for finite-difference Hessian.
+        if best_ia == 0 || best_ia + 1 >= n_aot || best_it == 0 || best_it + 1 >= n_tcwv {
+            boundary_mask[ix] = true;
+            if best_ia == 0 {
+                lower_aot_boundary_mask[ix] = true;
+            }
+            continue;
+        }
+
+        let ia = best_ia;
+        let it = best_it;
+
+        let f00 = costs[[ia, it, iy, ix]] as f64;
+        let fxm = costs[[ia - 1, it, iy, ix]] as f64;
+        let fxp = costs[[ia + 1, it, iy, ix]] as f64;
+        let fym = costs[[ia, it - 1, iy, ix]] as f64;
+        let fyp = costs[[ia, it + 1, iy, ix]] as f64;
+        let fmm = costs[[ia - 1, it - 1, iy, ix]] as f64;
+        let fmp = costs[[ia - 1, it + 1, iy, ix]] as f64;
+        let fpm = costs[[ia + 1, it - 1, iy, ix]] as f64;
+        let fpp = costs[[ia + 1, it + 1, iy, ix]] as f64;
+
+        if !f00.is_finite()
+            || !fxm.is_finite()
+            || !fxp.is_finite()
+            || !fym.is_finite()
+            || !fyp.is_finite()
+            || !fmm.is_finite()
+            || !fmp.is_finite()
+            || !fpm.is_finite()
+            || !fpp.is_finite()
+        {
+            continue;
+        }
+
+        let da64 = da as f64;
+        let dt64 = dt as f64;
+        let dfdx = (fxp - fxm) / (2.0 * da64);
+        let dfdy = (fyp - fym) / (2.0 * dt64);
+        let d2fdx2 = (fxp - 2.0 * f00 + fxm) / (da64 * da64);
+        let d2fdy2 = (fyp - 2.0 * f00 + fym) / (dt64 * dt64);
+        let d2fdxdy = (fpp - fpm - fmp + fmm) / (4.0 * da64 * dt64);
+
+        let a = d2fdx2;
+        let b = d2fdxdy;
+        let c = d2fdy2;
+        let det = a * c - b * b;
+        // Use 1e-6 threshold: data originates from f32, so tighter bounds
+        // cause spurious NaN/inf from ill-conditioned Hessians.
+        if !(a > 1e-6 && c > 1e-6 && det > 1e-6) {
+            continue;
+        }
+
+        // Newton update x* = x0 - H^{-1} g for [aot, tcwv].
+        let delta_a = (c * dfdx - b * dfdy) / det;
+        let delta_t = (-b * dfdx + a * dfdy) / det;
+        let mut a_fit = (aot_axis[ia] as f64) - delta_a;
+        let mut t_fit = (tcwv_axis[it] as f64) - delta_t;
+
+        let a_lo = aot_axis[ia - 1] as f64;
+        let a_hi = aot_axis[ia + 1] as f64;
+        let t_lo = tcwv_axis[it - 1] as f64;
+        let t_hi = tcwv_axis[it + 1] as f64;
+        a_fit = a_fit.clamp(a_lo.min(a_hi), a_lo.max(a_hi));
+        t_fit = t_fit.clamp(t_lo.min(t_hi), t_lo.max(t_hi));
+
+        aot_best[ix] = a_fit as f32;
+        tcwv_best[ix] = t_fit as f32;
+
+        // Diagonal of inverse Hessian as variance proxy.
+        let var_a = (c / det).max(1e-12);
+        let var_t = (a / det).max(1e-12);
+        aot_unc[ix] = var_a.sqrt() as f32;
+        tcwv_unc[ix] = var_t.sqrt() as f32;
+    }
 }
 
 #[cfg(test)]

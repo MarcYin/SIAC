@@ -1,18 +1,25 @@
 #![allow(non_local_definitions)]
 //! PSF Convolution
 //!
-//! DCT-based Gaussian PSF convolution for scale matching between
-//! high-resolution satellite imagery (e.g., Sentinel-2 at 10m) and
+//! Direct spatial-domain Gaussian-weighted convolution for scale matching
+//! between high-resolution satellite imagery (e.g., Sentinel-2 at 10m) and
 //! coarse-resolution BRDF products (e.g., MODIS at 500m).
+//!
+//! Despite the legacy `dct_convolve` method name (kept for backwards
+//! compatibility with existing call sites), the actual implementation is a
+//! separable spatial-domain Gaussian filter truncated at 4σ with NaN-aware
+//! weight normalisation — there is no DCT step. See the function comment on
+//! `dct_convolve` for details.
 
 use ndarray::{Array2, ArrayView2};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
 
-/// PSF Convolver using DCT-based Gaussian convolution
+/// PSF Convolver using direct spatial-domain Gaussian convolution.
 ///
-/// Efficiently convolves high-resolution imagery with a Gaussian PSF
-/// to match the spatial response of coarser resolution sensors.
+/// Convolves high-resolution imagery with a Gaussian PSF to match the
+/// spatial response of coarser resolution sensors. Uses a separable
+/// (two-pass) implementation truncated at 4σ.
 #[pyclass]
 pub struct PSFConvolver {
     /// PSF standard deviation in x direction (pixels)
@@ -53,13 +60,20 @@ impl PSFConvolver {
 }
 
 impl PSFConvolver {
-    /// DCT-based Gaussian convolution.
+    /// Direct spatial-domain Gaussian-weighted convolution (legacy name
+    /// `dct_convolve` kept for backwards compatibility).
     ///
-    /// **NOTE**: This is a simplified spatial-domain implementation that applies
-    /// the PSF via direct Gaussian-weighted averaging.  For production use,
-    /// prefer the Python-side `scipy.ndimage.gaussian_filter` path in
-    /// `kernel_model.KernelModelDeriver._convolve_2d` which handles NaN masking
-    /// correctly.
+    /// Applies the PSF via a separable two-pass Gaussian filter truncated at
+    /// 4σ. Each output pixel is a NaN-aware weighted mean of the input pixels
+    /// inside the kernel footprint: non-finite inputs are dropped from both
+    /// numerator and denominator so a single NaN does not contaminate the
+    /// neighbourhood, and an output is NaN only when *every* contributing
+    /// input is non-finite.
+    ///
+    /// The legacy `dct_convolve` name reflects an earlier DCT-based prototype;
+    /// the current implementation is purely spatial-domain. For the production
+    /// Python path, prefer `kernel_model.KernelModelDeriver._convolve_2d`
+    /// which wraps `scipy.ndimage.gaussian_filter` with the same NaN handling.
     fn dct_convolve(&self, image: ArrayView2<f64>) -> Array2<f64> {
         let (height, width) = (image.shape()[0], image.shape()[1]);
 

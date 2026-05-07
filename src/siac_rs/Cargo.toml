@@ -18,22 +18,13 @@ numpy = "0.20"
 
 # Numerical computing
 ndarray = { version = "0.15", features = ["rayon"] }
-ndarray-stats = "0.5"
 nalgebra = "0.32"
 
 # Parallelism
 rayon = "1.8"
 
-# Fast math
-num-traits = "0.2"
-
 [dev-dependencies]
-criterion = "0.5"
 approx = "0.5"
-
-[[bench]]
-name = "kernels"
-harness = false
 
 [lints.rust]
 unused_must_use = "deny"
