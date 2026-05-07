@@ -110,7 +110,13 @@ class MultiGridConfig:
     # L-BFGS-B parameters
     maxcor: int = 30  # Memory for L-BFGS
     gtol: float = 1e-2  # Gradient tolerance
-    ftol: float = 1e-7 * np.finfo(float).eps  # Function tolerance
+    # ``ftol`` is intentionally set to a value below machine epsilon so that
+    # L-BFGS-B convergence is governed entirely by ``gtol`` (the gradient
+    # norm). REVIEW.md §1.1 #6 flagged this as ``effectively zero''; the
+    # current behaviour IS gradient-only convergence by design — switching to
+    # a non-zero ftol would change retrievals across the regression suite and
+    # should only be done with paired numerical verification on a real scene.
+    ftol: float = 1e-7 * np.finfo(float).eps
 
     # Parameter bounds
     aot_bounds: tuple[float, float] = (0.001, 2.5)

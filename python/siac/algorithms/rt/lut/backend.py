@@ -1353,11 +1353,11 @@ class ZarrLUTBackend:
         Returns:
             Corrected RT parameters
         """
-        # Scale height for Rayleigh scattering (~8.5 km)
-        scale_height = 8.5
+        # Atmospheric Rayleigh scale height — see siac.constants.
+        from siac.constants import ATMOSPHERIC_SCALE_HEIGHT_KM
 
         # Elevation correction factor
-        correction = np.exp(-elevation / scale_height)
+        correction = np.exp(-elevation / ATMOSPHERIC_SCALE_HEIGHT_KM)
 
         # Apply correction (reduce path effects at altitude)
         path_ref_corr = path_ref * correction
@@ -1391,9 +1391,11 @@ class ZarrLUTBackend:
         Returns:
             Tuple of Jacobian DataArrays for (d_xap, d_xbp, d_xcp)
         """
-        # Perturbation size
-        delta_aot = 0.01
-        delta_tcwv = 0.1
+        # Forward-difference perturbation sizes — see siac.constants.
+        from siac.constants import (
+            DEFAULT_JACOBIAN_DELTA_AOT as delta_aot,
+            DEFAULT_JACOBIAN_DELTA_TCWV as delta_tcwv,
+        )
 
         template = geometry.sza
 

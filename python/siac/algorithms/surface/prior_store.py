@@ -312,15 +312,27 @@ class PrebuiltPriorStore:
             dims=["y", "x"],
         )
 
-        # Dummy BRDF kernel weights (not meaningful for pre-built priors)
+        # BRDF kernel weights are not meaningful for pre-built priors — the
+        # store materialises BOA reflectance directly without retaining the
+        # kernel decomposition. We fill the kernels with NaN (not zero) and
+        # the kernel uncertainties with +inf so that any downstream consumer
+        # that accidentally uses these fields sees obvious "no data" sentinels
+        # rather than apparent zeros with zero uncertainty (REVIEW.md §3.5
+        # prior_store.py:292-301).
         shape = boa.shape
         kernels = BRDFKernelWeights(
-            f0=xr.DataArray(np.full(shape, 0.0, dtype=np.float32), dims=["y", "x"]),
-            f1=xr.DataArray(np.full(shape, 0.0, dtype=np.float32), dims=["y", "x"]),
-            f2=xr.DataArray(np.full(shape, 0.0, dtype=np.float32), dims=["y", "x"]),
-            f0_unc=xr.DataArray(np.full(shape, 0.0, dtype=np.float32), dims=["y", "x"]),
-            f1_unc=xr.DataArray(np.full(shape, 0.0, dtype=np.float32), dims=["y", "x"]),
-            f2_unc=xr.DataArray(np.full(shape, 0.0, dtype=np.float32), dims=["y", "x"]),
+            f0=xr.DataArray(np.full(shape, np.nan, dtype=np.float32), dims=["y", "x"]),
+            f1=xr.DataArray(np.full(shape, np.nan, dtype=np.float32), dims=["y", "x"]),
+            f2=xr.DataArray(np.full(shape, np.nan, dtype=np.float32), dims=["y", "x"]),
+            f0_unc=xr.DataArray(
+                np.full(shape, np.float32(np.inf), dtype=np.float32), dims=["y", "x"]
+            ),
+            f1_unc=xr.DataArray(
+                np.full(shape, np.float32(np.inf), dtype=np.float32), dims=["y", "x"]
+            ),
+            f2_unc=xr.DataArray(
+                np.full(shape, np.float32(np.inf), dtype=np.float32), dims=["y", "x"]
+            ),
         )
 
         return SurfacePrior(

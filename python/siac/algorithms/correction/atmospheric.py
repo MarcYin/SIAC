@@ -96,7 +96,12 @@ class AtmosphericCorrector:
             coeffs = self.rt_model.compute_coefficients(geometry, atmo_state, band_spec, False)
             coeffs = resample_coefficients_to_template(coeffs, band_data)
             boa = coeffs.apply_correction(band_data)
-            band_valid = np.isfinite(boa) & (boa > -0.05) & (boa < 1.5)
+            # Reflectance validity range — siac.constants.
+            from siac.constants import BOA_VALID_MAX, BOA_VALID_MIN
+
+            band_valid = (
+                np.isfinite(boa) & (boa > BOA_VALID_MIN) & (boa < BOA_VALID_MAX)
+            )
             masked_boa = boa.where(band_valid)
             return masked_boa, (~band_valid), (time.perf_counter() - t_band)
 
