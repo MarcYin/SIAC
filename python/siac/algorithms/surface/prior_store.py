@@ -306,9 +306,14 @@ class PrebuiltPriorStore:
             dims=["y", "x"],
         )
 
-        # Validity mask
+        # Validity mask. ``> 0`` (not ``> BOA_VALID_MIN``) is intentional
+        # for the prior store: pre-built priors should never be negative
+        # (the store materialises non-negative reflectance), so any negative
+        # value is a corrupt sample rather than acceptable correction noise.
+        from siac.constants import BOA_VALID_MAX
+
         mask = xr.DataArray(
-            np.isfinite(boa.values) & (boa.values > 0) & (boa.values < 1.5),
+            np.isfinite(boa.values) & (boa.values > 0) & (boa.values < BOA_VALID_MAX),
             dims=["y", "x"],
         )
 

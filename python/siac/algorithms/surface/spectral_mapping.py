@@ -22,7 +22,7 @@ from siac.algorithms.surface import _spectral_curve_utils as curve_utils
 from siac.algorithms.surface._spectral_curve_utils import (
     normalized_band_response as _normalized_band_response,
 )
-from siac.runtime.models import copy_spatial_metadata_like
+from siac.geo._spatial import copy_spatial_metadata_like
 from siac.storage.writers import write_raster
 
 if TYPE_CHECKING:

@@ -8,8 +8,8 @@ import numpy as np
 import xarray as xr
 
 from siac.algorithms.grid.assembler import _resample_da
+from siac.geo._spatial import copy_spatial_metadata_like
 from siac.runtime import BRDFKernelWeights
-from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     import collections.abc

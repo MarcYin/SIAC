@@ -13,8 +13,8 @@ from siac._rust_compat import whittaker_smooth_cube
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
 from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectance
+from siac.geo._spatial import copy_spatial_metadata_like
 from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
-from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

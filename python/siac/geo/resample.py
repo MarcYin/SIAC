@@ -15,7 +15,12 @@ import numpy as np
 import xarray as xr
 from scipy import ndimage
 
-from siac.runtime.models import copy_spatial_metadata_like
+# REVIEW.md §1.4: ``copy_spatial_metadata_like`` was previously imported from
+# ``siac.runtime.models``, which inverted the runtime/geo layering. The
+# helper now lives in ``siac.geo._spatial`` (its natural home) so geo no
+# longer depends on runtime; the runtime module re-exports it for callers
+# that pinned the old path.
+from siac.geo._spatial import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.runtime import RTCoefficients

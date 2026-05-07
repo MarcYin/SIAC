@@ -142,8 +142,13 @@ class KernelModelDeriver:
             boa = self._apply_psf(boa, sigma_x, sigma_y)
             boa_unc = self._apply_psf(boa_unc, sigma_x, sigma_y)
 
-        # Create validity mask
-        mask = (boa > 0) & (boa < 1.5) & np.isfinite(boa)
+        # Create validity mask. The kernel-model prior is built from BRDF
+        # kernels and should produce non-negative reflectance; any negative
+        # value is a numerical artefact rather than acceptable correction
+        # noise, so we use ``> 0`` here (not ``> BOA_VALID_MIN``).
+        from siac.constants import BOA_VALID_MAX
+
+        mask = (boa > 0) & (boa < BOA_VALID_MAX) & np.isfinite(boa)
 
         return SurfacePrior(
             boa=boa,

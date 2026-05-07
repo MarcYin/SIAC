@@ -59,54 +59,12 @@ def _as_data_array(value: object) -> xr.DataArray:
     return value
 
 
-def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> xr.DataArray:
-    """Copy spatial coords/CRS/transform from *reference* onto *data* when possible."""
-    import rioxarray  # noqa: F401
-
-    out = data
-    x_dim: str | None = None
-    y_dim: str | None = None
-    try:
-        x_dim = reference.rio.x_dim
-        y_dim = reference.rio.y_dim
-    except Exception:
-        if "x" in reference.dims and "y" in reference.dims:
-            x_dim, y_dim = "x", "y"
-        elif "longitude" in reference.dims and "latitude" in reference.dims:
-            x_dim, y_dim = "longitude", "latitude"
-
-    coord_updates = {
-        dim: reference.coords[dim]
-        for dim in (x_dim, y_dim)
-        if dim is not None
-        and dim in out.dims
-        and dim in reference.coords
-        and out.sizes[dim] == reference.sizes[dim]
-    }
-    if coord_updates:
-        out = out.assign_coords(coord_updates)
-
-    spatial_sizes_match = (
-        x_dim is not None
-        and y_dim is not None
-        and x_dim in out.dims
-        and y_dim in out.dims
-        and out.sizes[x_dim] == reference.sizes[x_dim]
-        and out.sizes[y_dim] == reference.sizes[y_dim]
-    )
-    if spatial_sizes_match:
-        with suppress(Exception):
-            out = out.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
-
-    try:
-        ref_crs = reference.rio.crs
-    except Exception:
-        ref_crs = None
-    if ref_crs is not None and spatial_sizes_match:
-        out = out.rio.write_crs(ref_crs)
-        with suppress(Exception):
-            out = out.rio.write_transform(reference.rio.transform(recalc=True))
-    return out
+# ``copy_spatial_metadata_like`` lives in ``siac.geo._spatial`` so that
+# ``siac.geo.resample`` and the surface-prior pipelines can use it without
+# the previous ``geo -> runtime`` layering inversion (REVIEW.md §1.4). The
+# re-export here keeps backward compatibility for any caller still doing
+# ``from siac.runtime.models import copy_spatial_metadata_like``.
+from siac.geo._spatial import copy_spatial_metadata_like as copy_spatial_metadata_like
 
 
 @dataclass(frozen=True)
