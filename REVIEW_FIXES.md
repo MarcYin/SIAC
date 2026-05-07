@@ -238,16 +238,46 @@ One quirk: an agent (W4) cd'd out of its assigned worktree into the main working
 
 ### Next priorities
 
-The deferred items from waves 1-3 are still open:
+Of the items deferred after waves 1-4, three are now closed and three remain open:
 
-1. **Solver `ftol`** — `multigrid.py:113` is still `≈ 0`. Needs a regression scene to verify a non-zero value doesn't change retrievals.
-2. **Multigrid fixed-parameter cost/grad mismatch** — `multigrid.py:1648-1666`. Real bug; fix is to compute cost over the free-parameter half only.
-3. **`cost.py` Laplacian** — `cost.py:601-620` likely off-by-one on non-square grids; first verify whether the function is dead.
-4. **Layering inversion** — `siac.runtime ↔ siac.geo/storage`, `siac.domain → siac.geo`. Multi-file refactor; needs a clean commit boundary.
-5. **`_compute_overview_levels`** in `storage/writers.py` — confirmed dead in production but referenced by a coverage test. Paired removal.
-6. **Magic constants** — `siac.constants` module proposal in §2.4 of REVIEW.md.
+| Item | Status |
+|---|---|
+| `cost.py` Laplacian | ✅ Verified correct in wave 5; added a docstring note about the unusual nx/ny convention |
+| `_compute_overview_levels` removal | ✅ Removed in wave 5 (paired with the test reference) |
+| Solver `ftol` | Still deferred — needs a regression scene |
+| Multigrid fixed-parameter cost/grad mismatch | Still deferred — needs numerical verification |
+| Layering inversion | Still deferred — multi-file refactor |
+| Magic constants module | Still deferred — bulk mechanical work |
 
 All other findings from REVIEW.md are either fixed or covered by an explicit "Held back — by design" entry above.
+
+---
+
+## Wave 5 — Tier-B numerical safety + dead code + atomic writes (`c3541ab`)
+
+Six follow-ups verified individually against the unit suite:
+
+1. **`cost.py:create_sparse_laplacian` audit** (REVIEW.md §1.1 #8). Walked the boundary mask and Neumann diagonal corrections by hand on the `(nx=2, ny=3)` case — the math is correct. The unusual nx-as-outer / ny-as-inner indexing convention is confusing but consistent. Added a docstring note documenting the convention and the fact that REVIEW.md's "off-by-one" suspicion was a false positive.
+
+2. **`storage/writers.py:_compute_overview_levels` removal** (REVIEW.md §3.7 writers.py:957-968). Confirmed unreferenced in production (the GDAL COG driver builds overviews internally). Removed the helper and dropped the corresponding line from `tests/unit/test_coverage_io_extra.py`.
+
+3. **`backend.py:_sanitize_point_values` NaN preservation** (REVIEW.md §1.2 #4). Previously NaN inputs were replaced with the LUT axis midpoint — fabricating fake interpolations for missing pixels. Now NaN is preserved end-to-end so the interpolator returns NaN for those pixels. Finite-but-out-of-range values are still clipped to the LUT envelope (the LUT cannot extend beyond its sampled range). Updated the existing test that had been pinning the old contract; added a paired NaN-preserve test.
+
+4. **`http_zip_store.py` body cache cap** (REVIEW.md §1.3 #5). The `_full_body_cache` was unbounded; a 4 GB LUT zip could balloon RAM. Added a configurable cap (64 MiB default, `SIAC_HTTP_ZIP_FULL_BODY_CACHE_BYTES` override, `0` disables). Bodies above the cap are served range-by-range without memoisation.
+
+5. **`monthly_composite_store.py` atomic period writes** (REVIEW.md §1.3 #4). Previously the existing period directory was deleted before writing the new one; a crash mid-write left the period in a half-written state. Now stages into a sibling `{name}.tmp` directory and atomically swaps via `os.replace` once every asset is written. Staging directory is cleaned up on failure.
+
+6. **`sixs_outputs.py` documentation** (REVIEW.md §3.1 sixs_outputs.py:69). The flagged entries like `("sttotr", "sdtotr*sutotr", None)` are intentional — the consumer (`sixs_build._core_output_assignment_lines`) emits the field as an expression `output_values_out(N) = <expr>`, not as a name lookup. Added a module docstring documenting the contract so the false positive doesn't recur.
+
+### Wave 5 test suite
+
+Unchanged: 16 failed / 1200 passed / 7 skipped / 8 errors. All remaining failures and errors are pre-existing `siac._rust unavailable` ImportErrors.
+
+### Cumulative across all five waves
+
+- 39 source files modified, plus 5 new (`REVIEW.md`, `REVIEW_FIXES.md`, `tests/regression/README.md`, `tests/unit/test_tool_imports.py`, `python/siac/geo/_crs_compat.py`).
+- 9 commits on the working branch since `4878ef1`.
+- Test delta vs original baseline (20 failed / 1097 passed): **−4 failures / +103 passes / 0 new regressions**.
 
 ---
 
