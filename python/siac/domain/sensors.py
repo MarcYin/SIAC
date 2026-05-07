@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
+
+
+# Default tolerance (nm) when callers ask for a "nearest" band without a
+# specific window in mind. 50 nm covers typical S2/Landsat spacing without
+# bridging adjacent VIS bands.
+_DEFAULT_NEAREST_BAND_TOLERANCE_NM = 50.0
 
 
 @dataclass(frozen=True, init=False)
@@ -66,14 +73,21 @@ class SensorConfig:
     bands: tuple[SensorBand, ...]
     default_ref_scale: float = 1.0 / 10000.0
     default_ref_offset: float = 0.0
+    # Band names preferred for aerosol retrieval on this sensor. When set,
+    # default_aerosol_solver_bands() returns these bands in declaration order.
+    # Catalog entries (e.g. Sentinel-2 MSI) populate this; the generic
+    # fallback is documented on default_aerosol_solver_bands().
+    aerosol_solver_band_names: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if not self.bands:
             raise ValueError("SensorConfig must have at least one band.")
         names = [b.name for b in self.bands]
-        if len(names) != len(set(names)):
-            dupes = [n for n in names if names.count(n) > 1]
-            raise ValueError(f"Duplicate band names in SensorConfig: {sorted(set(dupes))}")
+        # O(N) duplicate detection via Counter (replaces O(N^2) names.count loop).
+        counts = Counter(names)
+        dupes = sorted(n for n, c in counts.items() if c > 1)
+        if dupes:
+            raise ValueError(f"Duplicate band names in SensorConfig: {dupes}")
         indices = [b.band_index for b in self.bands]
         if len(indices) != len(set(indices)):
             raise ValueError("Duplicate band_index values in SensorConfig.")
@@ -96,6 +110,10 @@ class SensorConfig:
     def get_band_by_wavelength(
         self, wavelength_nm: float, tolerance_nm: float = 20.0
     ) -> SensorBand | None:
+        """Return the band whose center is closest to ``wavelength_nm`` within
+        ``tolerance_nm``. Single shared implementation for nearest-band lookup;
+        :meth:`select_nearest_band` is a thin alias with a wider default tolerance.
+        """
         closest = None
         min_diff = float("inf")
 
@@ -119,27 +137,62 @@ class SensorConfig:
         return [b for b in self.bands if wl_min_nm <= b.center_wavelength <= wl_max_nm]
 
     def select_nearest_band(
-        self, target_nm: float, tolerance_nm: float = 50.0
+        self,
+        target_nm: float,
+        tolerance_nm: float = _DEFAULT_NEAREST_BAND_TOLERANCE_NM,
     ) -> SensorBand | None:
-        closest = None
-        min_diff = float("inf")
-        for band in self.bands:
-            diff = abs(band.center_wavelength - target_nm)
-            if diff < min_diff and diff <= tolerance_nm:
-                min_diff = diff
-                closest = band
-        return closest
+        """Backwards-compatible alias for :meth:`get_band_by_wavelength` with a
+        wider default tolerance (``_DEFAULT_NEAREST_BAND_TOLERANCE_NM``).
+
+        Implementation is shared with :meth:`get_band_by_wavelength`; only the
+        default tolerance differs.
+        """
+        return self.get_band_by_wavelength(target_nm, tolerance_nm=tolerance_nm)
 
     def default_aerosol_solver_bands(self) -> list[SensorBand]:
-        """Return the default bands used for aerosol retrieval on this sensor."""
-        preferred_by_sensor = {
-            "MSI": ("B02", "B04"),
-        }
-        preferred_names = preferred_by_sensor.get(self.sensor_id, ())
-        preferred = [band for name in preferred_names for band in self.bands if band.name == name]
-        if len(preferred) == len(preferred_names) and preferred:
-            return preferred
+        """Return the default bands used for aerosol retrieval on this sensor.
 
+        Resolution order:
+
+        1. ``aerosol_solver_band_names`` set on the catalog entry — returned
+           in declaration order. Used by S2 MSI (``("B02", "B04")``), OLI
+           (``("B1", "B2")``), and any externally registered sensors.
+        2. Legacy fallback for ``sensor_id == "MSI"`` configs without the
+           catalog field — still picks ``("B02", "B04")`` if both bands
+           exist. This is preserved only so test mocks that build
+           ``SensorConfig(sensor_id="MSI", ...)`` ad-hoc keep working;
+           the canonical path is to set ``aerosol_solver_band_names``.
+           TODO(REVIEW.md §3.2): drop this branch once downstream tests
+           migrate to the catalog field.
+        3. Generic 400-520 nm (aerosol-sensitive blue) wavelength window —
+           the historical behaviour for non-catalogued sensors.
+        4. First two bands as a final fallback.
+
+        The previous implementation hard-coded ``sensor_id == "MSI"`` inside
+        this dataclass; that branching now lives in the catalog
+        (``aerosol_solver_band_names``) — see REVIEW.md §3.2.
+        """
+        if self.aerosol_solver_band_names:
+            band_lookup = {b.name: b for b in self.bands}
+            preferred = [
+                band_lookup[name]
+                for name in self.aerosol_solver_band_names
+                if name in band_lookup
+            ]
+            if len(preferred) == len(self.aerosol_solver_band_names) and preferred:
+                return preferred
+
+        # Step 2 (legacy MSI fallback). Catalog-built S2 configs hit step 1
+        # above; this branch only matters for ad-hoc inline MSI configs.
+        if self.sensor_id == "MSI":
+            band_lookup = {b.name: b for b in self.bands}
+            legacy = [band_lookup[n] for n in ("B02", "B04") if n in band_lookup]
+            if len(legacy) == 2:
+                return legacy
+
+        # Step 3: aerosol-sensitive blue window. Matches the pre-refactor
+        # non-MSI behaviour exactly (no behaviour change for uncatalogued
+        # sensors).
         aerosol = self.select_bands_in_range(400.0, 520.0)
         if aerosol:
             return aerosol

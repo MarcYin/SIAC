@@ -4,7 +4,7 @@ Protocol definitions for SIAC pluggable modules.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     )
 
 
+# NOTE: runtime_checkable here matches attribute presence only,
+# not property semantics — see REVIEW.md §2.3
 @runtime_checkable
 class SatellitePreprocessor(Protocol):
     """Protocol for satellite-specific data preprocessing."""
@@ -35,19 +37,21 @@ class SatellitePreprocessor(Protocol):
     @property
     def sensor_config(self) -> SensorConfig: ...
 
-    def load_toa(self, input_path: str) -> xr.Dataset: ...
+    def load_toa(self, input_path: Path | str) -> xr.Dataset: ...
 
-    def extract_geometry(self, input_path: str) -> GeometryAngles: ...
+    def extract_geometry(self, input_path: Path | str) -> GeometryAngles: ...
 
     def extract_cloud_mask(
         self,
-        input_path: str,
+        input_path: Path | str,
         toa: xr.Dataset | None = None,
     ) -> xr.DataArray: ...
 
-    def get_metadata(self, input_path: str) -> dict: ...
+    def get_metadata(self, input_path: Path | str) -> dict[str, Any]: ...
 
 
+# NOTE: runtime_checkable here matches attribute presence only,
+# not property semantics — see REVIEW.md §2.3
 @runtime_checkable
 class AtmosphericPriorProvider(Protocol):
     """Protocol for atmospheric state prior data providers."""
@@ -64,6 +68,8 @@ class AtmosphericPriorProvider(Protocol):
     def source_name(self) -> str: ...
 
 
+# NOTE: runtime_checkable here matches attribute presence only,
+# not property semantics — see REVIEW.md §2.3
 @runtime_checkable
 class BRDFProductProvider(Protocol):
     """Protocol for BRDF product data providers."""
@@ -94,6 +100,8 @@ class SurfacePriorDeriver(Protocol):
     ) -> SurfacePrior: ...
 
 
+# NOTE: runtime_checkable here matches attribute presence only,
+# not property semantics — see REVIEW.md §2.3
 @runtime_checkable
 class MonthlyCompositeProvider(Protocol):
     """Protocol for providers returning prepared monthly composite inputs."""
@@ -111,6 +119,8 @@ class MonthlyCompositeProvider(Protocol):
     ) -> MonthlyCompositeCollection: ...
 
 
+# NOTE: runtime_checkable here matches attribute presence only,
+# not property semantics — see REVIEW.md §2.3
 @runtime_checkable
 class RTModelBackend(Protocol):
     """Protocol for RT backends."""

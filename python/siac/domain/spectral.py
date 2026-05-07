@@ -11,11 +11,25 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-def _trapezoid(y: NDArray, x: NDArray) -> float:
-    """Compatibility wrapper for NumPy 1.x/2.x integration API."""
+def _trapezoid_compat(y: NDArray, x: NDArray) -> float:
+    """Compatibility wrapper for the NumPy 1.x/2.x trapezoidal integration API.
+
+    NumPy 2.0 renamed ``np.trapz`` to ``np.trapezoid`` (the old name is
+    deprecated and slated for removal). This wrapper prefers the new name when
+    available and falls back to a small hand-rolled implementation when neither
+    ``np.trapezoid`` nor ``np.trapz`` is present (e.g. trimmed-down NumPy
+    builds, or tests that monkeypatch the attribute away). The fallback is the
+    standard composite-trapezoid formula ``Σ (y_i + y_{i+1}) * (x_{i+1} - x_i) / 2``.
+    """
     if hasattr(np, "trapezoid"):
         return float(np.trapezoid(y, x))
     return float(np.add.reduce((y[1:] + y[:-1]) * np.diff(x) * 0.5))
+
+
+# Backwards-compatible alias: existing call sites and tests reference
+# ``_trapezoid`` directly. Keep the name available so renaming is purely
+# cosmetic for new callers; older callers continue to work unchanged.
+_trapezoid = _trapezoid_compat
 
 
 def _fwhm(wavelengths_nm: NDArray, response: NDArray) -> float | None:
@@ -149,6 +163,16 @@ class RelativeSpectralResponse:
         if nonzero.size == 0:
             raise ValueError("RSRF response must include at least one non-zero sample")
 
+        # Trim the leading and trailing all-zero tails of the response curve
+        # while keeping a single zero sample on each side so the trapezoidal
+        # integration cleanly closes at the band edges.
+        #
+        # ``start = nonzero[0] - 1`` includes one zero before the support;
+        # ``stop = nonzero[-1] + 2`` is the standard ``range``-style exclusive
+        # end (``+1`` would only include the last nonzero sample, ``+2`` keeps
+        # one trailing zero — matching the ``-1`` we apply on the left side).
+        # ``max(..., 0)`` and ``min(..., size)`` guard the array bounds when
+        # the support already touches an edge.
         start = max(int(nonzero[0]) - 1, 0)
         stop = min(int(nonzero[-1]) + 2, raw_response.size)
         wavelengths = wavelengths[start:stop]
