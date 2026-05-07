@@ -21,6 +21,7 @@ Example:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -29,8 +30,22 @@ import rioxarray  # noqa: F401 - needed for .rio accessor
 import xarray as xr
 from rasterio.enums import Resampling
 
+from siac.geo._crs_compat import crs_equivalent as _crs_equivalent
+
 if TYPE_CHECKING:
     from collections.abc import MutableMapping, Sequence
+
+# RFC 3986 scheme prefix for fsspec/GDAL-style remote URLs.
+# Matches "http://", "https://", "s3://", "gs://", "azure://", "abfs://",
+# "file://", etc. — anything that looks like ``<scheme>://...`` with a
+# lowercase-leading scheme. Local paths (``/tmp/foo`` or ``C:\foo``) do not
+# match, which is the behaviour we want.
+_REMOTE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
+
+
+def _is_remote_uri(path: str) -> bool:
+    """Return True if ``path`` looks like a URI that fsspec can open."""
+    return bool(_REMOTE_SCHEME_RE.match(path))
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +160,9 @@ def read_raster_window(
     path = str(path)
     with rasterio.open(path) as src:
         target_bounds = bounds
-        if bounds_crs is not None and str(src.crs) != str(bounds_crs):
+        # Compare by authority/WKT semantics, not strings
+        # (REVIEW.md §2.8, §3.7 readers.py).
+        if bounds_crs is not None and not _crs_equivalent(src.crs, bounds_crs):
             target_bounds = transform_bounds(bounds_crs, src.crs, *bounds)
 
         window = from_bounds(*target_bounds, transform=src.transform)
@@ -452,8 +469,9 @@ def read_zarr_array(
     """
     path = str(path)
 
-    # Handle remote URLs
-    if path.startswith(("http://", "https://", "s3://")):
+    # Handle remote URLs. The previous explicit list missed `gs://`,
+    # `azure://`, `abfs://`, `file://`, etc. (REVIEW.md §3.7 readers.py:443).
+    if _is_remote_uri(path):
         mapper = _get_remote_zarr_mapper(path)
         ds = xr.open_zarr(mapper, chunks=chunks)
     else:
@@ -524,8 +542,10 @@ def check_rasters_aligned(
     info1 = get_raster_info(path1)
     info2 = get_raster_info(path2)
 
-    # Check CRS
-    if info1["crs"] != info2["crs"]:
+    # Check CRS by authority/WKT semantics, not string equality.
+    # ``"EPSG:4326"`` and the verbose WKT for the same authority must
+    # compare equal (REVIEW.md §2.8, §3.7 readers.py:495-527).
+    if not _crs_equivalent(info1["crs"], info2["crs"]):
         return False
 
     # Check resolution

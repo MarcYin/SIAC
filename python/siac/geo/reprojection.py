@@ -26,6 +26,13 @@ import xarray as xr
 from pyproj import CRS, Transformer
 from rasterio.enums import Resampling
 
+from siac.geo._crs_compat import (
+    crs_equivalent as _crs_equivalent,
+)
+from siac.geo._crs_compat import (
+    default_resampling_for_dtype as _default_resampling_for_dtype,
+)
+
 if TYPE_CHECKING:
     from rasterio.transform import Affine
 
@@ -50,6 +57,37 @@ RESAMPLING_METHODS = {
 }
 
 
+def _resolve_resampling(
+    resampling: str | Resampling | None,
+    *,
+    dtype: Any = None,
+) -> Resampling:
+    """Resolve a user-supplied ``resampling`` argument to a :class:`Resampling`.
+
+    * ``None`` → dtype-aware default (nearest for integer/bool, bilinear
+      otherwise; REVIEW.md §3.7 reprojection.py:111-143, 170);
+    * a :class:`Resampling` instance → returned as-is;
+    * a known string → looked up in ``RESAMPLING_METHODS``;
+    * an unknown string → ``ValueError`` instead of silently falling back to
+      bilinear (REVIEW.md §3.7 reprojection.py:88).
+    """
+    if resampling is None:
+        return _default_resampling_for_dtype(dtype)
+    if isinstance(resampling, Resampling):
+        return resampling
+    if isinstance(resampling, str):
+        method = RESAMPLING_METHODS.get(resampling)
+        if method is None:
+            raise ValueError(
+                f"Unknown resampling method: {resampling!r}; "
+                f"valid: {sorted(RESAMPLING_METHODS)}"
+            )
+        return method
+    raise TypeError(
+        f"resampling must be a str, Resampling enum, or None; got {type(resampling).__name__}"
+    )
+
+
 # =============================================================================
 # Reprojection Functions
 # =============================================================================
@@ -59,7 +97,7 @@ def reproject_to_crs(
     data: xr.DataArray,
     target_crs: str | CRS,
     resolution: float | tuple[float, float] | None = None,
-    resampling: str | Resampling = "bilinear",
+    resampling: str | Resampling | None = None,
     nodata: float | None = None,
 ) -> xr.DataArray:
     """
@@ -70,11 +108,19 @@ def reproject_to_crs(
         target_crs: Target CRS (EPSG code string or pyproj CRS)
         resolution: Target resolution. If tuple, (x_res, y_res).
                     If None, preserves approximate resolution.
-        resampling: Resampling method (string or Resampling enum)
+        resampling: Resampling method (string or Resampling enum). When
+                    ``None`` (the default), the kernel is selected from the
+                    input dtype: nearest for integer/boolean rasters
+                    (e.g. classification masks), bilinear for floating-point
+                    rasters (e.g. reflectance).
         nodata: NoData value for output. If None, uses input nodata.
 
     Returns:
         Reprojected DataArray
+
+    Raises:
+        ValueError: If ``resampling`` is a string that is not in
+            :data:`RESAMPLING_METHODS`.
 
     Example:
         >>> # Reproject to UTM zone 32N
@@ -83,9 +129,7 @@ def reproject_to_crs(
         >>> # Reproject with specific resolution
         >>> reprojected = reproject_to_crs(da, "EPSG:4326", resolution=0.0001)
     """
-    # Handle resampling method
-    if isinstance(resampling, str):
-        resampling = RESAMPLING_METHODS.get(resampling, Resampling.bilinear)
+    resampling = _resolve_resampling(resampling, dtype=data.dtype)
 
     # Handle nodata
     if nodata is not None:
@@ -111,7 +155,7 @@ def reproject_to_crs(
 def reproject_match(
     source: xr.DataArray,
     target: xr.DataArray,
-    resampling: str | Resampling = "bilinear",
+    resampling: str | Resampling | None = None,
     nodata: float | None = None,
 ) -> xr.DataArray:
     """
@@ -122,18 +166,24 @@ def reproject_match(
     Args:
         source: Source DataArray to reproject
         target: Target DataArray defining the output grid
-        resampling: Resampling method
+        resampling: Resampling method. When ``None`` (the default), the kernel
+            is selected from the source dtype: nearest for integer/boolean
+            rasters (e.g. classification masks), bilinear for floating-point
+            rasters.
         nodata: NoData value for output
 
     Returns:
         Source reprojected to match target's CRS, extent, and resolution
 
+    Raises:
+        ValueError: If ``resampling`` is a string not in
+            :data:`RESAMPLING_METHODS`.
+
     Example:
         >>> # Align BRDF data to satellite imagery grid
         >>> aligned_brdf = reproject_match(brdf_500m, sentinel2_10m)
     """
-    if isinstance(resampling, str):
-        resampling = RESAMPLING_METHODS.get(resampling, Resampling.bilinear)
+    resampling = _resolve_resampling(resampling, dtype=source.dtype)
 
     if nodata is not None:
         source = source.rio.write_nodata(nodata)
@@ -146,7 +196,7 @@ def reproject_match(
 def reproject_dataset_match(
     source: xr.Dataset,
     target: xr.DataArray,
-    resampling: str | Resampling = "bilinear",
+    resampling: str | Resampling | None = None,
 ) -> xr.Dataset:
     """
     Reproject all variables in a Dataset to match a target grid.
@@ -154,20 +204,38 @@ def reproject_dataset_match(
     Args:
         source: Source Dataset to reproject
         target: Target DataArray defining the output grid
-        resampling: Resampling method
+        resampling: Resampling method. When ``None`` (the default), each
+            variable's kernel is chosen from its dtype: nearest for
+            integer/boolean (mask, class ID) variables, bilinear for floats.
+            Pass an explicit string or :class:`Resampling` to use one method
+            for the whole dataset.
 
     Returns:
         Dataset with all variables reprojected
+
+    Raises:
+        ValueError: If ``resampling`` is a string not in
+            :data:`RESAMPLING_METHODS`.
     """
-    if isinstance(resampling, str):
-        resampling = RESAMPLING_METHODS.get(resampling, Resampling.bilinear)
+    # Resolve once for the whole dataset only when an explicit choice is
+    # given; ``None`` means "decide per variable".
+    explicit_resampling: Resampling | None
+    if resampling is None:
+        explicit_resampling = None
+    else:
+        explicit_resampling = _resolve_resampling(resampling)
 
     reprojected_vars = {}
 
     for var_name in source.data_vars:
         var = source[var_name]
         if hasattr(var, "rio") and var.rio.crs is not None:
-            reprojected_vars[var_name] = var.rio.reproject_match(target, resampling=resampling)
+            method = (
+                explicit_resampling
+                if explicit_resampling is not None
+                else _default_resampling_for_dtype(var.dtype)
+            )
+            reprojected_vars[var_name] = var.rio.reproject_match(target, resampling=method)
         else:
             # Keep non-spatial variables as-is
             reprojected_vars[var_name] = var
@@ -189,7 +257,7 @@ def reproject_dataset_match(
 def resample(
     data: xr.DataArray,
     target_resolution: float | tuple[float, float],
-    resampling: str | Resampling = "bilinear",
+    resampling: str | Resampling | None = None,
 ) -> xr.DataArray:
     """
     Resample a DataArray to a different resolution.
@@ -198,28 +266,35 @@ def resample(
         data: Input DataArray
         target_resolution: Target resolution in CRS units (usually meters).
                           If tuple, (x_res, y_res).
-        resampling: Resampling method
+        resampling: Resampling method. When ``None`` (the default), the kernel
+            is selected from the input dtype: nearest for integer/boolean
+            rasters, bilinear for floating-point rasters.
 
     Returns:
         Resampled DataArray at target resolution
+
+    Raises:
+        ValueError: If ``resampling`` is a string not in
+            :data:`RESAMPLING_METHODS`.
 
     Example:
         >>> # Resample 10m data to 500m for MODIS matching
         >>> coarse = resample(sentinel2, target_resolution=500.0)
     """
-    if isinstance(resampling, str):
-        resampling = RESAMPLING_METHODS.get(resampling, Resampling.bilinear)
+    resampling = _resolve_resampling(resampling, dtype=data.dtype)
 
     if isinstance(target_resolution, (int, float)):
         target_resolution = (target_resolution, target_resolution)
 
-    # Calculate new dimensions
+    # Calculate new dimensions. ``int(...)`` truncates toward zero and was
+    # losing the fractional border — use round() so the resampled raster
+    # covers the original extent (REVIEW.md §3.7 reprojection.py:217-228).
     current_res = data.rio.resolution()
     scale_x = abs(current_res[0]) / target_resolution[0]
     scale_y = abs(current_res[1]) / target_resolution[1]
 
-    new_width = max(1, int(data.rio.width * scale_x))
-    new_height = max(1, int(data.rio.height * scale_y))
+    new_width = max(1, int(round(data.rio.width * scale_x)))
+    new_height = max(1, int(round(data.rio.height * scale_y)))
 
     result = data.rio.reproject(
         data.rio.crs,
@@ -233,7 +308,7 @@ def resample(
 def resample_to_shape(
     data: xr.DataArray,
     target_shape: tuple[int, int],
-    resampling: str | Resampling = "bilinear",
+    resampling: str | Resampling | None = None,
 ) -> xr.DataArray:
     """
     Resample a DataArray to a specific shape.
@@ -241,13 +316,18 @@ def resample_to_shape(
     Args:
         data: Input DataArray
         target_shape: Target (height, width)
-        resampling: Resampling method
+        resampling: Resampling method. When ``None`` (the default), the kernel
+            is selected from the input dtype: nearest for integer/boolean
+            rasters, bilinear for floating-point rasters.
 
     Returns:
         Resampled DataArray with target shape
+
+    Raises:
+        ValueError: If ``resampling`` is a string not in
+            :data:`RESAMPLING_METHODS`.
     """
-    if isinstance(resampling, str):
-        resampling = RESAMPLING_METHODS.get(resampling, Resampling.bilinear)
+    resampling = _resolve_resampling(resampling, dtype=data.dtype)
 
     result = data.rio.reproject(
         data.rio.crs,
@@ -427,7 +507,7 @@ def get_crs(data: xr.DataArray) -> str | None:
 def align_grids(
     *arrays: xr.DataArray,
     reference_idx: int = 0,
-    resampling: str | Resampling = "bilinear",
+    resampling: str | Resampling | None = None,
 ) -> list[xr.DataArray]:
     """
     Align multiple DataArrays to the same grid.
@@ -435,7 +515,9 @@ def align_grids(
     Args:
         *arrays: DataArrays to align
         reference_idx: Index of the reference array (others align to this)
-        resampling: Resampling method
+        resampling: Resampling method. When ``None`` (the default), each
+            array's kernel is chosen from its dtype (nearest for
+            integer/boolean rasters, bilinear for floats).
 
     Returns:
         List of aligned DataArrays
@@ -481,7 +563,9 @@ def compute_common_bounds(
     all_bounds = []
     for arr in arrays:
         bounds = get_bounds(arr)
-        if arr.rio.crs != ref_crs:
+        # Compare CRS by authority/WKT semantics rather than by Python
+        # object identity / string match (REVIEW.md §3.7 reprojection.py:484).
+        if not _crs_equivalent(arr.rio.crs, ref_crs):
             bounds = transform_bounds(bounds, arr.rio.crs, ref_crs)
         all_bounds.append(bounds)
 
