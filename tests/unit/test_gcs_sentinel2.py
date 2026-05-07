@@ -73,16 +73,17 @@ def test_search_gcs_by_product_id_uses_prefix_exists(monkeypatch):
 
 def test_http_json_rejects_non_object_payload(monkeypatch):
     class _FakeResp:
-        def __enter__(self):
-            return self
+        def raise_for_status(self) -> None:
+            return None
 
-        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
-            return False
+        def json(self):
+            return ["not", "object"]
 
-        def read(self, _size=-1):  # noqa: ANN001
-            return b"[]"
+    class _FakeSession:
+        def get(self, url, headers=None, timeout=None):  # noqa: ARG002
+            return _FakeResp()
 
-    monkeypatch.setattr(gcs_mod.urllib.request, "urlopen", lambda *args, **kwargs: _FakeResp())  # noqa: ARG005
+    monkeypatch.setattr(gcs_mod, "_get_session", lambda: _FakeSession())
 
     with pytest.raises(ValueError, match="expected an object"):
         gcs_mod._http_json("https://example.com/json")
@@ -279,6 +280,36 @@ def test_download_with_retry_accepts_concurrent_completion(monkeypatch, tmp_path
     )
     assert target.read_bytes() == b"ok"
     assert attempts["count"] == 1
+
+
+def test_download_with_retry_log_uses_one_based_iteration(monkeypatch, tmp_path: Path, caplog):
+    """The retry log shows ``next_attempt/total`` rather than off-by-one
+    (REVIEW.md §3.3 gcs_sentinel2.py:296-323).
+    """
+    target = tmp_path / "x.bin"
+    attempts = {"n": 0}
+
+    def _fake_download(_url, path: Path, timeout=300):  # noqa: ANN001, ARG001
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise OSError(f"transient #{attempts['n']}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ok")
+
+    monkeypatch.setattr(gcs_mod, "_download_url_to_file", _fake_download)
+    caplog.set_level("WARNING", logger="siac.adapters.data.gcs_sentinel2")
+
+    gcs_mod._download_with_retry(
+        "https://example.com/x", target, expected_size=2, retries=3, backoff_sec=0.0
+    )
+
+    # Two transient failures, two retry warnings.
+    retry_messages = [r.getMessage() for r in caplog.records if "Retrying download" in r.getMessage()]
+    assert len(retry_messages) == 2
+    # ``attempts = retries + 1`` so total iteration count is 4. Retry log
+    # should report ``2/4`` and ``3/4`` (1-based next iteration / total).
+    assert "(2/4)" in retry_messages[0]
+    assert "(3/4)" in retry_messages[1]
 
 
 def test_gcs_backend_delegates(monkeypatch, tmp_path: Path):

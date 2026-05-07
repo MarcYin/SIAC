@@ -31,6 +31,36 @@ class _FakeResponse:
         return self._payload
 
 
+class _FakeSession:
+    """Stand-in for the shared retry-enabled :class:`requests.Session`."""
+
+    def __init__(
+        self,
+        *,
+        post_handler: Any | None = None,
+        delete_handler: Any | None = None,
+    ) -> None:
+        self._post = post_handler
+        self._delete = delete_handler
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        self.calls.append(("POST", url, kwargs))
+        if self._post is None:
+            raise AssertionError(f"Unexpected POST to {url}")
+        return self._post(url, **kwargs)
+
+    def delete(self, url: str, **kwargs: Any) -> Any:
+        self.calls.append(("DELETE", url, kwargs))
+        if self._delete is None:
+            raise AssertionError(f"Unexpected DELETE to {url}")
+        return self._delete(url, **kwargs)
+
+
+def _patch_session(monkeypatch: pytest.MonkeyPatch, session: _FakeSession) -> None:
+    monkeypatch.setattr(auth_mod, "_get_session", lambda: session)
+
+
 def test_from_config_loads_nested_credentials_and_builds_earthaccess_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -71,11 +101,8 @@ def test_from_config_loads_nested_credentials_and_builds_earthaccess_source(
 def test_cdse_token_exchange_rejects_non_object_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        auth_mod.requests,
-        "post",
-        lambda *args, **kwargs: _FakeResponse([]),  # noqa: ARG005
-    )
+    session = _FakeSession(post_handler=lambda url, **kwargs: _FakeResponse([]))  # noqa: ARG005
+    _patch_session(monkeypatch, session)
 
     with pytest.raises(AuthenticationError, match="JSON object"):
         auth_mod._cdse_token_exchange("user", "secret")
@@ -94,7 +121,7 @@ def test_cdse_create_temporary_s3_credentials_validates_payload(
             return _FakeResponse({"secret": "temporary-secret"})
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(auth_mod.requests, "post", _fake_post)
+    _patch_session(monkeypatch, _FakeSession(post_handler=_fake_post))
 
     with pytest.raises(AuthenticationError, match="missing access_id"):
         manager.cdse().create_temporary_s3_credentials()

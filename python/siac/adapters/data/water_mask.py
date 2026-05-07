@@ -1,4 +1,10 @@
-"""Water-mask loading with on-demand remote tile caching."""
+"""Water-mask loading with on-demand remote tile caching.
+
+Network downloads share a single retry-enabled :class:`requests.Session` so
+transient HTTP errors are retried with backoff and VRT companion ``.tif``
+tiles avoid recreating a new Session per request (REVIEW.md §2.6, §3.3
+water_mask.py:182-205).
+"""
 
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ import numpy as np
 import requests
 import xarray as xr
 
+from siac.adapters._http import make_session
 from siac.geo.reprojection import transform_bounds
 from siac.runtime.models import copy_spatial_metadata_like
 from siac.storage.readers import read_raster_window
@@ -116,17 +123,26 @@ def ensure_local_water_mask_source(
     cache_root = explicit_cache_dir or default_water_mask_cache_dir()
     cache_root.mkdir(parents=True, exist_ok=True)
     local_path = cache_root / Path(remote_path).name
-    if not local_path.exists():
-        _download_file(remote_source, local_path, session=session)
 
-    if remote_suffix != ".vrt":
-        return local_path
+    # Reuse one retry-enabled session for the VRT plus all companion tiles
+    # (REVIEW.md §3.3 water_mask.py:182-205).
+    owns_session = session is None
+    client = session if session is not None else make_session()
+    try:
+        if not local_path.exists():
+            _download_file(remote_source, local_path, session=client)
 
-    for tile_name in required_water_mask_tiles(bounds, crs):
-        tile_path = cache_root / tile_name
-        if tile_path.exists():
-            continue
-        _download_file(_tile_url(remote_source, tile_name), tile_path, session=session)
+        if remote_suffix != ".vrt":
+            return local_path
+
+        for tile_name in required_water_mask_tiles(bounds, crs):
+            tile_path = cache_root / tile_name
+            if tile_path.exists():
+                continue
+            _download_file(_tile_url(remote_source, tile_name), tile_path, session=client)
+    finally:
+        if owns_session:
+            client.close()
 
     return local_path
 
@@ -181,10 +197,15 @@ def _tile_url(vrt_url: str, tile_name: str) -> str:
 
 
 def _download_file(url: str, destination: Path, *, session: requests.Session | None = None) -> Path:
+    """Stream *url* into *destination* via an atomic move.
+
+    If *session* is ``None`` a retry-enabled session is created for this
+    download only (REVIEW.md §2.6) and closed afterwards.
+    """
     logger.info("Downloading water-mask asset %s -> %s", url, destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    client = session or requests.Session()
     owns_client = session is None
+    client = session if session is not None else make_session()
     temp_path: Path | None = None
     try:
         with client.get(url, stream=True, timeout=120) as response:

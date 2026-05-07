@@ -48,24 +48,22 @@ def test_cdse_helpers_cover_header_revocation_and_exchange_validation(
     )
 
     delete_calls: dict[str, Any] = {}
-    monkeypatch.setattr(
-        auth_mod.requests,
-        "delete",
-        lambda url, **kwargs: (
-            delete_calls.update({"url": url, "kwargs": kwargs}) or _FakeResponse({})
-        ),
-    )
+
+    class _FakeSession:
+        def post(self, url: str, **kwargs: Any) -> Any:
+            return _FakeResponse({"access_token": "tok", "expires_in": "bad"})
+
+        def delete(self, url: str, **kwargs: Any) -> Any:
+            delete_calls.update({"url": url, "kwargs": kwargs})
+            return _FakeResponse({})
+
+    monkeypatch.setattr(auth_mod, "_get_session", lambda: _FakeSession())
 
     assert manager.cdse().authorization_header() == {"Authorization": "Bearer cached-token"}
     manager.cdse().revoke_temporary_s3_credentials("ak/id")
     assert delete_calls["url"].endswith("/access_id/ak%2Fid")
     assert delete_calls["kwargs"]["headers"]["Authorization"] == "Bearer cached-token"
 
-    monkeypatch.setattr(
-        auth_mod.requests,
-        "post",
-        lambda *args, **kwargs: _FakeResponse({"access_token": "tok", "expires_in": "bad"}),  # noqa: ARG005
-    )
     with pytest.raises(AuthenticationError, match="invalid expires_in"):
         auth_mod._cdse_token_exchange("user", "secret")
 

@@ -14,6 +14,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
+from siac.adapters._http import make_session
 from siac.adapters._log_filter import SecretRedactionFilter
 from siac.errors import AuthenticationError
 
@@ -24,6 +25,27 @@ if TYPE_CHECKING:
     from siac.config import SIACConfig
 
 requests = cast("Any", import_module("requests"))
+
+# Shared session for CDSE OAuth + S3-credentials calls (REVIEW.md §2.6).
+# Lazily constructed on first use; mounts an HTTPAdapter with a urllib3 Retry
+# policy so transient 5xx/429 responses get retried with exponential backoff.
+_session_lock = threading.Lock()
+_shared_session: Any | None = None
+
+
+def _get_session() -> Any:
+    """Return the module-level retry-enabled :class:`requests.Session`.
+
+    Tests can monkeypatch this to substitute a stub session.
+    """
+    global _shared_session
+    if _shared_session is not None:
+        return _shared_session
+    with _session_lock:
+        if _shared_session is None:
+            _shared_session = make_session()
+        return _shared_session
+
 
 logger = logging.getLogger(__name__)
 logger.addFilter(SecretRedactionFilter())
@@ -135,7 +157,9 @@ class CDSEAuth(_ProviderAuthBase):
         return {"Authorization": f"Bearer {self.get_token(margin_seconds=margin_seconds)}"}
 
     def create_temporary_s3_credentials(self, timeout: int = 60) -> CDSES3Credentials:
-        resp = requests.post(
+        # Use the shared retry-enabled session (REVIEW.md §2.6 / §3.3 auth.py:138-145).
+        session = _get_session()
+        resp = session.post(
             _CDSE_S3_CREDENTIALS_URL,
             headers={
                 **self.authorization_header(),
@@ -164,7 +188,8 @@ class CDSEAuth(_ProviderAuthBase):
         return CDSES3Credentials(access_key_id=access_id, secret_access_key=secret)
 
     def revoke_temporary_s3_credentials(self, access_key_id: str, timeout: int = 60) -> None:
-        resp = requests.delete(
+        session = _get_session()
+        resp = session.delete(
             f"{_CDSE_S3_CREDENTIALS_URL}/access_id/{quote(access_key_id, safe='')}",
             headers={
                 **self.authorization_header(),
@@ -412,8 +437,13 @@ class CredentialManager:
 
 
 def _cdse_token_exchange(username: str, password: str, timeout: int = 60) -> tuple[str, int]:
-    """Exchange CDSE credentials for an access token."""
-    resp = requests.post(
+    """Exchange CDSE credentials for an access token (REVIEW.md §2.6, §3.3 auth.py:138-145).
+
+    Routes through the shared retry-enabled :class:`requests.Session` so that
+    transient 5xx errors during token acquisition are retried with backoff.
+    """
+    session = _get_session()
+    resp = session.post(
         _CDSE_TOKEN_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data={

@@ -3,6 +3,10 @@ Copernicus Data Space Ecosystem (CDSE) backend for Sentinel-2.
 
 This module implements ``search_cdse()`` and ``download_cdse()`` for the S2 data
 access layer described in ``docs/PLANS_S2.md`` (section 2, phase 2).
+
+Network access uses a shared :class:`requests.Session` from
+:mod:`siac.adapters._http` so that 5xx/429 retries and backoff are consistent
+with the rest of the adapter layer (REVIEW.md §2.6, §3.3 copernicus_dataspace.py).
 """
 
 from __future__ import annotations
@@ -10,6 +14,8 @@ from __future__ import annotations
 import logging
 import re
 import tempfile
+import threading
+import time as _time
 import zipfile
 from datetime import datetime, time
 from pathlib import Path
@@ -17,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import requests  # type: ignore[import-untyped]
 
+from siac.adapters._http import make_session
 from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
 
@@ -40,6 +47,66 @@ _RE_TILE = re.compile(r"_T(\d{2}[A-Z]{3})_")
 _RE_BASELINE = re.compile(r"_N(\d{4})_")
 _RE_ORBIT = re.compile(r"_R(\d{3})_")
 _RE_SAT = re.compile(r"^(S2[A-Z])_")
+
+# Margin to subtract from the OAuth token's `expires_in` so callers don't race
+# against actual server-side expiry. Matches the convention in
+# :mod:`siac.adapters.auth` (REVIEW.md §2.6).
+_TOKEN_EXPIRY_MARGIN_SEC: float = 30.0
+
+
+class _TokenCache:
+    """Per-credential OAuth token cache (REVIEW.md §3.3 copernicus_dataspace.py:262-274).
+
+    Without caching, ``download_cdse`` re-exchanges credentials for a token
+    on every download. The cache stores the token along with a monotonic
+    expiry deadline so concurrent downloads share one token until it is close
+    to expiring.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str, str], tuple[str, float]] = {}
+
+    def get(self, key: tuple[str, str]) -> str | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            token, expires_at = entry
+            if expires_at <= _time.monotonic():
+                self._entries.pop(key, None)
+                return None
+            return token
+
+    def set(self, key: tuple[str, str], token: str, expires_in: float) -> None:
+        deadline = _time.monotonic() + max(0.0, float(expires_in) - _TOKEN_EXPIRY_MARGIN_SEC)
+        with self._lock:
+            self._entries[key] = (token, deadline)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_token_cache = _TokenCache()
+
+# Shared retry-enabled session for catalog and download traffic (REVIEW.md §2.6).
+_session_lock = threading.Lock()
+_shared_session: requests.Session | None = None
+
+
+def _get_session() -> requests.Session:
+    """Return the module-level shared :class:`requests.Session`.
+
+    Tests can monkeypatch this helper to substitute a stub session.
+    """
+    global _shared_session
+    if _shared_session is not None:
+        return _shared_session
+    with _session_lock:
+        if _shared_session is None:
+            _shared_session = make_session()
+        return _shared_session
 
 
 def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
@@ -227,13 +294,17 @@ def _search_payload(query: S2Query, limit: int = 100) -> dict[str, Any]:
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: int = 60) -> dict[str, Any]:
-    resp = requests.post(url, json=payload, timeout=timeout)
+    """POST JSON via the shared retry-enabled session (REVIEW.md §2.6)."""
+    session = _get_session()
+    resp = session.post(url, json=payload, timeout=timeout)
     resp.raise_for_status()
     return _json_object_from_response(resp, url=url)
 
 
 def _get_json(url: str, timeout: int = 60) -> dict[str, Any]:
-    resp = requests.get(url, timeout=timeout)
+    """GET JSON via the shared retry-enabled session (REVIEW.md §2.6)."""
+    session = _get_session()
+    resp = session.get(url, timeout=timeout)
     resp.raise_for_status()
     return _json_object_from_response(resp, url=url)
 
@@ -253,13 +324,29 @@ def _load_page_from_link(link: dict[str, Any], timeout: int = 60) -> dict[str, A
 
 
 def _token_from_credentials(username: str, password: str, timeout: int = 60) -> str:
-    token, _ = _token_exchange(username, password, timeout)
+    """Return a cached or freshly fetched access token.
+
+    Reuses tokens via :data:`_token_cache` keyed on ``(username, password)``
+    (REVIEW.md §3.3 copernicus_dataspace.py:262-274 — previously every download
+    re-exchanged the OAuth token).
+    """
+    cache_key = (username, password)
+    cached = _token_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    token, expires_in = _token_exchange(username, password, timeout)
+    _token_cache.set(cache_key, token, float(expires_in))
     return token
 
 
 def _token_exchange(username: str, password: str, timeout: int = 60) -> tuple[str, int]:
-    """Exchange credentials for an access token. Returns (token, expires_in)."""
-    resp = requests.post(
+    """Exchange credentials for an access token. Returns (token, expires_in).
+
+    Routes through the shared retry-enabled session so transient 5xx/429
+    responses get retried with exponential backoff (REVIEW.md §2.6).
+    """
+    session = _get_session()
+    resp = session.post(
         CDSE_TOKEN_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data={
@@ -284,7 +371,7 @@ def _resolve_auth_header(access_key: str | None, secret_key: str | None) -> dict
     if access_key and not secret_key:
         return {"Authorization": f"Bearer {access_key}"}
 
-    # Username/password mode.
+    # Username/password mode (token cached via :func:`_token_from_credentials`).
     if access_key and secret_key:
         token = _token_from_credentials(access_key, secret_key)
         return {"Authorization": f"Bearer {token}"}
@@ -370,17 +457,23 @@ def download_cdse(
 
     headers = _resolve_auth_header(access_key=access_key, secret_key=secret_key)
     tmp_path: Path | None = None
+    session = _get_session()
     try:
-        resp = requests.get(product.source_url, headers=headers, stream=True, timeout=300)
-        resp.raise_for_status()
+        # Wrap the streaming GET in ``with`` so the underlying connection is
+        # released even if iter_content raises mid-transfer (REVIEW.md §3.3
+        # copernicus_dataspace.py:374-389).
+        with session.get(
+            product.source_url, headers=headers, stream=True, timeout=300
+        ) as resp:
+            resp.raise_for_status()
 
-        with tempfile.NamedTemporaryFile(
-            prefix="cdse_", suffix=".zip", delete=False, dir=dest
-        ) as tmp:
-            tmp_path = Path(tmp.name)
-            for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    tmp.write(chunk)
+            with tempfile.NamedTemporaryFile(
+                prefix="cdse_", suffix=".zip", delete=False, dir=dest
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        tmp.write(chunk)
 
         with zipfile.ZipFile(tmp_path) as zf:
             _safe_extract_zip(zf, dest)

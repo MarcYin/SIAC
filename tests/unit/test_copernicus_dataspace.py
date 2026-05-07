@@ -20,6 +20,14 @@ from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
 
 
+@pytest.fixture(autouse=True)
+def _clear_cdse_token_cache():
+    """Make every test start with a clean token cache (REVIEW.md §3.3)."""
+    cdse._token_cache.clear()
+    yield
+    cdse._token_cache.clear()
+
+
 class _FakeResponse:
     def __init__(
         self,
@@ -32,6 +40,12 @@ class _FakeResponse:
         self._json_data = json_data or {}
         self._raw_bytes = raw_bytes
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+        return False
+
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
@@ -42,6 +56,31 @@ class _FakeResponse:
     def iter_content(self, chunk_size: int = 1024 * 1024):
         for i in range(0, len(self._raw_bytes), chunk_size):
             yield self._raw_bytes[i : i + chunk_size]
+
+
+class _FakeSession:
+    """Stand-in for the shared retry-enabled :class:`requests.Session`."""
+
+    def __init__(self, *, get_handler=None, post_handler=None):
+        self._get = get_handler
+        self._post = post_handler
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def get(self, url: str, **kwargs):
+        self.calls.append(("GET", url, kwargs))
+        if self._get is None:
+            raise AssertionError(f"Unexpected GET to {url}")
+        return self._get(url, **kwargs)
+
+    def post(self, url: str, **kwargs):
+        self.calls.append(("POST", url, kwargs))
+        if self._post is None:
+            raise AssertionError(f"Unexpected POST to {url}")
+        return self._post(url, **kwargs)
+
+
+def _patch_session(monkeypatch, session: _FakeSession) -> None:
+    monkeypatch.setattr(cdse, "_get_session", lambda: session)
 
 
 def _stac_item(
@@ -75,7 +114,7 @@ def test_search_cdse_product_id_lookup(monkeypatch):
         assert product_id in url
         return _FakeResponse(json_data=_stac_item(product_id))
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get))
 
     q = S2Query.from_product_id(product_id)
     products = search_cdse(q)
@@ -140,7 +179,7 @@ def test_search_cdse_filters_tile_cloud_and_pagination(monkeypatch):
         assert json == {"token": "next-page"}
         return _FakeResponse(json_data=page_2)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
+    _patch_session(monkeypatch, _FakeSession(post_handler=_fake_post))
 
     q = S2Query(
         mgrs_tile="31UDQ",
@@ -173,7 +212,7 @@ def test_search_cdse_product_404_returns_empty(monkeypatch):
     def _fake_get(url: str, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(status_code=404)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get))
     products = search_cdse(
         S2Query.from_product_id("S2B_MSIL1C_20240101T000000_N0500_R000_T31UDQ_20240101T000000")
     )
@@ -203,7 +242,7 @@ def test_download_cdse_extracts_safe_zip(monkeypatch, tmp_path: Path):
         assert headers == {"Authorization": "Bearer token"}
         return _FakeResponse(raw_bytes=payload)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get))
 
     safe_path = download_cdse(product, tmp_path, access_key="token")
     assert safe_path.exists()
@@ -232,7 +271,7 @@ def test_download_cdse_rejects_zip_path_traversal(monkeypatch, tmp_path: Path):
         return _FakeResponse(raw_bytes=payload)
 
     dest = tmp_path / "downloads"
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get))
 
     with pytest.raises(DataNotFoundError, match="unsafe path"):
         download_cdse(product, dest)
@@ -383,7 +422,7 @@ def test_token_from_credentials_missing_token_raises(monkeypatch):
     def _fake_post(url: str, **kwargs):  # noqa: ARG001
         return _FakeResponse(json_data={"not_access_token": "x"})
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
+    _patch_session(monkeypatch, _FakeSession(post_handler=_fake_post))
     with pytest.raises(DataNotFoundError, match="access_token"):
         cdse._token_from_credentials("user", "pass")
 
@@ -395,8 +434,10 @@ def test_json_helpers_reject_non_object_payloads(monkeypatch):
     def _fake_post(url: str, json: dict, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(json_data=["still", "not", "an", "object"])
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
+    _patch_session(
+        monkeypatch,
+        _FakeSession(get_handler=_fake_get, post_handler=_fake_post),
+    )
 
     with pytest.raises(DataNotFoundError, match="was not an object"):
         cdse._get_json("https://example.test/get")
@@ -413,14 +454,14 @@ def test_search_cdse_processing_level_filter_and_product_lookup_error(monkeypatc
     def _fake_post(url: str, json: dict, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(json_data=page)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.post", _fake_post)
+    _patch_session(monkeypatch, _FakeSession(post_handler=_fake_post))
     q = S2Query(mgrs_tile="31UDQ", processing_level="L2A")
     assert search_cdse(q) == []
 
     def _fake_get_500(url: str, timeout: int = 60, **kwargs):  # noqa: ARG001
         return _FakeResponse(status_code=500)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_500)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get_500))
     with pytest.raises(requests.HTTPError):
         search_cdse(
             S2Query.from_product_id("S2B_MSIL1C_20240101T000000_N0500_R000_T31UDQ_20240101T000000")
@@ -445,9 +486,9 @@ def test_download_cdse_existing_safe_short_circuit(monkeypatch, tmp_path: Path):
 
     def _fake_get(url: str, **kwargs):  # noqa: ARG001
         called["n"] += 1
-        raise AssertionError("requests.get should not be called when SAFE already exists")
+        raise AssertionError("session.get should not be called when SAFE already exists")
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get))
     out = download_cdse(product, tmp_path)
     assert out == safe
     assert called["n"] == 0
@@ -473,7 +514,7 @@ def test_download_cdse_fallback_candidate_and_missing_safe(monkeypatch, tmp_path
     def _fake_get_alt(url: str, headers: dict | None = None, **kwargs):  # noqa: ARG001
         return _FakeResponse(raw_bytes=payload_with_alt)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_alt)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get_alt))
     out = download_cdse(product, tmp_path / "with_alt")
     assert out.name == f"{product.product_id}_ALT.SAFE"
     assert (out / "manifest.safe").exists()
@@ -486,6 +527,86 @@ def test_download_cdse_fallback_candidate_and_missing_safe(monkeypatch, tmp_path
     def _fake_get_no_safe(url: str, headers: dict | None = None, **kwargs):  # noqa: ARG001
         return _FakeResponse(raw_bytes=payload_no_safe)
 
-    monkeypatch.setattr("siac.adapters.data.copernicus_dataspace.requests.get", _fake_get_no_safe)
+    _patch_session(monkeypatch, _FakeSession(get_handler=_fake_get_no_safe))
     with pytest.raises(DataNotFoundError, match="SAFE directory was not found"):
         download_cdse(product, tmp_path / "missing_safe")
+
+
+def test_token_from_credentials_caches_within_expiry(monkeypatch):
+    """Token cache returns the same token until expiry (REVIEW.md §3.3)."""
+    calls: list[tuple[str, str]] = []
+
+    def _fake_exchange(username, password, timeout=60):  # noqa: ARG001
+        calls.append((username, password))
+        return f"tok-{len(calls)}", 600  # 10-minute expires_in
+
+    monkeypatch.setattr(cdse, "_token_exchange", _fake_exchange)
+
+    first = cdse._token_from_credentials("user", "pass")
+    second = cdse._token_from_credentials("user", "pass")
+    assert first == "tok-1"
+    assert second == "tok-1"
+    assert len(calls) == 1, "second call should reuse cached token"
+
+    # Different credentials get a different token.
+    other = cdse._token_from_credentials("other", "pass")
+    assert other == "tok-2"
+    assert len(calls) == 2
+
+
+def test_token_cache_evicts_expired_entries(monkeypatch):
+    """Expired tokens are dropped and re-fetched (REVIEW.md §3.3)."""
+    fake_now = {"value": 1000.0}
+    monkeypatch.setattr(cdse._time, "monotonic", lambda: fake_now["value"])
+
+    cdse._token_cache.set(("u", "p"), "tok-1", expires_in=60.0)
+    assert cdse._token_cache.get(("u", "p")) == "tok-1"
+
+    # Advance time past expiry margin (60 - 30 = 30s window).
+    fake_now["value"] += 31.0
+    assert cdse._token_cache.get(("u", "p")) is None
+
+
+def test_download_cdse_uses_streaming_context_manager(monkeypatch, tmp_path):
+    """The streaming GET is wrapped in ``with`` so connections are released
+    even when ``iter_content`` raises (REVIEW.md §3.3 copernicus_dataspace.py:374-389).
+    """
+    product = S2Product(
+        product_id="S2A_MSIL1C_20240101T103101_N0500_R008_T31UDQ_20240101T120000",
+        mgrs_tile="31UDQ",
+        sensing_date=datetime(2024, 1, 1, 10, 31, 1),
+        processing_baseline="N0500",
+        cloud_cover=12.0,
+        satellite="S2A",
+        orbit_number=8,
+        source_url="https://download.example/products/1/$value",
+    )
+
+    closed = {"value": False}
+
+    class _StreamResp:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            closed["value"] = True
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_content(self, chunk_size):  # noqa: ARG002
+            raise OSError("network blew up")
+
+    class _Session:
+        def get(self, url, headers=None, stream=False, timeout=None):  # noqa: ARG002
+            return _StreamResp()
+
+    monkeypatch.setattr(cdse, "_get_session", lambda: _Session())
+
+    with pytest.raises(OSError, match="network blew up"):
+        download_cdse(product, tmp_path, access_key="token")
+
+    assert closed["value"], "streaming GET response must be closed when iter_content raises"

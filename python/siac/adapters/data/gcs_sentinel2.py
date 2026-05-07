@@ -4,23 +4,28 @@ Google Cloud Storage backend for Sentinel-2.
 Uses the public ``gs://gcp-public-data-sentinel-2`` bucket (no auth).
 Supports MGRS-based listing only (no full catalog search).
 See PLANS_S2.md §2, Phase 3.
+
+Network access goes through the shared :func:`siac.adapters._http.make_session`
+factory so transient 5xx/429 responses are retried with exponential backoff
+(REVIEW.md §2.6, §3.3 gcs_sentinel2.py:71-76).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import threading
 import time
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+import requests  # type: ignore[import-untyped]
+
+from siac.adapters._http import make_session
 from siac.adapters.data.s2_data_source import S2Product, S2Query
 from siac.errors import DataNotFoundError
 
@@ -39,6 +44,26 @@ _RE_SENSING = re.compile(r"_([0-9]{8})T([0-9]{6})_")
 _RE_BASELINE = re.compile(r"_N(\d{4})_")
 _RE_ORBIT = re.compile(r"_R(\d{3})_")
 _RE_SAT = re.compile(r"^(S2[A-Z])_")
+
+_USER_AGENT = "siac-gcs-s2/1.0"
+
+# Shared retry-enabled session for catalog and download traffic (REVIEW.md §2.6).
+_session_lock = threading.Lock()
+_shared_session: requests.Session | None = None
+
+
+def _get_session() -> requests.Session:
+    """Return the module-level retry-enabled :class:`requests.Session`.
+
+    Tests can monkeypatch this helper to substitute a stub session.
+    """
+    global _shared_session
+    if _shared_session is not None:
+        return _shared_session
+    with _session_lock:
+        if _shared_session is None:
+            _shared_session = make_session()
+        return _shared_session
 
 
 def _normalize_product_id(product_id: str) -> str:
@@ -68,9 +93,15 @@ def _safe_prefix_from_product_id(product_id: str) -> str:
 
 
 def _http_json(url: str, timeout: int = 60) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "siac-gcs-s2/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.load(resp)
+    """Fetch *url* and decode JSON via the shared retry-enabled session.
+
+    Replaces the previous ``urllib.request.urlopen`` call (REVIEW.md §3.3
+    gcs_sentinel2.py:71-76); transient 5xx/429 responses are now retried.
+    """
+    session = _get_session()
+    resp = session.get(url, headers={"User-Agent": _USER_AGENT}, timeout=timeout)
+    resp.raise_for_status()
+    payload = resp.json()
     if not isinstance(payload, dict):
         raise ValueError(f"Unexpected JSON payload from {url!r}: expected an object")
     return cast("dict[str, Any]", payload)
@@ -240,16 +271,27 @@ def _temporary_download_path(target: Path) -> Path:
 
 
 def _download_url_to_file(url: str, target: Path, timeout: int = 300) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "siac-gcs-s2/1.0"})
+    """Stream *url* into *target* via an atomic rename.
+
+    Uses the shared retry-enabled session so transient 5xx/429 responses
+    are retried (REVIEW.md §2.6). The streaming response is wrapped in
+    ``with`` so the connection is released even if iteration raises.
+    """
+    session = _get_session()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = _temporary_download_path(target)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp, tmp.open("wb") as fh:
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                fh.write(chunk)
+        with session.get(
+            url,
+            headers={"User-Agent": _USER_AGENT},
+            stream=True,
+            timeout=timeout,
+        ) as resp:
+            resp.raise_for_status()
+            with tmp.open("wb") as fh:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        fh.write(chunk)
         tmp.replace(target)
     except Exception:
         tmp.unlink(missing_ok=True)
@@ -312,10 +354,14 @@ def _download_with_retry(
                 raise RuntimeError(f"Failed downloading {url} after {attempts} attempts") from exc
 
             delay = max(0.0, float(backoff_sec)) * (2 ** (attempt - 1))
+            # ``attempt`` is the iteration that just failed (1-based); the
+            # next iteration ``attempt + 1`` is the retry. ``attempts`` is
+            # the total iteration count, so the retry fraction is
+            # ``(attempt + 1) / attempts``.
             logger.warning(
                 "Retrying download (%d/%d) for %s after error: %s",
-                attempt,
-                attempts - 1,
+                attempt + 1,
+                attempts,
                 url,
                 exc,
             )

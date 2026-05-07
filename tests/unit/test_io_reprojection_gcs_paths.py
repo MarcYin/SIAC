@@ -250,12 +250,17 @@ def test_gcs_helpers_and_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
             return False
 
-        def read(self, _size):  # noqa: ANN001
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_content(self, chunk_size):  # noqa: ARG002
             raise OSError("boom")
 
-    import urllib.request
+    class _Session:
+        def get(self, url, headers=None, stream=False, timeout=None):  # noqa: ARG002
+            return _Resp()
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda _req, **_kwargs: _Resp())
+    monkeypatch.setattr(gcs_mod, "_get_session", lambda: _Session())
     target = tmp_path / "x.bin"
     with pytest.raises(OSError):
         gcs_mod._download_url_to_file("https://example.com/x", target)
