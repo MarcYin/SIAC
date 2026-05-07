@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -262,44 +264,75 @@ def _write_monthly_geotiff_period(
     *,
     grid: MonthlyCompositeStoreGridSpec | None = None,
 ) -> dict[str, str]:
-    if period_root.exists():
-        if period_root.is_dir():
-            shutil.rmtree(period_root)
+    """Atomically write a single (year, month) period.
+
+    Previously the existing period directory was deleted before writing
+    the new one — a crash mid-write left the period in a partial state
+    where some assets were written and others were missing
+    (REVIEW.md §1.3 #4). We now stage the new content into a sibling
+    ``.tmp`` directory and swap it in via ``os.replace`` once every
+    asset has been written. On success the previous directory is removed.
+    """
+
+    if period_root.exists() and not period_root.is_dir():
+        period_root.unlink()
+
+    staging_root = period_root.with_name(period_root.name + ".tmp")
+    if staging_root.exists():
+        # Clean any leftover staging directory from a previous failed run.
+        if staging_root.is_dir():
+            shutil.rmtree(staging_root)
         else:
-            period_root.unlink()
-    period_root.mkdir(parents=True, exist_ok=True)
+            staging_root.unlink()
+    staging_root.mkdir(parents=True, exist_ok=True)
 
-    assets: dict[str, str] = {}
-    if isinstance(composite, MonthlyKernelWeightComposite):
-        asset_sources: list[tuple[str, xr.DataArray, str]] = [
-            ("f0", composite.kernels.f0, "float32"),
-            ("f1", composite.kernels.f1, "float32"),
-            ("f2", composite.kernels.f2, "float32"),
-            ("f0_unc", composite.kernels.f0_unc, "float32"),
-            ("f1_unc", composite.kernels.f1_unc, "float32"),
-            ("f2_unc", composite.kernels.f2_unc, "float32"),
-        ]
-        if composite.kernels.reflectance_unc is not None:
-            asset_sources.append(("reflectance_unc", composite.kernels.reflectance_unc, "float32"))
-    else:
-        asset_sources = [("reflectance", composite.reflectance, "float32")]
+    try:
+        assets: dict[str, str] = {}
+        if isinstance(composite, MonthlyKernelWeightComposite):
+            asset_sources: list[tuple[str, xr.DataArray, str]] = [
+                ("f0", composite.kernels.f0, "float32"),
+                ("f1", composite.kernels.f1, "float32"),
+                ("f2", composite.kernels.f2, "float32"),
+                ("f0_unc", composite.kernels.f0_unc, "float32"),
+                ("f1_unc", composite.kernels.f1_unc, "float32"),
+                ("f2_unc", composite.kernels.f2_unc, "float32"),
+            ]
+            if composite.kernels.reflectance_unc is not None:
+                asset_sources.append(
+                    ("reflectance_unc", composite.kernels.reflectance_unc, "float32")
+                )
+        else:
+            asset_sources = [("reflectance", composite.reflectance, "float32")]
 
-    asset_sources.extend(
-        [
-            ("quality", composite.quality, "float32"),
-            ("sample_index", composite.sample_index, "int16"),
-        ]
-    )
-    for asset_name, data, dtype in asset_sources:
-        relative_asset = f"{asset_name}{_GEOTIFF_EXTENSION}"
-        _write_geotiff_asset(
-            period_root / relative_asset,
-            data,
-            asset_name=asset_name,
-            dtype=dtype,
-            grid=grid,
+        asset_sources.extend(
+            [
+                ("quality", composite.quality, "float32"),
+                ("sample_index", composite.sample_index, "int16"),
+            ]
         )
-        assets[asset_name] = relative_asset
+        for asset_name, data, dtype in asset_sources:
+            relative_asset = f"{asset_name}{_GEOTIFF_EXTENSION}"
+            _write_geotiff_asset(
+                staging_root / relative_asset,
+                data,
+                asset_name=asset_name,
+                dtype=dtype,
+                grid=grid,
+            )
+            assets[asset_name] = relative_asset
+
+        # Atomic swap: remove the previous period and rename staging.
+        if period_root.exists() and period_root.is_dir():
+            shutil.rmtree(period_root)
+        os.replace(staging_root, period_root)
+    except BaseException:
+        # On any failure remove the staging directory so it doesn't
+        # confuse the next attempt.
+        if staging_root.exists():
+            with suppress(OSError):
+                shutil.rmtree(staging_root)
+        raise
+
     return assets
 
 

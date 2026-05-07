@@ -47,7 +47,6 @@ from siac.storage.readers import (
 )
 from siac.storage.stac import build_stac_item_from_result
 from siac.storage.writers import (
-    _compute_overview_levels,
     _prepare_for_write,
     ensure_writable_directory,
     write_aot_scatter_plot,
@@ -241,9 +240,8 @@ class TestWritersExtra:
 
         out2 = _prepare_for_write(da, dtype=None, nodata=None)
         assert out2.rio.nodata is not None
-
-        levels = _compute_overview_levels(_make_da((2048, 2048)))
-        assert levels and levels[0] == 2
+        # _compute_overview_levels was removed (REVIEW.md §3.7) — GDAL's COG
+        # driver builds overviews internally, so the helper had no callers.
 
     def test_build_stac_item_from_result(self, tmp_path: Path):
         template = _make_da((16, 16))

@@ -253,6 +253,43 @@ class TestZarrLUTBackend:
             "altitude": np.array([0.0, 1.0, 2.0], dtype=np.float32),
         }
 
+        # Pass finite values for the optional axes so the test confirms
+        # clamping into the LUT envelope (e.g. tco3=400 outside [250, 350]
+        # → 350; elevation=-1 outside [0, 2] → 0). NaN inputs are now
+        # preserved end-to-end so the interpolator returns NaN for those
+        # pixels rather than fabricating a midpoint value (REVIEW.md §1.2 #4).
+        coords = backend._build_point_coords(
+            sza=np.array([15.0], dtype=np.float32),
+            vza=np.array([12.0], dtype=np.float32),
+            raa=np.array([100.0], dtype=np.float32),
+            aot=np.array([0.2], dtype=np.float32),
+            tcwv=np.array([2.0], dtype=np.float32),
+            tco3=np.array([400.0], dtype=np.float32),
+            elevation=np.array([-1.0], dtype=np.float32),
+        )
+
+        assert float(coords["sza"].values[0]) == pytest.approx(15.0)
+        assert float(coords["vza"].values[0]) == pytest.approx(12.0)
+        assert float(coords["raa"].values[0]) == pytest.approx(100.0)
+        assert float(coords["aot"].values[0]) == pytest.approx(0.2)
+        assert float(coords["tcwv"].values[0]) == pytest.approx(2.0)
+        # Out-of-range tco3 clamped to the LUT max (350).
+        assert float(coords["ozone"].values[0]) == pytest.approx(350.0)
+        # Out-of-range elevation clamped to the LUT min (0.0).
+        assert float(coords["altitude"].values[0]) == pytest.approx(0.0)
+
+    def test_build_point_coords_preserves_nan_for_optional_axes(self):
+        """REVIEW.md §1.2 #4 — NaN tco3/elevation must remain NaN."""
+        backend = ZarrLUTBackend("dummy")
+        backend._lut_coords = {
+            "sza": np.array([0.0, 30.0, 60.0], dtype=np.float32),
+            "vza": np.array([0.0, 10.0, 20.0], dtype=np.float32),
+            "raa": np.array([0.0, 90.0, 180.0], dtype=np.float32),
+            "aot": np.array([0.1, 0.5], dtype=np.float32),
+            "tcwv": np.array([1.0, 3.0], dtype=np.float32),
+            "ozone": np.array([250.0, 300.0, 350.0], dtype=np.float32),
+            "altitude": np.array([0.0, 1.0, 2.0], dtype=np.float32),
+        }
         coords = backend._build_point_coords(
             sza=np.array([15.0], dtype=np.float32),
             vza=np.array([12.0], dtype=np.float32),
@@ -262,14 +299,8 @@ class TestZarrLUTBackend:
             tco3=np.array([np.nan], dtype=np.float32),
             elevation=np.array([np.nan], dtype=np.float32),
         )
-
-        assert float(coords["sza"].values[0]) == pytest.approx(15.0)
-        assert float(coords["vza"].values[0]) == pytest.approx(12.0)
-        assert float(coords["raa"].values[0]) == pytest.approx(100.0)
-        assert float(coords["aot"].values[0]) == pytest.approx(0.2)
-        assert float(coords["tcwv"].values[0]) == pytest.approx(2.0)
-        assert float(coords["ozone"].values[0]) == pytest.approx(300.0)
-        assert float(coords["altitude"].values[0]) == pytest.approx(1.0)
+        assert np.isnan(float(coords["ozone"].values[0]))
+        assert np.isnan(float(coords["altitude"].values[0]))
 
     def test_build_point_coords_rejects_nonfinite_required_values(self):
         backend = ZarrLUTBackend("dummy")

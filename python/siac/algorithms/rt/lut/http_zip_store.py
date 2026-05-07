@@ -52,6 +52,25 @@ def _slice_bounds(size: int, start: int | None, end: int | None) -> tuple[int, i
     return start_i, end_i
 
 
+# Maximum body size we'll keep in the in-memory full-body cache. Without this
+# cap a multi-GB LUT zip can balloon RAM (REVIEW.md §1.3 #5).
+# Hidden behind an env-var override so power users can tune for their workload.
+_DEFAULT_FULL_BODY_CACHE_BYTES = 64 * 1024 * 1024  # 64 MiB
+
+
+def _resolve_full_body_cache_cap() -> int:
+    import os
+
+    raw = os.environ.get("SIAC_HTTP_ZIP_FULL_BODY_CACHE_BYTES")
+    if raw is None:
+        return _DEFAULT_FULL_BODY_CACHE_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_FULL_BODY_CACHE_BYTES
+    return max(value, 0)
+
+
 class _HTTPRangeFileSystem(AsyncFileSystem):
     """Minimal HTTP byte-range filesystem for one-object reads."""
 
@@ -76,6 +95,14 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
         self._session = requests.Session()
         self._size_cache: dict[str, int] = {}
         self._full_body_cache: dict[str, bytes] = {}
+        # Cap above which a body is *not* memoised. Set to 0 to disable
+        # the in-memory cache entirely.
+        self._full_body_cache_cap = _resolve_full_body_cache_cap()
+
+    def _maybe_cache_full_body(self, path: str, payload: bytes) -> None:
+        """Memoise the full body only if its size is under the configured cap."""
+        if self._full_body_cache_cap and len(payload) <= self._full_body_cache_cap:
+            self._full_body_cache[path] = payload
 
     def _discover_size(self, path: str) -> int:
         if path in self._size_cache:
@@ -117,7 +144,7 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
 
         payload = response.content
         size = len(payload)
-        self._full_body_cache[path] = payload
+        self._maybe_cache_full_body(path, payload)
         self._size_cache[path] = size
         return size
 
@@ -146,13 +173,13 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
             response.raise_for_status()
             payload = cast("bytes", response.content)
             if len(payload) == size:
-                self._full_body_cache[path] = payload
+                self._maybe_cache_full_body(path, payload)
             return payload[start_i:end_i]
         payload = cast("bytes", response.content)
 
         # Some servers may ignore Range and send full body.
         if response.status_code == 200 and len(payload) == size:
-            self._full_body_cache[path] = payload
+            self._maybe_cache_full_body(path, payload)
             return payload[start_i:end_i]
         return payload
 

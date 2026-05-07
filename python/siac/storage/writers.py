@@ -1016,21 +1016,7 @@ def _prepare_for_write(
     return data
 
 
-def _compute_overview_levels(data: xr.DataArray, max_overview_size: int = 256) -> list[int]:
-    """Compute appropriate overview levels based on image size.
-
-    NOTE: This helper is no longer used by ``write_cog`` — the GDAL ``COG``
-    driver builds overviews internally based on its ``blocksize`` and source
-    dimensions. Retained because external test fixtures still import it; new
-    code should not call it.
-    """
-    height, width = data.rio.height, data.rio.width
-    min_dim = min(height, width)
-
-    levels = []
-    factor = 2
-    while min_dim // factor > max_overview_size:
-        levels.append(factor)
-        factor *= 2
-
-    return levels
+# ``_compute_overview_levels`` was removed (REVIEW.md §3.7 writers.py:957-968):
+# it had no production callers — the GDAL ``COG`` driver builds overviews
+# internally — and the only remaining importer was a coverage-only test, which
+# was updated to drop the reference.

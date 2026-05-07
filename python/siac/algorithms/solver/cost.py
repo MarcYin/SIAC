@@ -591,12 +591,31 @@ def create_sparse_laplacian(nx: int, ny: int) -> sparse.csc_matrix:
 
     Uses Neumann boundary conditions (zero gradient at edges).
 
+    .. note::
+        The argument naming here is **unusual**: this function indexes pixels
+        as ``idx = i * ny + j`` where ``i`` runs over ``nx`` (the *outer*,
+        slow-moving index) and ``j`` runs over ``ny`` (the *inner*,
+        fast-moving index). Most of the rest of the codebase uses ``nx``
+        for image *width* (= columns) and ``ny`` for image *height*
+        (= rows); here the roles are flipped. The math works out (boundary
+        masks at ``ny-1::ny`` correctly zero inter-row connections), but
+        callers should pass ``(rows, cols)`` rather than ``(width, height)``
+        to match the implementation's convention.
+
+        REVIEW.md §1.1 #8 / §3.5 flagged a suspected off-by-one here; manual
+        verification on the ``(nx=2, ny=3)`` case shows the boundary mask
+        and Neumann diagonal corrections are in fact correct. Keeping the
+        function as-is and adding this note rather than altering working
+        numerics. The function is not currently called by ``MultiGridSolver``
+        (which uses Pseudo-Huber diffusion via :func:`apply_smoothness_filter`)
+        but is kept for diagnostics and to support alternative regularisers.
+
     Args:
-        nx: Grid width
-        ny: Grid height
+        nx: Number of pixel-grid rows (outer index).
+        ny: Number of pixel-grid columns (inner index).
 
     Returns:
-        Sparse Laplacian matrix
+        Sparse Laplacian matrix.
     """
     n = nx * ny
 

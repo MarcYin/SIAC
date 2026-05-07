@@ -446,12 +446,26 @@ class ZarrLUTBackend:
         values: np.ndarray,
         axis: np.ndarray,
     ) -> np.ndarray:
+        """Clamp finite values to ``[axis_min, axis_max]`` and preserve NaN.
+
+        Previously NaN values were replaced with the axis midpoint, which
+        caused missing inputs (e.g. cloudy pixels with no atmospheric prior)
+        to silently produce fabricated interpolations at the LUT's middle.
+        The interpolator (``RegularGridInterpolator(... fill_value=NaN)``)
+        is configured to return NaN for NaN inputs, so we now preserve NaN
+        end-to-end. Finite values are still clipped to the LUT envelope —
+        the LUT cannot extend beyond its sampled range, so silent clipping
+        of slightly-out-of-bounds values from observation noise is
+        intentional. (REVIEW.md §1.2 #4)
+        """
         axis_min, axis_max = cls._axis_bounds(axis)
-        midpoint = cls._axis_midpoint(axis)
         arr = np.asarray(values, dtype=np.float32)
-        sanitized = np.where(np.isfinite(arr), arr, midpoint)
-        clipped = np.asarray(np.clip(sanitized, axis_min, axis_max), dtype=np.float32)
-        return cast("np.ndarray", clipped)
+        finite_mask = np.isfinite(arr)
+        clipped = np.clip(arr, axis_min, axis_max).astype(np.float32, copy=False)
+        # Preserve NaN positions: where the input was non-finite (NaN/+inf/-inf)
+        # we restore the original sentinel rather than the clipped boundary.
+        result = np.where(finite_mask, clipped, arr).astype(np.float32, copy=False)
+        return cast("np.ndarray", result)
 
     @staticmethod
     def _require_finite_values(

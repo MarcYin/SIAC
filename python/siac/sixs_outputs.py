@@ -1,9 +1,31 @@
-"""Shared 6S native output surface definitions."""
+"""Shared 6S native output surface definitions.
+
+The :data:`SIXS_CORE_OUTPUT_SPECS` table maps Python-side output names to
+the Fortran *expressions* that compute them. Each entry is a 3-tuple:
+
+    (python_name, fortran_expression, optional_guard)
+
+The ``fortran_expression`` is interpolated verbatim into the generated
+Fortran source as ``output_values_out(N) = <expression>`` (see
+``siac.algorithms.rt.direct.sixs_build._core_output_assignment_lines``).
+Most entries simply name a Fortran variable (``"xa"`` -> ``output_values_out(N) = xa``),
+but a handful encode small arithmetic expressions — e.g.
+``("sttotr", "sdtotr*sutotr", None)`` writes
+``output_values_out(N) = sdtotr*sutotr`` so that ``sttotr`` is the product of
+the downward and upward Rayleigh transmittances. This is intentional;
+REVIEW.md §3.1 sixs_outputs.py:69 incorrectly flagged it as a name parse
+hazard — the consumer is an expression emitter, not a name lookup.
+
+The optional third element is a Fortran condition such as
+``"irapp.ge.0"``: when set, the assignment is gated by an
+``if`` so the output stays at its initialised value otherwise.
+"""
 
 from __future__ import annotations
 
 from typing import Final
 
+# (python_name, fortran_expression, optional_fortran_guard)
 SixSCoreOutputSpec = tuple[str, str, str | None]
 
 SIXS_BASE_OUTPUTS: Final[tuple[str, ...]] = ("xap", "xbp", "xcp")
