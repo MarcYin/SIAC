@@ -131,4 +131,124 @@ Picking the next 2–3 days of work:
 
 ---
 
+---
+
+## Wave 4 — worktree-isolated parallel agents
+
+After wave 1's silent-revert problem, wave 4 used `isolation: "worktree"` so each agent operated on its own git worktree (clean copy of the repo at `4878ef1`). Each agent committed onto its own branch; I cherry-picked them all back onto the working branch.
+
+### How the wave was run
+
+1. Committed wave 1-3 as `4878ef1` (the stable base for the worktree branches).
+2. Dispatched 5 parallel worktree-isolated agents (W2-W7), each owning a disjoint slice of the tree.
+3. One agent (W4) ended up committing directly to my working branch instead of its assigned worktree because of a worktree mis-routing — the work landed cleanly so I kept it.
+4. Cherry-picked the other 5 commits onto the working branch. Zero merge conflicts.
+5. Test suite update: four test files needed contract updates to match the new STAC + network behaviour. Committed as a follow-up.
+
+### Commits
+
+| SHA | Title | Files | Lines |
+|---|---|---|---|
+| `dccc5ed` | CRS authority comparison + dtype-aware resampling | 4 | +661/-33 |
+| `1f86786` | Harden adapter network layer | 11 | +627/-87 |
+| `a11d47c` | Harden STAC item generation | 3 | +462/-31 |
+| `f366f4a` | Rust crate hardening | 6 | +511/-400 |
+| `94ebf25` | Narrow bare excepts in cams.py + mcd43_earthaccess.py | 5 | +182/-19 |
+| `93705cc` | Catalog and domain hygiene | 8 | +438/-92 |
+| `4db8192` | Update test contracts after wave 4 | 4 | +42/-6 |
+
+### What landed
+
+#### W2 — Adapter network hardening (`1f86786`)
+- New `python/siac/adapters/_http.py` with `make_session(...)` factory: shared `requests.Session` with `urllib3.util.retry.Retry`, configurable timeouts, mounted on http:// and https://, full-jitter exponential backoff via the existing `_retry.py`.
+- `auth.py` CDSE token POST + S3 credential mint/revoke now use the shared session.
+- `copernicus_dataspace.py`: all `_post_json`/`_get_json`/`_token_exchange`/download paths use the shared session. New module-level `_TokenCache` keyed on `(username, password)` reuses OAuth token until `expires_in - 30s`. Streaming download wraps `session.get(stream=True)` in `with` for connection lifecycle.
+- `water_mask.py`: shared session for VRT + companion tile downloads.
+- `gcs_sentinel2.py`: replaced `urllib.request.urlopen` with `session.get`. Off-by-one fix in retry-warning log.
+- 56 new/updated tests passing.
+
+#### W3 — STAC robustness (`a11d47c`)
+- Antimeridian crossing detection: emits 6-element STAC bbox `[xmin, ymin, -180, xmax, ymax, 180]` and sets `siac:antimeridian_warning` property when AOI crosses 180°.
+- Non-fabricated bbox: `_wgs84_bounds_and_geometry` now raises `ValueError` if bounds are missing instead of defaulting to `(0,0,1,1)`.
+- Conditional eo extension: only added when `eo:bands` or `eo:cloud_cover` is set.
+- Self/root/collection links: `self` href is `{item_id}.json`, new `root` href `./`, optional `collection` link from `metadata['stac_collection_id']`.
+- View-angle range guards: `view:sun_elevation` dropped if outside [0, 90°]; `view:off_nadir` likewise.
+- FWHM → `siac:band_bandwidth_um`: STAC's `eo:bands.full_width_half_max` semantically means Gaussian FWHM; SIAC uses rectangular bandpass width. Renamed the field to a custom property to be honest about the semantics.
+- Item-id sanitization: invalid `output_dir.name` falls back to `siac-{uuid4}` with a warning.
+- Datetime null is no longer allowed: raises `ValueError` if `metadata['observation_time']` is missing.
+- 21 tests passing.
+
+#### W4 — CRS authority comparison + dtype-aware resampling (`dccc5ed`)
+- New private helper `python/siac/geo/_crs_compat.py` with `crs_equivalent(a, b)` that uses `pyproj.CRS.from_user_input(...)` for authority/WKT-aware comparison. `"EPSG:4326"` now matches the verbose WKT.
+- `_default_resampling_for_dtype(dtype)` picks `nearest` for integer/bool dtypes, `bilinear` for float — applied as the default in `reproject_match`, `reproject_dataset_match`, `resample`, `resample_to_shape`, `align_grids`. Explicit string args still work.
+- Unknown resampling method now raises `ValueError` with the list of valid methods, instead of silently downgrading to bilinear.
+- `int(round(...))` instead of `int(...)` in `resample`'s shape calculation so the resampled raster covers the original extent.
+- Remote scheme detection widened (regex `^[a-z][a-z0-9+.\-]*://`) so `gs://`, `azure://`, `abfs://`, `file://` are recognised.
+- 73 tests passing across `test_geo_crs_compat.py` (new), `test_io.py`, `test_io_reprojection_gcs_paths.py`.
+
+#### W5 — Rust crate hardening (`f366f4a`)
+- Dropped unused `ndarray-stats`, `num-traits`, `criterion` deps from `Cargo.toml`.
+- `py.allow_threads(...)` wraps the rayon parallel sections in `kernels::RossThickLiSparse::compute`, `whittaker::whittaker_smooth_cube`, `optimization::evaluate_grid_search_candidate_cost`, `optimization::evaluate_block_grid_search_cost_cube_with_provider_qa`, `optimization::compute_grid_search_cost_cube`, `optimization::refine_grid_search_with_qa`. Python-touching ops are kept outside the `allow_threads` boundary.
+- Parallelised `refine_grid_search_with_qa`: outer `for iy` replaced with rayon `into_par_iter()` over each output row.
+- Removed `[[bench]] name = "kernels"` from `Cargo.toml`; deleted no-op stub `benches/kernels.rs`.
+- Renamed `FixedParameter::None` → `FixedParameter::NoFixed` (no longer shadows `Option::None`).
+- `dct_convolve` doc now honestly describes the direct spatial-domain Gaussian convolution; legacy name retained.
+- 22 lib tests pass via `cargo test --lib` and `pixi run rust-test`.
+
+#### W6 — Bare except narrowing in cams.py + mcd43_earthaccess.py (`94ebf25`)
+- `cams.py:_load_cams_data`: narrowed to `(OSError, ValueError, KeyError, RuntimeError)`, added `exc_info=True`, logs full file paths. `local_candidates_found = True` only set after successful open — no longer permanently blocks redownload of corrupt local files.
+- `cams.py:_download_cams_file`: cdsapi failures narrowed to `(OSError, RuntimeError)`, re-raised as `DataNotFoundError` with original chained.
+- `cams.py:_cache_remote_path_with_options` + `_load_from_remote_s3_base`: structured logging includes URL prefix + exception class.
+- `mcd43_earthaccess.py`: split `_DATA_READ_ERRORS` documentation, added `exc_info=True` to all three public-API except blocks. Failure log includes every path in `paths` (not just `paths[0]`), and the no-finite-values warning includes `short_name`.
+- 50 targeted tests passing.
+
+#### W7 — Catalog and domain hygiene (`93705cc`)
+- S2A/S2B/S2C dedup: `_make_s2_config(satellite_id, band_overrides)` factored out. `_S2_COMMON_BANDS` defines the 13-band layout once.
+- `@runtime_checkable` Protocols with `@property` now carry an explanatory comment about the runtime-checkable lying-on-properties limitation.
+- Protocol type fixes: `load_toa(input_path: Path | str)` instead of `str`; `get_metadata` returns `dict[str, Any]`.
+- `select_nearest_band` consolidated to delegate to `get_band_by_wavelength` with module-constant `_DEFAULT_NEAREST_BAND_TOLERANCE_NM = 50.0`.
+- `default_aerosol_solver_bands` MSI-specific knowledge moved into the catalog as a per-sensor `aerosol_solver_band_names` field.
+- O(N²) duplicate detection replaced with `Counter`-based O(N).
+- `register(sensor_id, satellite_id, config)` extension API added to `registry.py`.
+- `spectral.py` `_trapezoid_compat` rename + comment block on the `+2` slice convention.
+- 288 targeted tests passing.
+
+### Wave 4 test contract updates (`4db8192`)
+- `tests/unit/test_coverage_io_extra.py`: STAC link assertion now uses `rels["self"]` / `rels["root"]` lookup instead of positional indexing.
+- `tests/unit/test_output_writer.py` and `tests/unit/test_earthdata_cloud_output_paths.py`: `CorrectionResult` fixtures now carry `metadata={"observation_time": datetime(...)}` since W3 made the datetime mandatory; updated the asserted filename prefix from placeholder `00000000T000000` to the real `20260102T120000`.
+- `tests/unit/test_coverage_misc_modules.py::test_cdse_and_gcs_backends`: monkeypatches `_get_session()` instead of `requests.post`/`requests.get` (W2 changed the codepath); adds `__enter__`/`__exit__` to the response mock for W2's `with session.get(stream=True)` pattern.
+
+### Test suite delta
+
+| Stage | Failed | Passed | Skipped | Errors |
+|---|---|---|---|---|
+| Original baseline | 20 | 1097 | 7 | 8 |
+| After wave 1-3 | 16 | 1121 | 7 | 8 |
+| After wave 4 (this) | **16** | **1199** | 7 | 8 |
+
+**Cumulative: −4 failures, +102 passes, 0 new regressions.**
+
+The 16 remaining failures + 8 errors are all pre-existing `siac._rust unavailable` ImportErrors. They surface in tests that exercise the BRDFKernels / TwoLayerNN code paths and require building the Rust extension (`maturin develop --release`).
+
+### Operational note: parallel worktree agents work
+
+Wave 4's worktree-isolated parallel pattern was successful — five agents ran in parallel without the silent-revert behaviour that broke wave 1's parallel run. The cost is six worktrees worth of disk and the cherry-pick step at the end. Cherry-picks were conflict-free because file ownership was strictly disjoint per agent.
+
+One quirk: an agent (W4) cd'd out of its assigned worktree into the main working branch's worktree before committing. That bypassed isolation but the work was clean. If you re-use this pattern, instruct each agent explicitly to commit *from its assigned worktree path* and not to `cd` elsewhere.
+
+### Next priorities
+
+The deferred items from waves 1-3 are still open:
+
+1. **Solver `ftol`** — `multigrid.py:113` is still `≈ 0`. Needs a regression scene to verify a non-zero value doesn't change retrievals.
+2. **Multigrid fixed-parameter cost/grad mismatch** — `multigrid.py:1648-1666`. Real bug; fix is to compute cost over the free-parameter half only.
+3. **`cost.py` Laplacian** — `cost.py:601-620` likely off-by-one on non-square grids; first verify whether the function is dead.
+4. **Layering inversion** — `siac.runtime ↔ siac.geo/storage`, `siac.domain → siac.geo`. Multi-file refactor; needs a clean commit boundary.
+5. **`_compute_overview_levels`** in `storage/writers.py` — confirmed dead in production but referenced by a coverage test. Paired removal.
+6. **Magic constants** — `siac.constants` module proposal in §2.4 of REVIEW.md.
+
+All other findings from REVIEW.md are either fixed or covered by an explicit "Held back — by design" entry above.
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
