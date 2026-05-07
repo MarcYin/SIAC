@@ -77,7 +77,7 @@ def _detect_crs(aoi: str | Path | dict[str, Any]) -> str | None:
     if isinstance(aoi, dict):
         payload = aoi
     elif isinstance(aoi, (str, Path)):
-        path = Path(str(aoi))
+        path = aoi if isinstance(aoi, Path) else Path(aoi)
         if path.exists():
             try:
                 payload = json.loads(path.read_text())

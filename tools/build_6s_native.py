@@ -10,7 +10,7 @@ from siac.algorithms.rt.direct.sixs_build import (
     build_native_sixs_module,
     resolve_build_paths,
 )
-from siac.config.schema import SixSAlgorithmConfig
+from siac.config.algorithms import SixSAlgorithmConfig
 
 
 def _parse_args() -> argparse.Namespace:

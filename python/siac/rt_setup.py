@@ -13,6 +13,7 @@ from siac.config.algorithms import (
     RTSurfaceSetupConfig,
     SixSSpectralReflectanceConfig,
 )
+from siac.errors import ConfigurationError
 
 DEFAULT_SIXS_RT_SETUP = RTSetupConfig(
     atmosphere=RTAtmosphereSetupConfig(
@@ -52,8 +53,11 @@ def _coerce_rt_setup(value: Any) -> RTSetupConfig:
     return RTSetupConfig.model_validate(value)
 
 
-def _merge_model_payload(base: Any, override: Any) -> dict[str, Any]:
-    payload = base.model_dump(mode="python") if hasattr(base, "model_dump") else dict(base or {})
+def _merge_model_payload(base: dict[str, Any], override: Any) -> dict[str, Any]:
+    # ``base`` is always a dict in callers (see _merge_rt_setup, which dumps the
+    # parent model first). Earlier the function accepted Any with an unreachable
+    # ``hasattr(base, "model_dump")`` branch — removed (REVIEW.md §3.1 rt_setup).
+    payload = dict(base or {})
     if override is None:
         return payload
     payload.update(override.model_dump(mode="python", exclude_none=True))
@@ -90,7 +94,7 @@ def resolve_backend_rt_setup(backend: str, setup: Any) -> RTSetupConfig:
         effective = _merge_rt_setup(DEFAULT_SIXS_RT_SETUP, requested)
         aerosol = effective.aerosol
         if aerosol is not None and aerosol.profile in _SIXS_UNSUPPORTED_RT_AEROSOLS:
-            raise ValueError(
+            raise ConfigurationError(
                 "RT setup aerosol profile "
                 f"{aerosol.profile!r} is not a native 6S profile. "
                 "Use a native 6S aerosol family such as 'continental', or select the LUT backend "
@@ -183,7 +187,7 @@ def validate_lut_requested_setup(requested: RTSetupConfig) -> None:
 
     if mismatches:
         detail = "; ".join(mismatches)
-        raise ValueError(
+        raise ConfigurationError(
             "The requested generic RT setup is incompatible with the fixed packaged remote libRadtran LUT preset: "
             + detail
         )

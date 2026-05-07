@@ -115,14 +115,21 @@ def weighted_spectral_mean(data: xr.DataArray, weights: xr.DataArray) -> xr.Data
         return data
 
     local_weights = weights.reindex(wavelength=data["wavelength"], fill_value=0.0)
+    eps = 1e-10
     if data.sizes["wavelength"] == 1:
         numerator = (data * local_weights).isel(wavelength=0, drop=True)
         denominator = local_weights.isel(wavelength=0, drop=True)
-        return numerator / xr.where(np.abs(denominator) < 1e-10, 1e-10, denominator)
+        # REVIEW.md §1.2 #1: preserve sign when clamping near-zero
+        # denominators. Previously a small negative ``denominator`` was
+        # replaced with ``+eps``, flipping the result's sign.
+        sign = xr.where(denominator >= 0, 1.0, -1.0)
+        safe_den = xr.where(np.abs(denominator) < eps, sign * eps, denominator)
+        return numerator / safe_den
 
     numerator = (data * local_weights).integrate("wavelength")
     denominator = local_weights.integrate("wavelength")
-    denominator = xr.where(np.abs(denominator) < 1e-10, 1e-10, denominator)
+    sign = xr.where(denominator >= 0, 1.0, -1.0)
+    denominator = xr.where(np.abs(denominator) < eps, sign * eps, denominator)
     return numerator / denominator
 
 

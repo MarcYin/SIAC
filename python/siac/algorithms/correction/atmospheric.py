@@ -14,6 +14,7 @@ import numpy as np
 import xarray as xr
 
 from siac.domain.protocols import RTModelBackend
+from siac.errors import ConfigurationError
 from siac.geo.resample import (
     resample_coefficients_to_template,
     resample_mask_to_template,
@@ -45,7 +46,7 @@ class AtmosphericCorrector:
                 f"rt_model must implement RTModelBackend protocol, got {type(rt_model).__name__}"
             )
         if correction_workers < 1:
-            raise ValueError("correction_workers must be >= 1")
+            raise ConfigurationError("correction_workers must be >= 1")
         self.rt_model = rt_model
         self.sensor_config = sensor_config
         self.correction_workers = int(correction_workers)
@@ -158,7 +159,8 @@ class AtmosphericCorrector:
             )
 
         if not boa_vars:
-            raise ValueError(
+            # Match the project error taxonomy (REVIEW.md §2.2).
+            raise ConfigurationError(
                 "No bands in TOA dataset matched sensor_config bands. "
                 f"TOA vars: {list(toa.data_vars)}, "
                 f"sensor bands: {self.sensor_config.band_names}"

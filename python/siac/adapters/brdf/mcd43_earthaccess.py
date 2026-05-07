@@ -1346,15 +1346,18 @@ class _EarthAccessBRDFProvider:
             time_axis=time_axis,
             target_template=target_template,
         )
-        if np.isfinite(temporal.f0.values).any():
-            return temporal
-        logger.warning(
-            "%s temporal BRDF payload contained no finite values for bounds=%s crs=%s days=%d; preserving NaN weights",
-            self._source_name,
-            bounds,
-            crs,
-            len(time_axis),
-        )
+        # REVIEW.md §3.3 mcd43_earthaccess.py:1349-1358: previously this had two
+        # branches both returning ``temporal``; the warning fires only when the
+        # payload is fully NaN, but we always return the same object.
+        if not np.isfinite(temporal.f0.values).any():
+            logger.warning(
+                "%s temporal BRDF payload contained no finite values for "
+                "bounds=%s crs=%s days=%d; preserving NaN weights",
+                self._source_name,
+                bounds,
+                crs,
+                len(time_axis),
+            )
         return temporal
 
     def _load_native_band_stack(

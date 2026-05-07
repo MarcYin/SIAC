@@ -1,5 +1,20 @@
 """Public API surface."""
 
+__all__ = [
+    "PreparedMonthlyCompositeBuildResult",
+    "SIAC",
+    "SceneProcessRequest",
+    "Sentinel2ProcessRequest",
+    "Sentinel2ResolveRequest",
+    "Sentinel2SearchRequest",
+    "prepare_monthly_composites",
+    "process_sentinel2",
+    "resolve_s2_input",
+    "search_sentinel2",
+    "siac_process",
+    "siac_process_s2",
+]
+
 from siac.api.public import (
     SIAC as SIAC,
 )

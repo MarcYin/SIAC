@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from siac.config.algorithms import RTAlgorithmConfig
+from siac.errors import ConfigurationError
 from siac.rt_setup import (
     DEFAULT_LUT_RT_SETUP,
     DEFAULT_SIXS_RT_SETUP,
@@ -76,12 +77,12 @@ def test_native_sixs_rejects_lut_specific_aerosol_family() -> None:
         setup={"aerosol": {"profile": "continental_average"}},
     )
 
-    with pytest.raises(ValueError, match="not a native 6S profile"):
+    with pytest.raises(ConfigurationError, match="not a native 6S profile"):
         resolve_effective_rt_setup(rt_config, "sixs")
 
 
 def test_lut_setup_validation_rejects_incompatible_requested_structure() -> None:
-    with pytest.raises(ValueError, match="fixed packaged remote libRadtran LUT preset"):
+    with pytest.raises(ConfigurationError, match="fixed packaged remote libRadtran LUT preset"):
         validate_lut_requested_setup(
             resolve_effective_rt_setup(
                 RTAlgorithmConfig(
@@ -123,7 +124,7 @@ def test_lut_setup_validation_rejects_semantic_overrides(
     setup: dict[str, object],
     expected: str,
 ) -> None:
-    with pytest.raises(ValueError, match=expected):
+    with pytest.raises(ConfigurationError, match=expected):
         resolve_effective_rt_setup(RTAlgorithmConfig(backend="lut", setup=setup), "lut")
 
 

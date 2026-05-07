@@ -15,7 +15,7 @@ import xarray as xr
 from PIL import Image, ImageDraw, ImageFont
 
 from siac.algorithms.solver import build_solver_valid_mask
-from siac.app.assembly import resolve_surface_prior_provider
+from siac.app._assembly_surface import resolve_surface_prior_provider
 from siac.app.planning import build_execution_plan
 from siac.app.requests import SceneProcessRequest
 from siac.config import SIACConfig

@@ -12,11 +12,18 @@ _NATIVE_IMPORT_ERROR: Exception | None = None
 
 
 def _load_native_rust() -> ModuleType | None:
-    """Import the optional native extension if it is available."""
+    """Import the optional native extension if it is available.
+
+    NOTE: ``Exception`` is broad on purpose — native extension load failures
+    can surface as ``OSError``/``RuntimeError`` from the dynamic linker (e.g.
+    missing libgomp), not just ``ImportError``. ``BaseException`` subclasses
+    such as ``SystemExit``/``KeyboardInterrupt`` still propagate. The contract
+    is exercised by ``tests/unit/test_rust_compat.py``.
+    """
     global _NATIVE_IMPORT_ERROR
     try:
         return importlib.import_module("siac._rust")
-    except Exception as exc:  # pragma: no cover - exercised via fallback tests
+    except Exception as exc:  # noqa: BLE001  - see docstring
         _NATIVE_IMPORT_ERROR = exc
         return None
 

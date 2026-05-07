@@ -479,12 +479,21 @@ def reproject_native_to_target(
 
 
 def read_hdf4_dataset(path: str | Path, dataset_name: str) -> tuple[np.ndarray, dict[str, Any]]:
-    """Read an HDF4 SDS plus decoded attributes."""
+    """Read an HDF4 SDS plus decoded attributes.
+
+    REVIEW.md §1.3 #1: previously this opened ``SD`` without closing it,
+    leaking one HDF4 file handle per call. Wrapped in ``try / finally``.
+    """
     sd = SD(str(path), SDC.READ)
-    sds = sd.select(dataset_name)
-    return np.asarray(sds.get()), {
-        key: decode_attr(value) for key, value in sds.attributes().items()
-    }
+    try:
+        sds = sd.select(dataset_name)
+        return np.asarray(sds.get()), {
+            key: decode_attr(value) for key, value in sds.attributes().items()
+        }
+    finally:
+        end = getattr(sd, "end", None)
+        if callable(end):
+            end()
 
 
 def read_hdf4_dataset_attrs(path: str | Path, dataset_name: str) -> dict[str, Any]:

@@ -3,13 +3,28 @@
 
 Monkey-patches key functions with timers to show where time goes.
 Run from the repo root with the .venv activated.
+
+.. warning::
+    This script depends on ``siac.app.assembly.build_pipeline_runtime`` and
+    ``siac.config.load_config`` — neither symbol exists in the current package
+    (the assembly module was split into ``siac.app._assembly_*`` and
+    ``load_config`` was renamed to ``siac.config.load.load_system_config``).
+    The script is therefore marked broken pending a manual rewrite against the
+    current API. (REVIEW.md §1.1 #1)
 """
 from __future__ import annotations
 
-import functools
-import logging
-import time
-from pathlib import Path
+raise ImportError(
+    "tools/profile_m3.py is broken: it depends on siac.app.assembly."
+    "build_pipeline_runtime and siac.config.load_config, both removed in the "
+    "current refactor. Rewrite against siac.app._assembly_* and "
+    "siac.config.load.load_system_config before using."
+)
+
+import functools  # noqa: E402,F401  - dead code retained for future rewrite
+import logging  # noqa: E402,F401
+import time  # noqa: E402,F401
+from pathlib import Path  # noqa: E402,F401
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("m3_profile")

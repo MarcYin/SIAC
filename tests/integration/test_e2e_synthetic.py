@@ -9,7 +9,10 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pytest
 import xarray as xr
+
+pytestmark = pytest.mark.integration
 
 from siac.algorithms.grid.assembler import assemble_grids
 from siac.domain import SensorBand, SensorConfig

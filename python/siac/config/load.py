@@ -46,7 +46,11 @@ def load_system_config(path: Path | str) -> SystemConfig:
 def load_system_config_from_default() -> SystemConfig:
     """Load from SIAC_CONFIG_FILE or the default user config path."""
     raw_path = os.getenv(CONFIG_PATH_ENV)
+    # Treat an empty-string env var as unset rather than as ``Path('.')``.
+    # REVIEW.md §3.2 load.py:48-50.
     path = Path(raw_path) if raw_path else DEFAULT_CONFIG_PATH
+    if raw_path is not None and not raw_path.strip():
+        path = DEFAULT_CONFIG_PATH
     return load_system_config(path)
 
 

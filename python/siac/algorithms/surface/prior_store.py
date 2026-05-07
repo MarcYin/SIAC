@@ -65,21 +65,37 @@ def _interpolate_doy(
     if target_doy in doy_sorted:
         return data.sel(doy=target_doy).drop_vars("doy", errors="ignore")
 
-    # Find bracketing DOYs
+    # Find bracketing DOYs.
+    #
+    # REVIEW.md §1.1 #10: previously this used a hard-coded ``365`` for the
+    # year length, which is wrong in leap years (Mar 1 is DOY 61 not DOY 60,
+    # so a fixed 365-day modulus introduces a 1-day bias). Use the actual span
+    # ``max(doy_sorted)`` (typically 365 or 366 from the source DOY axis) as a
+    # consistent year length when computing wrap-around gaps.
+    year_length = int(max(int(doy_sorted[-1]), 365))
+    if year_length < 366 and (
+        np.any(doy_sorted >= 366) or target_doy >= 366
+    ):
+        year_length = 366
+
     idx_after = np.searchsorted(doy_sorted, target_doy)
 
     if idx_after == 0:
         # target is before first DOY — wrap from last DOY of previous year
         doy_lo = doy_sorted[-1]
         doy_hi = doy_sorted[0]
-        gap = (365 - doy_lo) + doy_hi
-        dist_lo = (365 - doy_lo) + target_doy if target_doy < doy_lo else target_doy - doy_lo
+        gap = (year_length - doy_lo) + doy_hi
+        dist_lo = (
+            (year_length - doy_lo) + target_doy
+            if target_doy < doy_lo
+            else target_doy - doy_lo
+        )
         weight = dist_lo / gap if gap > 0 else 0.5
     elif idx_after >= len(doy_sorted):
         # target is after last DOY — wrap to first DOY of next year
         doy_lo = doy_sorted[-1]
         doy_hi = doy_sorted[0]
-        gap = (365 - doy_lo) + doy_hi
+        gap = (year_length - doy_lo) + doy_hi
         dist_lo = target_doy - doy_lo
         weight = dist_lo / gap if gap > 0 else 0.5
     else:
@@ -139,18 +155,25 @@ def _crop_to_bounds(
 ) -> xr.DataArray:
     """Crop a raster DataArray to target bounds using pixel indices.
 
-    Assumes data is on a regular grid with origin at tile_bounds[:2].
+    Standard rasters store rows top-to-bottom (y decreasing), so the row index
+    is computed from the *top* (``tymax``) downward. The previous version
+    indexed from ``tymin`` upward, which silently produced a vertically
+    flipped / mis-cropped region for any standard raster (REVIEW.md §1.1 #9).
     """
     txmin, tymin, txmax, tymax = tile_bounds
     xmin, ymin, xmax, ymax = target_bounds
 
     ny, nx = data.shape[-2], data.shape[-1]
 
-    # Compute pixel coordinates
+    # X (col) — origin at tile west edge, increasing eastward.
     col_start = max(0, int((xmin - txmin) / resolution_m))
     col_end = min(nx, int(np.ceil((xmax - txmin) / resolution_m)))
-    row_start = max(0, int((ymin - tymin) / resolution_m))
-    row_end = min(ny, int(np.ceil((ymax - tymin) / resolution_m)))
+
+    # Y (row) — origin at tile *north* edge, increasing southward (raster
+    # convention). We compute the offset from ``tymax`` down to ``ymax``
+    # (top of the target window) and from ``tymax`` down to ``ymin`` (bottom).
+    row_start = max(0, int((tymax - ymax) / resolution_m))
+    row_end = min(ny, int(np.ceil((tymax - ymin) / resolution_m)))
 
     if data.ndim == 2:
         return data[row_start:row_end, col_start:col_end]

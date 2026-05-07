@@ -54,8 +54,12 @@ class SolverConvergenceError(SIACError):
     is_recoverable = True
 
 
-class ValidationError(SIACError):
-    """Data validation error."""
+class ValidationError(SIACError, ValueError):
+    """Data validation error.
+
+    Inherits from both ``SIACError`` and ``ValueError`` so callers using
+    the standard-library ``except ValueError`` idiom catch it too.
+    """
 
 
 class AuthenticationError(SIACError):

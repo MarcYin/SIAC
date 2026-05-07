@@ -18,12 +18,12 @@ from siac.adapters.earthdata import earthaccess_cache_dir
 from siac.adapters.earthdata_common import build_target_template
 from siac.app._assembly_surface import (
     _select_visible_surface_prior_bands,
-    _surface_prior_brdf_request,
-    _surface_prior_mapping_state,
+    prepare_monthly_surface_prior_runtime as _prepare_monthly_surface_prior_runtime,
+    query_monthly_surface_prior as _query_monthly_surface_prior,
+    surface_prior_brdf_request as _surface_prior_brdf_request,
+    surface_prior_mapping_state as _surface_prior_mapping_state,
 )
-from siac.app.assembly import (
-    _prepare_monthly_surface_prior_runtime,
-    _query_monthly_surface_prior,
+from siac.app._assembly_providers import (
     resolve_brdf_provider,
     resolve_monthly_composite_provider,
 )

@@ -166,12 +166,19 @@ class CostFunction:
     def _setup_band_weights(self) -> None:
         """Setup wavelength-based band weights."""
         wavelengths = np.array([b.center_wavelength for b in self.bands])
-        # Convert to micrometers for weighting
-        wl_um = wavelengths / 1000.0
+        # Convert to micrometers; clamp away from zero so a band with
+        # ``center_wavelength == 0`` (bug upstream) doesn't produce NaN/inf.
+        # REVIEW.md §1.2 #3: ``weights / weights.sum()`` was unguarded.
+        wl_um = np.maximum(wavelengths / 1000.0, 1e-6)
 
         # Power-law weighting (shorter wavelengths weighted more for AOT)
         weights = wl_um**self.config.band_weight_power
-        self.band_weights = weights / weights.sum()
+        denom = weights.sum()
+        if not np.isfinite(denom) or denom <= 0.0:
+            # Fall back to uniform weights rather than NaN-poisoning the cost.
+            self.band_weights = np.full_like(weights, 1.0 / max(len(weights), 1))
+        else:
+            self.band_weights = weights / denom
 
     def _setup_smoothness(self) -> None:
         """Setup smoothness regularization (no precomputation needed)."""

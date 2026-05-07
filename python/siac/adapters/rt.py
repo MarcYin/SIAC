@@ -63,7 +63,12 @@ def build_rt_model(
                 raise ValueError(
                     "Cannot resolve emulator RT model and LUT fallback is unavailable."
                 ) from exc
-            logger.warning("Emulator RT model unavailable; falling back to LUT backend.")
+            # exc_info=True so the operator can see why the emulator failed,
+            # not just that we silently degraded (REVIEW.md §2.1, §3.3 rt.py).
+            logger.warning(
+                "Emulator RT model unavailable; falling back to LUT backend.",
+                exc_info=True,
+            )
             backend = "lut"
 
     if backend == "lut" and lut_path:

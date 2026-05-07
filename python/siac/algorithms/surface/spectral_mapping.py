@@ -687,8 +687,11 @@ class SpectralMapper:
         )
 
     def _cache_distance_metrics(self, metrics: dict[str, xr.DataArray]) -> None:
+        # Intentionally a no-op: the package mapper's distance metrics are
+        # discarded under the upstream runtime path. ``test_spectral_mapping_extra
+        # .test_map_does_not_cache_distance_metrics_under_upstream_runtime`` pins
+        # this contract. Override in subclasses if persistence is needed.
         del metrics
-        return
 
     def _align_source_data(self, data: xr.DataArray) -> xr.DataArray:
         if "band" not in data.dims:

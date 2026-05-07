@@ -768,8 +768,19 @@ class CAMSProvider:
             local_path = self._remote_cache_root() / parsed.netloc / parsed.path.lstrip("/")
             local_path.parent.mkdir(parents=True, exist_ok=True)
             if not local_path.exists():
+                # Atomic-rename: download to a sibling ``.tmp`` first so a
+                # crash mid-transfer doesn't leave a partial file that the
+                # next ``not local_path.exists()`` check accepts as cached
+                # (REVIEW.md §1.3 #3, §3.3 cams.py:763-781).
                 fs = fsspec.filesystem("s3", **(storage_options or {}))
-                fs.get(remote_path, str(local_path))
+                tmp_path = local_path.with_suffix(local_path.suffix + ".tmp")
+                try:
+                    fs.get(remote_path, str(tmp_path))
+                    tmp_path.replace(local_path)
+                except BaseException:
+                    if tmp_path.exists():
+                        tmp_path.unlink(missing_ok=True)
+                    raise
             return local_path
 
         cached_path = Path(

@@ -29,7 +29,7 @@ from siac.storage.product_writers import (
 )
 from siac.storage.raster_writers import write_cog, write_raster, write_zarr
 from siac.storage.stac import build_stac_item_from_result
-from siac.storage.writers import ensure_writable_directory, write_netcdf
+from siac.storage.writers import _atomic_write_text, ensure_writable_directory, write_netcdf
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -206,7 +206,7 @@ class ConfiguredOutputWriter:
     ) -> dict[str, Path]:
         stac_path = output_dir / f"{prefix}.json"
         stac_item = build_stac_item_from_result(result, output_dir=output_dir, artifacts=artifacts)
-        stac_path.write_text(json.dumps(stac_item, indent=2), encoding="utf-8")
+        _atomic_write_text(stac_path, json.dumps(stac_item, indent=2))
         artifacts["stac_item"] = stac_path
         return artifacts
 

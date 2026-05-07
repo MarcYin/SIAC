@@ -32,11 +32,10 @@ def resolve_solver(config: Any) -> SolverFn:
                 sc, "quadratic_block_min_valid_fraction", 0.5
             ),
         )
-        solver_stages = (
-            solver_config.get("stages", ())
-            if isinstance(solver_config, dict)
-            else getattr(solver_config, "stages", ())
-        )
+        # ``solver_config`` is a MultiGridConfig instance (constructed above);
+        # the previous ``isinstance(solver_config, dict)`` branch was unreachable
+        # (REVIEW.md §3.6 _assembly_solver.py).
+        solver_stages = getattr(solver_config, "stages", ())
         solver_cls = StagedMultiGridSolver if solver_stages else MultiGridSolver
         mg_solver = solver_cls(solver_config)
         solve_kwargs: dict[str, Any] = {}

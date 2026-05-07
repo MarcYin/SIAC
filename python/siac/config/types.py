@@ -306,16 +306,6 @@ def _coerce_float_tuple(value: Any) -> tuple[float, ...] | None:
     return (float(value),)
 
 
-def _coerce_int_tuple(value: Any) -> tuple[int, ...] | None:
-    if value is None:
-        return None
-    if isinstance(value, tuple):
-        return tuple(int(item) for item in value)
-    if isinstance(value, list):
-        return tuple(int(item) for item in value)
-    return (int(value),)
-
-
 def _coerce_float_matrix(value: Any) -> tuple[tuple[float, ...], ...] | None:
     if value is None:
         return None

@@ -12,7 +12,7 @@ from typing import Any, cast
 from siac import __version__
 from siac.config import SIACConfig
 from siac.domain.aoi import AOI
-from siac.errors import SIACError
+from siac.errors import ConfigurationError, SIACError
 
 
 def _non_empty_text(value: str) -> str:
@@ -168,6 +168,18 @@ def _configure_logging(level_name: str) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         force=True,
     )
+    # Attach the secret-redaction filter to every root handler so credentials
+    # are scrubbed regardless of which submodule emitted the record. Until
+    # now the filter only shadowed ``siac.adapters.auth``, leaving URLs that
+    # carry tokens un-redacted in cams.py / mcd43_earthaccess.py /
+    # copernicus_dataspace.py logs (REVIEW.md §2.7). A filter set on the
+    # ``Logger`` only fires for records the logger emits directly, so we
+    # install it on every existing handler instead.
+    from siac.adapters._log_filter import SecretRedactionFilter
+
+    for handler in logging.getLogger().handlers:
+        if not any(isinstance(f, SecretRedactionFilter) for f in handler.filters):
+            handler.addFilter(SecretRedactionFilter())
 
 
 def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
@@ -181,8 +193,19 @@ def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
             args.aoi_file, crs=cast("str | None", getattr(args, "aoi_crs", None))
         )
     if getattr(args, "aoi_wkt", None) is not None:
+        # Parse WKT into a GeoJSON dict via siac.geo.geometry, then construct AOI.
+        # Previously this passed WKT directly to AOI.from_geojson which silently
+        # corrupted the AOI (REVIEW.md §1.1 #2).
+        from siac.geo.geometry import _parse_wkt
+
+        try:
+            geojson = _parse_wkt(args.aoi_wkt, _target_crs=None)
+        except (ValueError, AttributeError) as exc:
+            raise ConfigurationError(
+                f"Failed to parse --aoi-wkt as WKT: {exc}"
+            ) from exc
         return AOI.from_geojson(
-            args.aoi_wkt, crs=cast("str | None", getattr(args, "aoi_crs", None))
+            geojson, crs=cast("str | None", getattr(args, "aoi_crs", None))
         )
     return None
 

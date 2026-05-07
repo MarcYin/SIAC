@@ -132,12 +132,14 @@ class TwoLayerNNEmulator:
                         fallback_sat,
                     )
 
-        # Extract band names from filenames
+        # Extract band names from filenames. Match B<digits> or the B8A
+        # 'narrow NIR' band, accepting either case (REVIEW.md §3.4 two_nn.py:140).
         for path in found_files:
             name = path.stem
-            # Try to extract band name (e.g., "B02", "B1")
             for part in name.split("_"):
-                if part.startswith("B") and (part[1:].isdigit() or part in ["B8A"]):
+                if part.startswith("B") and (
+                    part[1:].isdigit() or part.upper() in ("B8A",)
+                ):
                     available.append(part)
                     break
 

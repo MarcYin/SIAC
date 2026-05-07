@@ -412,7 +412,12 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
     return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
 
 
-@SURFACE_PRIOR_METHOD_REGISTRY.register("monthly_database")
+# NOTE: This function is intentionally NOT registered in
+# SURFACE_PRIOR_METHOD_REGISTRY. Its construction needs the
+# ``fallback_brdf_provider_factory`` keyword argument, which the registry's
+# uniform ``(config, brdf_provider)`` signature cannot supply. ``resolve_surface
+# _prior_provider`` dispatches the ``monthly_database`` method to this builder
+# inline (REVIEW.md §3.6 _assembly_surface.py).
 def _build_monthly_surface_prior(
     config: Any,
     monthly_composite_provider: Any,

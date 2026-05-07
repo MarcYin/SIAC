@@ -2,6 +2,7 @@
 Pytest configuration and fixtures for SIAC tests.
 """
 
+import socket
 from datetime import datetime
 from pathlib import Path
 
@@ -10,20 +11,27 @@ import pytest
 import xarray as xr
 
 # =============================================================================
-# Path fixtures
+# Network isolation
 # =============================================================================
 
 
-@pytest.fixture
-def fixtures_dir() -> Path:
-    """Path to test fixtures directory."""
-    return Path(__file__).parent / "fixtures"
+@pytest.fixture(autouse=True)
+def _block_network(monkeypatch, request):
+    """Block real network calls in unit tests by default.
 
+    Tests that legitimately need the network must declare
+    ``@pytest.mark.integration``.
+    """
+    if "integration" in request.keywords:
+        return
 
-@pytest.fixture
-def sample_data_dir(fixtures_dir: Path) -> Path:
-    """Path to sample data directory."""
-    return fixtures_dir / "sample_data"
+    def _no_network(*args, **kwargs):
+        raise RuntimeError(
+            "Real network call attempted in a non-integration test. "
+            "Use a mock or add @pytest.mark.integration."
+        )
+
+    monkeypatch.setattr(socket.socket, "connect", _no_network)
 
 
 # =============================================================================
@@ -102,11 +110,12 @@ def sample_brdf_weights() -> dict:
     """Sample BRDF kernel weights."""
     shape = (7, 100, 100)  # 7 MODIS bands
 
-    # Typical vegetation BRDF parameters
+    # Typical vegetation BRDF parameters (seeded for determinism)
+    rng = np.random.default_rng(42)
     return {
-        "f0": np.random.default_rng().uniform(0.02, 0.3, shape),  # Isotropic
-        "f1": np.random.default_rng().uniform(0.01, 0.1, shape),  # Volumetric
-        "f2": np.random.default_rng().uniform(0.005, 0.05, shape),  # Geometric
+        "f0": rng.uniform(0.02, 0.3, shape),  # Isotropic
+        "f1": rng.uniform(0.01, 0.1, shape),  # Volumetric
+        "f2": rng.uniform(0.005, 0.05, shape),  # Geometric
         "f0_unc": np.full(shape, 0.01),
         "f1_unc": np.full(shape, 0.005),
         "f2_unc": np.full(shape, 0.002),
@@ -124,10 +133,11 @@ def sample_toa() -> xr.Dataset:
     bands = ["B02", "B03", "B04", "B08", "B11", "B12"]
     shape = (100, 100)
 
+    rng = np.random.default_rng(43)
     data_vars = {}
     for band in bands:
-        # Realistic TOA reflectance values
-        toa = np.random.default_rng().uniform(0.05, 0.4, shape).astype(np.float32)
+        # Realistic TOA reflectance values (seeded for determinism)
+        toa = rng.uniform(0.05, 0.4, shape).astype(np.float32)
         data_vars[band] = xr.DataArray(
             toa,
             dims=["y", "x"],

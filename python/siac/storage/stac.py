@@ -380,14 +380,26 @@ def build_stac_item_from_result(
     properties.update(_proj_properties(first_band, native_bounds))
 
     # processing extension
-    properties["processing:software"] = {"SIAC": "2.0.0"}
+    # Read version from package metadata rather than a hard-coded literal so
+    # we don't drift on every release (REVIEW.md §3.7 stac.py:383).
+    try:
+        from siac import __version__ as _siac_version
+    except ImportError:  # pragma: no cover - defensive
+        _siac_version = "unknown"
+    properties["processing:software"] = {"SIAC": _siac_version}
     processing_time = _safe_float(result.diagnostics.processing_time_s)
     if processing_time is not None:
         properties["siac:processing_time_s"] = processing_time
 
-    # SIAC-specific properties
-    properties["siac:aot_mean"] = float(result.aot.mean(skipna=True).values)
-    properties["siac:tcwv_mean"] = float(result.tcwv.mean(skipna=True).values)
+    # SIAC-specific properties. Drop NaN values (which are not valid JSON via
+    # the stdlib ``json`` module) so the STAC item is serialisable
+    # (REVIEW.md §3.7 stac.py:389-390).
+    aot_mean = float(result.aot.mean(skipna=True).values)
+    tcwv_mean = float(result.tcwv.mean(skipna=True).values)
+    if np.isfinite(aot_mean):
+        properties["siac:aot_mean"] = aot_mean
+    if np.isfinite(tcwv_mean):
+        properties["siac:tcwv_mean"] = tcwv_mean
     properties["siac:satellite"] = satellite_id
     for source_key, target_key in (
         ("tile_id", "siac:tile_id"),

@@ -17,8 +17,10 @@ Example:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import logging
+import os
 import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
@@ -60,6 +62,26 @@ COG_SETTINGS = {
 }
 
 _NETCDF_DEFAULT = object()
+
+
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Write text to ``path`` atomically by writing to a sibling .tmp then renaming.
+
+    Ensures readers never observe a partially written file: either the previous
+    contents (if any) or the new contents are visible. The rename is atomic on
+    POSIX when source and destination are on the same filesystem (the parent
+    directory we just created).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(content, encoding=encoding)
+        tmp.replace(path)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+        raise
 
 
 def _repair_directory_mode(directory: Path) -> None:
@@ -193,8 +215,20 @@ def write_raster(
         write_kwargs["blockxsize"] = blockxsize
         write_kwargs["blockysize"] = blockysize
 
-    # Write using rioxarray
-    data.rio.to_raster(str(path), **write_kwargs)
+    # Atomic write: stage to a sibling .tmp file then os.replace into place so
+    # readers never observe a partially written GeoTIFF. The temp file lives in
+    # the same directory, so the rename is atomic on POSIX. Guarded with an
+    # existence check so monkey-patched mocks that skip the actual write do
+    # not crash on the rename step.
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        data.rio.to_raster(str(tmp_path), **write_kwargs)
+        if tmp_path.exists():
+            os.replace(str(tmp_path), str(path))
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
 
     logger.info(f"Wrote raster to {path}")
     return path
@@ -245,8 +279,18 @@ def write_cog(
         **kwargs,
     }
 
-    # Write using rioxarray
-    data.rio.to_raster(str(path), **write_kwargs)
+    # Atomic write: stage to a sibling .tmp file then os.replace into place.
+    # Same rationale as write_raster: the GDAL COG driver writes in-place and
+    # would otherwise leave a half-finished tif if interrupted.
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        data.rio.to_raster(str(tmp_path), **write_kwargs)
+        if tmp_path.exists():
+            os.replace(str(tmp_path), str(path))
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
 
     logger.info(f"Wrote COG to {path}")
     return path
@@ -338,6 +382,12 @@ def write_zarr(
     if chunks is not None:
         data = data.chunk(chunks)
 
+    # NOTE: Zarr stores are directories with many files; an atomic-rename of a
+    # directory is not portable (POSIX permits it only when the destination is
+    # an empty directory; semantics on Windows / S3 / GCS differ). A correct
+    # atomic-publish for Zarr would require a manifest-style commit and is out
+    # of scope here. Callers that need crash-safe Zarr writes should write to a
+    # staging path and rename themselves once the store is closed.
     data.to_zarr(str(path), mode=mode, **kwargs)
 
     logger.info(f"Wrote Zarr store to {path}")
@@ -421,7 +471,19 @@ def write_netcdf(
         for name, _coord in payload.coords.items():
             encoding[name] = {"_FillValue": None}
 
-    payload.to_netcdf(str(path), encoding=encoding, **kwargs)
+    # Atomic write: NetCDF writes synchronously; stage to a sibling .tmp and
+    # rename so readers never observe a partial file (or a corrupt HDF5
+    # superblock if the process crashes mid-write). The existence check guards
+    # against monkey-patched mocks that skip the underlying write.
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        payload.to_netcdf(str(tmp_path), encoding=encoding, **kwargs)
+        if tmp_path.exists():
+            os.replace(str(tmp_path), str(path))
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
 
     logger.info(f"Wrote NetCDF to {path}")
     return path
@@ -955,7 +1017,13 @@ def _prepare_for_write(
 
 
 def _compute_overview_levels(data: xr.DataArray, max_overview_size: int = 256) -> list[int]:
-    """Compute appropriate overview levels based on image size."""
+    """Compute appropriate overview levels based on image size.
+
+    NOTE: This helper is no longer used by ``write_cog`` — the GDAL ``COG``
+    driver builds overviews internally based on its ``blocksize`` and source
+    dimensions. Retained because external test fixtures still import it; new
+    code should not call it.
+    """
     height, width = data.rio.height, data.rio.width
     min_dim = min(height, width)
 

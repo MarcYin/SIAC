@@ -32,6 +32,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "process_sentinel2": ("siac.api", "process_sentinel2"),
     "prepare_monthly_composites": ("siac.api", "prepare_monthly_composites"),
     "resolve_s2_input": ("siac.api", "resolve_s2_input"),
+    "siac_process": ("siac.api", "siac_process"),
     "siac_process_s2": ("siac.api", "siac_process_s2"),
     "search_sentinel2": ("siac.api", "search_sentinel2"),
 }

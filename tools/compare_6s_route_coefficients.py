@@ -17,12 +17,12 @@ from siac.algorithms.rt.direct.sixs_build import build_native_sixs_module
 from siac.algorithms.rt.direct.sixs_native import _build_scene_lut_plan
 from siac.algorithms.rt.lut import DEFAULT_LUT_URL, ZarrLUTBackend
 from siac.config import SixSAlgorithmConfig
-from siac.config.schema import (
+from siac.config.algorithms import (
     SixSAtmosphericCorrectionConfig,
-    SixSAtmosphericProfile,
     SixSSpectralReflectanceConfig,
     SixSSurfaceConfig,
 )
+from siac.config.types import SixSAtmosphericProfile
 from siac.domain.sensors import SensorBand
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 

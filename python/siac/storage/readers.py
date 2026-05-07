@@ -91,8 +91,14 @@ def read_raster(
     if overview_level is not None:
         open_kwargs["overview_level"] = overview_level
 
-    # Open with rioxarray
-    da = xr.open_dataarray(path, engine="rasterio", **open_kwargs)
+    # Open with rioxarray. The xr.open_dataarray("...", engine="rasterio")
+    # path keeps the underlying rasterio dataset alive on the returned object,
+    # which leaks file handles in long-running pipelines (REVIEW.md §2.8).
+    # Eagerly load values into memory and close the dataset before returning.
+    # All current callers consume the array via .values / .astype paths, so
+    # this matches existing behaviour without changing the contract.
+    with xr.open_dataarray(path, engine="rasterio", **open_kwargs) as opened:
+        da = opened.load()
 
     # Select specific band if requested
     if band is not None and "band" in da.dims:
@@ -409,14 +415,21 @@ def read_netcdf_variable(
     Returns:
         xr.DataArray with variable data
     """
-    ds = xr.open_dataset(path, chunks=chunks)
-    da = ds[variable]
+    # The dataset must outlive the returned variable; previously the dataset
+    # handle was leaked because we returned ds[variable] without closing
+    # ``ds`` (REVIEW.md §2.8). Eagerly load the variable into memory, capture
+    # any CRS metadata, then close the dataset on the way out.
+    with xr.open_dataset(path, chunks=chunks) as ds:
+        da = ds[variable].load()
 
-    # Try to set CRS if available
-    if "crs" in ds.attrs:
-        da = da.rio.write_crs(ds.attrs["crs"])
-    elif "spatial_ref" in ds:
-        da = da.rio.write_crs(ds["spatial_ref"].attrs.get("crs_wkt"))
+        crs_wkt: str | None = None
+        if "crs" in ds.attrs:
+            crs_wkt = ds.attrs["crs"]
+        elif "spatial_ref" in ds:
+            crs_wkt = ds["spatial_ref"].attrs.get("crs_wkt")
+
+    if crs_wkt is not None:
+        da = da.rio.write_crs(crs_wkt)
 
     return da
 

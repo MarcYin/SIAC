@@ -171,7 +171,9 @@ class TestAtmosphericCorrector:
 
     def test_invalid_correction_workers_raises(self, mock_rt_model):
         """Correction workers must be at least one."""
-        with pytest.raises(ValueError, match="correction_workers must be >= 1"):
+        from siac.errors import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="correction_workers must be >= 1"):
             AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG, correction_workers=0)
 
     def test_apply_correction_consistency(self, sample_inputs, mock_rt_model):

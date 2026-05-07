@@ -6,12 +6,14 @@ import logging
 import re
 
 # Patterns that look like tokens, keys, or passwords in log messages.
+# REVIEW.md §2.7: widened the Bearer/token character class to include
+# ``+ / =`` so JWTs, base64-padded tokens, and similar formats redact fully.
 _SECRET_PATTERNS = (
-    re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE),
+    re.compile(r"(Bearer\s+)[A-Za-z0-9._+/=\-]+", re.IGNORECASE),
     re.compile(r"(access_key_id[=:]\s*)[A-Za-z0-9/+]+", re.IGNORECASE),
     re.compile(r"(secret_access_key[=:]\s*)[A-Za-z0-9/+=]+", re.IGNORECASE),
     re.compile(r"(password[=:]\s*)\S+", re.IGNORECASE),
-    re.compile(r"(token[=:]\s*)[A-Za-z0-9._\-]+", re.IGNORECASE),
+    re.compile(r"(token[=:]\s*)[A-Za-z0-9._+/=\-]+", re.IGNORECASE),
 )
 
 

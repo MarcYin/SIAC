@@ -703,35 +703,39 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         return angles
 
     def _parse_view_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
-        """Parse view angle grids from XML (mean across detectors)."""
+        """Parse view angle grids from XML (arithmetic mean across detectors).
+
+        REVIEW.md §1.1 #5: previously this used a running ``(a + b) / 2`` step
+        per band, which biases toward the last-seen entry rather than producing
+        the arithmetic mean. We now collect all values and average once.
+        """
         ns = self._get_namespace(root)
 
-        # Get mean viewing angles
-        mean_vza: float | None = None
-        mean_vaa: float | None = None
+        zenith_values: list[float] = []
+        azimuth_values: list[float] = []
 
-        # Look for Mean_Viewing_Incidence_Angle
         for mean_elem in root.findall(f".//{ns}Mean_Viewing_Incidence_Angle"):
             zenith = mean_elem.find(f"{ns}ZENITH_ANGLE")
             azimuth = mean_elem.find(f"{ns}AZIMUTH_ANGLE")
-
             if (
                 zenith is not None
                 and azimuth is not None
                 and zenith.text is not None
                 and azimuth.text is not None
             ):
-                if mean_vza is None:
-                    mean_vza = float(zenith.text)
-                    mean_vaa = float(azimuth.text)
-                else:
-                    assert mean_vaa is not None
-                    # Average across bands
-                    mean_vza = (mean_vza + float(zenith.text)) / 2
-                    mean_vaa = (mean_vaa + float(azimuth.text)) / 2
+                zenith_values.append(float(zenith.text))
+                azimuth_values.append(float(azimuth.text))
 
-        # Fallback values
-        if mean_vza is None or mean_vaa is None:
+        if zenith_values and azimuth_values:
+            mean_vza = float(np.mean(zenith_values))
+            mean_vaa = float(np.mean(azimuth_values))
+        else:
+            # Fallback to magic defaults; warn so the operator notices the XML
+            # didn't carry the angles we needed (REVIEW.md §3.3 sentinel2.py).
+            logger.warning(
+                "Mean_Viewing_Incidence_Angle entries not found in MTD_TL.xml; "
+                "falling back to default VZA=5.0deg, VAA=100.0deg."
+            )
             mean_vza = 5.0
             mean_vaa = 100.0
 
