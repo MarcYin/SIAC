@@ -5,12 +5,18 @@ from __future__ import annotations
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from rasterio.warp import transform_bounds
+
+# Permitted character set for STAC item ids generated from ``output_dir.name``.
+# ``.`` doesn't include path separators or whitespace; if the basename does
+# not match, we fall back to a UUID4 (REVIEW.md §3.7 stac.py:316-318).
+_ITEM_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +151,41 @@ def _native_bounds(
 def _wgs84_bounds_and_geometry(
     native_bounds: tuple[float, float, float, float],
     crs: CRS | str | None,
-) -> tuple[list[float], dict[str, Any]]:
+) -> tuple[list[float], dict[str, Any], bool]:
+    """Project native bounds to WGS84 and emit STAC bbox + geometry.
+
+    Returns ``(bbox, geometry, antimeridian)``. When ``antimeridian`` is
+    ``True``, the bbox is the 6-element STAC form
+    ``[xmin, ymin, -180, xmax, ymax, 180]`` and the geometry is a single
+    polygon whose coordinates wrap across 180/-180 (callers should also set
+    ``siac:antimeridian_warning`` on properties — see REVIEW.md §3.7).
+    """
     if crs is None:
         xmin, ymin, xmax, ymax = native_bounds
     else:
         transformed = transform_bounds(crs, "EPSG:4326", *native_bounds, densify_pts=21)
         xmin, ymin, xmax, ymax = map(float, transformed)
-    bbox = [xmin, ymin, xmax, ymax]
+
+    # Antimeridian detection (REVIEW.md §3.7 stac.py:145-167):
+    # ``transform_bounds`` returns ``xmax < xmin`` when the AOI wraps the
+    # antimeridian; an unwrapped span > 180° on a non-global AOI is also
+    # suspect. In either case naively building a single polygon from
+    # ``[xmin, ymin, xmax, ymax]`` produces a near-global rectangle.
+    antimeridian = bool(xmax < xmin or (xmax - xmin) > 180.0)
+    if antimeridian:
+        logger.warning(
+            "Detected antimeridian-crossing AOI (xmin=%.6f, xmax=%.6f); "
+            "emitting 6-element STAC bbox and unwrapped polygon.",
+            xmin,
+            xmax,
+        )
+        # STAC 1.1.0 6-element bbox encodes antimeridian crossing as
+        # [xmin, ymin, -180, xmax, ymax, 180] (longitude order is
+        # west-of-AM, east-of-AM).
+        bbox = [xmin, ymin, -180.0, xmax, ymax, 180.0]
+    else:
+        bbox = [xmin, ymin, xmax, ymax]
+
     geometry = {
         "type": "Polygon",
         "coordinates": [
@@ -164,7 +198,7 @@ def _wgs84_bounds_and_geometry(
             ]
         ],
     }
-    return bbox, geometry
+    return bbox, geometry, antimeridian
 
 
 def _proj_properties(
@@ -201,10 +235,19 @@ def _gsd(first_band: Any) -> float | None:
 
 
 def _band_metadata(band: SensorBand) -> dict[str, Any]:
+    # REVIEW.md §3.7 stac.py:208 — STAC ``eo:bands.full_width_half_max``
+    # specifically denotes the FWHM of a presumed-Gaussian spectral
+    # response, while SIAC's ``SensorBand.bandwidth`` is a rectangular
+    # band-pass width. They are related but not interchangeable, so we
+    # publish the bandwidth under a SIAC-namespaced custom field instead
+    # of pretending it is FWHM. ``domain.spectral.RelativeSpectralResponse``
+    # carries a properly computed ``fwhm_nm`` for callers that need true
+    # FWHM. ``_band_metadata_from_name`` (no ``SensorBand`` available)
+    # naturally omits this field.
     metadata: dict[str, Any] = {
         "name": band.name,
         "center_wavelength": float(band.wavelength_um),
-        "full_width_half_max": float(band.bandwidth / 1000.0),
+        "siac:band_bandwidth_um": float(band.bandwidth / 1000.0),
     }
     common_name = _BAND_COMMON_NAMES.get(band.name)
     if common_name is not None:
@@ -292,15 +335,33 @@ def build_stac_item_from_result(
         first_band = result.boa[first_band_name]
     else:
         first_band = result.aot
-    fallback_bounds = metadata.get("bounds", (0.0, 0.0, 1.0, 1.0))
+
+    # REVIEW.md §3.7 stac.py:295 — never fabricate a default unit-square
+    # bbox. Prefer caller-supplied ``metadata['bounds']``; otherwise fall
+    # back to ``rio.bounds()`` on the first band; only if both are missing
+    # do we raise. STAC requires geometry/bbox.
+    fallback_bounds = metadata.get("bounds")
+    if fallback_bounds is None:
+        try:
+            fallback_bounds = tuple(map(float, first_band.rio.bounds()))
+        except (AttributeError, ValueError, RuntimeError, OSError):
+            fallback_bounds = None
+    if fallback_bounds is None:
+        raise ValueError(
+            "STAC item generation requires bounds: pass `metadata['bounds']` "
+            "or ensure the first band exposes `rio.bounds()`. "
+            "(REVIEW.md §3.7 stac.py:295)"
+        )
     native_bounds = _native_bounds(first_band, fallback_bounds)
     crs = None
     try:
         crs = first_band.rio.crs
     except Exception:
         crs = metadata.get("crs")
+    if crs is None:
+        crs = metadata.get("crs")
 
-    bbox, geometry_geojson = _wgs84_bounds_and_geometry(native_bounds, crs)
+    bbox, geometry_geojson, antimeridian = _wgs84_bounds_and_geometry(native_bounds, crs)
 
     # Identifiers
     satellite_id = _parse_satellite_id(
@@ -313,16 +374,52 @@ def build_stac_item_from_result(
     observation_time = metadata.get("observation_time")
     dt_str = _isoformat_utc(observation_time) if isinstance(observation_time, datetime) else None
 
-    # Item ID
+    # Item ID — sanitize against [A-Za-z0-9_.-] (REVIEW.md §3.7 stac.py:316-318).
+    # Empty / "." / shell-special / whitespace -> UUID4 fallback with a warning.
     if item_id is None:
-        item_id = output_dir.name
+        candidate = output_dir.name
+        if candidate and _ITEM_ID_PATTERN.match(candidate):
+            item_id = candidate
+        else:
+            item_id = f"siac-{uuid.uuid4()}"
+            logger.warning(
+                "output_dir.name=%r is not a valid STAC item id; "
+                "generated UUID-based fallback %r.",
+                candidate,
+                item_id,
+            )
 
-    # View geometry (from metadata if available)
+    # View geometry (from metadata if available). ``_mean_deg`` assumes the
+    # input is in radians; we sanity-check the radian range here so that a
+    # stray degrees-array doesn't silently produce out-of-spec angles.
     obs_geometry = metadata.get("geometry")
     mean_sza = _mean_deg(obs_geometry.sza) if obs_geometry is not None else None
     mean_saa = _mean_deg(obs_geometry.saa) if obs_geometry is not None else None
     mean_vza = _mean_deg(obs_geometry.vza) if obs_geometry is not None else None
     mean_vaa = _mean_deg(obs_geometry.vaa) if obs_geometry is not None else None
+
+    # REVIEW.md §3.7 stac.py:373 — SZA unit assertion. After ``_mean_deg``
+    # converts radians->degrees, an SZA mean > 90 degrees is non-physical
+    # for daytime observations and almost always indicates a degree-valued
+    # input was passed through ``np.rad2deg`` a second time. Drop the
+    # field rather than emit nonsense.
+    if mean_sza is not None and not (0.0 <= mean_sza <= 90.0):
+        logger.warning(
+            "Mean SZA %.3f deg out of [0, 90]; expected radians input. "
+            "Skipping view:sun_elevation. (REVIEW.md §3.7 stac.py:373)",
+            mean_sza,
+        )
+        mean_sza = None
+
+    # REVIEW.md §3.7 stac.py:377 — VZA range check. ``view:off_nadir`` is
+    # defined in [0, 90] degrees. Drop the field if outside.
+    if mean_vza is not None and not (0.0 <= mean_vza <= 90.0):
+        logger.warning(
+            "Mean VZA %.3f deg out of [0, 90]; skipping view:off_nadir. "
+            "(REVIEW.md §3.7 stac.py:377)",
+            mean_vza,
+        )
+        mean_vza = None
 
     # Cloud cover
     cloud_cover = _cloud_cover_percent(result.cloud_mask)
@@ -332,13 +429,25 @@ def build_stac_item_from_result(
     sensor_config = metadata.get("sensor_config")
 
     # ---- Properties ----
+    # REVIEW.md §3.7 stac.py:341 — STAC requires that when ``datetime`` is
+    # null, *both* ``start_datetime`` and ``end_datetime`` are populated.
+    # We don't have a temporal range to fall back on, so a missing or
+    # non-datetime ``observation_time`` is a hard error rather than a
+    # silently-invalid STAC item.
+    if dt_str is None:
+        raise ValueError(
+            "STAC item generation requires a datetime: "
+            "metadata['observation_time'] must be a `datetime` instance "
+            "(got %r). If only a temporal range is available, set "
+            "start_datetime/end_datetime in the result metadata first."
+            % (observation_time,)
+        )
     properties: dict[str, Any] = {
         "created": _isoformat_utc(datetime.now(timezone.utc)),
+        "datetime": dt_str,
     }
-    if dt_str is not None:
-        properties["datetime"] = dt_str
-    else:
-        properties["datetime"] = None
+    if antimeridian:
+        properties["siac:antimeridian_warning"] = True
     if platform is not None:
         properties["platform"] = platform
     if constellation is not None:
@@ -548,19 +657,47 @@ def build_stac_item_from_result(
             )
 
     # ---- Links ----
+    # REVIEW.md §3.7 stac.py:540-545 — ``href: "./"`` for ``rel: self`` is
+    # not a valid STAC self link; STAC best-practice has the self link
+    # point at the on-disk JSON file, and ``rel: root`` point at the
+    # collection/catalog root (here ``./``). If the caller publishes the
+    # item under a STAC collection, ``metadata['stac_collection_id']``
+    # may carry that id.
+    self_filename = f"{item_id}.json"
     links: list[dict[str, Any]] = [
         {
             "rel": "self",
-            "href": "./",
+            "href": self_filename,
             "type": "application/geo+json",
-        }
+        },
+        {
+            "rel": "root",
+            "href": "./",
+            "type": _JSON_MEDIA_TYPE,
+        },
     ]
+    collection_id = metadata.get("stac_collection_id")
+    if isinstance(collection_id, str) and collection_id:
+        links.append(
+            {
+                "rel": "collection",
+                "href": "./",
+                "type": _JSON_MEDIA_TYPE,
+                "title": collection_id,
+            }
+        )
     input_href = metadata.get("input_path")
     if input_href is not None:
         links.append({"rel": "derived_from", "href": str(input_href)})
 
     # ---- Extensions ----
-    extensions = [_EO_EXTENSION, _PROJECTION_EXTENSION]
+    # REVIEW.md §3.7 stac.py:551-554 — only declare the eo extension when
+    # we actually emit eo:* fields (eo:bands or eo:cloud_cover); otherwise
+    # the extension URL is a STAC spec violation.
+    extensions: list[str] = []
+    if "eo:bands" in properties or "eo:cloud_cover" in properties:
+        extensions.append(_EO_EXTENSION)
+    extensions.append(_PROJECTION_EXTENSION)
     if any(k.startswith("view:") for k in properties):
         extensions.append(_VIEW_EXTENSION)
     extensions.append(_PROCESSING_EXTENSION)

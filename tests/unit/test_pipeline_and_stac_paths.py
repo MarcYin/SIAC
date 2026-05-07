@@ -175,9 +175,12 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         sizes={"y": 2, "x": 3},
     )
     assert stac_mod._native_bounds(first_band, (1.0, 2.0, 3.0, 4.0)) == (1.0, 2.0, 3.0, 4.0)
-    bbox, geometry = stac_mod._wgs84_bounds_and_geometry((1.0, 2.0, 3.0, 4.0), None)
+    bbox, geometry, antimeridian = stac_mod._wgs84_bounds_and_geometry(
+        (1.0, 2.0, 3.0, 4.0), None
+    )
     assert bbox == [1.0, 2.0, 3.0, 4.0]
     assert geometry["coordinates"][0][0] == [1.0, 2.0]
+    assert antimeridian is False
     assert stac_mod._proj_properties(first_band, (1.0, 2.0, 3.0, 4.0)) == {
         "proj:bbox": [1.0, 2.0, 3.0, 4.0],
         "proj:shape": [2, 3],
@@ -229,12 +232,14 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
             "bounds": obs.bounds,
         },
     )
-    item = stac_mod.build_stac_item_from_result(
-        result,
-        output_dir=tmp_path,
-        artifacts={"boa.B02": tmp_path / "B02.tif"},
-    )
-    assert item["properties"]["datetime"] is None
+    # REVIEW.md §3.7 stac.py:341 — string ``observation_time`` is rejected
+    # because STAC requires a real datetime (or start/end_datetime pair).
+    with pytest.raises(ValueError, match="STAC item generation requires a datetime"):
+        stac_mod.build_stac_item_from_result(
+            result,
+            output_dir=tmp_path,
+            artifacts={"boa.B02": tmp_path / "B02.tif"},
+        )
 
     good_obs = SimpleNamespace(
         **{**obs.__dict__, "metadata": {"observation_time": datetime(2024, 1, 1)}}
@@ -258,7 +263,12 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         item_id="item-1",
     )
     assert item["id"] == "item-1"
-    assert item["links"] == [{"rel": "self", "href": "./", "type": "application/geo+json"}]
+    # Self link points at the item's JSON filename; root is "./"
+    # (REVIEW.md §3.7 stac.py:540-545).
+    assert item["links"] == [
+        {"rel": "self", "href": "item-1.json", "type": "application/geo+json"},
+        {"rel": "root", "href": "./", "type": "application/json"},
+    ]
 
 
 def test_pipeline_helper_branches_cover_fallbacks_and_preload_failures(
