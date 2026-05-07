@@ -324,8 +324,60 @@ Three of REVIEW.md's "highest-impact issues" turned out to be false positives af
 | `multigrid.py:113` ftol value | Intentional design (now documented); changing would alter retrievals — needs regression scene |
 | Solver fixed-param cost/grad | Verified false positive (wave 6) — closed |
 | `cost.py` Laplacian | Verified false positive (wave 5) — closed |
-| Layering inversion `siac.runtime ↔ siac.geo/storage` | Multi-file refactor; needs a clean commit boundary |
-| Magic constants | First pass shipped (wave 6); the long tail is mechanical work for a future PR |
+| Layering inversion `siac.runtime ↔ siac.geo/storage` | ✅ Closed in wave 7 |
+| Magic constants | First two passes shipped (waves 6 + 7); long tail is per-callsite cleanup |
+
+---
+
+## Wave 7 — Layering cycle break + constants extension (`ef115f2`)
+
+Closes the only remaining "genuinely open" architectural item from REVIEW.md.
+
+### Layering: `runtime ↔ geo` cycle broken
+
+The `runtime ↔ geo` cycle was carried by exactly one symbol: `copy_spatial_metadata_like` in `siac.runtime.models`. The function is a pure xarray/rioxarray utility — no runtime dependencies — so it was a long-standing layering accident rather than essential coupling.
+
+**Move:** new `siac/geo/_spatial.py` hosts the function. Its natural home — `siac.geo` is the spatial layer.
+
+**Backward compat:** `siac.runtime.models` keeps a single-line re-export so any caller still doing `from siac.runtime.models import copy_spatial_metadata_like` keeps working.
+
+**Updated callers** to import from `siac.geo._spatial` directly:
+- `siac.geo.resample`
+- `siac.algorithms.surface._swir_refine_resample`
+- `siac.algorithms.surface.brdf_whittaker`
+- `siac.algorithms.surface.spectral_mapping`
+
+Verified that no `siac.geo.*` module imports `siac.runtime.*` at runtime any more (only `TYPE_CHECKING`-only imports remain).
+
+### Layering: `domain → geo` is fine, just unusual
+
+REVIEW.md §1.4 also flagged `siac.domain.aoi` importing from `siac.geo`. Verified that `siac.geo.*` does NOT import from `siac.domain.*`, so this is a one-way `domain → geo` dependency, not a cycle. AOI is fundamentally a spatial type (uses rasterio + pyproj for transform_bounds, polygon-to-bounds, etc.); treating it as a spatial type rather than a pure domain type clarifies that the layering is intact. Added a docstring to `siac/domain/__init__.py` documenting this so the convention doesn't get re-flagged.
+
+### Layering: `storage → runtime` was a non-issue
+
+REVIEW.md §1.4 flagged `siac.storage.writers` and `siac.storage.stac` for importing `siac.runtime.*`. Confirmed both imports are inside `if TYPE_CHECKING:` blocks — no runtime cycle exists. No changes needed.
+
+### Constants pass 2
+
+Extended `siac.constants.BOA_VALID_MAX` to two more callsites that previously hard-coded `1.5`:
+- `algorithms/surface/kernel_model.py:146` (kernel-model prior validity mask)
+- `algorithms/surface/prior_store.py:311` (pre-built prior validity mask)
+
+Both keep `> 0` (not `> BOA_VALID_MIN = -0.05`) for the lower bound — different semantics from the corrected-BOA path: prior reflectance is non-negative by construction, so any negative value is a numerical artefact rather than acceptable correction noise. Each callsite carries a comment explaining the asymmetry.
+
+### Wave 7 test suite
+
+Unchanged: 16 failed / 1200 passed / 7 skipped / 8 errors. All remaining failures + errors are pre-existing `siac._rust unavailable` ImportErrors.
+
+### What's still open after wave 7
+
+Everything from REVIEW.md is now either fixed, verified false, or documented as an intentional design choice. The repo is in a consistent layered state with the test suite at the same green baseline as before the review (modulo the `siac._rust` toolchain issue, which is independent of this work).
+
+### Cumulative across all seven waves
+
+- 42 source files modified, plus 7 new (`REVIEW.md`, `REVIEW_FIXES.md`, `tests/regression/README.md`, `tests/unit/test_tool_imports.py`, `python/siac/geo/_crs_compat.py`, `python/siac/constants.py`, `python/siac/geo/_spatial.py`).
+- 15 commits on the working branch since `4878ef1`.
+- Test delta vs original baseline (20 failed / 1097 passed): **−4 failures / +103 passes / 0 new regressions**.
 
 ---
 
