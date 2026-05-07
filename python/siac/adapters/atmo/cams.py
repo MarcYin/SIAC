@@ -37,6 +37,7 @@ import numpy as np
 import xarray as xr
 
 from siac.adapters.auth import CredentialManager
+from siac.errors import DataNotFoundError
 from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
@@ -280,14 +281,43 @@ class CAMSProvider:
 
         for pattern in patterns:
             files = sorted(data_dir.glob(pattern))
-            if files:
-                local_candidates_found = True
-                try:
-                    if len(files) == 1:
-                        return xr.open_dataset(files[0])
-                    return xr.open_mfdataset(files, combine="by_coords")
-                except Exception as e:
-                    logger.warning(f"Failed to load CAMS: {e}")
+            if not files:
+                continue
+            # REVIEW.md §2.1, §3.3 cams.py:285-301:
+            # Narrow the swallow surface from bare ``Exception`` to the I/O-
+            # related types that xarray actually raises on a corrupt or
+            # unreadable NetCDF file (HDF5 errors come up as ``OSError``,
+            # decode failures as ``ValueError``, missing coords as
+            # ``KeyError``). ``RuntimeError`` is left in because dask
+            # combine errors surface as ``RuntimeError`` from xarray's
+            # ``combine_by_coords``. The original cause is preserved via
+            # ``exc_info=True`` so a corrupt local file is visible in logs
+            # rather than being silently skipped.
+            #
+            # ``local_candidates_found`` is only set to True after a
+            # successful open: see REVIEW.md §3.3 cams.py:298-301 where the
+            # original code set this flag during a *failed* open and thereby
+            # permanently blocked the redownload fallback for any corrupt
+            # local file.
+            try:
+                if len(files) == 1:
+                    loaded = xr.open_dataset(files[0])
+                else:
+                    loaded = xr.open_mfdataset(files, combine="by_coords")
+            except (OSError, ValueError, KeyError, RuntimeError) as exc:
+                file_paths = [str(p) for p in files]
+                logger.warning(
+                    "Failed to load CAMS files %s for pattern %s: %s; "
+                    "the file(s) may be corrupt or partially written. "
+                    "Remove or quarantine them so redownload can proceed.",
+                    file_paths,
+                    pattern,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            local_candidates_found = True
+            return loaded
 
         tif_dataset = self._load_cams_tif_group(date_str, iso_date)
         if tif_dataset is not None:
@@ -821,15 +851,35 @@ class CAMSProvider:
         storage_options: dict[str, object],
     ) -> Path | None:
         """Cache a remote CAMS URL with explicit storage options."""
+        # REVIEW.md §2.1, §3.3 cams.py:850-871:
+        # Narrow the bare ``Exception`` so unexpected programming errors
+        # (e.g. an AttributeError after a future fsspec API change) propagate
+        # instead of being silently mapped to "data unavailable". The set
+        # below covers the realistic fsspec/boto failure modes:
+        #   * ``OSError`` and subclasses (PermissionError, ConnectionError,
+        #     TimeoutError, FileNotFoundError) cover transport/auth/quota
+        #     errors that fsspec surfaces.
+        #   * ``KeyError`` shows up when storage_options are missing.
+        #   * ``ValueError`` shows up on malformed URLs and bad options.
+        # The URL is logged so the operator can see *which* prefix failed.
+        # Credentials never appear in the URL itself, but the global
+        # ``SecretRedactionFilter`` (REVIEW.md §2.7) still scrubs any token
+        # patterns out of the rendered record before it hits any handler.
         try:
             return self._cache_remote_file(url, storage_options=storage_options)
         except FileNotFoundError:
             if not missing_ok:
                 logger.warning(f"CAMS remote file not found: {url}")
             return None
-        except Exception as exc:
+        except (OSError, KeyError, ValueError) as exc:
             log = logger.debug if missing_ok else logger.warning
-            log(f"Failed to cache remote CAMS file {url}: {exc}")
+            log(
+                "Failed to cache remote CAMS file %s (%s): %s",
+                url,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             return None
 
     def _load_from_remote_url(
@@ -862,9 +912,25 @@ class CAMSProvider:
         if not self._looks_like_cdse_cams_base(base_url):
             return None
 
+        # REVIEW.md §2.1, §3.3 cams.py:850-871:
+        # Log the S3 prefix so failed remote loads aren't completely
+        # invisible. Credentials are never embedded in CDSE eodata URLs
+        # (they live in ``storage_options`` and never reach this log
+        # statement); the global ``SecretRedactionFilter`` (REVIEW.md
+        # §2.7) still scrubs any accidental matches.
+        logger.debug(
+            "CAMS S3 load: base_url=%s obs_time=%s",
+            base_url,
+            obs_time.strftime("%Y-%m-%d"),
+        )
         with self._remote_storage_options_context(base_url) as storage_options:
             selected = self._select_cdse_cams_files(base_url, obs_time, storage_options)
             if not selected:
+                logger.debug(
+                    "CAMS S3 load: no files matched at %s for %s",
+                    base_url,
+                    obs_time.strftime("%Y-%m-%d"),
+                )
                 return None
 
             datasets: list[xr.Dataset] = []
@@ -878,6 +944,12 @@ class CAMSProvider:
                     datasets.append(dataset)
 
             if not datasets:
+                logger.warning(
+                    "CAMS S3 load: matched %d file(s) at %s but none could be opened; "
+                    "see preceding warnings for the underlying cause.",
+                    len(selected),
+                    base_url,
+                )
                 return None
             return xr.merge(datasets, compat="override")
 
@@ -1061,6 +1133,15 @@ class CAMSProvider:
         cds_auth = self._auth.cds() if self._auth is not None else CredentialManager().cds()
         client_kwargs = cds_auth.client_kwargs()
 
+        # REVIEW.md §2.1, §3.3 cams.py:1058-1063:
+        # Narrow the bare ``Exception`` so authentication failures, quota
+        # exhaustion, and other operationally meaningful errors don't masquerade
+        # as "data unavailable". cdsapi raises ``RuntimeError`` for API errors
+        # (HTTP 4xx/5xx, 'Reason: not authorized', etc.) and ``OSError`` for
+        # network/transport problems via ``requests``. Anything outside that
+        # set is a programming bug we want to see propagate. The original
+        # cause is preserved both via ``exc_info=True`` and the chained
+        # ``raise ... from exc`` so the operator can see auth/quota detail.
         try:
             if not client_kwargs:
                 logger.info(
@@ -1069,9 +1150,16 @@ class CAMSProvider:
             cdsapi.Client(**client_kwargs).retrieve(self._CDS_DATASET, request).download(
                 str(output_path)
             )
-        except Exception as e:
-            logger.warning(f"Failed to download CAMS data for {obs_time:%Y-%m-%d}: {e}")
-            return None
+        except (OSError, RuntimeError) as exc:
+            logger.warning(
+                "Failed to download CAMS data for %s via cdsapi: %s",
+                obs_time.strftime("%Y-%m-%d"),
+                exc,
+                exc_info=True,
+            )
+            raise DataNotFoundError(
+                f"Failed to download CAMS data for {obs_time:%Y-%m-%d} via cdsapi: {exc}"
+            ) from exc
         return output_path
 
     @staticmethod

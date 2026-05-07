@@ -512,7 +512,14 @@ def test_cams_remote_missing_can_fallback_to_download(
         cache_dir=tmp_path / "cache",
     )
 
-    def _missing_cache(_url, _storage_options=None):
+    # REVIEW.md §2.1, §3.3 cams.py:850-871: ``_cache_remote_file`` is
+    # called with ``storage_options=...`` (not ``_storage_options``) — use
+    # the matching kwarg name so the fixture signature is callable. The
+    # narrower exception tuple in the post-fix code does NOT catch
+    # ``TypeError`` from kwarg mismatches; that is a programming bug the
+    # narrower tuple is designed to surface.
+    def _missing_cache(_url, storage_options=None):
+        del storage_options
         raise FileNotFoundError("missing")
 
     monkeypatch.setattr(remote, "_cache_remote_file", _missing_cache)

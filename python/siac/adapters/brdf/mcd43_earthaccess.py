@@ -69,6 +69,26 @@ except (ImportError, AttributeError):  # pragma: no cover
     _HDF5Error = OSError
 
 # Combined tuple used in except clauses throughout this module.
+#
+# REVIEW.md §2.1, §3.3 mcd43_earthaccess.py:62-69:
+# This tuple is intentionally wide because it covers two distinct concerns:
+#   (a) genuine I/O failures from HDF4/HDF5 reading (``OSError`` and the
+#       library-specific ``_HDF4Error``/``_HDF5Error`` types), and
+#   (b) downstream parsing/scaling failures (``KeyError`` for missing
+#       dataset names, ``ValueError`` for bad scale-factor metadata,
+#       ``RuntimeError`` for GDAL warp/translate failures, ``TypeError``
+#       for shape mismatches in ``apply_scale_and_mask``).
+#
+# Each consumer of this tuple must call ``logger.warning(..., exc_info=True)``
+# so that a typo in a dataset name doesn't silently downgrade to "use
+# defaults". Use ``_TRANSIENT_DATA_READ_ERRORS`` instead for blocks where
+# only category (a) is expected — that lets programming bugs in category (b)
+# propagate.
+_TRANSIENT_DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    _HDF4Error,
+    _HDF5Error,
+)
 _DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     KeyError,
@@ -261,10 +281,17 @@ class _EarthAccessBRDFProvider:
                         target_resolution=target_resolution,
                     )
                 except _DATA_READ_ERRORS as exc:  # pragma: no cover - external/system dependent
+                    # REVIEW.md §2.1, §3.3: keep the wider tuple here — this
+                    # block wraps a deep call tree (HDF4/HDF5 read, GDAL warp,
+                    # apply_scale_and_mask) where category (b) failures still
+                    # surface. ``exc_info=True`` preserves the original cause
+                    # so programming bugs (e.g. typo'd dataset name) appear in
+                    # logs instead of silently downgrading to defaults.
                     logger.warning(
                         "%s BRDF granule parsing failed; using defaults (%s)",
                         self._source_name,
                         exc,
+                        exc_info=True,
                     )
 
         return self._default_weights(
@@ -328,10 +355,15 @@ class _EarthAccessBRDFProvider:
                         time_axis=time_axis,
                     )
                 except _DATA_READ_ERRORS as exc:  # pragma: no cover - external/system dependent
+                    # REVIEW.md §2.1, §3.3: keep the wider tuple here — this
+                    # block wraps the temporal-batch read pipeline.
+                    # ``exc_info=True`` preserves the original cause so
+                    # programming bugs at any layer surface in logs.
                     logger.warning(
                         "%s temporal BRDF granule parsing failed; using defaults (%s)",
                         self._source_name,
                         exc,
+                        exc_info=True,
                     )
 
         return self._default_temporal_weights(
@@ -477,10 +509,15 @@ class _EarthAccessBRDFProvider:
                         )
                     return outputs
                 except _DATA_READ_ERRORS as exc:  # pragma: no cover - external/system dependent
+                    # REVIEW.md §2.1, §3.3: keep the wider tuple here.
+                    # ``exc_info=True`` ensures programming bugs in the
+                    # batched temporal pipeline surface in logs instead of
+                    # silently degrading to NaN weights.
                     logger.warning(
                         "%s batched temporal BRDF granule parsing failed; preserving NaN weights (%s)",
                         self._source_name,
                         exc,
+                        exc_info=True,
                     )
                     return [
                         self._nan_temporal_weights(
@@ -815,9 +852,17 @@ class _EarthAccessBRDFProvider:
         )
         params, unc = self._unpack_payload_stack(payload, requested=requested)
         if not np.isfinite(params.values).any():
+            # REVIEW.md §2.1, §3.3 mcd43_earthaccess.py:817-823:
+            # Include the NASA short_name so operators triaging multi-product
+            # runs can tell which collection produced the empty payload.
+            # ``_source_name`` is the family label (e.g. "MCD43"); the
+            # ``short_name`` is the specific NASA product+version (e.g.
+            # "MCD43A1.061") — both are useful in the warning.
             logger.warning(
-                "%s BRDF payload contained no finite values for bounds=%s crs=%s; preserving NaN weights",
+                "%s: BRDF payload (short_name=%s) contained no finite values "
+                "for bounds=%s crs=%s; preserving NaN weights",
                 self._source_name,
+                self.short_name,
                 bounds,
                 crs,
             )
@@ -872,11 +917,21 @@ class _EarthAccessBRDFProvider:
                 resolution_name="target_resolution",
             )
         except _DATA_READ_ERRORS as exc:
+            # REVIEW.md §2.1, §3.3 mcd43_earthaccess.py:874-881:
+            # The failure can apply to *any* path in the list (resolution,
+            # template build, GDAL subdataset detection), so log every path
+            # that was considered rather than only ``paths[0]``. ``exc_info``
+            # preserves the underlying cause when an operator widens the log
+            # level for diagnostics.
+            considered = [str(getattr(p, "name", p)) for p in paths]
             logger.debug(
-                "%s could not build source-aligned BRDF target template from %s; using AOI grid (%s)",
-                getattr(paths[0], "name", paths[0]),
+                "%s could not build source-aligned BRDF target template from "
+                "candidates %s for dataset %s; using AOI grid (%s)",
+                getattr(paths[0], "name", paths[0]) if paths else "<no paths>",
+                considered,
                 requested[0][1].parameter_dataset,
                 exc,
+                exc_info=True,
             )
             return build_target_template(bounds, crs, target_resolution), float(target_resolution)
 

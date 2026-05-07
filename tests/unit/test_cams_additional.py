@@ -555,7 +555,14 @@ def test_select_cdse_files_tif_dataset_and_download_helpers(
         file_provider, "_import_cdsapi", lambda: SimpleNamespace(Client=unreachable_client)
     )
     monkeypatch.setattr(file_provider, "_auth", CredentialManager())
-    assert file_provider._download_cams_file(datetime(2024, 1, 1)) is None
+    # REVIEW.md §2.1, §3.3 cams.py:1058-1063: cdsapi failures are now
+    # raised as ``DataNotFoundError`` so auth/quota failures don't
+    # silently masquerade as "data unavailable". The ``RuntimeError``
+    # raised by the fake client is wrapped and re-raised.
+    from siac.errors import DataNotFoundError
+
+    with pytest.raises(DataNotFoundError, match="should not be called"):
+        file_provider._download_cams_file(datetime(2024, 1, 1))
 
     auth = CredentialManager()
     auth.set_credentials("cds", key="api-key")

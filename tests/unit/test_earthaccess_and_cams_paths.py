@@ -238,6 +238,9 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
     assert out.name == "CAMS_2024-01-02.nc"
 
     # Failure branch in retrieve/download.
+    # REVIEW.md §2.1, §3.3 cams.py:1058-1063: cdsapi failures are now
+    # raised as ``DataNotFoundError`` so auth/quota failures don't
+    # silently masquerade as "data unavailable".
     class _BoomClient:
         def __init__(self, **kwargs):
             pass
@@ -246,7 +249,10 @@ def test_cams_download_and_explicit_path_branches(monkeypatch, tmp_path: Path):
             raise RuntimeError("boom")
 
     monkeypatch.setitem(sys.modules, "cdsapi", SimpleNamespace(Client=_BoomClient))
-    assert p_auth._download_cams_file(datetime(2024, 1, 3)) is None
+    from siac.errors import DataNotFoundError
+
+    with pytest.raises(DataNotFoundError, match="boom"):
+        p_auth._download_cams_file(datetime(2024, 1, 3))
 
 
 def test_cams_download_missing_credentials_uses_cdsapi_defaults(monkeypatch, tmp_path: Path):
