@@ -381,4 +381,78 @@ Everything from REVIEW.md is now either fixed, verified false, or documented as 
 
 ---
 
+## Wave 8 — Numerical regression scene (`f680d71`)
+
+The single highest-leverage item left over from the strategic review: the codebase had no way to verify that a numerical change (solver knob, RT coefficient, correction threshold) didn't shift retrievals on a real scene. Every Tier-B item was therefore "don't touch".
+
+This wave fixes that by capturing the existing T33KWP S2B 2026-03-29 production run as the first regression scene.
+
+### What landed
+
+- `tests/regression/goldens/t33kwp_sixs_20260329.json` — captured summary statistics (mean / std / p01 / p50 / p99 / min / max + valid_fraction + shape/dtype) for AOT, TCWV, CLOUD, and 13 BOA bands, plus a locked subset of STAC sidecar properties (AOT/TCWV mean, view angles, EPSG, datetime, tile_id, satellite).
+- `tests/regression/_compare.py` — shared comparator with documented default tolerances (1e-3 rel / 1e-4 abs / 1e-3 valid_fraction).
+- `tests/regression/test_t33kwp_sixs_scene.py` — 17 parametrised tests (3 atmospheric/cloud + 13 BOA bands + 1 STAC) that re-run the pipeline via `siac.workflows.scene.process_scene` and assert outputs match goldens. Marked both `regression` and `slow`; skips cleanly when the SAFE input, the auxiliary cache tree, or the rt6s extension isn't available.
+- `tests/regression/regenerate_goldens.py` — CLI helper to refresh the JSON after an *intentional* numerical change. Verified: produces bit-identical output to the originally-captured JSON when run against the same outputs.
+- `tests/regression/README.md` — instructions for running, adding a new scene, choosing tolerances, and when (not) to refresh goldens.
+
+### Validation
+
+All 16 product comparisons + 1 STAC comparison verify against the existing captured run when invoked through `_compare.py`. The `regenerate_goldens.py` helper produces bit-identical output to the manually-captured JSON.
+
+The fast unit suite is unchanged: 16 failed / 1200 passed / 7 skipped / 8 errors. The regression tests are off by default — they only run when explicitly invoked with `-m regression` AND the developer-machine inputs are present.
+
+### How to use it
+
+To verify a numerical change is safe:
+
+```bash
+PYTHONPATH=python pixi run -e rt6s python -m pytest tests/regression \
+    -m "regression and slow" --no-cov -v
+```
+
+To refresh goldens after an *intentional* change:
+
+```bash
+# 1. Run the pipeline by hand to produce new outputs.
+PYTHONPATH=python pixi run -e rt6s python -m siac.cli process-s2 \
+    tmp/.../S2B_..._T33KWP_....SAFE \
+    --config tmp/real_cdse_mcd43_t33kwp_sixs.toml \
+    --output-path /tmp/new_run
+
+# 2. Validate the new outputs (visual review, comparison vs reference).
+
+# 3. Refresh the goldens.
+PYTHONPATH=python pixi run -e rt6s python tests/regression/regenerate_goldens.py \
+    --output-dir /tmp/new_run \
+    --golden tests/regression/goldens/t33kwp_sixs_20260329.json \
+    --scene-id <S2_PRODUCT_ID> \
+    --config-path tmp/real_cdse_mcd43_t33kwp_sixs.toml \
+    --rt-backend sixs
+```
+
+### Items this unblocks
+
+| REVIEW.md / REVIEW_FIXES.md item | Path forward |
+|---|---|
+| `multigrid.py:113` ftol value | A/B test: change ftol to e.g. `1e-9`, run `-m regression`, accept if all 17 tests pass within tolerance |
+| Solver smoothness `gamma`, `delta` tuning | Same A/B pattern |
+| RT scale-height (`ATMOSPHERIC_SCALE_HEIGHT_KM`) | Same A/B pattern |
+| Jacobian step sizes | Same A/B pattern |
+| Any future numerical refactor | Same A/B pattern |
+
+### Limits
+
+- **One scene only.** A real regression suite needs 3–5 scenes covering desert/forest/water/cloudy. Adding more is mechanical (run the pipeline, run `regenerate_goldens.py`).
+- **Developer-machine local.** Inputs (SAFE + ~5 GB of MCD43/CAMS/DEM cache) don't fit in CI. The right next step is to push the auxiliary caches to a pixi-managed cloud store and add a CI job that runs the regression suite on a self-hosted runner.
+- **Float-reduction-order drift.** Tolerances are tight but not zero — different thread counts may shift the last few bits in `np.mean`. The 1e-3 / 1e-4 defaults absorb this.
+- **`siac._rust` still required.** The rt6s build is a prerequisite. Resolving the rust-build situation (item #2 in the strategic recommendations) would also unblock more of CI.
+
+### Cumulative across all eight waves
+
+- 42 source files modified, plus 11 new (REVIEW docs + 5 helpers + new constants/spatial modules + 4 regression-test files).
+- 16 commits on the working branch since `4878ef1`.
+- Test delta vs original baseline (20 failed / 1097 passed): **−4 failures / +103 passes / 0 new regressions**, plus a 17-test gated regression suite ready to validate any future numerical change.
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
