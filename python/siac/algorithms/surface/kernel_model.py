@@ -191,8 +191,14 @@ class KernelModelDeriver:
                 k_vol.interp(y=target_y, x=target_x, method="linear"),
                 k_geo.interp(y=target_y, x=target_x, method="linear"),
             )
-        except Exception:
-            # Fallback to shape-only resize when coordinates are not monotonic/aligned.
+        except (ValueError, KeyError, RuntimeError):
+            # Narrowed from ``except Exception`` (REVIEW.md §2.1, §3.5
+            # kernel_model.py:189). xarray.interp raises ValueError for
+            # non-monotonic / unaligned coords, KeyError when a dim is
+            # missing, and rasterio-backed reproject can raise
+            # RuntimeError on shape mismatch — those are the "fallback
+            # to shape-only resize" cases. Other exception classes
+            # (e.g. MemoryError) should propagate.
             target_shape = (int(ref.sizes["y"]), int(ref.sizes["x"]))
             return (
                 self._resize_kernel_grid(k_vol, target_shape, target_y, target_x),

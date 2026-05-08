@@ -162,7 +162,12 @@ class ZarrLUTBackend:
                     consolidated=False,
                     zarr_format=3,
                 )
-            except Exception as e:
+            except (KeyError, ValueError, RuntimeError, OSError) as e:
+                # Narrowed from ``except Exception`` (REVIEW.md §2.1):
+                # zarr raises KeyError for missing v3 entries, ValueError
+                # for malformed metadata, OSError for I/O issues, and
+                # xarray wraps some of these in RuntimeError. Other
+                # classes (MemoryError, KeyboardInterrupt) propagate.
                 logger.warning(
                     "Failed to open LUT as zarr v3 (%s); retrying with zarr v2 paths",
                     e,
@@ -177,7 +182,8 @@ class ZarrLUTBackend:
         if self._lut is None:
             try:
                 self._lut = xr.open_zarr(store=store, consolidated=True)
-            except Exception as e:
+            except (KeyError, ValueError, RuntimeError, OSError) as e:
+                # Same narrowing rationale as the zarr-v3 path above.
                 logger.warning(
                     "Failed to open LUT with consolidated metadata (%s); retrying with consolidated=False",
                     e,
@@ -204,7 +210,13 @@ class ZarrLUTBackend:
             return (Path(store) / key).exists()
         try:
             return key in store
-        except Exception:
+        except (TypeError, KeyError, OSError, RuntimeError, ValueError):
+            # Defensive best-effort check (REVIEW.md §2.1): a custom Mapping
+            # with no ``__contains__`` raises TypeError, remote stores can
+            # raise OSError on a transient connection drop, fsspec wrappers
+            # may surface RuntimeError, and a misconfigured zarr v3 store
+            # raises ValueError on probe. ``MemoryError``/``KeyboardInterrupt``
+            # still propagate.
             return False
 
     def compute_coefficients(
@@ -1124,6 +1136,10 @@ class ZarrLUTBackend:
             try:
                 return fn()
             except Exception as exc:
+                # Intentionally broad: ``_is_transient_lut_io_error`` does
+                # its own classification by walking ``__cause__`` /
+                # ``__context__`` and matching tokens. Anything that's not
+                # transient is re-raised unchanged. (REVIEW.md §2.1)
                 if attempt >= max_attempts or not self._is_transient_lut_io_error(exc):
                     raise
                 logger.warning(

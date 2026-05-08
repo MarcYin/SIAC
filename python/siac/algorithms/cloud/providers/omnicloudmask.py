@@ -24,7 +24,12 @@ class OmniCloudMaskProvider:
     def _default_predictor() -> Callable[[np.ndarray], np.ndarray]:
         try:
             omnicloudmask = import_module("omnicloudmask")
-        except Exception as exc:
+        except ImportError as exc:
+            # Narrowed from ``except Exception`` (REVIEW.md §2.1):
+            # only swallow import-time failures here. Other exception
+            # classes (a partial install raising AttributeError during
+            # module init, for example) should propagate so the user can
+            # see the real cause.
             raise ImportError(
                 "omnicloudmask is required for SIAC cloud masking. "
                 "Install the 'omnicloudmask' package."

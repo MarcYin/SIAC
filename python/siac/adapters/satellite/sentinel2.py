@@ -730,14 +730,19 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             mean_vza = float(np.mean(zenith_values))
             mean_vaa = float(np.mean(azimuth_values))
         else:
-            # Fallback to magic defaults; warn so the operator notices the XML
-            # didn't carry the angles we needed (REVIEW.md §3.3 sentinel2.py).
+            # Fallback to defaults from ``siac.constants``; warn so the
+            # operator notices the XML didn't carry the angles we needed
+            # (REVIEW.md §3.3 sentinel2.py).
+            from siac.constants import DEFAULT_S2_VAA_DEG, DEFAULT_S2_VZA_DEG
+
             logger.warning(
                 "Mean_Viewing_Incidence_Angle entries not found in MTD_TL.xml; "
-                "falling back to default VZA=5.0deg, VAA=100.0deg."
+                "falling back to default VZA=%.1fdeg, VAA=%.1fdeg.",
+                DEFAULT_S2_VZA_DEG,
+                DEFAULT_S2_VAA_DEG,
             )
-            mean_vza = 5.0
-            mean_vaa = 100.0
+            mean_vza = DEFAULT_S2_VZA_DEG
+            mean_vaa = DEFAULT_S2_VAA_DEG
 
         # Create uniform grids (simplified - full implementation would parse per-detector grids)
         zenith_grid = np.full((23, 23), mean_vza)
@@ -750,13 +755,20 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     def _parse_angle_grid(self, elem: ET.Element, ns: str) -> np.ndarray:
         """Parse angle values from grid element."""
+        from siac.constants import DEFAULT_S2_ANGLE_GRID_DEG
+
         values_list = elem.find(f"{ns}Values_List")
         if values_list is None:
             values_list = elem.find("Values_List")
 
         if values_list is None:
-            # Return default grid
-            return np.full((23, 23), 30.0)
+            # Return default grid (REVIEW.md §3.3 sentinel2.py:755).
+            logger.warning(
+                "Sentinel-2 angle grid Values_List missing; "
+                "falling back to uniform %.1fdeg grid.",
+                DEFAULT_S2_ANGLE_GRID_DEG,
+            )
+            return np.full((23, 23), DEFAULT_S2_ANGLE_GRID_DEG)
 
         rows: list[list[float]] = []
         for values in values_list.findall(f"{ns}VALUES"):
@@ -767,7 +779,12 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 rows.append(row)
 
         if not rows:
-            return np.full((23, 23), 30.0)
+            logger.warning(
+                "Sentinel-2 angle grid Values_List empty; "
+                "falling back to uniform %.1fdeg grid.",
+                DEFAULT_S2_ANGLE_GRID_DEG,
+            )
+            return np.full((23, 23), DEFAULT_S2_ANGLE_GRID_DEG)
 
         return cast("np.ndarray[Any, np.dtype[np.float32]]", np.asarray(rows, dtype=np.float32))
 

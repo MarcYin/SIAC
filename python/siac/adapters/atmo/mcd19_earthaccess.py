@@ -105,11 +105,15 @@ class _EarthAccessMAIACAODProvider:
                         resolution=resolution,
                         short_name=used_short_name,
                     )
-                except Exception as exc:  # pragma: no cover - external/system dependent
+                except (OSError, ValueError, KeyError, RuntimeError) as exc:
+                    # Narrowed (REVIEW.md §2.1, §3.3 mcd19_earthaccess.py:108).
+                    # OSError covers HDF/NetCDF I/O; ValueError/KeyError cover
+                    # malformed metadata; RuntimeError covers gdal/rasterio
+                    # wrapping. exc_info=True so the cause is visible.
                     logger.warning(
-                        "%s granule parsing failed; using defaults (%s)",
+                        "%s granule parsing failed; using defaults",
                         self._source_name,
-                        exc,
+                        exc_info=True,
                     )
 
         return self._default_prior(bounds, resolution)
@@ -245,7 +249,18 @@ class _EarthAccessMAIACAODProvider:
                     reduce_orbit_stack(tcwv),
                     granule_path=path,
                 )
-            except Exception:
+            except (OSError, KeyError, ValueError, RuntimeError):
+                # Narrowed (REVIEW.md §2.1): OSError covers HDF I/O,
+                # KeyError missing TCWV dataset, ValueError malformed
+                # scale/offset, RuntimeError gdal wrappers. Log so an
+                # operator notices missing TCWV.
+                logger.warning(
+                    "%s TCWV dataset %r unavailable in granule %s; using AOD-only prior",
+                    self._source_name,
+                    self.tcwv_dataset,
+                    path,
+                    exc_info=True,
+                )
                 tcwv_da = None
 
         return {

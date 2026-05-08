@@ -678,8 +678,16 @@ def test_cams_extract_and_tif_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     nc = tmp_path / "cams_bad.nc"
     nc.write_text("x")
+    # The mock must accept **kwargs because the production code calls
+    # ``xr.open_dataset(path, decode_timedelta=True)``. Previously the
+    # bare ``except Exception`` in cams.py absorbed the TypeError from
+    # the kwarg mismatch; now that the catch is narrowed (REVIEW.md §2.1)
+    # the mock has to actually let the call through and raise the
+    # intended RuntimeError instead.
     monkeypatch.setattr(
-        xr, "open_dataset", lambda _path: (_ for _ in ()).throw(RuntimeError("bad nc"))
+        xr,
+        "open_dataset",
+        lambda _path, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad nc")),
     )
     assert p._load_from_explicit_path(nc) is None
 

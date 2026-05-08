@@ -448,7 +448,10 @@ def query_surface_prior_from_monthly_database(
     _tree_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         _tree_future = _tree_pool.submit(_prewarm_tree, database)
-    except Exception:
+    except RuntimeError:
+        # Narrowed (REVIEW.md §2.1): ThreadPoolExecutor.submit raises
+        # RuntimeError if the pool is already shut down. We re-raise so
+        # the caller sees the failure; the pool is shut down cleanly.
         _tree_pool.shutdown(wait=False)
         raise
 

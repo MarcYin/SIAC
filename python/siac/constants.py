@@ -72,3 +72,43 @@ BOA_VALID_MIN: Final[float] = -0.05
 #: numerical blow-ups in the correction. Real BOA never exceeds 1.0 except
 #: in very rare specular cases (active fires, glints).
 BOA_VALID_MAX: Final[float] = 1.5
+
+# ---------------------------------------------------------------------------
+# Surface-prior fallbacks
+# ---------------------------------------------------------------------------
+
+#: Default reflectance to use for pixels with no temporal BRDF data.
+#:
+#: Conservative mid-range value used by ``brdf_whittaker`` when a pixel
+#: has no usable observations across the temporal window. Picked to lie
+#: between dark soil (~0.05) and snow (~0.8) so the prior pulls weakly
+#: in either direction. The companion uncertainty
+#: ``DEFAULT_NO_DATA_BOA_UNC`` is large enough that the data term in the
+#: cost function dominates whenever real observations are present.
+DEFAULT_NO_DATA_BOA: Final[float] = 0.20
+
+#: Default reflectance uncertainty for pixels with no temporal BRDF data.
+#:
+#: Wide enough (1-σ ≈ 8% reflectance) that the prior contribution to
+#: the cost is small whenever real observations exist; tight enough
+#: that the prior still acts as a regulariser for fully-cloudy pixels.
+DEFAULT_NO_DATA_BOA_UNC: Final[float] = 0.08
+
+# ---------------------------------------------------------------------------
+# Sentinel-2 angle parsing fallbacks
+# ---------------------------------------------------------------------------
+
+#: Fallback Sentinel-2 view zenith angle (degrees) when MTD_TL.xml is missing
+#: ``Mean_Viewing_Incidence_Angle``. Roughly the median across-swath VZA for
+#: an MSI scene; the warning emitted alongside this value tells operators
+#: their angle parsing fell through.
+DEFAULT_S2_VZA_DEG: Final[float] = 5.0
+
+#: Fallback Sentinel-2 view azimuth angle (degrees) — see
+#: ``DEFAULT_S2_VZA_DEG``. ~100° is a plausible descending-orbit value.
+DEFAULT_S2_VAA_DEG: Final[float] = 100.0
+
+#: Fallback Sentinel-2 angle-grid value for sun_zenith / sun_azimuth when
+#: the per-detector ``Values_List`` is empty. 30° is a defensive
+#: mid-latitude / mid-day estimate.
+DEFAULT_S2_ANGLE_GRID_DEG: Final[float] = 30.0

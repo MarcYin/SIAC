@@ -399,7 +399,10 @@ def _write_distance_metric_diagnostics(
         try:
             crs = metric.rio.crs
             transform = metric.rio.transform(recalc=True)
-        except Exception:
+        except (AttributeError, ValueError, RuntimeError):
+            # rioxarray raises one of these when spatial metadata is
+            # missing or coords aren't strictly monotonic. Other
+            # exception classes propagate. (REVIEW.md §2.1)
             crs = None
             transform = None
         if crs is None or transform is None:

@@ -32,7 +32,11 @@ def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> x
     try:
         x_dim = reference.rio.x_dim
         y_dim = reference.rio.y_dim
-    except Exception:
+    except (AttributeError, KeyError, ValueError):
+        # rioxarray raises one of these when the array hasn't had
+        # ``set_spatial_dims`` called (no rio metadata yet) — fall back
+        # to a name-based heuristic. Other exception classes propagate
+        # so genuine bugs aren't masked. (REVIEW.md §2.1)
         if "x" in reference.dims and "y" in reference.dims:
             x_dim, y_dim = "x", "y"
         elif "longitude" in reference.dims and "latitude" in reference.dims:
@@ -58,15 +62,21 @@ def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> x
         and out.sizes[y_dim] == reference.sizes[y_dim]
     )
     if spatial_sizes_match:
-        with suppress(Exception):
+        # rio.set_spatial_dims raises rioxarray's MissingSpatialDimensionError
+        # (a ValueError subclass) when the dim isn't found. The narrowed
+        # tuple matches what rioxarray actually raises (REVIEW.md §2.1).
+        with suppress(ValueError, KeyError, AttributeError):
             out = out.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
 
     try:
         ref_crs = reference.rio.crs
-    except Exception:
+    except (AttributeError, ValueError):
+        # Same rationale as the dim-detection path above.
         ref_crs = None
     if ref_crs is not None and spatial_sizes_match:
         out = out.rio.write_crs(ref_crs)
-        with suppress(Exception):
+        # transform(recalc=True) may raise if coords aren't strictly
+        # monotonic; that's expected for non-georeferenced overlays.
+        with suppress(ValueError, RuntimeError):
             out = out.rio.write_transform(reference.rio.transform(recalc=True))
     return out

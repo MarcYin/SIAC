@@ -366,7 +366,11 @@ class CAMSProvider:
             ):
                 try:
                     aligned = aligned.interp({dim: reference.coords[dim]}, method="linear")
-                except Exception:
+                except (ValueError, NotImplementedError):
+                    # Narrowed (REVIEW.md §2.1): xarray.interp raises
+                    # ValueError for non-monotonic / size-1 axes and
+                    # NotImplementedError for some integer-coord cases
+                    # — the nearest fallback handles both.
                     aligned = aligned.interp({dim: reference.coords[dim]}, method="nearest")
         return aligned
 
@@ -747,9 +751,17 @@ class CAMSProvider:
         if suffix in self._NETCDF_SUFFIXES:
             try:
                 return xr.open_dataset(path, decode_timedelta=True)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError):
+                # Narrowed (REVIEW.md §2.1): netCDF4/h5netcdf raise OSError
+                # for I/O issues and ValueError for malformed datasets;
+                # xarray wraps some as RuntimeError. Other exception
+                # classes propagate.
                 origin = source_name or str(path)
-                logger.warning(f"Failed to open CAMS NetCDF file {origin}: {e}")
+                logger.warning(
+                    "Failed to open CAMS NetCDF file %s; falling back",
+                    origin,
+                    exc_info=True,
+                )
                 return None
 
         if suffix in self._TIFF_SUFFIXES:

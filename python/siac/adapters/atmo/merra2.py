@@ -98,8 +98,17 @@ class MERRA2Provider:
             )
             if not granules:
                 logger.warning("No MERRA-2 granules found via Earthaccess for requested AOI/time")
-        except Exception as exc:  # pragma: no cover - external/system dependent
-            logger.warning("MERRA-2 Earthaccess probe failed; using defaults (%s)", exc)
+        except (OSError, RuntimeError, ValueError, AttributeError) as exc:
+            # Probe is best-effort (REVIEW.md §2.1, §3.3 merra2.py:101).
+            # Earthaccess raises OSError for network issues, RuntimeError
+            # for auth, ValueError for malformed CMR responses, and
+            # AttributeError when the installed version drops a method
+            # we used to call. Fall back to climatology in all cases.
+            logger.warning(
+                "MERRA-2 Earthaccess probe failed; using climatological defaults",
+                exc_info=True,
+            )
+            del exc  # exc_info covers it
 
     @staticmethod
     def _grid(

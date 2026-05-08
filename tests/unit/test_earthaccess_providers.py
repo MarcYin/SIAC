@@ -161,7 +161,11 @@ def test_merra2_provider_probe_failure_warns_and_returns_defaults(caplog: pytest
         )
 
     assert float(state.aot.mean()) == pytest.approx(0.15)
-    assert "MERRA-2 Earthaccess probe failed; using defaults" in caplog.text
+    # Wave 9 narrowed the bare except in merra2.py and reworded the log
+    # message to say "climatological defaults"; assertion updated to
+    # match (REVIEW.md §2.1).
+    assert "MERRA-2 Earthaccess probe failed" in caplog.text
+    assert "climatological defaults" in caplog.text
 
 
 def test_merra2_provider_rejects_non_positive_resolution() -> None:

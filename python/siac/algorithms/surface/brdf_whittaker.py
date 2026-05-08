@@ -117,8 +117,12 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             target_index,
         )
 
-        prior = np.where(has_data, prior, 0.20).astype(np.float32)
-        prior_unc = np.where(has_data, prior_unc, 0.08).astype(np.float32)
+        # Fallback values for no-data pixels — see ``siac.constants`` for
+        # rationale. Previously hard-coded ``0.20`` / ``0.08`` (REVIEW.md §3.5).
+        from siac.constants import DEFAULT_NO_DATA_BOA, DEFAULT_NO_DATA_BOA_UNC
+
+        prior = np.where(has_data, prior, DEFAULT_NO_DATA_BOA).astype(np.float32)
+        prior_unc = np.where(has_data, prior_unc, DEFAULT_NO_DATA_BOA_UNC).astype(np.float32)
 
         coords = {
             "band": brdf_weights.f0.coords["band"],
