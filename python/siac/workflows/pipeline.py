@@ -683,7 +683,75 @@ def run_pipeline(
     output_path: Path | str | None = None,
     output_writer: Any | None = None,
 ) -> CorrectionResult:
-    """Orchestrate module execution with a selectable execution backend."""
+    """Run the SIAC pipeline with caller-supplied stage callables.
+
+    This is the **advanced public extension point** for SIAC. Most users
+    should call :func:`siac.api.process_sentinel2`, :func:`siac.api.siac_process`,
+    or :class:`siac.api.SIAC` instead — those high-level entry points
+    construct sensible defaults for every stage callable from the
+    configuration object. Reach for ``run_pipeline`` only when you need to
+    inject a custom RT backend, a non-standard surface prior, or otherwise
+    swap a single stage of the M1-M6 pipeline without re-implementing
+    the rest.
+
+    REVIEW.md §3.6 originally flagged this function as having a 10+
+    parameter signature with private-typed callables and no documented
+    contract; it's now ratified as the canonical extension point. The
+    callable types
+    (:type:`PreprocessorFn`, :type:`AtmoPriorFn`,
+    :type:`SurfacePriorFn`, :type:`GridAssemblerFn`, :type:`SolverFn`,
+    :type:`CorrectorFn`) are exported from this module and form the
+    public extension contract.
+
+    Stages run in this order:
+
+    1. ``preprocessor(input_path, aoi, config)``
+       → :class:`siac.runtime.ObservationBundle` (M1)
+    2. ``atmo_provider(observation, config)``
+       → :class:`siac.runtime.AtmosphericState` (M2)
+    3. ``surface_prior_provider(observation, atmo, rt_model, resolution)``
+       → :class:`siac.runtime.SurfacePrior` (M3)
+    4. ``grid_assembler(observation, atmo, surface_prior, ...)``
+       → :class:`siac.runtime.SolverInputBundle` (M4)
+    5. ``solver(inputs, config)``
+       → :class:`siac.runtime.SolvedAtmosphere` (M5)
+    6. ``corrector(observation, solved_atmo, rt_model, ...)``
+       → :class:`siac.runtime.CorrectionResult` (M6)
+
+    Args:
+        input_path: SAFE directory for the scene to process.
+        aoi: Optional clipping AOI; ``None`` means full-scene.
+        config: A :class:`siac.config.SIACConfig` (or compatible) object.
+        preprocessor: Stage M1 callable.
+        atmo_provider: Stage M2 callable.
+        surface_prior_provider: Stage M3 callable.
+        grid_assembler: Stage M4 callable.
+        solver: Stage M5 callable.
+        corrector: Stage M6 callable.
+        rt_model: RT model passed to M3/M5/M6 (typically built via
+            :func:`siac.adapters.rt.build_rt_model`).
+        max_workers: Optional override of ``config.runtime.execution.max_workers``.
+        execution: Optional pre-resolved :class:`PipelineExecutionSettings`
+            (skips re-resolution from config).
+        observer: Optional :class:`ExecutionObserver` to receive
+            stage-by-stage progress; one is constructed if a summary
+            report path or progress display is configured.
+        output_path: Optional directory where the configured output
+            writer will materialise the BOA / AOT / TCWV artifacts.
+        output_writer: Optional callable matching the
+            :class:`OutputWriter` protocol; built from config when
+            ``None``.
+
+    Returns:
+        :class:`siac.runtime.CorrectionResult` carrying BOA reflectance,
+        atmospheric state, cloud mask, and any QA layers the corrector
+        emitted.
+
+    Raises:
+        :class:`siac.errors.SIACError` (or a subclass) on configuration
+        / data / RT / solver failures. Stage timeouts surface as
+        :class:`TimeoutError`.
+    """
     settings = _resolve_execution_settings(
         config,
         execution=execution,

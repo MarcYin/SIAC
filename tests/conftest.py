@@ -2,6 +2,7 @@
 Pytest configuration and fixtures for SIAC tests.
 """
 
+import importlib
 import socket
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,36 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
+
+
+# =============================================================================
+# Build-state preflight
+# =============================================================================
+
+
+def pytest_report_header(config) -> list[str]:  # noqa: ARG001
+    """Surface whether the optional Rust extension is available.
+
+    The native ``siac._rust`` extension carries the BRDF kernels, the NN
+    emulator, and the multigrid grid-search cubes. ~25 unit tests fail
+    with ``ModuleNotFoundError: No module named 'siac._rust'`` when the
+    extension hasn't been built. This header makes the situation
+    obvious in the test run output instead of having developers chase
+    unrelated-looking import errors.
+
+    To build it::
+
+        pixi run build-rust
+
+    """
+    try:
+        importlib.import_module("siac._rust")
+    except ImportError as exc:
+        return [
+            "siac._rust: NOT BUILT — ~25 tests will fail with ImportError. "
+            f"Run `pixi run build-rust` to fix. (cause: {exc})"
+        ]
+    return ["siac._rust: built ✓"]
 
 # =============================================================================
 # Network isolation

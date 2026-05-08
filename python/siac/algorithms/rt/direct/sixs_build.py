@@ -1570,12 +1570,75 @@ def _prepare_source_tree(config: SixSAlgorithmConfig, paths: SixSBuildPaths) -> 
     return paths.patched_dir
 
 
+#: SHA-256 of the upstream 6SV2.1 source tarball that SIAC's bridge expects.
+#: Compared against the locally-cached archive after download. If the
+#: upstream source is ever re-published (or this constant drifts from
+#: the actual archive), update it here in one place rather than at
+#: every callsite. ``None`` disables the check (set
+#: ``SIAC_SIXS_SOURCE_SHA256`` env var to override per-run).
+_SIXS_SOURCE_SHA256: str | None = None
+
+
+def _archive_sha256(path: Path) -> str:
+    """SHA-256 of *path* in fixed-size chunks (avoid loading the whole tarball)."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _fetch_and_unpack_source(source_url: str, archive_path: Path, upstream_dir: Path) -> Path:
+    """Fetch the 6SV2.1 source tarball and unpack it under ``upstream_dir``.
+
+    REVIEW.md §3.4 sixs_build.py:1576-1597 flagged two robustness issues
+    in the original implementation: the download was not atomic (a
+    partially-written tarball could survive a crash and be re-used on
+    the next run), and there was no integrity check against a known
+    hash. This version fixes both:
+
+    - Download to ``<archive>.tmp`` and ``Path.replace`` on success so
+      a crash mid-transfer leaves no usable file.
+    - Verify the SHA-256 of the cached archive against
+      ``_SIXS_SOURCE_SHA256`` (or ``SIAC_SIXS_SOURCE_SHA256`` env
+      override). When the constant is ``None``, the check is skipped
+      with a one-line warning.
+    """
+    import os
+
     if not archive_path.exists():
         logger.info("Downloading 6SV2.1 source from %s", source_url)
-        response = requests.get(source_url, timeout=120)
-        response.raise_for_status()
-        archive_path.write_bytes(response.content)
+        tmp_path = archive_path.with_suffix(archive_path.suffix + ".tmp")
+        try:
+            response = requests.get(source_url, timeout=120)
+            response.raise_for_status()
+            tmp_path.write_bytes(response.content)
+            tmp_path.replace(archive_path)
+        except BaseException:
+            if tmp_path.exists():
+                with __import__("contextlib").suppress(OSError):
+                    tmp_path.unlink()
+            raise
+
+    expected = os.environ.get("SIAC_SIXS_SOURCE_SHA256") or _SIXS_SOURCE_SHA256
+    if expected:
+        actual = _archive_sha256(archive_path)
+        if actual.lower() != expected.lower():
+            raise RuntimeError(
+                f"6SV2.1 archive at {archive_path} has SHA-256 {actual!r} but "
+                f"expected {expected!r}. Either the upstream source has changed "
+                "or the cached archive is corrupt — delete it and re-run, or "
+                "set SIAC_SIXS_SOURCE_SHA256 to the new hash if the change is "
+                "intentional."
+            )
+    else:
+        logger.warning(
+            "6SV2.1 archive checksum not configured (set "
+            "SIAC_SIXS_SOURCE_SHA256 or update _SIXS_SOURCE_SHA256 in "
+            "sixs_build.py); proceeding without integrity verification."
+        )
 
     if upstream_dir.exists() and (upstream_dir / "main.f").exists():
         return upstream_dir

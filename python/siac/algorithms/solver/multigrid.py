@@ -1539,8 +1539,20 @@ class MultiGridSolver:
         return cast("Float32Array", np.asarray(smoothed, dtype=np.float32))
 
     def _resample_field(self, field: np.ndarray, target_shape: tuple[int, int]) -> Float64Array:
-        """Resample 2D field to target shape."""
+        """Resample 2D field to target shape.
+
+        REVIEW.md §1.2 #9: previously every call promoted ``field`` to
+        ``float64`` even when the shape was unchanged, producing a
+        ``float32 → float64 → float32`` round-trip at every multigrid
+        level when ``aot``/``tcwv`` are stored as float32. The same-shape
+        fast path now returns the input view directly when it's already
+        float64, and only allocates a copy when a dtype promotion is
+        actually needed for the Rust kernels (which take f64 — promoting
+        to f64 there is unavoidable).
+        """
         if field.shape == target_shape:
+            if field.dtype == np.float64:
+                return cast("Float64Array", field)
             return cast("Float64Array", np.asarray(field, dtype=np.float64))
 
         data = np.ascontiguousarray(field, dtype=np.float64)
