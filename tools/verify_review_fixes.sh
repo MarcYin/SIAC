@@ -393,20 +393,33 @@ else
   else
     OUTDIR=$(mktemp -d)
     REPORT="$OUTDIR/profile.txt"
-    note "profiling pipeline run (overhead ~15%) → $REPORT"
+    PROFILE_LOG="$OUTDIR/profile_run.log"
+    note "profiling pipeline run (overhead ~15%, ~6-8 min) → $REPORT"
+    note "                                            log → $PROFILE_LOG"
+    # Capture the script's full output AND its real exit code. Previously
+    # we piped through ``tail -2`` which masked the exit status (pipelines
+    # without ``set -o pipefail`` return the last command's exit code, so
+    # ``tail`` always succeeded).
     if PYTHONPATH=python pixi run -e rt6s python tools/profile_pipeline.py \
         --safe "$SAFE" --config "$CFG" \
         --output-dir "$OUTDIR/out" --report-path "$REPORT" \
-        --top 20 2>&1 | tail -2; then
+        --top 20 >"$PROFILE_LOG" 2>&1
+    then
       if [[ -s "$REPORT" ]] && [[ -s "$REPORT.pstats" ]] && [[ -s "$REPORT.callers.txt" ]]; then
         pass "cProfile run produced report + pstats + callers"
         echo "  Top 5 by cumulative time:"
         grep -A 7 "ncalls" "$REPORT" | sed -n '2,7p' | sed 's/^/    /'
       else
-        fail "profile reports missing or empty"
+        fail "profile reports missing or empty (script claimed success)"
+        echo "  Output dir contents:"; ls -la "$OUTDIR" | sed 's/^/    /'
+        echo "  Last 15 lines of $PROFILE_LOG:"
+        tail -15 "$PROFILE_LOG" 2>/dev/null | sed 's/^/    /'
       fi
     else
-      fail "profile_pipeline.py invocation failed"
+      EXIT_CODE=$?
+      fail "profile_pipeline.py exited with code $EXIT_CODE"
+      echo "  Last 25 lines of $PROFILE_LOG:"
+      tail -25 "$PROFILE_LOG" 2>/dev/null | sed 's/^/    /'
     fi
   fi
 fi

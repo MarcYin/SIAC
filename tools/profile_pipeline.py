@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         profiler.disable()
 
+    # Aux files share a consistent suffix-chain pattern so the trio is
+    # easy to glob: ``<report>``, ``<report>.pstats``, ``<report>.callers.txt``.
+    # Previously the pstats path was suffix-chained but the callers path
+    # used ``with_name(stem + ".callers.txt")`` which produced
+    # ``<stem>.callers.txt`` instead of ``<stem>.<ext>.callers.txt`` —
+    # the verify_review_fixes.sh harness then couldn't find the callers
+    # report and reported FAIL.
     pstats_path = args.report_path.with_suffix(args.report_path.suffix + ".pstats")
     profiler.dump_stats(str(pstats_path))
 
@@ -102,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         stats.strip_dirs().sort_stats(args.sort).print_stats(args.top)
 
     # Top-N callers for the same set (helps disambiguate hot leaves).
-    callers_path = args.report_path.with_name(args.report_path.stem + ".callers.txt")
+    callers_path = args.report_path.with_suffix(args.report_path.suffix + ".callers.txt")
     with callers_path.open("w") as fh:
         stats = pstats.Stats(profiler, stream=fh)
         stats.strip_dirs().sort_stats(args.sort).print_callers(args.top)
