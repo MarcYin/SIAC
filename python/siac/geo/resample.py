@@ -262,47 +262,50 @@ def resample_coefficients_to_template(
     coeffs: RTCoefficients,
     template: xr.DataArray,
 ) -> RTCoefficients:
-    """Resample all fields of an RTCoefficients bundle to *template* grid."""
-    from siac.runtime import RTCoefficients as RTCoefficientsClass
+    """Resample all fields of an :class:`siac.runtime.RTCoefficients` bundle to *template* grid.
 
-    def _resample_optional(field: xr.DataArray | None) -> xr.DataArray | None:
-        if field is None:
-            return None
-        if len(field.dims) == 2:
-            return resample_field_to_template(field, template)
-        if len(field.dims) == 3 and "param" in field.dims:
-            param_values = (
-                field.coords["param"].values
-                if "param" in field.coords
-                else np.arange(field.sizes["param"])
-            )
-            stacked = xr.concat(
-                [
-                    resample_field_to_template(field.sel(param=param, drop=True), template)
-                    for param in param_values
-                ],
-                dim="param",
-            )
-            result: xr.DataArray = stacked.assign_coords(param=param_values).transpose(
-                "param", *template.dims
-            )
-            return result
-        return field
+    Thin wrapper around :meth:`siac.runtime.RTCoefficients.resample_to_template`
+    (the inverse layering direction — runtime knows about geo, not the
+    other way round; REVIEW.md §1.4). Kept here for callers that have
+    historically imported through ``siac.geo``.
+    """
+    return coeffs.resample_to_template(template)
 
-    resampled_extras: dict[str, xr.DataArray] = {}
-    for name, field in coeffs.extras.items():
-        resampled = _resample_optional(field)
-        resampled_extras[name] = field if resampled is None else resampled
 
-    return RTCoefficientsClass(
-        xap=resample_field_to_template(coeffs.xap, template),
-        xbp=resample_field_to_template(coeffs.xbp, template),
-        xcp=resample_field_to_template(coeffs.xcp, template),
-        d_xap=_resample_optional(coeffs.d_xap),
-        d_xbp=_resample_optional(coeffs.d_xbp),
-        d_xcp=_resample_optional(coeffs.d_xcp),
-        extras=resampled_extras,
-    )
+def resample_field_or_param_stack_to_template(
+    field: xr.DataArray | None,
+    template: xr.DataArray,
+) -> xr.DataArray | None:
+    """Resample a 2-D field or 3-D ``(param, y, x)`` stack to *template* shape.
+
+    Pulled out of the old in-line helper in
+    :func:`resample_coefficients_to_template` so
+    :meth:`siac.runtime.RTCoefficients.resample_to_template` can call it
+    without re-implementing the param-stack logic. ``None`` passes through
+    unchanged.
+    """
+    if field is None:
+        return None
+    if len(field.dims) == 2:
+        return resample_field_to_template(field, template)
+    if len(field.dims) == 3 and "param" in field.dims:
+        param_values = (
+            field.coords["param"].values
+            if "param" in field.coords
+            else np.arange(field.sizes["param"])
+        )
+        stacked = xr.concat(
+            [
+                resample_field_to_template(field.sel(param=param, drop=True), template)
+                for param in param_values
+            ],
+            dim="param",
+        )
+        result: xr.DataArray = stacked.assign_coords(param=param_values).transpose(
+            "param", *template.dims
+        )
+        return result
+    return field
 
 
 # ---------------------------------------------------------------------------

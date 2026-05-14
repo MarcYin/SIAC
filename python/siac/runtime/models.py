@@ -310,6 +310,35 @@ class RTCoefficients:
         selected = self.output_names if names is None else tuple(names)
         return {name: self.get_output(name) for name in selected}
 
+    def resample_to_template(self, template: xr.DataArray) -> "RTCoefficients":
+        """Resample every field of this coefficient bundle to *template* grid.
+
+        The function used to live in ``siac.geo.resample`` and reach back
+        into ``siac.runtime`` to reconstruct ``RTCoefficients``, creating
+        the runtime↔geo cycle that REVIEW.md §1.4 flagged. Moving the
+        construction onto the class itself lets ``siac.geo.resample``
+        keep its public wrapper as a one-liner that just delegates here.
+        """
+        from siac.geo.resample import (
+            resample_field_or_param_stack_to_template,
+            resample_field_to_template,
+        )
+
+        resampled_extras: dict[str, xr.DataArray] = {}
+        for name, field in self.extras.items():
+            resampled = resample_field_or_param_stack_to_template(field, template)
+            resampled_extras[name] = field if resampled is None else resampled
+
+        return RTCoefficients(
+            xap=resample_field_to_template(self.xap, template),
+            xbp=resample_field_to_template(self.xbp, template),
+            xcp=resample_field_to_template(self.xcp, template),
+            d_xap=resample_field_or_param_stack_to_template(self.d_xap, template),
+            d_xbp=resample_field_or_param_stack_to_template(self.d_xbp, template),
+            d_xcp=resample_field_or_param_stack_to_template(self.d_xcp, template),
+            extras=resampled_extras,
+        )
+
     def apply_correction(self, toa: xr.DataArray) -> xr.DataArray:
         y = _as_data_array(self.xap * toa - self.xbp)
         denom = _as_data_array(1.0 + self.xcp * y)
