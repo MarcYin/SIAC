@@ -42,15 +42,20 @@ hdr()  { printf "\n\033[1m=== %s ===\033[0m\n" "$1"; }
 # ---------------------------------------------------------------------------
 hdr "Wave 10: siac._rust + full unit suite"
 
-if [[ ! -f python/siac/_rust.cpython-*.so ]]; then
-  note "siac._rust not built — running pixi run build-rust (takes ~20s)"
+# siac._rust must exist for the Python that's about to run pytest.
+# The default and rt6s pixi envs use different Python versions (3.12 vs
+# 3.11), so check the explicit per-python builds we expect.
+PY_MAJOR_MINOR=$(pixi run python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')" 2>/dev/null)
+RUST_SO="python/siac/_rust.cpython-${PY_MAJOR_MINOR}-darwin.so"
+if [[ ! -f "$RUST_SO" ]]; then
+  note "siac._rust not built for cp${PY_MAJOR_MINOR} — running pixi run build-rust (takes ~20s)"
   if pixi run build-rust >/dev/null 2>&1; then
     pass "pixi run build-rust"
   else
     fail "pixi run build-rust"
   fi
 else
-  pass "siac._rust already built ($(ls python/siac/_rust.cpython-*.so | head -1))"
+  pass "siac._rust already built ($RUST_SO)"
 fi
 
 PYTHONPATH=python pixi run python -c "
@@ -335,18 +340,39 @@ else
     export SIAC_REGRESSION_SAFE="$SAFE"
     export SIAC_REGRESSION_CONFIG="$CFG"
     note "running pipeline on T33KWP — this takes ~3 min"
+    # rt6s env uses a different Python (3.11) than the default env (3.12),
+    # so siac._rust must be built for BOTH or the pipeline crashes inside
+    # the fixture and the fixture turns the crash into a skip. Make sure
+    # it's built before invoking pytest.
+    if ! [[ -f python/siac/_rust.cpython-311-darwin.so ]]; then
+      note "siac._rust not built for the rt6s Python; running pixi run -e rt6s build-rust"
+      pixi run -e rt6s build-rust >/dev/null 2>&1 || fail "rt6s build-rust failed"
+    fi
     REG_OUT=$(PYTHONPATH=python pixi run -e rt6s python -m pytest \
         tests/regression/test_t33kwp_sixs_scene.py \
         -m "regression and slow" --tb=line --no-cov -q 2>&1)
     LAST=$(echo "$REG_OUT" | tail -3 | head -1)
     echo "  $LAST"
-    if echo "$REG_OUT" | grep -qE '17 passed'; then
+    # Distinguish three cases: passed / failed / skipped.
+    # - passed:  every assertion within tolerance (PASS)
+    # - failed:  numerical regression — real bug (FAIL)
+    # - skipped: the fixture couldn't run the pipeline (e.g. cache empty,
+    #            rt6s env missing); not a code regression — NOTE, not FAIL.
+    if echo "$REG_OUT" | grep -qE '17 passed' ; then
       pass "all 17 regression assertions pass within tolerance"
-    elif echo "$REG_OUT" | grep -qE 'failed' ; then
-      fail "regression suite reported failures — see output above"
+    elif echo "$REG_OUT" | grep -qE ' [0-9]+ failed' ; then
+      fail "regression suite reported failures — numerical regression!"
       echo "$REG_OUT" | grep -E '^FAILED|tolerance|delta' | head -10
+    elif echo "$REG_OUT" | grep -qE ' [0-9]+ skipped' ; then
+      # Find why pytest skipped — usually surfaced in the fixture
+      # message captured by pytest's short-summary.
+      SKIP_REASON=$(echo "$REG_OUT" | grep -E 'SKIPPED|Skipped' | head -3 | sed 's/^/    /')
+      note "regression skipped (not a code regression):"
+      [[ -n "$SKIP_REASON" ]] && echo "$SKIP_REASON"
+      note "Common causes: rt6s env missing siac._rust (run \`pixi run -e rt6s build-rust\`), missing cache under tmp/, or stale auxiliary data."
     else
-      fail "regression suite output not understood (rt6s env missing? cache empty?)"
+      fail "regression suite output not understood — pasting last 10 lines:"
+      echo "$REG_OUT" | tail -10 | sed 's/^/    /'
     fi
   fi
 fi

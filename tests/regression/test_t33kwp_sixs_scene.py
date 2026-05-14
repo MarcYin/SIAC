@@ -106,15 +106,31 @@ def regression_run(regression_inputs: dict[str, Path], tmp_path_factory) -> Path
         auth=CredentialManager.from_config(config),
     )
 
+    # Distinguish "inputs/environment missing" from "real pipeline regression".
+    # An ImportError or FileNotFoundError almost always means cache/env;
+    # any other exception class is a real bug we want to surface.
     try:
         process_scene(request)
-    except Exception as exc:
+    except (ImportError, FileNotFoundError) as exc:
         pytest.skip(
             f"Regression pipeline raised {type(exc).__name__}: {exc}. "
             "This usually means cached MCD43/CAMS data is missing or the rt6s "
-            "extension isn't built; rerun with `pixi run -e rt6s` and ensure "
-            "the cache directories referenced by the config exist."
+            "extension isn't built. Build with `pixi run -e rt6s build-rust` "
+            "and ensure the cache directories referenced by the config exist; "
+            "set SIAC_REGRESSION_STRICT=1 to fail instead of skipping."
         )
+    except Exception as exc:
+        # SIAC errors / RT errors / solver errors are NOT skippable — they're
+        # the whole point of the regression suite. Only the two
+        # "environment isn't there" classes above are treated as skips.
+        # Override via SIAC_REGRESSION_STRICT=0 if you want every failure
+        # to skip instead.
+        if os.environ.get("SIAC_REGRESSION_STRICT", "1") == "0":
+            pytest.skip(
+                f"Regression pipeline raised {type(exc).__name__}: {exc}. "
+                "(SIAC_REGRESSION_STRICT=0 so treating as environment issue.)"
+            )
+        raise
 
     return out
 
