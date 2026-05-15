@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from siac.algorithms.solver import MultiGridConfig, MultiGridSolver, StagedMultiGridSolver
@@ -39,8 +38,21 @@ def resolve_solver(config: Any) -> SolverFn:
         solver_cls = StagedMultiGridSolver if solver_stages else MultiGridSolver
         mg_solver = solver_cls(solver_config)
         solve_kwargs: dict[str, Any] = {}
-        with suppress(TypeError, ValueError):
+        try:
             signature = inspect.signature(mg_solver.solve)
+        except (TypeError, ValueError):
+            # Wave 15: inspect.signature can fail on wrapped / C-implemented
+            # callables. If we couldn't introspect we just won't forward the
+            # optional kwargs. Note in the log so a debugger isn't confused
+            # by sharp_transition_mask / water_mask silently dropping.
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "Could not inspect solver signature; sharp_transition_mask "
+                "and water_mask kwargs will not be forwarded. The solver "
+                "may treat those regions less defensively than configured."
+            )
+        else:
             if "sharp_transition_mask" in signature.parameters:
                 solve_kwargs["sharp_transition_mask"] = inputs.sharp_transition_mask
             if "water_mask" in signature.parameters:

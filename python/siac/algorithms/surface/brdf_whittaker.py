@@ -121,6 +121,26 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         # rationale. Previously hard-coded ``0.20`` / ``0.08`` (REVIEW.md §3.5).
         from siac.constants import DEFAULT_NO_DATA_BOA, DEFAULT_NO_DATA_BOA_UNC
 
+        # Wave 15: report how many pixels needed the magic fallback. The
+        # operator should know whether a scene-prior derives from real
+        # observations or from the prior alone.
+        no_data_count = int(np.sum(~has_data))
+        if no_data_count > 0:
+            total = int(np.asarray(has_data).size)
+            fraction = no_data_count / max(total, 1)
+            level = logger.warning if fraction > 0.10 else logger.info
+            level(
+                "BRDF-Whittaker surface prior: %d / %d pixels (%.1f%%) lacked "
+                "any temporal observation; using fallback BOA=%.3f, "
+                "BOA_UNC=%.3f. Large fractions indicate the temporal window "
+                "missed the scene or the MCD43 cache is sparse here.",
+                no_data_count,
+                total,
+                fraction * 100,
+                DEFAULT_NO_DATA_BOA,
+                DEFAULT_NO_DATA_BOA_UNC,
+            )
+
         prior = np.where(has_data, prior, DEFAULT_NO_DATA_BOA).astype(np.float32)
         prior_unc = np.where(has_data, prior_unc, DEFAULT_NO_DATA_BOA_UNC).astype(np.float32)
 

@@ -675,30 +675,48 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         return None
 
     def _parse_sun_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
-        """Parse sun angle grids from XML."""
+        """Parse sun angle grids from XML.
+
+        Wave 15: warn loudly when expected elements are missing. Previously
+        this method silently returned an empty / partial dict; the caller
+        had no signal that sun angles were missing and would fall through
+        to whatever its own default was — exactly the silent-fallback
+        pattern that hid the wave-14 namespace bug.
+        """
         ns = self._get_namespace(root)
 
-        angles = {}
+        angles: dict[str, np.ndarray] = {}
 
-        # Find Sun_Angles_Grid
-        sun_grid = root.find(f".//{ns}Sun_Angles_Grid")
+        sun_grid = self._find_descendant(root, "Sun_Angles_Grid", ns)
         if sun_grid is None:
-            # Try without namespace
-            sun_grid = root.find(".//Sun_Angles_Grid")
+            logger.warning(
+                "Sentinel-2 MTD_TL.xml has no Sun_Angles_Grid element — "
+                "downstream code will see an empty sun-angle dict. This is "
+                "almost always a bug (every well-formed S2 SAFE has this "
+                "element); check whether the MTD_TL.xml is truncated."
+            )
+            return angles
 
-        if sun_grid is not None:
-            zenith = sun_grid.find(f".//{ns}Zenith")
-            if zenith is None:
-                zenith = sun_grid.find(".//Zenith")
+        zenith = self._find_descendant(sun_grid, "Zenith", ns)
+        azimuth = self._find_descendant(sun_grid, "Azimuth", ns)
 
-            azimuth = sun_grid.find(f".//{ns}Azimuth")
-            if azimuth is None:
-                azimuth = sun_grid.find(".//Azimuth")
+        if zenith is not None:
+            angles["zenith"] = self._parse_angle_grid(zenith, ns)
+        else:
+            logger.warning(
+                "Sentinel-2 Sun_Angles_Grid is missing the Zenith sub-element; "
+                "downstream sun-zenith will fall back to whatever default the "
+                "caller uses."
+            )
 
-            if zenith is not None:
-                angles["zenith"] = self._parse_angle_grid(zenith, ns)
-            if azimuth is not None:
-                angles["azimuth"] = self._parse_angle_grid(azimuth, ns)
+        if azimuth is not None:
+            angles["azimuth"] = self._parse_angle_grid(azimuth, ns)
+        else:
+            logger.warning(
+                "Sentinel-2 Sun_Angles_Grid is missing the Azimuth sub-element; "
+                "downstream sun-azimuth will fall back to whatever default the "
+                "caller uses."
+            )
 
         return angles
 
@@ -920,6 +938,20 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
     @staticmethod
     def _quantification_value(metadata: dict[str, Any]) -> float:
+        # Wave 15: previously this silently substituted the standard
+        # ``10000.0`` whenever the metadata dict lacked ``quantification_value``.
+        # That value IS the conventional S2 default, but a missing value in
+        # metadata indicates a real parse failure in
+        # ``_parse_product_metadata`` (the XML's QUANTIFICATION_VALUE element).
+        # Warn so the operator notices, but keep the fallback so production
+        # runs against truncated metadata don't hard-fail.
+        if "quantification_value" not in metadata:
+            logger.warning(
+                "Sentinel-2 product metadata is missing QUANTIFICATION_VALUE; "
+                "falling back to the standard 10000.0. The MTD_MSIL1C.xml is "
+                "almost certainly truncated or non-standard — verify the SAFE "
+                "integrity."
+            )
         raw = metadata.get("quantification_value", 10000.0)
         quantification = float(raw)
         if not np.isfinite(quantification) or quantification <= 0.0:

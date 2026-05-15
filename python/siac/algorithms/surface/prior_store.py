@@ -285,7 +285,19 @@ class PrebuiltPriorStore:
         if "wavelengths" in ds:
             store_wl = ds["wavelengths"].values
         else:
-            # Fallback: MODIS land band centers
+            # Wave 15: warn when assuming MODIS band centers. Previously
+            # this silently used MODIS wavelengths for ANY store that
+            # didn't declare them, which silently produced wrong sensor
+            # projections for non-MODIS data (REVIEW.md §3.5).
+            logger.warning(
+                "Prior store at %s does not declare a ``wavelengths`` coord; "
+                "assuming MODIS-style band centers "
+                "[645, 858.5, 469, 555, 1240, 1640, 2130] nm. If this store "
+                "is built from a different sensor, the resulting sensor "
+                "projection will be wrong — declare the wavelengths coord "
+                "in the store to fix.",
+                self.store_path,
+            )
             store_wl = np.array([645.0, 858.5, 469.0, 555.0, 1240.0, 1640.0, 2130.0])
 
         # Project to sensor bands
