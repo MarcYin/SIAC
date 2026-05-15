@@ -708,15 +708,22 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         REVIEW.md §1.1 #5: previously this used a running ``(a + b) / 2`` step
         per band, which biases toward the last-seen entry rather than producing
         the arithmetic mean. We now collect all values and average once.
+
+        Wave 14: also uses the namespace-tolerant ``_findall_descendants`` /
+        ``_find_child`` helpers because S2 MTD_TL.xml puts ``xmlns:n1`` on
+        the root only, leaving every descendant in the empty namespace.
+        The previous code searched with the prefix and missed every
+        match, silently falling back to ``DEFAULT_S2_VZA_DEG = 5.0`` and
+        ``DEFAULT_S2_VAA_DEG = 100.0`` on every real scene.
         """
         ns = self._get_namespace(root)
 
         zenith_values: list[float] = []
         azimuth_values: list[float] = []
 
-        for mean_elem in root.findall(f".//{ns}Mean_Viewing_Incidence_Angle"):
-            zenith = mean_elem.find(f"{ns}ZENITH_ANGLE")
-            azimuth = mean_elem.find(f"{ns}AZIMUTH_ANGLE")
+        for mean_elem in self._findall_descendants(root, "Mean_Viewing_Incidence_Angle", ns):
+            zenith = self._find_child(mean_elem, "ZENITH_ANGLE", ns)
+            azimuth = self._find_child(mean_elem, "AZIMUTH_ANGLE", ns)
             if (
                 zenith is not None
                 and azimuth is not None
@@ -754,15 +761,21 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         }
 
     def _parse_angle_grid(self, elem: ET.Element, ns: str) -> np.ndarray:
-        """Parse angle values from grid element."""
+        """Parse angle values from grid element.
+
+        Wave 14: uses the namespace-tolerant ``_find_child`` /
+        ``_findall_children`` helpers. The previous code searched
+        ``f"{ns}Values_List"`` first then fell back to ``"Values_List"``,
+        but the ``VALUES`` rows inside used the prefix-only form with no
+        fallback — so when the elements were unprefixed (the normal
+        S2 case), ``rows`` came back empty and the helper returned a
+        magic 30.0° uniform grid.
+        """
         from siac.constants import DEFAULT_S2_ANGLE_GRID_DEG
 
-        values_list = elem.find(f"{ns}Values_List")
-        if values_list is None:
-            values_list = elem.find("Values_List")
+        values_list = self._find_child(elem, "Values_List", ns)
 
         if values_list is None:
-            # Return default grid (REVIEW.md §3.3 sentinel2.py:755).
             logger.warning(
                 "Sentinel-2 angle grid Values_List missing; "
                 "falling back to uniform %.1fdeg grid.",
@@ -771,10 +784,8 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             return np.full((23, 23), DEFAULT_S2_ANGLE_GRID_DEG)
 
         rows: list[list[float]] = []
-        for values in values_list.findall(f"{ns}VALUES"):
-            if values is None:
-                values = values_list.find("VALUES")
-            if values is not None and values.text:
+        for values in self._findall_children(values_list, "VALUES", ns):
+            if values.text:
                 row = [float(v) for v in values.text.split()]
                 rows.append(row)
 
@@ -954,6 +965,34 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         if elems:
             return list(elems)
         return list(root.findall(f".//{tag}"))
+
+    @staticmethod
+    def _find_child(parent: ET.Element, tag: str, ns: str) -> ET.Element | None:
+        """Find a direct child by tag, trying namespaced first then unprefixed.
+
+        Critical for S2 MTD_TL.xml: the root carries ``xmlns:n1=...`` but
+        the child elements (``Mean_Viewing_Incidence_Angle``, ``ZENITH_ANGLE``,
+        ``Values_List``, etc.) are unprefixed and live in *no* namespace.
+        A naïve ``parent.find(f"{ns}TAG")`` returns ``None`` for those,
+        which was silently making ``_parse_view_angles`` /
+        ``_parse_angle_grid`` fall back to the magic
+        ``DEFAULT_S2_*`` constants on every real scene.
+        """
+        elem = parent.find(f"{ns}{tag}") if ns else None
+        if elem is None:
+            elem = parent.find(tag)
+        return elem
+
+    @staticmethod
+    def _findall_children(parent: ET.Element, tag: str, ns: str) -> list[ET.Element]:
+        """findall direct children by tag, trying namespaced first then unprefixed.
+
+        See :meth:`_find_child` for the rationale.
+        """
+        elems = parent.findall(f"{ns}{tag}") if ns else []
+        if elems:
+            return list(elems)
+        return list(parent.findall(tag))
 
     @classmethod
     def _band_name_for_offset_id(cls, band_id: str) -> str | None:
