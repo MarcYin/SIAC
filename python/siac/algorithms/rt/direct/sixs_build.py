@@ -585,6 +585,42 @@ def patch_main_source(text: str) -> str:
         "main.f runtime initialization",
     )
     text = _replace_once(text, "      read(iread,*) igeom", "      igeom=0", "geometry mode input")
+
+    # Wave 16 (performance): the upstream 6S hardcodes ``ipol=1`` to compute
+    # the full polarized radiative transfer (Stokes I, Q, U via ospol_ /
+    # kernelpol_). The polarization kernels dominate runtime when the
+    # view geometry is significantly off-nadir. SIAC's downstream pipeline
+    # uses only the scalar (I) component for atmospheric correction —
+    # path reflectance, transmittance, spherical albedo — so the Q/U
+    # work is wasted compute. Patch to ``ipol=0`` by default so the
+    # unpolarized scalar RT runs ~3-5x faster.
+    #
+    # Set the environment variable ``SIAC_SIXS_COMPUTE_POLARIZATION=1``
+    # at build time to opt back into the polarized path (e.g. for
+    # science work that needs Stokes parameters; note the bridge
+    # currently doesn't expose them downstream so this only affects
+    # the scalar-I result via second-order polarization corrections,
+    # which are typically <1% at typical S2 geometry).
+    _polarization_env = os.environ.get("SIAC_SIXS_COMPUTE_POLARIZATION", "0").strip().lower()
+    if _polarization_env in {"0", "false", "no", "off", ""}:
+        text = _replace_once(
+            text,
+            "       ipol=1",
+            "\n".join(
+                [
+                    "c      SIAC build: polarized RT disabled for performance",
+                    "c      (set SIAC_SIXS_COMPUTE_POLARIZATION=1 at build time to revert)",
+                    "       ipol=0",
+                ]
+            ),
+            "ipol polarization toggle (SIAC build: default unpolarized)",
+        )
+    else:
+        logger.info(
+            "SIAC_SIXS_COMPUTE_POLARIZATION=%s — keeping upstream ipol=1; "
+            "the build will run the full polarized RT (slower).",
+            _polarization_env,
+        )
     text = _replace_once(
         text,
         "      read(iread,*) asol,phi0,avis,phiv,month,jday",

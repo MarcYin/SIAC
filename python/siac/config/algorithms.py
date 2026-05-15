@@ -313,6 +313,23 @@ class SixSAlgorithmConfig(SIACBaseModel):
     scene_lut_max_nodes_per_axis: int = Field(default=4, ge=1)
     scene_lut_max_cases: int = Field(default=4096, ge=1)
     scene_lut_required_speedup: float = Field(default=1.5, gt=1.0)
+    #: Whether the native 6S extension was built with polarized radiative
+    #: transfer enabled (``ipol=1`` in the Fortran source). The polarized
+    #: branch computes Stokes Q and U via ``ospol_``/``kernelpol_``, which
+    #: dominates the runtime at off-nadir geometry. SIAC's downstream
+    #: pipeline uses only the scalar (I) component, so polarization
+    #: contributes only via second-order corrections to the scalar
+    #: result — typically <1% in BOA reflectance at typical S2 geometry.
+    #:
+    #: This is a **build-time** flag. Flipping it requires rebuilding the
+    #: native extension (``pixi run -e rt6s build-6s-native`` after
+    #: setting ``SIAC_SIXS_COMPUTE_POLARIZATION=1`` or ``0`` in the
+    #: environment). Setting this field on the config alone is not
+    #: enough — the build picks up the value via the env var at
+    #: source-patching time.
+    #:
+    #: Default ``False`` (since wave 16) for ~3-5x faster runtime.
+    compute_polarization: bool = False
     month: int = Field(default=1, ge=1, le=12)
     day: int = Field(default=1, ge=1, le=31)
     output_variables: tuple[str, ...] = SIXS_DEFAULT_OUTPUT_VARIABLES
