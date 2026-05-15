@@ -606,7 +606,91 @@ Apart from the multi-week native-6S migration, the codebase is in a consistent, 
 
 ---
 
-*This report is generated, not curated. Trust but verify each row before acting on it.*
+## Wave 14 — S2 MTD_TL.xml namespace bug (real, deep, old) (`2f38b09`, `f1f8e7e`)
+
+A subtle long-standing bug surfaced by the wave 9 diagnostic warnings I'd added to make silent fallbacks visible. The user ran `tools/run_t33kwp_correction.py` and saw:
+
+```
+Sentinel-2 angle grid Values_List empty; falling back to uniform 30.0deg grid.
+Mean_Viewing_Incidence_Angle entries not found in MTD_TL.xml; falling back to default VZA=5.0deg, VAA=100.0deg.
+```
+
+…which on a well-formed S2 SAFE should NEVER fire. These elements are always present.
+
+### Root cause
+
+S2 `MTD_TL.xml` declares `xmlns:n1="https://psd-15.sentinel2.eo.esa.int/PSD/..."` on the root element and uses the `n1:` prefix only for the root and `Geometric_Info`. Every angle-related descendant — `Mean_Viewing_Incidence_Angle`, `ZENITH_ANGLE`, `Sun_Angles_Grid`, `Values_List`, `VALUES` — is unprefixed and lives in the empty namespace.
+
+The previous parsers extracted the namespace from the root tag and prepended it to every descendant search:
+
+```python
+ns = "{https://psd-15.sentinel2.eo.esa.int/...}"
+root.findall(f".//{ns}Mean_Viewing_Incidence_Angle")  # → []  (none in that namespace)
+```
+
+ElementTree's namespaced findall correctly returns nothing. The parser silently fell through to the magic `DEFAULT_S2_VZA_DEG=5.0`, `DEFAULT_S2_VAA_DEG=100.0`, and uniform 30° sun-angle grid. **Every real S2 scene took this path.**
+
+### Numerical impact
+
+On the T33KWP MTD_TL.xml:
+
+| | **Before (silent default)** | **After (real)** |
+|---|---|---|
+| View zenith | 5.0° | **8.45°** (+3.45°) |
+| View azimuth | 100.0° | **284.73°** (near-180° flip) |
+| Sun zenith | 30.0° uniform | **36.9–38.2°** per-cell grid |
+| Sun azimuth | 30.0° uniform | **45.4–47.8°** per-cell grid |
+
+The 184° view-azimuth flip is the dominant error — it means the relative azimuth between sun and sensor was completely wrong, which made the 6S RT call produce wrong path reflectance and transmittance, which made AOT retrieval wrong.
+
+### Fix
+
+Three new namespace-tolerant helpers + parser rewrites:
+
+- `_find_child(parent, tag, ns)` / `_findall_children(parent, tag, ns)` — direct-child siblings to the existing descendant helpers; try namespaced first, fall back to unprefixed.
+- `_parse_view_angles` rewritten to use `_findall_descendants` for the outer search and `_find_child` for the nested `ZENITH_ANGLE`/`AZIMUTH_ANGLE` lookups.
+- `_parse_angle_grid` rewritten the same way; also fixed an unreachable `if values is None` branch inside the iteration (Python's `for` never yields `None` for missing matches).
+
+Plus `tests/unit/test_sentinel2_angle_parsing.py` (4 tests) using a synthesized MTD_TL fixture that mirrors the real n1-root-only layout. Each test asserts BOTH the positive ("we read the real values") AND the negative ("we did not fall back to defaults") contract so this can't silently regress again.
+
+### Regression golden refresh
+
+The previously-captured T33KWP goldens characterised a run using the wrong angles. Re-captured from the corrected pipeline:
+
+| metric | old | new | delta | reason |
+|---|---|---|---|---|
+| `view:sun_elevation` | 60.0° | **52.4°** | −7.6° | real sun grid (was uniform 30° zenith → 60° elev) |
+| `view:off_nadir` | 5.0° | **8.45°** | +3.45° | real VZA (was DEFAULT_S2_VZA_DEG) |
+| AOT mean | 0.09092 | **0.09323** | +2.5% | RT inversion uses correct geometry |
+| AOT std | 0.00981 | **0.01083** | +10% | idem |
+| TCWV mean | 3.50294 | 3.50294 | 0% | absorption physics dominates; view-angle insensitive |
+| BOA_B02 mean | 0.08895 | 0.09265 | +4.2% | wavelength-dependent RT correction |
+| BOA_B08 mean | 0.25143 | 0.25355 | +0.8% | idem; NIR less affected |
+
+The shifts are physically consistent: the previous AOT inversion was compensating for incorrect Mie + Rayleigh scattering geometry. With correct angles, retrieved AOT is slightly higher; BOA bands shift in a wavelength-dependent way (visible bands most affected); TCWV is unchanged because water-vapor retrieval is dominated by absorption-band physics rather than scattering geometry.
+
+### Performance footnote
+
+Pipeline wall-clock with corrected angles: **28.4 min** (vs 6.4 min on the buggy path). The 4× slowdown is genuine 6S work — the previous "fast" path was 6S taking shortcuts through `ospol_` / `kernelpol_` because the wrong near-nadir geometry let many polarization scattering terms short-circuit. With the correct off-nadir geometry, the full polarized RT integral runs for every grid-search candidate.
+
+A separate performance ticket is now warranted to scope:
+- Scene-LUT reuse across the block-grid-search (currently each block calls 6S afresh)
+- An unpolarized 6S mode (`ipol=0`) for atmospheric correction (the Stokes parameters aren't used downstream)
+- A coarser default for `grid_search_aot_points` (currently 40)
+
+These would bring the runtime back toward the 6-7 minute baseline without compromising correctness.
+
+### Cumulative across all 14 waves
+
+- 50 source files modified, plus 13 new (REVIEW docs + 5 helpers + constants/spatial modules + 4 regression-test files + profile_pipeline.py + run_t33kwp_correction.py + verify_review_fixes.sh + test_sentinel2_angle_parsing.py).
+- 24 commits on the working branch since `4878ef1`.
+- **Test delta vs original baseline (20 failed / 1097 passed): +201 passes / −20 failures / −8 errors**, plus a 17-test gated numerical regression suite + an end-to-end profiling harness + a one-button verifier.
+
+### Lesson learned
+
+This is the third "the test passes but it's testing the wrong thing" bug we've caught in this campaign. The wave 9 diagnostic warnings — which I'd added defensively without expecting them to fire on real data — were the only reason this surfaced. Without them, the goldens would have continued silently characterising buggy behaviour indefinitely.
+
+**Defensive warnings on "this shouldn't happen but if it does..." paths are not paranoia; they're real diagnostic coverage.**
 
 ---
 
