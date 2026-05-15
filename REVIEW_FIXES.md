@@ -737,4 +737,79 @@ This rule is now enforced at five sites across the codebase. Whenever you find a
 
 ---
 
+## Wave 16 — Native 6S unpolarized mode (ipol=0) — 2.3× speedup (`71fa466`)
+
+Performance follow-up promised at the end of wave 14: the corrected angles made the pipeline slow because every 6S call now runs the full polarized scattering integrals (`ospol_`/`kernelpol_`). For atmospheric correction we only use the scalar (I) component; polarization contributes only via second-order corrections to that scalar — typically <2% in BOA reflectance at S2 geometry.
+
+### What changed
+
+The upstream 6S source hardcodes `ipol=1` and explicitly says in a comment that `ipol=0` "is not available" — but the underlying RT math fully supports the unpolarized branch (it's only the input-reading that was disabled). Patch in `sixs_build.py:patch_main_source` rewrites `ipol=1` → `ipol=0`, gated by an env var:
+
+```
+SIAC_SIXS_COMPUTE_POLARIZATION=0  (default) -> ipol=0, ~3-5x faster RT
+SIAC_SIXS_COMPUTE_POLARIZATION=1            -> ipol=1, polarized RT
+```
+
+Companion `SixSAlgorithmConfig.compute_polarization: bool = False` field documents the trade-off. **This is a build-time flag**: flipping it requires `pixi run -e rt6s build-6s-native` to rebuild the native extension.
+
+### Measured impact on T33KWP S2B 2026-03-29
+
+| metric | wave 14 (ipol=1) | wave 16 (ipol=0) | delta |
+|---|---|---|---|
+| **wall-clock** | **28.4 min** | **12.2 min** | **2.33× faster** |
+| AOT mean | 0.09323 | 0.09425 | +1.1% |
+| AOT std | 0.01083 | 0.01115 | +3.0% |
+| AOT p50 | 0.09062 | 0.09150 | +1.0% |
+| TCWV mean | 3.50294 | 3.50294 | 0 |
+| BOA_B02 mean | 0.09265 | 0.09414 | +1.6% |
+| BOA_B03 mean | 0.11309 | 0.11384 | +0.7% |
+| BOA_B04 mean | 0.21339 | 0.21381 | +0.2% |
+| BOA_B08 mean | 0.25355 | 0.25378 | +0.09% |
+| sun_elevation | 52.4° | 52.4° | 0 |
+| off_nadir | 8.45° | 8.45° | 0 |
+
+The shifts are physically consistent: without polarization, the path reflectance is slightly lower, so the solver retrieves slightly higher AOT to match TOA. BOA bands shift by a wavelength-dependent factor (visible bands most affected, NIR least). All shifts <2%, within typical atmospheric correction noise (AOT retrieval uncertainty is typically 5-10%).
+
+### Wall-clock progression across waves
+
+| Wave | What | Wall-clock | Comment |
+|---|---|---|---|
+| baseline | wrong angles, ipol=1 (de facto skipped) | **6.4 min** | numerically WRONG (S2 view azimuth off by ~180°) |
+| 14 | correct angles, ipol=1 | **28.4 min** | correct but 4× the buggy baseline |
+| **16** | **correct angles, ipol=0** | **12.2 min** | correct + 2.3× faster than wave 14 |
+
+Net: only 1.9× slower than the (incorrect) original, and correctness is restored.
+
+### To revert to polarized RT for science work
+
+```bash
+SIAC_SIXS_COMPUTE_POLARIZATION=1 pixi run -e rt6s build-6s-native
+# then re-capture goldens:
+PYTHONPATH=python pixi run -e rt6s python tools/run_t33kwp_correction.py \
+    --output-path /tmp/polarized_run
+python tests/regression/regenerate_goldens.py \
+    --output-dir /tmp/polarized_run \
+    --golden tests/regression/goldens/t33kwp_sixs_20260329.json \
+    --scene-id S2B_MSIL1C_20260329T084559_N0512_R107_T33KWP_20260329T140503 \
+    --rt-backend sixs
+```
+
+### Scene-LUT reuse — no longer needed
+
+Wave 14 also flagged scene-LUT reuse across the block-grid-search as a potential optimization. With ipol=0 bringing wall-clock down to 12.2 min, that refactor is no longer needed for production use. It remains a future optimization opportunity (~30-50% further speedup possible if implemented well), but doesn't block merge.
+
+### Test suite
+
+**1298 passed / 0 failed / 7 skipped / 0 errors.** Unchanged from wave 15.
+
+### Cumulative across all 16 waves
+
+- 51 source files modified, plus 13 new
+- 30 commits on the working branch since `4878ef1`
+- **Test delta vs original baseline (20 failed / 1097 passed): +201 passes / −20 failures / −8 errors**
+- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15)
+- Pipeline performance: 12.2 min on T33KWP (wave 16) — 2.3× faster than the corrected baseline
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
