@@ -694,4 +694,47 @@ This is the third "the test passes but it's testing the wrong thing" bug we've c
 
 ---
 
+## Wave 15 — Silent-fallback cleanup (`44237a8`)
+
+Triggered by the user's wave 14 finding: "the warnings were not the case previously, there is something wrong." The S2 namespace bug was hidden for ages because the parser silently fell back to magic defaults. Other parts of the codebase had the same pattern — silently substituting "sensible" defaults when reality was actually broken. This wave walks the high-impact sites and converts each from silent to loud so future bugs of the same shape surface as soon as they fire.
+
+### Sites converted to loud
+
+| Module | Was silent about | Now logs |
+|---|---|---|
+| `sentinel2.py:_parse_sun_angles` | `Sun_Angles_Grid` / `Zenith` / `Azimuth` missing | WARNING naming each missing element |
+| `sentinel2.py:_quantification_value` | Default `10000.0` substituted | WARNING naming MTD_MSIL1C.xml as the source of the gap |
+| `prior_store.py` | MODIS band centers as fallback | WARNING naming the store path; documents that non-MODIS stores produce wrong projections |
+| `brdf_whittaker.py` | Per-pixel `DEFAULT_NO_DATA_BOA` fill | INFO with count + fraction; promoted to WARNING when >10% of pixels need the fallback |
+| `_assembly_solver.py` | `signature` introspection dropping kwargs | WARNING naming `sharp_transition_mask` / `water_mask` as dropped |
+
+### Audited and left intentionally silent
+
+Not every `except Exception` or `with suppress` is a silent fallback. The following were verified to be legitimate cleanup-then-reraise patterns OR documented best-effort behaviour, and left as-is:
+
+- `storage/writers.py:_atomic_write_text / write_raster / write_cog / write_netcdf` — `except Exception:` cleanup-then-`raise`, NOT fallback.
+- `_pipeline_priors.py:198` — cancel futures, re-raise.
+- `geo/_crs_compat.py:43` — documented string-fallback for unknown CRS classes (best-effort equality).
+- `_pipeline_outputs.py:24` — numpy-scalar `.item()` with repr fallback.
+- `cams.py:548` — `write_transform(recalc=True)` is best-effort; data is usable without it.
+- `observability.py:51` — JSON-safe `.item()` conversion falls through to `repr()`.
+
+### Test suite
+
+**1298 passed / 0 failed / 7 skipped / 0 errors.** Unchanged from wave 14.
+
+### Cumulative across all 15 waves
+
+- 51 source files modified, plus 13 new (REVIEW docs + 5 helpers + constants/spatial modules + 4 regression-test files + profile_pipeline.py + run_t33kwp_correction.py + verify_review_fixes.sh + test_sentinel2_angle_parsing.py).
+- 26 commits on the working branch since `4878ef1`.
+- **Test delta vs original baseline (20 failed / 1097 passed): +201 passes / −20 failures / −8 errors**.
+
+### The recurring lesson, stated as a rule
+
+> If your code substitutes a "sensible default" when reality doesn't match expectations, **log when that substitution fires**. The cost of a warning that occasionally fires on legitimate-but-unusual data is negligible. The cost of a silent fallback that hides a real bug for months — like the S2 namespace one — is enormous.
+
+This rule is now enforced at five sites across the codebase. Whenever you find another silent fallback, add it to the list.
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
