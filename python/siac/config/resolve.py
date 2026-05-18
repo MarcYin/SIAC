@@ -70,6 +70,8 @@ def resolve_paths(system: SystemConfig) -> ResolvedPathsConfig:
         atmo=_default_cache_path(cache_root, "atmo"),
         brdf=_default_cache_path(cache_root, "brdf"),
         s2=_default_cache_path(cache_root, "s2"),
+        cloud=_default_cache_path(cache_root, "cloud"),
+        reproject=_default_cache_path(cache_root, "reproject"),
     )
     return ResolvedPathsConfig(
         dem=system.paths.dem,
@@ -82,6 +84,10 @@ def resolve_paths(system: SystemConfig) -> ResolvedPathsConfig:
             atmo=_resolve_cache_dir(system.paths.caches.atmo, defaults.atmo),
             brdf=_resolve_cache_dir(system.paths.caches.brdf, defaults.brdf),
             s2=_resolve_cache_dir(system.paths.caches.s2, defaults.s2),
+            cloud=_resolve_cache_dir(system.paths.caches.cloud, defaults.cloud),
+            reproject=_resolve_cache_dir(
+                system.paths.caches.reproject, defaults.reproject
+            ),
         ),
     )
 

@@ -29,8 +29,19 @@ class CachePathsConfig(SIACBaseModel):
     #: Skips the OmniCloudMask PyTorch inference (~20-25 s) on subsequent
     #: runs over the same TOA inputs. Set to ``None`` to disable caching.
     cloud: Path | None = None
+    #: Content-addressed cache directory for reprojected priors and
+    #: other geometric resamples (wave 18 opt 3). When set, the
+    #: ``cached_reproject_match`` helper persists each reprojection
+    #: output under a SHA-256 key over (target-grid signature,
+    #: source-identity, resampling method, format version). On
+    #: subsequent runs the reprojection is a single-digit-ms NetCDF
+    #: load instead of a multi-second ``warp.reproject`` call. The MCD43
+    #: monthly-composite reprojection — the largest single contributor
+    #: to the wave-17 35 s of ``warp.py:reproject`` wall-clock — is the
+    #: primary consumer. Set to ``None`` to disable.
+    reproject: Path | None = None
 
-    @field_validator("atmo", "brdf", "s2", "cloud", mode="before")
+    @field_validator("atmo", "brdf", "s2", "cloud", "reproject", mode="before")
     @classmethod
     def normalize_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)

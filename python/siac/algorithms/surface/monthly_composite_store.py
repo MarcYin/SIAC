@@ -24,7 +24,9 @@ from siac.algorithms.surface.brdf_monthly_composite import (
     MonthlyKernelWeightComposite,
 )
 from siac.domain import SensorBand
+from siac.geo.cached_reprojection import cached_reproject_match
 from siac.geo.reprojection import reproject_match
+from siac.geo.target_grid import TargetGrid
 from siac.runtime import BRDFKernelWeights
 from siac.runtime.models import copy_spatial_metadata_like
 from siac.storage.writers import write_raster
@@ -391,6 +393,8 @@ def _align_raster_asset_to_grid(
     grid: MonthlyCompositeStoreGridSpec,
     *,
     nodata: float | int | None,
+    cache_dir: Path | str | None = None,
+    source_identity: str | None = None,
 ) -> xr.DataArray:
     template = _grid_template(grid)
     if _data_array_crs(data) is None:
@@ -400,12 +404,28 @@ def _align_raster_asset_to_grid(
         raise ValueError(
             "Monthly composite assets require source CRS metadata for explicit-grid reprojection"
         )
-    aligned = reproject_match(
-        data,
-        template,
-        resampling="nearest",
-        nodata=nodata,
-    )
+    # Wave 18 (opt 3): cached reprojection when ``cache_dir`` + a stable
+    # ``source_identity`` are provided. Falls back to the legacy
+    # ``reproject_match`` call when either is missing — the cached path
+    # MUST have a non-empty identity to avoid silent cross-source
+    # collisions (the helper raises if it's empty, so callers can't
+    # accidentally turn off the identity check).
+    if cache_dir is not None and source_identity:
+        aligned = cached_reproject_match(
+            data,
+            TargetGrid.from_template(template),
+            source_identity=source_identity,
+            cache_dir=cache_dir,
+            resampling="nearest",
+            nodata=nodata,
+        )
+    else:
+        aligned = reproject_match(
+            data,
+            template,
+            resampling="nearest",
+            nodata=nodata,
+        )
     return aligned.astype(data.dtype, copy=False)
 
 
