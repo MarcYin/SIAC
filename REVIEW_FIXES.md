@@ -899,4 +899,85 @@ The joint LUT saves ~8× on 6S evaluations at the grid-search stage (one big LUT
 
 ---
 
+## Wave 18 — Profile-driven follow-up wins (band-parallel LUT, async writes, joint-LUT preload, cloud cache)
+
+User asked "what else is the bottleneck of processing speed?" The wave-17 profile (cProfile, `/tmp/wave17_profile.txt`) shifted the heat map *away* from the grid-search solver (now <1% of wall-clock) and onto four new targets. This wave attacks each.
+
+### (1) Band-parallel joint LUT — `2dc3b8b`
+
+The joint-LUT build dispatched its 13 per-band 6S batches **sequentially** in wave 17. Each `run_batch` has a substantial serial portion that OpenMP can't cover, so even with all cores busy a band still takes ~16 s.
+
+`SixSNativeRunner._run_joint_lut_bands` now (a) defaults `parallel_backend="worker_libraries"` so isolated 6S library copies are loaded once per session, and (b) dispatches per-band batches concurrently across those copies via `ThreadPoolExecutor`. Each worker uses `max(1, native_threads // worker_count)` OpenMP threads so total threads ≈ core count.
+
+Falls back to the previous sequential path when worker sessions can't be loaded (e.g. when the .so can't be hard-linked into a writable scratch dir).
+
+### (2) Async COG writes — `2dc3b8b`
+
+`AtmosphericCorrector.correct` previously did `parallel compute → sequential write` — even though `rasterio.to_raster` releases the GIL inside the encoder. The 96 s of `raster_writer.py:229(to_raster)` in the profile was wall-clock that couldn't overlap with the next band's compute.
+
+`correct()` now folds each band's write into the **same** executor task as its compute. The invalid-mask OR-accumulation moves after the executor block (it's order-independent — no I/O, just bookkeeping). New `test_correct_overlaps_writes_with_compute` checks `sum(write_durations) > 1.25× clock_span`, which is only true when writes truly overlap.
+
+### (5) Content-addressed cloud-mask cache — `4becae2`
+
+OmniCloudMask PyTorch inference takes ~20-25 s per scene and is non-deterministic across runs (a few hundred edge-of-cloud pixels flip between adjacent classes — wave 17 had to absorb the cascade through an `AOT.min` tolerance loosening at one point).
+
+A new `siac.algorithms.cloud.cache` module persists model outputs as sharded `.npz` files keyed by SHA-256 over the float32 raster bytes + class mapping + target resolution + a version tag. `build_cloud_classes` threads a `cloud_cache_dir` kwarg into the auto-mode path. `CachePathsConfig.cloud` is the canonical config field — when set, the preprocessor passes it through. 12 new unit tests cover key sensitivity, save→load roundtrip, missing/shape-mismatch/corrupted entries, hit-then-miss path, opt-out, namespace partitioning, format-version pin.
+
+The cache fixes both the perf problem (subsequent runs hit at single-digit-ms) **and** the determinism one (every consumer reads identical persisted bytes).
+
+### (4) Joint-LUT preload during M3 — `81b9908`
+
+The joint-LUT build (~98 s) ran sequentially after `fetch_priors` (~48 s parallel). But the LUT only needs M2's atmospheric prior and the grid-search axes (config-derived) — it doesn't share work with M3's surface-prior reprojection, so the two stages can overlap.
+
+New helper `derive_grid_search_axes(config)` returns `(aot_axis, tcwv_axis)` for the simple single-pass case (returns `None` for fixed-parameter mode and staged solvers — those derive their axes from per-pixel priors that aren't known until the solver runs). New `SixSNativeRunner.preload_joint_grid_search_lut` builds eagerly and stores in a single-shot cache keyed by a signature of inputs. `_maybe_submit_lut_preload` in `workflows/pipeline.py` prefers the joint-LUT preload when supported, with the legacy `preload_scene_subset` as fallback.
+
+Two new tests cover the preload → matching build → cached return → cache cleared flow, and the preload → mismatching build → fresh recompute flow.
+
+### (3) Cached reprojected priors — **deferred** with documented design
+
+The remaining 35 s of `warp.py:reproject` is split across MCD43 / CAMS / DEM reprojection onto the scene grid. A robust cache here needs:
+
+- NetCDF / Zarr persistence (the priors are large multi-band float32 rasters, .npz is too memory-naive)
+- Cache key spanning source data identity + target grid signature + resampling method
+- Wrapper hooks at the call sites in `surface/monthly_composite_store.py` and the CAMS adapter
+
+The `paths.caches.atmo` and `paths.caches.brdf` config fields already exist and already short-circuit raw-data downloads (CAMS S3 cache, MCD43 cache). What's not yet cached is the *reprojected output* on top of the raw cache. That's a ~1-2 day effort done right. Designed but not implemented; flagged for wave 19.
+
+The other beneficiary of this work is the regression suite (same scene, repeated runs). For operational use (process many different scenes), the benefit is smaller — most reprojections are scene-unique.
+
+### Measured impact on T33KWP S2B 2026-03-29
+
+| Wave | Pipeline | Wall-clock | Wave-over-wave |
+|---|---|---|---|
+| 14 | corrected angles + ipol=1 | 28.4 min | — |
+| 16 | + ipol=0 (unpolarised RT) | 12.2 min | 2.33× |
+| 17 | + joint grid-search LUT | 8.8 min | 1.39× |
+| **18** | **+ wave 18 wins, T33KWP config** | **8.8 min (528 s)** | **~1% (this config)** |
+
+The T33KWP scene config explicitly sets `parallel_backend="openmp"` and uses a staged solver — so (1) and (4) are *not active* for it. Only (2) and (5)-when-configured are exercised. The 4-second improvement is real but tiny because the T33KWP test config opts out of the wins this wave was designed for.
+
+The expected impact on a **default config** (non-staged solver, no explicit parallel-backend override, cloud cache enabled):
+
+- (1) Band-parallel joint LUT: ~30-60 s saved (98 s → ~40-60 s).
+- (2) Async COG writes: ~30-60 s saved (96 s sequential → ~40-50 s overlapped).
+- (4) Joint-LUT preload overlap: ~30-40 s saved (LUT runs during M3 instead of after).
+- (5) Cloud-mask cache (warm): ~20-25 s saved per cache hit.
+
+Stacking these, an 8.8-min wave-17 run becomes a 4-5 min wave-18 run for the typical user config. The numbers above are not measured on T33KWP for the reasons stated; they're the per-stage savings observed in isolation. A scene with a non-staged config would let us measure the full stack — that's the natural validation target for wave 19.
+
+### Test suite
+
+- **Unit: 1317 passed / 0 failed / 7 skipped** (+14 from wave 17's 1303 — 12 cloud cache tests, 2 joint-LUT preload tests, 1 band-parallel test, 1 async-write overlap test).
+- **T33KWP regression: 17 / 17 passed** at default tight tolerance.
+
+### Cumulative across all 18 waves
+
+- 56 source files modified, plus 15 new (including `cloud/cache.py` and 2 new test files)
+- 36 commits on the working branch since `4878ef1`
+- **Test delta vs original baseline (20 failed / 1097 passed): +220 passes / −20 failures / −8 errors**
+- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15), joint-LUT determinism fixed (wave 17), cloud-mask determinism via cache (wave 18)
+- Pipeline performance: **8.8 min on T33KWP** (wave 17/18) — 3.2× faster than the corrected baseline, with up to another ~1.5-2× available on default configs that opt into wave 18's parallelism
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
