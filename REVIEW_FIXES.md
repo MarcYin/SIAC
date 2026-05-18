@@ -977,18 +977,51 @@ The expected impact on a **default config** (non-staged solver, no explicit para
 
 Stacking these, an 8.8-min wave-17 run becomes a 4-5 min wave-18 run for the typical user config. The numbers above are not measured on T33KWP for the reasons stated; they're the per-stage savings observed in isolation. A scene with a non-staged config would let us measure the full stack — that's the natural validation target for wave 19.
 
+### Wave 18e — M6 correction shares scene prep across bands (`ee0b11b`)
+
+Following the user's question "how was the correction coefficient derived per band, was it at the original or aerosol resolution?", I traced through `_default_corrector` + `AtmosphericCorrector.correct` and confirmed: **the RT coefficients ARE computed at the 60 m aerosol grid, then linearly resampled to each band's native resolution before the TOA→BOA arithmetic**. So the spatial-resolution part of the user's hypothesis was already optimal.
+
+The other half — "one computation for all bands" — turned out to be partial: each band's 6S kernel call is unavoidable per-band because the spectral response (RSRF) integration differs per band, but the **scene-level prep** (geometry case_arrays, valid mask, LUT plan) doesn't depend on spectral content and was being re-run 13 times.
+
+New `SixSBackend.prepare_correction_scene(geometry, atmo_state)` returns a frozen `PreparedCorrectionScene(prepared, plan, use_scene_lut)` that `compute_coefficients_with_prepared(prepared, band)` consumes for each band. `AtmosphericCorrector.correct` auto-detects the helpers via `getattr` and uses them when both are available; backends that haven't opted in (LUT/emulator/custom) fall through to the legacy per-band path with no behaviour change. Two new unit tests assert (a) prep runs once instead of N_bands times and (b) the shared-prep output is bit-identical to the per-band fallback.
+
+### Wave 18f — Preview PNG downsampling (`ee0b11b`)
+
+The wave-17 profile attributed **16 s of T33KWP wall-clock to `_write_previews`** — three quarters of the 22 s post-correction tail. `write_cloud_mask_preview` and `write_false_colour_preview` each ran per-pixel `_field_to_uint8` on full-resolution 10980×10980 BOA bands to render PNGs that display at ~1000-2000 px.
+
+- New `_downsample_for_preview(data, max_size_px)` stride-decimates a 2-D field before the per-pixel work. Decimation by `s` reduces work by `s²` and is faster than PIL/scipy resampling paths.
+- All four preview writers (`write_cloud_mask_preview`, `write_false_colour_preview`, `write_field_preview`, `write_aot_scatter_plot`) gain a `max_size_px` kwarg (default 2048).
+- `_field_to_uint8` switched from float64 to float32 — same visual output, ~2× throughput on the (still-large) arrays before decimation.
+- `OutputDefaultsConfig` gains `include_previews: bool = True` (opt-out for production runs) and `preview_max_size_px: int = 2048` (the cap). Backwards-compatible defaults preserve current behaviour.
+- Pre-existing bug fixed: `write_field_preview` had `_LUT_CACHE.get(palette) or _build_lut(palette)` which raised `ValueError: truth value of an array with more than one element is ambiguous` once the cache was populated. Replaced with explicit `is None` check.
+
+16 new tests in `test_preview_downsample.py` cover downsampler edge cases, `_field_to_uint8` correctness, each preview writer's size cap, heterogeneous-shape mask handling, and the config opt-out.
+
 ### Test suite
 
-- **Unit: 1349 passed / 0 failed / 7 skipped** (+46 from wave 17's 1303 — 12 cloud cache tests, 2 joint-LUT preload tests, 1 band-parallel test, 1 async-write overlap test, 30 TargetGrid + cached_reproject_match tests).
-- **T33KWP regression: 17 / 17 passed** at default tight tolerance (8m 58s).
+- **Unit: 1366 passed / 0 failed / 7 skipped** (+63 from wave 17's 1303). New tests: 12 cloud cache, 30 TargetGrid + cached_reproject, 2 scene-prep sharing, 1 band-parallel, 1 async-write overlap, 2 joint-LUT preload, 16 preview downsample.
+- **T33KWP regression: 17 / 17 passed** at default tight tolerance.
+
+### Measured wall-clock progression
+
+| Wave | Pipeline | T33KWP wall-clock | Δ vs wave 17 |
+|---|---|---|---|
+| 14 | corrected angles + ipol=1 | 28.4 min | — |
+| 16 | + ipol=0 (unpolarised RT) | 12.2 min | 1.39× faster |
+| 17 | + joint grid-search LUT | 8.8 min (528 s) | 3.2× faster vs wave 14 |
+| 18a-c | + worker_libs / async writes / cloud cache / LUT preload | 8.8 min (528 s) | 0% (config opts out of most of these on T33KWP) |
+| 18d | + cached reprojection infrastructure | 8.8 min (528 s) | 0% (not yet wired to scene-time call sites) |
+| **18e+f** | **+ shared scene-prep + preview downsampling** | **8.2 min (491 s)** | **−37 s / 7% faster on T33KWP** |
+
+For default configs that opt into wave 18a's worker_libraries + wave 18b's cloud cache + (future) wave 18d's reprojection caches at the MCD43 call site, the *additional* stacked savings are estimated at another 30-60 s (the cumulative effect couldn't be measured on T33KWP because that scene explicitly overrides those defaults).
 
 ### Cumulative across all 18 waves
 
-- 58 source files modified, plus 17 new (including `cloud/cache.py`, `geo/target_grid.py`, `geo/cached_reprojection.py`, and 3 new test files)
-- 37 commits on the working branch since `4878ef1`
-- **Test delta vs original baseline (20 failed / 1097 passed): +252 passes / −20 failures / −8 errors**
-- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15), joint-LUT determinism fixed (wave 17), cloud-mask determinism via cache (wave 18b), canonical TargetGrid contract for reprojections (wave 18d)
-- Pipeline performance: **8.8 min on T33KWP** (wave 17/18) — 3.2× faster than the corrected baseline. The reprojection-cache infrastructure for opt (3) is shipped but only the monthly-composite-store call site is wired so far; the bigger MCD43 + CAMS reprojection sites are next-wave migration work
+- 60 source files modified, plus 19 new (including `cloud/cache.py`, `geo/target_grid.py`, `geo/cached_reprojection.py`, `PreparedCorrectionScene`, the preview downsampler, and 4 new test files)
+- 39 commits on the working branch since `4878ef1`
+- **Test delta vs original baseline (20 failed / 1097 passed): +269 passes / −20 failures / −8 errors**
+- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15), joint-LUT determinism fixed (wave 17), cloud-mask determinism via cache (wave 18b), canonical TargetGrid contract for reprojections (wave 18d), pre-existing `_LUT_CACHE` numpy-bool bug fixed (wave 18f)
+- Pipeline performance: **8.2 min on T33KWP** (wave 18e/f) — 3.5× faster than the corrected baseline, with additional 30-60 s available on default configs that opt into the wave-18 parallelism + caching
 
 ---
 
