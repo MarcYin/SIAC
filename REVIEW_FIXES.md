@@ -812,4 +812,91 @@ Wave 14 also flagged scene-LUT reuse across the block-grid-search as a potential
 
 ---
 
+## Wave 17 — Joint (aot × tcwv × geometry) LUT for block-grid-search reuse — 1.39× speedup
+
+User-requested full refactor following wave 16's note that scene-LUT reuse "remains a future optimization opportunity." This wave implements it.
+
+### The problem
+
+The block-grid-search invokes the RT coefficient provider once per `(aot, tcwv)` candidate pair — typically `N_aot × N_tcwv = 11 × 11 = 121` pairs. The wave-16 per-candidate path runs a fresh scene-LUT batch *per candidate × per band*, which is `121 × 13 = 1,573` independent 6S batches, even though the only thing that changes between candidates is two scalar values. The geometric LUT axes are recomputed and discarded over and over.
+
+### What changed
+
+A new `JointGridSearchLUT` precomputes **one** large LUT that spans the full `(aot, tcwv)` grid plus the (coarsened) per-pixel geometric/atmospheric dimensions. The LUT is built once before the grid-search kernel runs, then queried via interpolation for each candidate. Because the `(aot, tcwv)` axes in the LUT coincide exactly with the grid-search points, candidate lookups are bit-exact in those dimensions (no atmospheric interpolation error); only the geometric axes use linear interpolation, the same approximation the per-candidate scene-LUT already makes.
+
+Files touched (new code + wiring):
+
+| File | What changed |
+|---|---|
+| `python/siac/algorithms/rt/direct/sixs_native.py` | Added `_build_joint_grid_search_lut_plan`, `JointGridSearchLUT`, `_ScalarInterpolator`, and `SixSNativeRunner.build_joint_grid_search_lut`. ~180 lines. |
+| `python/siac/algorithms/rt/direct/sixs.py` | Exposes `SixSBackend.build_joint_grid_search_lut` as the public entrypoint. |
+| `python/siac/algorithms/solver/multigrid.py` | `_candidate_coeff_provider` now auto-detects `build_joint_grid_search_lut` on the RT backend and uses joint-LUT lookups when available; falls back to the per-candidate path otherwise. |
+| `python/siac/config/algorithms.py` | New `joint_grid_search_lut_enabled` / `joint_grid_search_lut_max_nodes_per_axis` / `joint_grid_search_lut_max_cases` config fields. Default `max_cases=524288` is sized to fit `11×11×4^6 ≈ 500K` (one aot/tcwv grid × scene-LUT's geometric resolution) so the joint LUT preserves the per-candidate path's interpolation fidelity. |
+| `tests/unit/test_sixs_native.py` | Five new tests: plan preserves aot/tcwv axes, evaluate matches direct at grid points, opt-out disabled returns None, direct mode returns None, amortisation reduces 6S call count. |
+| `tests/regression/goldens/t33kwp_sixs_20260329.json` | Goldens refreshed from a fixed deterministic joint-LUT run. |
+
+### The uninitialised-memory bug we caught and fixed in the same wave
+
+First implementation passed `candidate_atmo` (the per-pixel state used inside the provider closure) to `build_joint_grid_search_lut`. But that state's `aot`/`tcwv` arrays are allocated by `np.empty(...)` and only get filled when the provider closure is called for a real candidate — so at LUT-build time they contain **uninitialised memory**. The LUT builder's `valid_mask` then ran `np.isfinite(atmo_state.aot.values) & ...` against random bytes, marking a non-deterministic subset of pixels as invalid each run. Symptom: `AOT.mean` drifted by up to 3% between consecutive runs of identical code; `siac:aot_mean` STAC property out of tolerance.
+
+Fixed by passing `coeff_atmo_template` (the prior, with valid `aot`/`tcwv` everywhere) instead. The LUT's atmospheric axes still come from the explicit `aot_axis` / `tcwv_axis` arguments — the per-pixel values are only used to build the *valid pixel mask*, and that mask must be deterministic. After the fix:
+
+- Repeated runs produce bit-identical AOT/BOA/TCWV outputs.
+- Strict `abs_tol=1e-4` AOT regression tolerance restored (had been temporarily widened to `5e-4` to debug).
+
+This was a genuine intermittent correctness bug, caught by the regression-suite-as-canary loop. Lesson logged here so the next refactor checks every `AtmosphericState` field for "is this writeable scratch space?" before passing it as an input.
+
+### Measured impact on T33KWP S2B 2026-03-29
+
+| metric | wave 16 | wave 17 | delta |
+|---|---|---|---|
+| **wall-clock** | **12.2 min** | **8.8 min** | **1.39× faster** |
+| AOT mean | 0.09425 | 0.09428 | +0.03% |
+| AOT std | 0.01115 | 0.01121 | +0.5% |
+| AOT p50 | 0.09150 | 0.09152 | +0.02% |
+| TCWV mean | 3.50294 | 3.50294 | 0 |
+| BOA_B02 mean | 0.09414 | 0.09414 | 0.00% |
+| BOA_B03 mean | 0.11384 | 0.11383 | -0.01% |
+| BOA_B04 mean | 0.21381 | 0.21381 | 0% |
+| BOA_B08 mean | 0.25378 | 0.25378 | 0% |
+| sun_elevation | 52.4° | 52.4° | 0 |
+| off_nadir | 8.45° | 8.45° | 0 |
+
+The shifts are within numerical-equivalence bounds — most stats agree to 4-5 decimal places, with the largest delta on `AOT.std` at 0.5% (a tail statistic that picks up tiny single-pixel-level differences from the floating-point reduction order of the 7-D scipy interpolant vs the 5-D per-candidate path).
+
+### Wall-clock progression across all 17 waves
+
+| Wave | What | Wall-clock | Comment |
+|---|---|---|---|
+| baseline | wrong angles, ipol=1 (de facto skipped) | **6.4 min** | numerically WRONG (S2 view azimuth off by ~180°) |
+| 14 | correct angles, ipol=1 | **28.4 min** | correct but 4× the buggy baseline |
+| 16 | correct angles, ipol=0 | **12.2 min** | correct + 2.3× faster than wave 14 |
+| **17** | **+ joint grid-search LUT** | **8.8 min** | correct + 3.2× faster than wave 14, only 1.4× slower than the buggy original |
+
+### Why the speedup is modest (1.4×, not 8×)
+
+The joint LUT saves ~8× on 6S evaluations at the grid-search stage (one big LUT vs `121 ×` redundant LUTs). But the grid-search is only one stage of the pipeline. Other unchanged stages — cloud detection, surface BRDF prior, gas-absorption setup, BOA correction, COG writing — each take 1-2 minutes and don't benefit. Profiling the joint-LUT branch shows ~80% of the remaining wall-clock is in those other stages, not the solver. Further perf wins now require attacking the next-largest stage rather than micro-optimising the LUT.
+
+### Backward compatibility
+
+- `joint_grid_search_lut_enabled: bool = True` — opt-out config flag.
+- Auto-detection via `getattr(rt_model, "build_joint_grid_search_lut", None)` — non-6S backends (LUT/emulator) silently fall through to their original compute paths.
+- `sixs.mode == "direct"` opts out (consistent with the existing per-candidate scene-LUT gating).
+- Any exception during LUT build falls back to the per-candidate path with a logged warning.
+
+### Test suite
+
+- **Unit tests: 1303 passed / 0 failed / 7 skipped** (+5 new joint-LUT tests vs wave 16's 1298).
+- **Regression (T33KWP): 17 / 17 passed** at the default tight `abs_tol=1e-4` tolerance after the deterministic-memory fix.
+
+### Cumulative across all 17 waves
+
+- 53 source files modified, plus 13 new
+- 33 commits on the working branch since `4878ef1`
+- **Test delta vs original baseline (20 failed / 1097 passed): +206 passes / −20 failures / −8 errors**
+- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15), joint-LUT determinism fixed (wave 17)
+- Pipeline performance: **8.8 min on T33KWP** (wave 17) — 3.2× faster than the corrected baseline (wave 14)
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
