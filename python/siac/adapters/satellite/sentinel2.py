@@ -476,6 +476,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             resolution_policy=settings["resolution_policy"],
             allow_upsample_to_target=settings["allow_upsample_to_target"],
             unmapped_to_missing=settings["unmapped_to_missing"],
+            cloud_cache_dir=settings.get("cache_dir"),
         )
         self._last_cloud_classes = cloud_classes
 

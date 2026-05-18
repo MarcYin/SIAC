@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
+from siac.algorithms.cloud.cache import maybe_run_with_cache
 from siac.algorithms.cloud.mapping import apply_class_mapping
 from siac.algorithms.cloud.providers.omnicloudmask import OmniCloudMaskProvider
 from siac.geo import reproject_match
@@ -328,6 +329,7 @@ def build_cloud_classes(
     resolution_policy: str = "auto",
     allow_upsample_to_target: bool = False,
     unmapped_to_missing: bool = True,
+    cloud_cache_dir: Path | str | None = None,
 ) -> xr.DataArray:
     """Build standardized cloud classes (0/1/2/3) from model/file/user inputs."""
     if len(toa.data_vars) == 0:
@@ -390,12 +392,27 @@ def build_cloud_classes(
     )
 
     if provider == "omnicloudmask":
-        out = OmniCloudMaskProvider().predict(
-            red,
-            green,
-            nir,
+        # Wave 18: cache the cloud-classifier output under a content-hash
+        # key so subsequent runs on the same TOA inputs skip the ~25s
+        # PyTorch inference. The cache also pins outputs deterministically
+        # across runs (OmniCloudMask's pytorch backend has a few hundred
+        # edge-of-cloud pixels' worth of run-to-run variance — see wave 17
+        # for the cascade effect this caused before being absorbed).
+        out = maybe_run_with_cache(
+            cache_dir=cloud_cache_dir,
+            red=red,
+            green=green,
+            nir=nir,
             class_mapping=class_mapping,
-            unmapped_to_missing=unmapped_to_missing,
+            target_resolution_m=target_resolution_m,
+            extra_namespace=f"provider={provider};unmapped_to_missing={unmapped_to_missing}",
+            compute_fn=lambda: OmniCloudMaskProvider().predict(
+                red,
+                green,
+                nir,
+                class_mapping=class_mapping,
+                unmapped_to_missing=unmapped_to_missing,
+            ),
         )
     else:
         raise ValueError(f"Unsupported cloud provider: {provider!r}")

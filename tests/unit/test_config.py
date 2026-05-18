@@ -379,7 +379,11 @@ class TestSixSConfig:
         cfg = SixSAlgorithmConfig()
 
         assert cfg.build_profile == "release"
-        assert cfg.parallel_backend == "openmp"
+        # Wave 18 flipped the default from "openmp" to "worker_libraries"
+        # so the joint-LUT band loop can dispatch concurrently across
+        # isolated 6S library copies. The OpenMP path is still selectable
+        # by setting ``parallel_backend="openmp"`` explicitly.
+        assert cfg.parallel_backend == "worker_libraries"
         assert cfg.output_variables == SIXS_DEFAULT_OUTPUT_VARIABLES
         assert not hasattr(cfg, "atmospheric_profile")
 

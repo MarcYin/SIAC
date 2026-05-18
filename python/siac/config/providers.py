@@ -25,8 +25,12 @@ class CachePathsConfig(SIACBaseModel):
     atmo: Path | None = None
     brdf: Path | None = None
     s2: Path | None = None
+    #: Content-addressed cache directory for cloud-mask model outputs.
+    #: Skips the OmniCloudMask PyTorch inference (~20-25 s) on subsequent
+    #: runs over the same TOA inputs. Set to ``None`` to disable caching.
+    cloud: Path | None = None
 
-    @field_validator("atmo", "brdf", "s2", mode="before")
+    @field_validator("atmo", "brdf", "s2", "cloud", mode="before")
     @classmethod
     def normalize_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)

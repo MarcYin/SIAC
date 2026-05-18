@@ -85,6 +85,14 @@ def build_preprocessor_runtime(
     cloud_mask_config = config.algorithms.cloud_mask.model_dump(exclude={"user_callable"})
     paths = getattr(config, "paths", None)
     rsrf_root = getattr(paths, "rsrf_root", None)
+    # Wave 18: thread the content-addressed cloud-mask cache directory
+    # from ``paths.caches.cloud`` into the preprocessor so the OmniCloudMask
+    # PyTorch inference can be short-circuited on repeated runs over the
+    # same TOA inputs (~20-25 s saved per cache hit on a Sentinel-2 scene).
+    caches = getattr(paths, "caches", None)
+    cloud_cache_dir = getattr(caches, "cloud", None) if caches is not None else None
+    if cloud_cache_dir is not None:
+        cloud_mask_config["cache_dir"] = cloud_cache_dir
     preprocessor_config: dict[str, Any] = {"cloud_mask": cloud_mask_config}
     if rsrf_root is not None:
         preprocessor_config["rsrf_root"] = rsrf_root
