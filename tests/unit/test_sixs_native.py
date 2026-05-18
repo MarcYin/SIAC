@@ -1279,6 +1279,155 @@ def test_joint_grid_search_lut_amortises_native_calls(
     )
 
 
+def test_preload_joint_grid_search_lut_serves_subsequent_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave 18 (opt 4): preload_joint_grid_search_lut caches a built LUT
+    that the very next matching build_joint_grid_search_lut call retrieves
+    without invoking 6S again.
+    """
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            scene_lut_max_nodes_per_axis=2,
+            scene_lut_max_cases=256,
+            joint_grid_search_lut_max_nodes_per_axis=2,
+            joint_grid_search_lut_max_cases=4096,
+            parallel_backend="openmp",  # exercise the mockable batch path
+        )
+    )
+    runner = backend._runner
+
+    native_calls = {"count": 0}
+
+    def _fake_run_native_batch(**kwargs):
+        native_calls["count"] += 1
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        return _NativeBatchResult(
+            outputs={
+                name: np.ascontiguousarray(np.zeros(n_cases, dtype=np.float64))
+                for name in (
+                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
+                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
+                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
+                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
+                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                )
+            },
+            status=np.zeros(n_cases, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _fake_run_native_batch)
+
+    geometry = _sample_geometry((4, 4))
+    atmo = _sample_atmo((4, 4))
+    bands = [
+        SensorBand(name=f"B{i:02d}", center_wavelength=400.0 + 50.0 * i,
+                   bandwidth=30.0, resolution=10.0, band_index=i)
+        for i in range(3)
+    ]
+    aot_axis = np.array([0.1, 0.2, 0.3], dtype=np.float64)
+    tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    # Preload: builds once, caches.
+    preloaded = backend.preload_joint_grid_search_lut(
+        geometry=geometry, atmo_state=atmo,
+        aot_axis=aot_axis, tcwv_axis=tcwv_axis, bands=bands,
+    )
+    assert preloaded is not None
+    n_preload_calls = native_calls["count"]
+    assert n_preload_calls == len(bands), (
+        f"preload should run one native batch per band; got {n_preload_calls}"
+    )
+
+    # Subsequent build with matching args: SHOULD NOT trigger new 6S calls.
+    joint = backend.build_joint_grid_search_lut(
+        geometry=geometry, atmo_state=atmo,
+        aot_axis=aot_axis, tcwv_axis=tcwv_axis, bands=bands,
+    )
+    assert joint is preloaded, "build should return the cached preloaded LUT"
+    assert native_calls["count"] == n_preload_calls, (
+        "matching build must not re-run 6S after a preload"
+    )
+
+    # The cache is single-shot: a third call rebuilds fresh.
+    joint2 = backend.build_joint_grid_search_lut(
+        geometry=geometry, atmo_state=atmo,
+        aot_axis=aot_axis, tcwv_axis=tcwv_axis, bands=bands,
+    )
+    assert joint2 is not preloaded
+    assert native_calls["count"] == 2 * n_preload_calls, (
+        "second build (cache cleared) must trigger one fresh batch per band"
+    )
+
+
+def test_preload_joint_grid_search_lut_signature_mismatch_misses_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different aot/tcwv axes (or bands) must NOT be served from cache."""
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            joint_grid_search_lut_max_nodes_per_axis=2,
+            joint_grid_search_lut_max_cases=4096,
+            parallel_backend="openmp",
+        )
+    )
+    runner = backend._runner
+
+    def _fake_run_native_batch(**kwargs):
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        return _NativeBatchResult(
+            outputs={
+                name: np.ascontiguousarray(np.zeros(n_cases, dtype=np.float64))
+                for name in (
+                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
+                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
+                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
+                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
+                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                )
+            },
+            status=np.zeros(n_cases, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _fake_run_native_batch)
+
+    geometry = _sample_geometry((4, 4))
+    atmo = _sample_atmo((4, 4))
+    band = SensorBand(name="B04", center_wavelength=665.0,
+                      bandwidth=30.0, resolution=10.0, band_index=3)
+
+    backend.preload_joint_grid_search_lut(
+        geometry=geometry, atmo_state=atmo,
+        aot_axis=np.array([0.1, 0.2]),
+        tcwv_axis=np.array([1.0, 2.0]),
+        bands=[band],
+    )
+    # Different aot_axis → signature mismatch → cache miss → rebuild.
+    joint_b = backend.build_joint_grid_search_lut(
+        geometry=geometry, atmo_state=atmo,
+        aot_axis=np.array([0.5, 0.8]),  # different
+        tcwv_axis=np.array([1.0, 2.0]),
+        bands=[band],
+    )
+    assert joint_b is not None
+    # Verify cached LUT is still there (cache only cleared on a MATCHING build).
+    assert runner._cached_joint_lut is not None
+
+
 def test_joint_grid_search_lut_band_parallel_runs_each_band_on_a_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

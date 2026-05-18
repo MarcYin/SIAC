@@ -1420,6 +1420,12 @@ class SixSNativeRunner:
         self._openmp_session: _SixSExtensionModule | None = None
         self._worker_sessions: list[_SixSExtensionModule] = []
         self._worker_sessions_available: bool | None = None
+        #: Single-shot cache for a prebuilt joint grid-search LUT (wave 18).
+        #: ``preload_joint_grid_search_lut`` writes here; the next call to
+        #: ``build_joint_grid_search_lut`` reads + clears so subsequent
+        #: requests (e.g. across solver stages) recompute fresh inputs.
+        self._cached_joint_lut: JointGridSearchLUT | None = None
+        self._cached_joint_lut_signature: tuple | None = None
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
         self._observation_time = observation_time
@@ -1503,6 +1509,79 @@ class SixSNativeRunner:
             )
         return None
 
+    @staticmethod
+    def _joint_lut_signature(
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: np.ndarray,
+        tcwv_axis: np.ndarray,
+        bands: list[SensorBand],
+        output_variables: tuple[str, ...] | list[str] | None,
+    ) -> tuple:
+        """Return a hashable identity for a joint-LUT request.
+
+        Wave 18 (opt 4): used to match a precomputed (preload-stage) joint
+        LUT against the build call inside the solver. The signature folds
+        in the call's shape-relevant inputs so a precompute that doesn't
+        match the eventual solver request can't be reused incorrectly.
+        """
+        return (
+            tuple(geometry.sza.shape),
+            tuple(getattr(atmo_state.tco3, "shape", ())),
+            tuple(np.asarray(aot_axis, dtype=np.float64).tolist()),
+            tuple(np.asarray(tcwv_axis, dtype=np.float64).tolist()),
+            tuple(band.name for band in bands),
+            tuple(output_variables) if output_variables is not None else None,
+        )
+
+    def preload_joint_grid_search_lut(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: np.ndarray,
+        tcwv_axis: np.ndarray,
+        bands: list[SensorBand],
+        output_variables: tuple[str, ...] | list[str] | None = None,
+    ) -> JointGridSearchLUT | None:
+        """Eagerly build a joint LUT and cache it for a single later read.
+
+        Designed to be invoked during the prior-fetch stage so the joint
+        LUT's 6S work overlaps with M2/M3 wall-clock instead of running
+        sequentially after them. The very next ``build_joint_grid_search_lut``
+        call with matching inputs picks it up, then the cache is cleared
+        (so staged solvers that rebuild with different inputs aren't
+        served a stale entry).
+        """
+        joint = self.build_joint_grid_search_lut(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            bands=bands,
+            output_variables=output_variables,
+            _bypass_cache=True,
+        )
+        if joint is None:
+            return None
+        self._cached_joint_lut = joint
+        self._cached_joint_lut_signature = self._joint_lut_signature(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            bands=bands,
+            output_variables=output_variables,
+        )
+        logger.info(
+            "Preloaded joint grid-search LUT in parallel with prior fetch "
+            "(%d bands, %d cases).",
+            len(bands),
+            joint.plan.lut_case_count,
+        )
+        return joint
+
     def build_joint_grid_search_lut(
         self,
         *,
@@ -1512,6 +1591,7 @@ class SixSNativeRunner:
         tcwv_axis: np.ndarray,
         bands: list[SensorBand],
         output_variables: tuple[str, ...] | list[str] | None = None,
+        _bypass_cache: bool = False,
     ) -> JointGridSearchLUT | None:
         """Build a joint scene-LUT covering an explicit (aot, tcwv) grid.
 
@@ -1527,6 +1607,30 @@ class SixSNativeRunner:
             return None
         if str(self._config.mode) == "direct":
             return None
+
+        # Wave 18: serve a precomputed LUT if one matches this call exactly.
+        # Single-shot — the cache is cleared on hit so staged solvers that
+        # rebuild with different inputs aren't served a stale entry.
+        if not _bypass_cache and self._cached_joint_lut is not None:
+            sig = self._joint_lut_signature(
+                geometry=geometry,
+                atmo_state=atmo_state,
+                aot_axis=aot_axis,
+                tcwv_axis=tcwv_axis,
+                bands=bands,
+                output_variables=output_variables,
+            )
+            if sig == self._cached_joint_lut_signature:
+                logger.info(
+                    "Using preloaded joint grid-search LUT (%d cases, %d bands).",
+                    self._cached_joint_lut.plan.lut_case_count,
+                    self._cached_joint_lut.band_count,
+                )
+                cached = self._cached_joint_lut
+                self._cached_joint_lut = None
+                self._cached_joint_lut_signature = None
+                return cached
+
         prepared = self._prepare_scene_inputs(geometry=geometry, atmo_state=atmo_state)
         if not np.any(prepared.valid_mask):
             return None

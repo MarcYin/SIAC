@@ -122,6 +122,12 @@ def fetch_priors(
                     message="Surface prior submitted after atmospheric prior.",
                 )
         _submit_fn = lut_submit_fn if lut_submit_fn is not None else submit_fn
+        # Wave 18 (opt 4): pass the solver config through so the LUT
+        # preload can build the joint grid-search LUT when the solver's
+        # aot/tcwv axes are derivable from config alone — this overlaps
+        # the joint LUT 6S build (~98s, the post-wave-17 dominant cost)
+        # with the M3 surface-prior reprojection.
+        solver_config = getattr(getattr(config, "algorithms", None), "solver", None)
         f_lut = maybe_submit_lut_preload_fn(
             SubmitAdapter(_submit_fn),
             rt_model,
@@ -130,6 +136,7 @@ def fetch_priors(
             requested_band_names=solver_band_names,
             retries=retries,
             observer_id=observer_id,
+            solver_config=solver_config,
         )
         timeout_stage = "M3.surface_prior"
         active_timeout = m3_timeout

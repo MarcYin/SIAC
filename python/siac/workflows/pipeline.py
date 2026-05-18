@@ -153,23 +153,76 @@ def _maybe_submit_lut_preload(
     requested_band_names: tuple[str, ...] | None,
     retries: int,
     observer_id: str | None = None,
+    solver_config: Any | None = None,
 ) -> Any | None:
-    """Start LUT scene preload task when backend supports it."""
-    preload_fn = getattr(rt_model, "preload_scene_subset", None)
-    if not callable(preload_fn):
-        return None
+    """Start an RT-model preload task when the backend supports one.
 
+    Wave 18 (opt 4): prefer the **joint** grid-search LUT preload (built
+    once and cached for the solver to reuse). The joint LUT is the
+    dominant 6S work in the post-wave-17 pipeline (~98s / 8.8min) and
+    its inputs are knowable from config + obs + atmo alone — so it can
+    run in parallel with the M3 surface-prior reprojection. Falls back
+    to the per-candidate scene-LUT preload when the backend doesn't
+    expose ``preload_joint_grid_search_lut`` or when the solver's grid
+    axes can't be derived from config (fixed-parameter mode, staged
+    solvers).
+    """
     bands = _select_solver_bands_for_preload(
         obs.sensor_config,
         requested_band_names=requested_band_names,
     )
     preload_geometry = _geometry_for_atmo_grid(obs.geometry, atmo)
+    observer = resolve_execution_observer(observer_id)
+
+    joint_preload_fn = getattr(rt_model, "preload_joint_grid_search_lut", None)
+    if callable(joint_preload_fn) and solver_config is not None:
+        # Local import to avoid an algorithms ↔ workflows cycle.
+        from siac.algorithms.solver.multigrid import derive_grid_search_axes
+
+        axes = derive_grid_search_axes(solver_config)
+        if axes is not None:
+            aot_axis, tcwv_axis = axes
+            logger.info(
+                "Starting joint grid-search LUT preload in parallel (%d band%s, "
+                "aot:%d × tcwv:%d).",
+                len(bands),
+                "" if len(bands) == 1 else "s",
+                int(aot_axis.size),
+                int(tcwv_axis.size),
+            )
+            if observer is not None:
+                observer.increment_counter("lut_preload_started", stage="LUT.preload")
+                observer.emit(
+                    "progress",
+                    stage="LUT.preload",
+                    message="Submitting joint grid-search LUT preload.",
+                    band_count=len(bands),
+                    geometry_shape=tuple(preload_geometry.sza.shape),
+                )
+            return executor.submit(
+                _call_with_retries,
+                lambda: joint_preload_fn(
+                    geometry=preload_geometry,
+                    atmo_state=atmo,
+                    aot_axis=aot_axis,
+                    tcwv_axis=tcwv_axis,
+                    bands=list(bands),
+                ),
+                (),
+                retries=retries,
+                stage_name="LUT.preload",
+                observer_id=observer_id,
+            )
+
+    preload_fn = getattr(rt_model, "preload_scene_subset", None)
+    if not callable(preload_fn):
+        return None
+
     logger.info(
         "Starting LUT preload in parallel on the atmospheric grid (scene subset + %d band grid%s).",
         len(bands),
         "" if len(bands) == 1 else "s",
     )
-    observer = resolve_execution_observer(observer_id)
     if observer is not None:
         observer.increment_counter("lut_preload_started", stage="LUT.preload")
         observer.emit(

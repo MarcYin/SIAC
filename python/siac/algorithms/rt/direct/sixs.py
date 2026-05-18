@@ -126,6 +126,33 @@ class SixSBackend:
             output_variables=self.requested_output_variables,
         )
 
+    def preload_joint_grid_search_lut(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: np.ndarray,
+        tcwv_axis: np.ndarray,
+        bands: list[SensorBand],
+    ) -> JointGridSearchLUT | None:
+        """Build the joint LUT eagerly and cache it for the next solver call.
+
+        Wave 18 (opt 4): called during prior-fetch so the joint LUT's 6S
+        work overlaps with the surface-prior reprojection — saves the
+        single-pass cost of the LUT build off the critical path. The next
+        ``build_joint_grid_search_lut`` call with matching inputs picks
+        up the cached LUT (single-shot — staged solvers that rebuild with
+        different inputs miss and recompute fresh).
+        """
+        return self._runner.preload_joint_grid_search_lut(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            bands=bands,
+            output_variables=self.requested_output_variables,
+        )
+
     @staticmethod
     def _coerce_result(outputs: Any) -> RTCoefficients:
         if isinstance(outputs, RTCoefficients):

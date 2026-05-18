@@ -54,6 +54,40 @@ FixedAtmosphericParameter: TypeAlias = Literal["none", "aot", "tcwv"]
 StageInitialState: TypeAlias = Literal["prior", "previous"]
 
 
+def derive_grid_search_axes(
+    config: MultiGridConfig,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return the (aot_axis, tcwv_axis) that would be used by the block-grid
+    search for the given config, or None when the axes depend on the per-pixel
+    prior (fixed-parameter mode) or vary across stages.
+
+    Used by the pipeline preload step to compute the joint LUT in parallel
+    with prior-fetching, before the solver itself runs. When this returns
+    None, the joint LUT can't be safely precomputed — it must wait for the
+    solver to inspect the prior and decide.
+    """
+    # Staged solvers may use different fixed_parameter per stage; each stage
+    # rebuilds its own grid axes. The conservative move is to skip preload
+    # there — the savings exist only in the simple single-pass case anyway.
+    if getattr(config, "stages", None):
+        return None
+    fixed = str(getattr(config, "fixed_atmospheric_parameter", "none"))
+    if fixed in {"aot", "tcwv"}:
+        # When one of the parameters is fixed, its axis derives from the
+        # per-pixel prior — we can't know it until the prior is in hand.
+        return None
+
+    n_aot = max(3, int(config.grid_search_aot_points))
+    n_tcwv = max(3, int(config.grid_search_tcwv_points))
+    aot_axis = np.linspace(
+        config.aot_bounds[0], config.aot_bounds[1], n_aot, dtype=np.float32
+    )
+    tcwv_axis = np.linspace(
+        config.tcwv_bounds[0], config.tcwv_bounds[1], n_tcwv, dtype=np.float32
+    )
+    return aot_axis, tcwv_axis
+
+
 def build_solver_valid_mask(
     cloud_mask: xr.DataArray,
     toa: xr.DataArray,
