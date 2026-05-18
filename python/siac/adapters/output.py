@@ -477,17 +477,26 @@ class ConfiguredOutputWriter:
         output_dir: Path,
     ) -> dict[str, Path]:
         """Write all preview PNGs: false colour, AOT/TCWV maps, cloud overlay, scatter."""
+        # Wave 18f: the previews collectively cost ~16 s on T33KWP at full
+        # resolution. Gate them on a dedicated ``include_previews`` field so
+        # production runs that don't need quicklook PNGs can skip the work
+        # without losing the RGB GeoTIFF quicklook (still gated by
+        # ``include_rgb``). Backwards-compatible: default is True.
         if not self.defaults.include_rgb:
+            return {}
+        if not getattr(self.defaults, "include_previews", True):
             return {}
 
         preview_dir = output_dir / "preview"
         artifacts: dict[str, Path] = {}
+        max_size_px = int(getattr(self.defaults, "preview_max_size_px", 2048))
 
         # False-colour composite (NIR-Red-Green)
         try:
             fc_path = write_false_colour_preview(
                 result.boa,
                 preview_dir / "false_colour.png",
+                max_size_px=max_size_px,
             )
             if fc_path is not None:
                 artifacts["preview.false_colour"] = fc_path
@@ -504,6 +513,7 @@ class ConfiguredOutputWriter:
                 palette="magma",
                 title="AOT 550 nm",
                 cloud_mask=result.cloud_mask,
+                max_size_px=max_size_px,
             )
             artifacts["preview.aot"] = aot_path
         except Exception:
@@ -519,6 +529,7 @@ class ConfiguredOutputWriter:
                 title="TCWV (cm)",
                 unit="cm",
                 cloud_mask=result.cloud_mask,
+                max_size_px=max_size_px,
             )
             artifacts["preview.tcwv"] = tcwv_path
         except Exception:
@@ -530,6 +541,7 @@ class ConfiguredOutputWriter:
                 result.boa,
                 result.cloud_mask,
                 preview_dir / "cloud_mask.png",
+                max_size_px=max_size_px,
             )
             if cloud_path is not None:
                 artifacts["preview.cloud_mask"] = cloud_path

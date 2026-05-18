@@ -88,12 +88,44 @@ class AtmosphericCorrector:
 
             work_items.append((band_name, band_spec, band_data))
 
+        # Wave 18e: share the scene-level RT prep (geometry/atmo case_arrays
+        # + LUT plan) across all bands instead of re-running it inside every
+        # per-band ``compute_coefficients`` call. The 6S kernel work itself
+        # is still per-band — each spectral response is integrated separately
+        # — but the wrapping prep doesn't depend on spectral content and is
+        # safe to share across the per-band executor threads.
+        #
+        # Auto-detect via ``getattr``: backends that don't expose the helper
+        # (LUT/emulator, or any custom RTModelBackend) fall through to the
+        # legacy per-band ``compute_coefficients`` call. The contract here is
+        # purely additive — no behaviour changes for backends that haven't
+        # opted in.
+        prepare_fn = getattr(self.rt_model, "prepare_correction_scene", None)
+        compute_with_prep = getattr(
+            self.rt_model, "compute_coefficients_with_prepared", None
+        )
+        prepared_scene: Any | None = None
+        if callable(prepare_fn) and callable(compute_with_prep) and len(work_items) > 1:
+            try:
+                prepared_scene = prepare_fn(geometry=geometry, atmo_state=atmo_state)
+            except Exception:
+                logger.exception(
+                    "prepare_correction_scene failed; falling back to per-band "
+                    "compute_coefficients."
+                )
+                prepared_scene = None
+
         def _correct_single_band(
             band_spec: Any,
             band_data: xr.DataArray,
         ) -> tuple[xr.DataArray, xr.DataArray, float]:
             t_band = time.perf_counter()
-            coeffs = self.rt_model.compute_coefficients(geometry, atmo_state, band_spec, False)
+            if prepared_scene is not None:
+                coeffs = compute_with_prep(prepared_scene, band_spec)
+            else:
+                coeffs = self.rt_model.compute_coefficients(
+                    geometry, atmo_state, band_spec, False
+                )
             coeffs = resample_coefficients_to_template(coeffs, band_data)
             boa = coeffs.apply_correction(band_data)
             # Reflectance validity range — siac.constants.

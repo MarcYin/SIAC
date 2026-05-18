@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from siac.algorithms.rt.direct.sixs_native import JointGridSearchLUT, SixSNativeRunner
+from siac.algorithms.rt.direct.sixs_native import (
+    JointGridSearchLUT,
+    PreparedCorrectionScene,
+    SixSNativeRunner,
+)
 from siac.rt_setup import resolve_backend_rt_setup
 from siac.runtime import RTCoefficients
 
@@ -125,6 +129,36 @@ class SixSBackend:
             bands=bands,
             output_variables=self.requested_output_variables,
         )
+
+    def prepare_correction_scene(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+    ) -> PreparedCorrectionScene:
+        """Share the scene prep + LUT plan across per-band correction calls.
+
+        Wave 18e: M6 correction calls compute_coefficients per band, which
+        previously redid the same per-scene prep work 13 times. With this
+        helper the prep runs once and is reused by
+        :meth:`compute_coefficients_with_prepared` for each band.
+        """
+        return self._runner.prepare_correction_scene(
+            geometry=geometry, atmo_state=atmo_state
+        )
+
+    def compute_coefficients_with_prepared(
+        self,
+        prepared_scene: PreparedCorrectionScene,
+        band: SensorBand,
+    ) -> RTCoefficients:
+        """Run RT for a single band using shared scene prep (wave 18e)."""
+        outputs = self._runner.compute_coefficients_with_prepared(
+            prepared_scene=prepared_scene,
+            band=band,
+            output_variables=self.requested_output_variables,
+        )
+        return self._coerce_result(outputs)
 
     def preload_joint_grid_search_lut(
         self,

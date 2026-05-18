@@ -70,6 +70,22 @@ class OutputDefaultsConfig(SIACBaseModel):
     include_rgb: bool = True
     include_uncertainty: bool = True
     include_auxiliary: bool = True
+    #: Wave 18f: whether to render the decorative PNG previews
+    #: (cloud-mask overlay, false-colour, AOT/TCWV colour maps, AOT
+    #: scatter plots). These add ~12-16 s of wall-clock per scene on
+    #: T33KWP because they run the per-pixel scaling + PIL render on
+    #: the full-resolution BOA bands. Set to ``False`` for production
+    #: runs that don't need the visual quicklooks — the RGB GeoTIFF
+    #: quicklook (gated by ``include_rgb``) is still written.
+    include_previews: bool = True
+    #: Max edge length (pixels) for preview PNG outputs. Wave 18f
+    #: downsamples the input BOA bands to this size before the
+    #: per-pixel PIL render — the cloud-mask and false-colour previews
+    #: were spending most of their wall-clock processing 10980×10980
+    #: arrays for what eventually displays at ~1000-2000 px anyway. A
+    #: 2048-px cap captures essentially all the visual fidelity at a
+    #: fraction of the cost.
+    preview_max_size_px: int = Field(default=2048, gt=0)
     skip_correction: bool = False
     boa_dtype: BOADType = BOADType.FLOAT32
     boa_scale: float = Field(default=10000.0, gt=0.0)

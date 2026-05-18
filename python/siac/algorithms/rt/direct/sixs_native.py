@@ -1019,6 +1019,27 @@ class _SceneLUTPlan:
     lut_case_count: int
 
 
+@dataclass(frozen=True)
+class PreparedCorrectionScene:
+    """Scene-level prep + LUT plan shared by all bands in M6 correction.
+
+    Wave 18e: in the previous design every per-band ``compute_coefficients``
+    call inside :class:`siac.algorithms.correction.AtmosphericCorrector`
+    re-ran ``_prepare_scene_inputs`` and ``_build_scene_lut_plan`` from
+    scratch — work that doesn't depend on the spectral band and is
+    redundant across 13 bands. This object captures that prep once so the
+    per-band executor can dispatch only the band-specific 6S work.
+
+    The object is intentionally **read-only** and safe to pass to multiple
+    threads concurrently — the 6S call reads ``prepared.case_arrays`` and
+    ``plan.grid_case_arrays`` but never mutates them.
+    """
+
+    prepared: _PreparedSceneInputs
+    plan: _SceneLUTPlan
+    use_scene_lut: bool
+
+
 class JointGridSearchLUT:
     """Precomputed RT-coefficient LUT spanning a 2-D (aot, tcwv) grid.
 
@@ -1796,6 +1817,74 @@ class SixSNativeRunner:
                 native_outputs = self._run_native_batch(**self._band_native_kwargs(prepared, band))
             outputs.append(self._render_native_outputs(prepared, selected_names, native_outputs))
         return outputs
+
+    def prepare_correction_scene(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+    ) -> PreparedCorrectionScene:
+        """Build a shared scene prep + LUT plan once for all bands in M6.
+
+        Wave 18e: returns a frozen :class:`PreparedCorrectionScene` that
+        :meth:`compute_coefficients_with_prepared` can consume for each
+        band without redoing the per-band-redundant prep work (scene
+        inputs assembly, valid-mask construction, scene-LUT plan).
+
+        The object is safe to share across threads — every consumer reads
+        from it but never mutates it.
+        """
+        prepared = self._prepare_scene_inputs(geometry=geometry, atmo_state=atmo_state)
+        plan = _build_scene_lut_plan(
+            prepared.case_arrays,
+            max_nodes_per_axis=int(self._config.scene_lut_max_nodes_per_axis),
+            max_cases=int(self._config.scene_lut_max_cases),
+        )
+        use_scene_lut = _should_use_scene_lut(
+            mode=str(self._config.mode),
+            direct_case_count=plan.direct_case_count,
+            lut_case_count=plan.lut_case_count,
+            min_pixels=int(self._config.scene_lut_min_pixels),
+            required_speedup=float(self._config.scene_lut_required_speedup),
+        )
+        return PreparedCorrectionScene(
+            prepared=prepared,
+            plan=plan,
+            use_scene_lut=use_scene_lut,
+        )
+
+    def compute_coefficients_with_prepared(
+        self,
+        *,
+        prepared_scene: PreparedCorrectionScene,
+        band: SensorBand,
+        output_variables: tuple[str, ...] | list[str] | None = None,
+    ) -> dict[str, xr.DataArray]:
+        """Run RT for a single band using a pre-computed scene prep.
+
+        Wave 18e: in M6 correction this is called per band inside the
+        per-band executor — the 6S kernel work is unavoidably band-specific
+        (each band has its own spectral response), but the scene
+        preparation that wraps it is now done once via
+        :meth:`prepare_correction_scene` and shared.
+        """
+        selected_names = _to_native_output_names(output_variables)
+        if not np.any(prepared_scene.prepared.valid_mask):
+            return _nan_output_arrays(prepared_scene.prepared.template, selected_names)
+        if prepared_scene.use_scene_lut:
+            native_outputs = self._run_scene_lut_batch(
+                prepared=prepared_scene.prepared,
+                band=band,
+                selected_names=selected_names,
+                plan=prepared_scene.plan,
+            )
+        else:
+            native_outputs = self._run_native_batch(
+                **self._band_native_kwargs(prepared_scene.prepared, band)
+            )
+        return self._render_native_outputs(
+            prepared_scene.prepared, selected_names, native_outputs
+        )
 
     def _prepare_scene_inputs(
         self,

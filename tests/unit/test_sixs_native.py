@@ -1279,6 +1279,179 @@ def test_joint_grid_search_lut_amortises_native_calls(
     )
 
 
+def test_prepare_correction_scene_shares_prep_across_bands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave 18e: per-band ``compute_coefficients_with_prepared`` calls must
+    reuse the scene prep + LUT plan from a single
+    ``prepare_correction_scene`` invocation, instead of redoing the prep
+    work for every band the way the legacy per-band path did.
+
+    We verify this by counting calls to the underlying
+    ``_prepare_scene_inputs`` / ``_build_scene_lut_plan`` helpers.
+    """
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            scene_lut_max_nodes_per_axis=2,
+            scene_lut_max_cases=256,
+            parallel_backend="openmp",  # exercise mockable batch path
+        )
+    )
+    runner = backend._runner
+
+    prepare_count = {"n": 0}
+    real_prepare = runner._prepare_scene_inputs
+
+    def _counting_prepare(*args, **kwargs):
+        prepare_count["n"] += 1
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_prepare_scene_inputs", _counting_prepare)
+
+    def _fake_run_native_batch(**kwargs):
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        return _NativeBatchResult(
+            outputs={
+                name: np.ascontiguousarray(np.zeros(n_cases, dtype=np.float64))
+                for name in (
+                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
+                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
+                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
+                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
+                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                )
+            },
+            status=np.zeros(n_cases, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _fake_run_native_batch)
+
+    geometry = _sample_geometry((4, 4))
+    atmo = _sample_atmo((4, 4))
+    bands = [
+        SensorBand(name=f"B{i:02d}", center_wavelength=400.0 + 50.0 * i,
+                   bandwidth=30.0, resolution=10.0, band_index=i)
+        for i in range(5)
+    ]
+
+    # Path A: legacy per-band compute_coefficients — prep runs N_bands times.
+    prepare_count["n"] = 0
+    for band in bands:
+        backend.compute_coefficients(geometry, atmo, band, compute_jacobian=False)
+    legacy_prep_count = prepare_count["n"]
+    assert legacy_prep_count == len(bands), (
+        f"Legacy path should run prep once per band; got {legacy_prep_count}"
+    )
+
+    # Path B: wave-18e shared prep — prep runs exactly once.
+    prepare_count["n"] = 0
+    prepared = backend.prepare_correction_scene(geometry=geometry, atmo_state=atmo)
+    for band in bands:
+        backend.compute_coefficients_with_prepared(prepared, band)
+    shared_prep_count = prepare_count["n"]
+    assert shared_prep_count == 1, (
+        f"Shared-prep path should run prep once total; got {shared_prep_count}"
+    )
+
+
+def test_compute_coefficients_with_prepared_matches_per_band(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave 18e correctness: shared-prep output must be bit-identical to the
+    per-band ``compute_coefficients`` output for the same (geometry, atmo,
+    band) inputs. The optimization is purely about avoiding redundant prep
+    work — there's no numerical difference allowed.
+    """
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            scene_lut_max_nodes_per_axis=2,
+            scene_lut_max_cases=256,
+            parallel_backend="openmp",
+        )
+    )
+    runner = backend._runner
+
+    def _deterministic_fake_run_native_batch(**kwargs):
+        # Encode the band's spectral_wlinf into the outputs so the test
+        # can detect cache contamination across bands.
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        wlinf = float(kwargs["spectral_wlinf"])
+        sza = np.asarray(kwargs["sza_deg"], dtype=np.float64)
+        outputs = {
+            "xap": np.full(n_cases, wlinf, dtype=np.float64) + 0.01 * sza,
+            "xbp": np.full(n_cases, wlinf * 2.0, dtype=np.float64),
+            "xcp": np.full(n_cases, wlinf * 3.0, dtype=np.float64),
+        }
+        outputs.update(
+            {
+                name: np.zeros(n_cases, dtype=np.float64)
+                for name in (
+                    "tgasm", "totg", "rho_atm", "rho_atm_pol", "trans_solar",
+                    "trans_view", "spher_albedo", "raylscatd", "aerscatd",
+                    "raylscatu", "aerscatu", "transm_h2o", "transm_o3",
+                    "transm_other", "dwn_irr_dir", "dwn_irr_dif",
+                    "dwn_irr_env", "rad_path",
+                )
+            }
+        )
+        return _NativeBatchResult(
+            outputs={
+                name: np.ascontiguousarray(values, dtype=np.float64)
+                for name, values in outputs.items()
+            },
+            status=np.zeros(n_cases, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _deterministic_fake_run_native_batch)
+
+    geometry = _sample_geometry((4, 4))
+    atmo = _sample_atmo((4, 4))
+    bands = [
+        SensorBand(name="B04", center_wavelength=665.0, bandwidth=30.0,
+                   resolution=10.0, band_index=3),
+        SensorBand(name="B08", center_wavelength=842.0, bandwidth=115.0,
+                   resolution=10.0, band_index=7),
+    ]
+
+    # Per-band reference.
+    per_band_results = []
+    for band in bands:
+        coeffs = backend.compute_coefficients(
+            geometry, atmo, band, compute_jacobian=False
+        )
+        per_band_results.append((coeffs.xap.values, coeffs.xbp.values, coeffs.xcp.values))
+
+    # Shared-prep variant.
+    prepared = backend.prepare_correction_scene(geometry=geometry, atmo_state=atmo)
+    shared_prep_results = []
+    for band in bands:
+        coeffs = backend.compute_coefficients_with_prepared(prepared, band)
+        shared_prep_results.append(
+            (coeffs.xap.values, coeffs.xbp.values, coeffs.xcp.values)
+        )
+
+    for (xap_a, xbp_a, xcp_a), (xap_b, xbp_b, xcp_b) in zip(
+        per_band_results, shared_prep_results
+    ):
+        np.testing.assert_array_equal(xap_a, xap_b)
+        np.testing.assert_array_equal(xbp_a, xbp_b)
+        np.testing.assert_array_equal(xcp_a, xcp_b)
+
+
 def test_preload_joint_grid_search_lut_serves_subsequent_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
