@@ -1556,23 +1556,102 @@ class SixSNativeRunner:
         selected_names = _to_native_output_names(
             output_variables or getattr(self._config, "output_variables", None)
         )
-        band_outputs: list[_NativeBatchResult] = []
         logger.debug(
             "Building joint grid-search LUT: %d pixels, %d cases per band, %d bands.",
             plan.direct_case_count,
             plan.lut_case_count,
             len(bands),
         )
-        for band in bands:
-            native_kwargs = self._band_native_kwargs(prepared, band)
-            native_kwargs.update(plan.grid_case_arrays)
-            band_outputs.append(self._run_native_batch(**native_kwargs))
+        band_outputs = self._run_joint_lut_bands(
+            prepared=prepared, plan=plan, bands=bands
+        )
         return JointGridSearchLUT(
             prepared=prepared,
             plan=plan,
             band_native_outputs=band_outputs,
             selected_names=selected_names,
         )
+
+    def _run_joint_lut_bands(
+        self,
+        *,
+        prepared: _PreparedSceneInputs,
+        plan: _SceneLUTPlan,
+        bands: list[SensorBand],
+    ) -> list[_NativeBatchResult]:
+        """Run the joint LUT's per-band 6S batches.
+
+        When ``parallel_backend == "worker_libraries"`` we dispatch the
+        per-band batches concurrently across isolated library sessions —
+        each 6S call has a substantial serial portion that OpenMP can't
+        cover, so band-level parallelism gives a meaningful wall-clock win
+        on top of the per-call OpenMP scaling. With the OpenMP backend the
+        runner already saturates cores for a single batch, so we keep the
+        sequential band loop to avoid oversubscription.
+        """
+        backend = str(getattr(self._config, "parallel_backend", "openmp"))
+        n_bands = len(bands)
+        if backend != "worker_libraries" or n_bands <= 1:
+            band_outputs: list[_NativeBatchResult] = []
+            for band in bands:
+                native_kwargs = self._band_native_kwargs(prepared, band)
+                native_kwargs.update(plan.grid_case_arrays)
+                band_outputs.append(self._run_native_batch(**native_kwargs))
+            return band_outputs
+
+        worker_count = min(n_bands, self._worker_library_count())
+        sessions = self._ensure_worker_sessions(worker_count)
+        if not sessions:
+            band_outputs = []
+            for band in bands:
+                native_kwargs = self._band_native_kwargs(prepared, band)
+                native_kwargs.update(plan.grid_case_arrays)
+                band_outputs.append(self._run_native_batch(**native_kwargs))
+            return band_outputs
+
+        # Each session uses a fraction of the available OpenMP threads so
+        # the sum across sessions stays close to (but does not exceed) the
+        # physical core budget. The Fortran 6S kernel is largely serial
+        # once you go past 4 threads per call anyway, so this allocation
+        # captures most of the OpenMP win plus all of the band-parallelism.
+        per_worker_threads = max(1, int(self._native_threads) // worker_count)
+        results_by_band: dict[int, _NativeBatchResult] = {}
+
+        # Pre-build per-band kwargs outside the executor to keep the worker
+        # closures small and to surface band-spec errors deterministically.
+        band_kwargs: list[dict[str, Any]] = []
+        for band in bands:
+            kwargs = self._band_native_kwargs(prepared, band)
+            kwargs.update(plan.grid_case_arrays)
+            band_kwargs.append(kwargs)
+
+        def _run_single_band(
+            session: _SixSExtensionModule, band_index: int
+        ) -> _NativeBatchResult:
+            kwargs = band_kwargs[band_index]
+            result = session.run_batch(n_threads=per_worker_threads, **kwargs)
+            failed = result.status != 0
+            if np.any(failed):
+                for _name, values in result.outputs.items():
+                    values[failed] = np.nan
+                logger.warning(
+                    "6S native runner returned %d non-zero status values "
+                    "for joint-LUT band #%d.",
+                    int(np.count_nonzero(failed)),
+                    band_index,
+                )
+            return result
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_to_band = {
+                executor.submit(_run_single_band, sessions[idx % worker_count], idx): idx
+                for idx in range(n_bands)
+            }
+            for future in future_to_band:
+                band_index = future_to_band[future]
+                results_by_band[band_index] = future.result()
+
+        return [results_by_band[idx] for idx in range(n_bands)]
 
     def _compute_band_outputs_multi(
         self,

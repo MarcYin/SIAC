@@ -164,6 +164,60 @@ class TestAtmosphericCorrector:
         assert result.tcwv is not None
         np.testing.assert_allclose(result.aot.values, 0.15)
 
+    def test_correct_overlaps_writes_with_compute(self, sample_inputs, mock_rt_model):
+        """Wave 18: the per-band COG write should run inside the same executor
+        task as the per-band compute so writes overlap with continued compute.
+
+        We verify this by recording the wall-clock interval each band's writer
+        callback spends and checking that the *total of those intervals*
+        exceeds the *clock span* of when they're observed — i.e. multiple
+        writes were in flight concurrently.
+        """
+        import threading
+        import time
+
+        toa, geometry, atmo_state = sample_inputs
+        corrector = AtmosphericCorrector(
+            mock_rt_model, SENTINEL2A_CONFIG, correction_workers=4
+        )
+
+        write_intervals: list[tuple[float, float]] = []
+        write_lock = threading.Lock()
+        first_call_time: list[float] = []
+
+        def _slow_writer(band_name: str, boa: xr.DataArray) -> xr.DataArray:
+            _ = band_name
+            t0 = time.perf_counter()
+            if not first_call_time:
+                first_call_time.append(t0)
+            # 50ms simulated GIL-releasing I/O (rasterio.to_raster releases
+            # the GIL inside the encoder so multiple bands can write in
+            # parallel). Sleep does too.
+            time.sleep(0.05)
+            t1 = time.perf_counter()
+            with write_lock:
+                write_intervals.append((t0, t1))
+            return boa
+
+        t_start = time.perf_counter()
+        corrector.correct(toa, geometry, atmo_state, boa_band_writer=_slow_writer)
+        t_end = time.perf_counter()
+
+        assert len(write_intervals) >= 3, "all 3 bands should have been written"
+
+        # Sum of write durations vs wall-clock span: if writes truly overlap
+        # with compute / each other, sum(durations) > span * 1.5.
+        sum_durations = sum(end - start for start, end in write_intervals)
+        clock_span = t_end - t_start
+        # Heuristic: 3 bands × 50ms = 150ms of write work. If purely serial
+        # the clock span ≈ sum_durations. With overlap the clock span is
+        # significantly less. Use a conservative threshold of 0.8× to avoid
+        # flake on slow CI.
+        assert clock_span < sum_durations * 0.8, (
+            f"writes did not overlap: sum_durations={sum_durations:.3f}s "
+            f"vs clock_span={clock_span:.3f}s"
+        )
+
     def test_invalid_rt_model_raises(self):
         """Passing non-RTModelBackend should raise TypeError."""
         with pytest.raises(TypeError, match="rt_model must implement RTModelBackend"):

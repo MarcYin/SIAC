@@ -829,10 +829,16 @@ def test_scene_lut_mode_interpolates_linear_native_outputs(monkeypatch: pytest.M
         resolution=10.0,
         band_index=3,
     )
+    # parallel_backend="openmp" forces the path that goes through
+    # ``_run_native_batch`` (which the test below monkey-patches). The
+    # default is ``worker_libraries``, which would skip the mock and try
+    # to load real .so copies — see wave 18 for the band-parallel
+    # implementation that introduced that.
     direct_runner = SixSBackend(
         sixs_config=SixSAlgorithmConfig(
             mode="direct",
             output_variables=("xap", "xbp", "xcp", "tgasm"),
+            parallel_backend="openmp",
         )
     )._runner
     scene_runner = SixSBackend(
@@ -841,6 +847,7 @@ def test_scene_lut_mode_interpolates_linear_native_outputs(monkeypatch: pytest.M
             output_variables=("xap", "xbp", "xcp", "tgasm"),
             scene_lut_max_nodes_per_axis=2,
             scene_lut_max_cases=256,
+            parallel_backend="openmp",
         )
     )._runner
 
@@ -978,6 +985,10 @@ def test_joint_grid_search_lut_evaluate_matches_direct_at_grid_points(
             scene_lut_max_cases=256,
             joint_grid_search_lut_max_nodes_per_axis=2,
             joint_grid_search_lut_max_cases=4096,
+            # Force the openmp path so the _run_native_batch mock below
+            # is exercised. The default worker_libraries path bypasses it
+            # and loads real .so sessions.
+            parallel_backend="openmp",
         )
     )
     runner = backend._runner
@@ -1170,6 +1181,10 @@ def test_joint_grid_search_lut_amortises_native_calls(
             scene_lut_max_cases=256,
             joint_grid_search_lut_max_nodes_per_axis=2,
             joint_grid_search_lut_max_cases=4096,
+            # The mock below patches _run_native_batch — force the openmp
+            # path through it instead of the band-parallel worker_libraries
+            # path that goes via session.run_batch directly.
+            parallel_backend="openmp",
         )
     )
     runner = backend._runner
@@ -1262,6 +1277,137 @@ def test_joint_grid_search_lut_amortises_native_calls(
         f"Joint LUT ({joint_total_calls}) should use fewer 6S calls than "
         f"direct ({direct_calls})."
     )
+
+
+def test_joint_grid_search_lut_band_parallel_runs_each_band_on_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave 18: with parallel_backend='worker_libraries' the joint-LUT band
+    loop dispatches each band's 6S batch to a different isolated library
+    session in parallel, rather than re-using one OpenMP-shared session.
+
+    The test verifies (a) each band's call goes through ``session.run_batch``
+    rather than the OpenMP-shared ``_run_native_batch``, and (b) the
+    final per-band outputs preserve band order.
+    """
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            scene_lut_max_nodes_per_axis=2,
+            scene_lut_max_cases=256,
+            joint_grid_search_lut_max_nodes_per_axis=2,
+            joint_grid_search_lut_max_cases=4096,
+            parallel_backend="worker_libraries",
+            worker_libraries=3,
+        )
+    )
+    runner = backend._runner
+
+    session_call_counts: list[int] = []
+
+    class _StubSession:
+        def __init__(self, marker: int) -> None:
+            self._marker = marker
+            self.calls = 0
+
+        def run_batch(self, *, n_threads: int, **kwargs):
+            _ = n_threads
+            self.calls += 1
+            n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+            # Encode the band's spectral_wlinf into xap so the test can
+            # verify each result came from the band it was issued for.
+            wlinf = float(kwargs["spectral_wlinf"])
+            outputs = {
+                name: np.zeros(n_cases, dtype=np.float64)
+                for name in (
+                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
+                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
+                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
+                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
+                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                )
+            }
+            outputs["xap"] = np.full(n_cases, wlinf, dtype=np.float64)
+            return _NativeBatchResult(
+                outputs={
+                    name: np.ascontiguousarray(values, dtype=np.float64)
+                    for name, values in outputs.items()
+                },
+                status=np.zeros(n_cases, dtype=np.int32),
+            )
+
+    stub_sessions = [_StubSession(i) for i in range(3)]
+
+    def _fake_ensure_workers(worker_count: int):
+        return stub_sessions[:worker_count]
+
+    monkeypatch.setattr(runner, "_ensure_worker_sessions", _fake_ensure_workers)
+
+    # If anything went wrong and the code falls back to _run_native_batch,
+    # this raises and the test fails clearly rather than silently passing.
+    def _explode_run_native_batch(**_kwargs):
+        raise AssertionError(
+            "_run_native_batch must not be called when band-parallel "
+            "worker_libraries path is in use."
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _explode_run_native_batch)
+
+    bands = [
+        SensorBand(
+            name=f"B{i:02d}",
+            # Use distinct, increasing wavelengths so xap encodes a
+            # band-unique value once spectral_wlinf is extracted.
+            center_wavelength=400.0 + 50.0 * i,
+            bandwidth=30.0,
+            resolution=10.0,
+            band_index=i,
+        )
+        for i in range(5)
+    ]
+    aot_axis = np.array([0.10, 0.20, 0.30], dtype=np.float64)
+    tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    joint = backend.build_joint_grid_search_lut(
+        geometry=_sample_geometry((4, 4)),
+        atmo_state=_sample_atmo((4, 4)),
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        bands=bands,
+    )
+    assert joint is not None
+    assert joint.band_count == len(bands)
+
+    # 5 bands across 3 sessions → at least each session should have run
+    # at least once, and the total calls should equal the band count.
+    total_session_calls = sum(s.calls for s in stub_sessions)
+    assert total_session_calls == len(bands), (
+        f"Expected one session call per band ({len(bands)}); "
+        f"got {total_session_calls} (per-session: "
+        f"{[s.calls for s in stub_sessions]})"
+    )
+
+    # Verify band-order is preserved in the returned outputs. xap was
+    # encoded with each band's spectral_wlinf — extract back and check
+    # bands appear in their input order.
+    for band_idx, band in enumerate(bands):
+        # All non-NaN xap values for this band should equal that band's wlinf.
+        outputs_for_band = joint.evaluate(0.20, 2.0)[band_idx]
+        xap_arr = np.asarray(outputs_for_band["xap"].values).ravel()
+        finite = xap_arr[np.isfinite(xap_arr)]
+        # Every finite value should be near the band's spectral lower bound.
+        # Our SensorBand has bandwidth=30.0 (nm) so wlinf = center/1000 - 0.015 µm.
+        expected_wlinf = (band.center_wavelength - 15.0) / 1000.0
+        assert np.allclose(finite, expected_wlinf, rtol=1e-3, atol=1e-3), (
+            f"Band {band.name}: expected xap≈{expected_wlinf:.4f}, "
+            f"got {finite[:3]}"
+        )
 
 
 def test_worker_library_backend_slices_batches_and_merges_outputs(

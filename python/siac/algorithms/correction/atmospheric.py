@@ -105,34 +105,66 @@ class AtmosphericCorrector:
             masked_boa = boa.where(band_valid)
             return masked_boa, (~band_valid), (time.perf_counter() - t_band)
 
-        per_band_results: dict[str, tuple[xr.DataArray, xr.DataArray, float]] = {}
+        # Wave 18 perf change: fold the COG write into each band's worker
+        # task so writes overlap with continued compute on other bands,
+        # instead of serialising writes after the compute phase finishes.
+        # In wave 17 the write phase was sequential and accounted for ~96s
+        # of wall-clock on T33KWP (cf. /tmp/wave17_profile.txt). Each
+        # ``rasterio`` COG encode releases the GIL, so the same
+        # ThreadPoolExecutor can carry the write while the next band is
+        # computed.
+        def _correct_and_write_single_band(
+            band_name_local: str,
+            band_spec: Any,
+            band_data: xr.DataArray,
+        ) -> tuple[xr.DataArray, xr.DataArray, float, float]:
+            masked_boa, band_invalid, compute_s = _correct_single_band(
+                band_spec, band_data
+            )
+            t_write_band = time.perf_counter()
+            if boa_band_writer is not None:
+                masked_boa = boa_band_writer(band_name_local, masked_boa)
+            write_s = time.perf_counter() - t_write_band
+            return masked_boa, band_invalid, compute_s, write_s
+
+        per_band_full: dict[
+            str, tuple[xr.DataArray, xr.DataArray, float, float]
+        ] = {}
         t_compute_phase = time.perf_counter()
         if self.correction_workers > 1 and len(work_items) > 1:
             max_workers = min(self.correction_workers, len(work_items))
             # RT coefficient computation is CPU-bound; use threads (ProcessPoolExecutor
             # would require pickling xarray/numpy objects, which adds overhead).
             # ThreadPoolExecutor still helps when the RT model releases the GIL
-            # (e.g. Rust-backed emulator) or when I/O is mixed in.
+            # (e.g. Rust-backed emulator) or when I/O is mixed in. Wave 18:
+            # the COG write — also GIL-releasing inside rasterio — is folded
+            # into the same task, so the write of band N overlaps with the
+            # compute of band N+1.
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    band_name: executor.submit(_correct_single_band, band_spec, band_data)
+                    band_name: executor.submit(
+                        _correct_and_write_single_band,
+                        band_name,
+                        band_spec,
+                        band_data,
+                    )
                     for band_name, band_spec, band_data in work_items
                 }
                 for band_name, future in futures.items():
-                    per_band_results[band_name] = future.result()
+                    per_band_full[band_name] = future.result()
         else:
             for band_name, band_spec, band_data in work_items:
-                per_band_results[band_name] = _correct_single_band(band_spec, band_data)
+                per_band_full[band_name] = _correct_and_write_single_band(
+                    band_name, band_spec, band_data
+                )
         compute_phase_s = time.perf_counter() - t_compute_phase
 
+        # Sequential accumulation of invalid-mask | per_band outputs — fast
+        # bookkeeping, no I/O. The actual writes happened in the executor.
         t_write_phase = time.perf_counter()
         for band_name, _band_spec, _band_data in work_items:
-            masked_boa, band_invalid, compute_s = per_band_results[band_name]
+            masked_boa, band_invalid, compute_s, write_s = per_band_full[band_name]
             compute_time_by_band[band_name] = compute_s
-            t_write_band = time.perf_counter()
-            if boa_band_writer is not None:
-                masked_boa = boa_band_writer(band_name, masked_boa)
-            write_s = time.perf_counter() - t_write_band
             write_time_by_band[band_name] = write_s
             boa_vars[band_name] = masked_boa
             invalid_boa_mask = (

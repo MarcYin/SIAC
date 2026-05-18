@@ -305,7 +305,19 @@ class SixSAlgorithmConfig(SIACBaseModel):
     compiler: str = "gfortran"
     build_profile: SixSBuildProfile = SixSBuildProfile.RELEASE
     mode: SixSMode = SixSMode.AUTO
-    parallel_backend: SixSParallelBackend = SixSParallelBackend.OPENMP
+    #: Parallelism mode for 6S native calls.
+    #:
+    #: - ``"openmp"`` shares one library copy and uses OpenMP threads
+    #:   within each batch — efficient for a single large batch but
+    #:   leaves cores idle when several bands need to run.
+    #: - ``"worker_libraries"`` loads N isolated library copies and
+    #:   dispatches different batches (e.g. the per-band joint-LUT
+    #:   batches) concurrently. Each worker uses
+    #:   ``max(1, native_threads // worker_count)`` OpenMP threads so the
+    #:   total stays inside the core budget. This is the default since
+    #:   wave 18 because the joint-LUT band loop is the largest remaining
+    #:   chunk of wall-clock that benefits from band-level parallelism.
+    parallel_backend: SixSParallelBackend = SixSParallelBackend.WORKER_LIBRARIES
     native_threads: int | None = Field(default=None, ge=1)
     worker_libraries: int | None = Field(default=None, ge=1)
     chunk_size: int = Field(default=4096, ge=1)
