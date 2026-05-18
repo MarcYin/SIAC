@@ -933,17 +933,29 @@ New helper `derive_grid_search_axes(config)` returns `(aot_axis, tcwv_axis)` for
 
 Two new tests cover the preload → matching build → cached return → cache cleared flow, and the preload → mismatching build → fresh recompute flow.
 
-### (3) Cached reprojected priors — **deferred** with documented design
+### (3) `TargetGrid` + `cached_reproject_match` — `6e6c4fa`
 
-The remaining 35 s of `warp.py:reproject` is split across MCD43 / CAMS / DEM reprojection onto the scene grid. A robust cache here needs:
+After shipping the previous four optimizations and the user pushing back on (3) being deferred, the canonical reprojection cache infrastructure landed in wave 18d:
 
-- NetCDF / Zarr persistence (the priors are large multi-band float32 rasters, .npz is too memory-naive)
-- Cache key spanning source data identity + target grid signature + resampling method
-- Wrapper hooks at the call sites in `surface/monthly_composite_store.py` and the CAMS adapter
+- **`siac.geo.target_grid.TargetGrid`** is the new canonical contract every pipeline stage can normalize against — `(bounds, CRS, resolution_m, shape)` with a hashable `signature()` for cache keys. `from_template(da)` makes it backwards-compatible with the existing pile of `reproject_match` callers that have a template `xr.DataArray` in hand.
+- **`siac.geo.cached_reprojection.cached_reproject_match`** is the helper: behaves exactly like `reproject_match` when `cache_dir is None`, but otherwise checks a content-addressed NetCDF cache before falling through to the real reprojection. The cache key folds in the target signature, a caller-supplied `source_identity`, the resampling method, and a format-version pin. **No silent content-hash fallback** for empty `source_identity` — the helper raises, because silently hashing a gigabyte-scale prior every call would defeat the whole point.
+- **`CachePathsConfig.reproject`** is the new config field. The resolver puts a default under `cache_root/reproject` when `cache_root` is set. The cloud-cache directory (added in wave 18b) also gets a proper default now — previously it was config-only and didn't inherit from `cache_root`.
+- **NetCDF persistence**: zlib level-4 compressed, atomic-rename writes, sharded directories (2-hex-char fan-out). Graceful degradation on read errors → falls through to live reproject.
 
-The `paths.caches.atmo` and `paths.caches.brdf` config fields already exist and already short-circuit raw-data downloads (CAMS S3 cache, MCD43 cache). What's not yet cached is the *reprojected output* on top of the raw cache. That's a ~1-2 day effort done right. Designed but not implemented; flagged for wave 19.
+The first call site to opt in is `_align_raster_asset_to_grid` in `monthly_composite_store.py`. The new args (`cache_dir`, `source_identity`) are optional — when both are passed the cached path fires; otherwise behavior is byte-identical to wave 17. This is a conservative migration: no existing caller is changed, no callers see different output unless they explicitly opt in.
 
-The other beneficiary of this work is the regression suite (same scene, repeated runs). For operational use (process many different scenes), the benefit is smaller — most reprojections are scene-unique.
+Tests cover 30 cases: TargetGrid signature identity + sensitivity (bounds, CRS, resolution, version-tag pin, sub-µm bounds noise absorption), `from_template` round-trip + CRS-missing validation, cache key sensitivity to grid/identity/resampling/namespace + version pin, save+load roundtrip preserving values AND CRS, missing/shape-mismatch/corrupted entries returning None cleanly, no-cache equivalence to plain `reproject_match`, miss-then-hit returning identical data, hit short-circuiting `reproject_match` (verified by monkeypatching it to explode), different identities producing different cache entries, empty-identity raising loudly, template-DA backward compat, and namespace partitioning.
+
+### What still isn't cached
+
+The `cached_reproject_match` infrastructure exists but only the monthly-composite-store call site is wired up. Other high-value sites (in priority order) are:
+
+- **`adapters/brdf/mcd43_earthaccess.py` MCD43 tile reprojection** — the biggest single contributor to the 35 s of `warp.reproject` time. Deep call chain through `merge_reprojected_tiles` / GDAL VRT logic; needs a careful source-identity contract (probably `f"mcd43-{tile_id}-{date}-{kernel}"`) before it's safe to cache.
+- **`adapters/atmo/cams.py` CAMS atmospheric prior reprojection** — moderate size, simpler call chain.
+- **Cloud-mask band alignment** in `algorithms/cloud/mask.py` — small arrays, low ROI.
+- **DEM reprojection** — already accessed via VRT, low ROI to add another cache layer.
+
+The infrastructure is there; wiring is the remaining work. Each call site needs the caller to commit to a stable `source_identity` string — that's the part that needs care, because a buggy identity produces silent cross-source contamination.
 
 ### Measured impact on T33KWP S2B 2026-03-29
 
@@ -967,16 +979,16 @@ Stacking these, an 8.8-min wave-17 run becomes a 4-5 min wave-18 run for the typ
 
 ### Test suite
 
-- **Unit: 1317 passed / 0 failed / 7 skipped** (+14 from wave 17's 1303 — 12 cloud cache tests, 2 joint-LUT preload tests, 1 band-parallel test, 1 async-write overlap test).
-- **T33KWP regression: 17 / 17 passed** at default tight tolerance.
+- **Unit: 1349 passed / 0 failed / 7 skipped** (+46 from wave 17's 1303 — 12 cloud cache tests, 2 joint-LUT preload tests, 1 band-parallel test, 1 async-write overlap test, 30 TargetGrid + cached_reproject_match tests).
+- **T33KWP regression: 17 / 17 passed** at default tight tolerance (8m 58s).
 
 ### Cumulative across all 18 waves
 
-- 56 source files modified, plus 15 new (including `cloud/cache.py` and 2 new test files)
-- 36 commits on the working branch since `4878ef1`
-- **Test delta vs original baseline (20 failed / 1097 passed): +220 passes / −20 failures / −8 errors**
-- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15), joint-LUT determinism fixed (wave 17), cloud-mask determinism via cache (wave 18)
-- Pipeline performance: **8.8 min on T33KWP** (wave 17/18) — 3.2× faster than the corrected baseline, with up to another ~1.5-2× available on default configs that opt into wave 18's parallelism
+- 58 source files modified, plus 17 new (including `cloud/cache.py`, `geo/target_grid.py`, `geo/cached_reprojection.py`, and 3 new test files)
+- 37 commits on the working branch since `4878ef1`
+- **Test delta vs original baseline (20 failed / 1097 passed): +252 passes / −20 failures / −8 errors**
+- Pipeline correctness: S2 angles fixed (wave 14), no more silent fallbacks (wave 15), joint-LUT determinism fixed (wave 17), cloud-mask determinism via cache (wave 18b), canonical TargetGrid contract for reprojections (wave 18d)
+- Pipeline performance: **8.8 min on T33KWP** (wave 17/18) — 3.2× faster than the corrected baseline. The reprojection-cache infrastructure for opt (3) is shipped but only the monthly-composite-store call site is wired so far; the bigger MCD43 + CAMS reprojection sites are next-wave migration work
 
 ---
 
