@@ -1041,25 +1041,95 @@ class MultiGridSolver:
                 )
             target[band_index] = coeff_values
 
-        def _candidate_coeff_provider(
-            aot_val: float, tcwv_val: float
-        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-            if solve_aot:
-                candidate_aot_values.fill(np.float32(aot_val))
-            if solve_tcwv:
-                candidate_tcwv_values.fill(np.float32(tcwv_val))
-
-            for ib, band in enumerate(bands):
-                coeffs = rt_model.compute_coefficients(
-                    coeff_geometry,
-                    candidate_atmo,
-                    band,
-                    compute_jacobian=False,
+        # Try to build a single joint (aot × tcwv × geometry) LUT spanning the
+        # entire grid-search range. The block-grid-search invokes the coeff
+        # provider hundreds of times (N_aot × N_tcwv pairs); each call would
+        # otherwise run a fresh 6S batch per band. The joint LUT amortises
+        # those 6S calls across all candidates by precomputing one big LUT and
+        # serving each candidate by interpolation instead. Because the LUT
+        # nodes in the (aot, tcwv) axes coincide with the grid-search points,
+        # the lookups are exact at the candidate values and only the geometric
+        # dimensions are linearly interpolated — the same approximation the
+        # per-candidate scene-LUT path already makes.
+        #
+        # IMPORTANT: pass ``coeff_atmo_template`` (the prior, with deterministic
+        # per-pixel aot/tcwv values) — NOT ``candidate_atmo``, whose aot/tcwv
+        # arrays are allocated with ``np.empty`` and may contain uninitialised
+        # memory at this point (the values only get filled inside the provider
+        # closure once a real candidate is in hand). Feeding uninitialised
+        # values to the builder leaks NaNs into the LUT's ``valid_mask``
+        # check, producing a non-deterministic valid pixel set across runs.
+        # The aot/tcwv per-pixel arrays passed in here are only used to
+        # populate the LUT's case_arrays for completeness; the actual aot/tcwv
+        # axes the LUT spans come from the explicit ``aot_axis`` / ``tcwv_axis``
+        # arguments below.
+        #
+        # When the backend doesn't support this optimization (non-6S backend,
+        # or sixs.mode == "direct"), build_joint_grid_search_lut returns None
+        # and we fall through to the original per-candidate compute path.
+        joint_lut = None
+        joint_lut_builder = getattr(rt_model, "build_joint_grid_search_lut", None)
+        if callable(joint_lut_builder):
+            try:
+                joint_lut = joint_lut_builder(
+                    geometry=coeff_geometry,
+                    atmo_state=coeff_atmo_template,
+                    aot_axis=aot_axis.astype(np.float64, copy=False),
+                    tcwv_axis=tcwv_axis.astype(np.float64, copy=False),
+                    bands=bands,
                 )
-                _assign_coeff_stack(xap_stack, ib, coeffs.xap)
-                _assign_coeff_stack(xbp_stack, ib, coeffs.xbp)
-                _assign_coeff_stack(xcp_stack, ib, coeffs.xcp)
-            return xap_stack, xbp_stack, xcp_stack
+            except Exception:
+                logger.exception(
+                    "Failed to build joint grid-search LUT; falling back to the "
+                    "per-candidate scene-LUT compute path."
+                )
+                joint_lut = None
+
+        if joint_lut is not None:
+            logger.info(
+                "Block-grid-search using joint LUT: %d aot × %d tcwv × %d bands "
+                "(LUT case_count=%d, scene pixels=%d).",
+                int(aot_axis.size),
+                int(tcwv_axis.size),
+                len(bands),
+                joint_lut.plan.lut_case_count,
+                joint_lut.plan.direct_case_count,
+            )
+
+            def _candidate_coeff_provider(
+                aot_val: float, tcwv_val: float
+            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                if solve_aot:
+                    candidate_aot_values.fill(np.float32(aot_val))
+                if solve_tcwv:
+                    candidate_tcwv_values.fill(np.float32(tcwv_val))
+                band_outputs = joint_lut.evaluate(float(aot_val), float(tcwv_val))
+                for ib, outputs in enumerate(band_outputs):
+                    _assign_coeff_stack(xap_stack, ib, outputs["xap"])
+                    _assign_coeff_stack(xbp_stack, ib, outputs["xbp"])
+                    _assign_coeff_stack(xcp_stack, ib, outputs["xcp"])
+                return xap_stack, xbp_stack, xcp_stack
+        else:
+
+            def _candidate_coeff_provider(
+                aot_val: float, tcwv_val: float
+            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                if solve_aot:
+                    candidate_aot_values.fill(np.float32(aot_val))
+                if solve_tcwv:
+                    candidate_tcwv_values.fill(np.float32(tcwv_val))
+
+                for ib, band in enumerate(bands):
+                    coeffs = rt_model.compute_coefficients(
+                        coeff_geometry,
+                        candidate_atmo,
+                        band,
+                        compute_jacobian=False,
+                    )
+                    _assign_coeff_stack(xap_stack, ib, coeffs.xap)
+                    _assign_coeff_stack(xbp_stack, ib, coeffs.xbp)
+                    _assign_coeff_stack(xcp_stack, ib, coeffs.xcp)
+                return xap_stack, xbp_stack, xcp_stack
 
         block_valid_counts = self._aggregate_valid_counts(solve_valid_mask, block_size)
         block_total_counts = self._aggregate_block_pixel_counts(shape, block_size)

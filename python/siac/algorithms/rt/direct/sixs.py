@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from siac.algorithms.rt.direct.sixs_native import SixSNativeRunner
+from siac.algorithms.rt.direct.sixs_native import JointGridSearchLUT, SixSNativeRunner
 from siac.rt_setup import resolve_backend_rt_setup
 from siac.runtime import RTCoefficients
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    import numpy as np
 
     from siac.domain.sensors import SensorBand, SensorConfig
     from siac.runtime import AtmosphericState, GeometryAngles
@@ -95,6 +97,34 @@ class SixSBackend:
 
     def preload_scene_subset(self, *args: Any, **kwargs: Any) -> Any:
         return self._runner.preload_scene_subset(*args, **kwargs)
+
+    def build_joint_grid_search_lut(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: np.ndarray,
+        tcwv_axis: np.ndarray,
+        bands: list[SensorBand],
+    ) -> JointGridSearchLUT | None:
+        """Build a joint (aot × tcwv × geometry) LUT for grid-search reuse.
+
+        The block-grid-search calls the RT model with the same scene-level
+        geometry/atmosphere but many different ``(aot, tcwv)`` candidate
+        pairs. Computing a single LUT spanning the whole grid amortises the
+        6S work across all candidates. Returns ``None`` when the
+        optimization is disabled or unsupported by the underlying runner —
+        the caller should then fall back to per-candidate
+        :meth:`compute_coefficients` invocations.
+        """
+        return self._runner.build_joint_grid_search_lut(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            bands=bands,
+            output_variables=self.requested_output_variables,
+        )
 
     @staticmethod
     def _coerce_result(outputs: Any) -> RTCoefficients:

@@ -313,6 +313,25 @@ class SixSAlgorithmConfig(SIACBaseModel):
     scene_lut_max_nodes_per_axis: int = Field(default=4, ge=1)
     scene_lut_max_cases: int = Field(default=4096, ge=1)
     scene_lut_required_speedup: float = Field(default=1.5, gt=1.0)
+    #: Joint (aot × tcwv × geometry) LUT used by the solver's block-grid search.
+    #: When enabled, the solver builds **one** large LUT spanning the entire
+    #: grid-search range across (aot, tcwv) — plus the per-pixel geometric
+    #: dimensions — before invoking the inner block-grid-search kernel. Each
+    #: (aot_val, tcwv_val) candidate is then served by interpolation rather
+    #: than a fresh 6S batch. This eliminates the ~N_aot × N_tcwv redundant
+    #: 6S evaluations the previous per-candidate scene-LUT path incurred.
+    #: ``joint_grid_search_lut_enabled`` toggles the optimization; the other
+    #: two fields control the LUT size budget (analogous to the per-candidate
+    #: scene-LUT fields). The default ``joint_grid_search_lut_max_cases`` is
+    #: sized to fully preserve the per-candidate scene-LUT's geometric
+    #: resolution (4 nodes per axis × 6 geometric axes = 4096 cases) on top
+    #: of the typical 11×11 aot/tcwv grid: 121 × 4^6 ≈ 500 K. This keeps
+    #: joint-LUT outputs numerically equivalent to the per-candidate
+    #: scene-LUT path at the LUT nodes — only the geometric axes use linear
+    #: interpolation, exactly as the per-candidate path does.
+    joint_grid_search_lut_enabled: bool = True
+    joint_grid_search_lut_max_nodes_per_axis: int = Field(default=4, ge=1)
+    joint_grid_search_lut_max_cases: int = Field(default=524288, ge=1)
     #: Whether the native 6S extension was built with polarized radiative
     #: transfer enabled (``ipol=1`` in the Fortran source). The polarized
     #: branch computes Stokes Q and U via ``ospol_``/``kernelpol_``, which
@@ -369,6 +388,14 @@ class SixSAlgorithmConfig(SIACBaseModel):
         if self.scene_lut_max_cases < self.scene_lut_max_nodes_per_axis:
             raise ValueError(
                 "sixs.scene_lut_max_cases must be >= sixs.scene_lut_max_nodes_per_axis."
+            )
+        if (
+            self.joint_grid_search_lut_max_cases
+            < self.joint_grid_search_lut_max_nodes_per_axis
+        ):
+            raise ValueError(
+                "sixs.joint_grid_search_lut_max_cases must be >= "
+                "sixs.joint_grid_search_lut_max_nodes_per_axis."
             )
         return self
 

@@ -30,6 +30,8 @@ from siac.algorithms.rt.direct.sixs_build import (
     resolve_build_paths,
 )
 from siac.algorithms.rt.direct.sixs_native import (
+    JointGridSearchLUT,
+    _build_joint_grid_search_lut_plan,
     _build_scene_lut_plan,
     _build_spectral_response,
     _NativeBatchResult,
@@ -887,6 +889,379 @@ def test_scene_lut_mode_interpolates_linear_native_outputs(monkeypatch: pytest.M
         np.testing.assert_allclose(
             scene[name].values, direct[name].values, rtol=1.0e-10, atol=1.0e-10
         )
+
+
+def test_joint_grid_search_lut_plan_preserves_aot_tcwv_axes() -> None:
+    """The joint LUT plan must always preserve the caller-supplied aot/tcwv axes.
+
+    Even when the case-count budget is tight, only the geometric axes should
+    be coarsened — the (aot, tcwv) axes are the whole point of the joint LUT
+    and must equal the grid-search points so the lookup is exact at each
+    candidate.
+    """
+    case_arrays = {
+        "sza_deg": np.linspace(20.0, 40.0, 64, dtype=np.float64),
+        "saa_deg": np.linspace(100.0, 130.0, 64, dtype=np.float64),
+        "vza_deg": np.linspace(0.0, 8.0, 64, dtype=np.float64),
+        "vaa_deg": np.linspace(80.0, 110.0, 64, dtype=np.float64),
+        "aot550": np.full(64, 0.15, dtype=np.float64),  # ignored — axis comes from caller
+        "tcwv_cm": np.full(64, 2.0, dtype=np.float64),  # ignored — axis comes from caller
+        "tco3_atmcm": np.linspace(0.28, 0.34, 64, dtype=np.float64),
+        "elevation_km": np.linspace(0.0, 0.5, 64, dtype=np.float64),
+    }
+    aot_axis = np.linspace(0.05, 0.8, 11, dtype=np.float64)
+    tcwv_axis = np.linspace(0.0, 6.0, 11, dtype=np.float64)
+
+    plan = _build_joint_grid_search_lut_plan(
+        case_arrays,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        max_nodes_per_axis=4,
+        # Tight budget: 11*11 = 121 for aot×tcwv alone, leaves ~2 nodes per
+        # geometric axis after trimming.
+        max_cases=2048,
+    )
+
+    np.testing.assert_array_equal(plan.axes["aot550"], aot_axis)
+    np.testing.assert_array_equal(plan.axes["tcwv_cm"], tcwv_axis)
+    assert plan.lut_case_count <= 2048
+    assert plan.direct_case_count == 64
+
+
+def test_joint_grid_search_lut_evaluate_matches_direct_at_grid_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At grid-search nodes, joint-LUT lookup must equal a fresh direct compute.
+
+    The key correctness invariant: because the LUT's (aot, tcwv) axes are
+    exactly the grid-search axes, evaluating at any (aot_node, tcwv_node)
+    pair should yield identical coefficients to running the scene through
+    the per-candidate (direct) path with that aot/tcwv. Only the geometric
+    dimensions are linearly interpolated, but the synthetic kernel below is
+    linear so even those are exact.
+    """
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    geometry = GeometryAngles.from_degrees(
+        xr.DataArray(np.full((4, 4), 25.0, dtype=np.float32), dims=("y", "x")),
+        xr.DataArray(np.full((4, 4), 110.0, dtype=np.float32), dims=("y", "x")),
+        xr.DataArray(np.full((4, 4), 5.0, dtype=np.float32), dims=("y", "x")),
+        xr.DataArray(np.full((4, 4), 95.0, dtype=np.float32), dims=("y", "x")),
+    )
+    # Per-pixel aot/tcwv prior values are irrelevant to the joint LUT —
+    # the LUT axes come from the caller, not from the prior.
+    atmo = AtmosphericState(
+        aot=xr.DataArray(0.15 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+        tcwv=xr.DataArray(2.0 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+        tco3=xr.DataArray(0.30 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+        aot_unc=xr.DataArray(0.01 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+        tcwv_unc=xr.DataArray(0.05 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+        tco3_unc=xr.DataArray(0.01 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+        elevation=xr.DataArray(0.2 * np.ones((4, 4), dtype=np.float32), dims=("y", "x")),
+    )
+    band = SensorBand(
+        name="B04",
+        center_wavelength=665.0,
+        bandwidth=30.0,
+        resolution=10.0,
+        band_index=3,
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            scene_lut_max_nodes_per_axis=2,
+            scene_lut_max_cases=256,
+            joint_grid_search_lut_max_nodes_per_axis=2,
+            joint_grid_search_lut_max_cases=4096,
+        )
+    )
+    runner = backend._runner
+
+    def _fake_run_native_batch(**kwargs):
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        aot = np.asarray(kwargs["aot550"], dtype=np.float64)
+        tcwv = np.asarray(kwargs["tcwv_cm"], dtype=np.float64)
+        sza = np.asarray(kwargs["sza_deg"], dtype=np.float64)
+        # Linear in everything so interpolation is exact at any sample point.
+        outputs = {
+            "xap": 0.1 * aot + 0.05 * tcwv + 0.001 * sza,
+            "xbp": 0.02 * aot + 0.001 * tcwv,
+            "xcp": 0.01 * aot + 0.002 * tcwv,
+        }
+        outputs.update(
+            {
+                # All other native outputs unused by the test but required by
+                # the bundle; supply zeros.
+                name: np.zeros(n_cases, dtype=np.float64)
+                for name in (
+                    "tgasm",
+                    "totg",
+                    "rho_atm",
+                    "rho_atm_pol",
+                    "trans_solar",
+                    "trans_view",
+                    "spher_albedo",
+                    "raylscatd",
+                    "aerscatd",
+                    "raylscatu",
+                    "aerscatu",
+                    "transm_h2o",
+                    "transm_o3",
+                    "transm_other",
+                    "dwn_irr_dir",
+                    "dwn_irr_dif",
+                    "dwn_irr_env",
+                    "rad_path",
+                )
+            }
+        )
+        # Make every payload-relevant output backed by float64.
+        return _NativeBatchResult(
+            outputs={
+                name: np.ascontiguousarray(values, dtype=np.float64)
+                for name, values in outputs.items()
+            },
+            status=np.zeros(n_cases, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _fake_run_native_batch)
+
+    aot_axis = np.array([0.10, 0.20, 0.30], dtype=np.float64)
+    tcwv_axis = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    joint = backend.build_joint_grid_search_lut(
+        geometry=geometry,
+        atmo_state=atmo,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        bands=[band],
+    )
+    assert joint is not None
+
+    # Compare joint-LUT outputs at every grid node against a fresh
+    # compute_coefficients call with the same (aot, tcwv) value broadcast.
+    for aot_val in aot_axis:
+        for tcwv_val in tcwv_axis:
+            atmo_at_node = AtmosphericState(
+                aot=xr.DataArray(
+                    float(aot_val) * np.ones((4, 4), dtype=np.float32),
+                    dims=("y", "x"),
+                ),
+                tcwv=xr.DataArray(
+                    float(tcwv_val) * np.ones((4, 4), dtype=np.float32),
+                    dims=("y", "x"),
+                ),
+                tco3=atmo.tco3,
+                aot_unc=atmo.aot_unc,
+                tcwv_unc=atmo.tcwv_unc,
+                tco3_unc=atmo.tco3_unc,
+                elevation=atmo.elevation,
+            )
+            direct = backend.compute_coefficients(
+                geometry, atmo_at_node, band, compute_jacobian=False
+            )
+            band_outputs = joint.evaluate(float(aot_val), float(tcwv_val))
+            joint_xap = band_outputs[0]["xap"].values
+            joint_xbp = band_outputs[0]["xbp"].values
+            joint_xcp = band_outputs[0]["xcp"].values
+            # Tolerance: per-pixel values pass through a float32 DataArray
+            # template at one step in the pipeline, so absolute differences
+            # at the float32 epsilon scale (~1e-7 for unit-magnitude values,
+            # less for these ~0.01-scale coefficients) are expected.
+            np.testing.assert_allclose(
+                joint_xap, direct.xap.values, rtol=1.0e-6, atol=1.0e-9
+            )
+            np.testing.assert_allclose(
+                joint_xbp, direct.xbp.values, rtol=1.0e-6, atol=1.0e-9
+            )
+            np.testing.assert_allclose(
+                joint_xcp, direct.xcp.values, rtol=1.0e-6, atol=1.0e-9
+            )
+
+
+def test_joint_grid_search_lut_disabled_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the config opt-out flag is False, build_joint_grid_search_lut returns None."""
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            joint_grid_search_lut_enabled=False,
+        )
+    )
+
+    result = backend.build_joint_grid_search_lut(
+        geometry=_sample_geometry((4, 4)),
+        atmo_state=_sample_atmo((4, 4)),
+        aot_axis=np.linspace(0.05, 0.8, 3),
+        tcwv_axis=np.linspace(0.0, 6.0, 3),
+        bands=[
+            SensorBand(
+                name="B04",
+                center_wavelength=665.0,
+                bandwidth=30.0,
+                resolution=10.0,
+                band_index=3,
+            )
+        ],
+    )
+    assert result is None
+
+
+def test_joint_grid_search_lut_direct_mode_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When sixs.mode == 'direct', joint LUT is disabled (consistent with scene LUT)."""
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(sixs_config=SixSAlgorithmConfig(mode="direct"))
+
+    result = backend.build_joint_grid_search_lut(
+        geometry=_sample_geometry((4, 4)),
+        atmo_state=_sample_atmo((4, 4)),
+        aot_axis=np.linspace(0.05, 0.8, 3),
+        tcwv_axis=np.linspace(0.0, 6.0, 3),
+        bands=[
+            SensorBand(
+                name="B04",
+                center_wavelength=665.0,
+                bandwidth=30.0,
+                resolution=10.0,
+                band_index=3,
+            )
+        ],
+    )
+    assert result is None
+
+
+def test_joint_grid_search_lut_amortises_native_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One LUT build + N evaluate() calls must invoke 6S fewer times than N
+    direct compute_coefficients invocations.
+
+    This is the whole performance rationale of the optimization: the inner
+    block-grid-search runs the coefficient provider once per (aot, tcwv)
+    candidate. With the joint LUT, all candidates share a single 6S batch.
+    """
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _config: Path("/tmp/fake_sixs_native.so"),
+    )
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(
+            mode="scene_lut",
+            output_variables=("xap", "xbp", "xcp"),
+            scene_lut_max_nodes_per_axis=2,
+            scene_lut_max_cases=256,
+            joint_grid_search_lut_max_nodes_per_axis=2,
+            joint_grid_search_lut_max_cases=4096,
+        )
+    )
+    runner = backend._runner
+
+    call_counter = {"count": 0}
+
+    def _counting_run_native_batch(**kwargs):
+        call_counter["count"] += 1
+        n_cases = int(np.asarray(kwargs["sza_deg"]).size)
+        outputs = {
+            name: np.zeros(n_cases, dtype=np.float64)
+            for name in (
+                "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm", "rho_atm_pol",
+                "trans_solar", "trans_view", "spher_albedo", "raylscatd",
+                "aerscatd", "raylscatu", "aerscatu", "transm_h2o", "transm_o3",
+                "transm_other", "dwn_irr_dir", "dwn_irr_dif", "dwn_irr_env",
+                "rad_path",
+            )
+        }
+        return _NativeBatchResult(
+            outputs={
+                name: np.ascontiguousarray(values, dtype=np.float64)
+                for name, values in outputs.items()
+            },
+            status=np.zeros(n_cases, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _counting_run_native_batch)
+
+    geometry = _sample_geometry((4, 4))
+    atmo = _sample_atmo((4, 4))
+    bands = [
+        SensorBand(name=f"B{i:02d}", center_wavelength=400.0 + 50 * i,
+                   bandwidth=30.0, resolution=10.0, band_index=i)
+        for i in range(3)
+    ]
+
+    aot_axis = np.linspace(0.05, 0.8, 5, dtype=np.float64)
+    tcwv_axis = np.linspace(0.0, 6.0, 5, dtype=np.float64)
+    n_candidates = aot_axis.size * tcwv_axis.size  # 25
+
+    # Joint path: 1 build × N_bands native calls, then N_candidates × 0 native calls.
+    call_counter["count"] = 0
+    joint = backend.build_joint_grid_search_lut(
+        geometry=geometry,
+        atmo_state=atmo,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        bands=bands,
+    )
+    assert joint is not None
+    joint_build_calls = call_counter["count"]
+    for aot_val in aot_axis:
+        for tcwv_val in tcwv_axis:
+            _ = joint.evaluate(float(aot_val), float(tcwv_val))
+    joint_total_calls = call_counter["count"]
+    assert joint_build_calls == len(bands), (
+        f"Expected one 6S batch per band at build time, got {joint_build_calls}"
+    )
+    assert joint_total_calls == joint_build_calls, (
+        f"evaluate() must not run native 6S; got {joint_total_calls - joint_build_calls} stray calls"
+    )
+
+    # Direct path: N_candidates × N_bands native calls.
+    call_counter["count"] = 0
+    for aot_val in aot_axis:
+        for tcwv_val in tcwv_axis:
+            atmo_at = AtmosphericState(
+                aot=xr.DataArray(
+                    float(aot_val) * np.ones((4, 4), dtype=np.float32), dims=("y", "x")
+                ),
+                tcwv=xr.DataArray(
+                    float(tcwv_val) * np.ones((4, 4), dtype=np.float32), dims=("y", "x")
+                ),
+                tco3=atmo.tco3,
+                aot_unc=atmo.aot_unc,
+                tcwv_unc=atmo.tcwv_unc,
+                tco3_unc=atmo.tco3_unc,
+                elevation=atmo.elevation,
+            )
+            for band in bands:
+                backend.compute_coefficients(
+                    geometry, atmo_at, band, compute_jacobian=False
+                )
+    direct_calls = call_counter["count"]
+    assert direct_calls == n_candidates * len(bands)
+
+    # The headline assertion — the joint path must use far fewer 6S calls.
+    assert joint_total_calls < direct_calls, (
+        f"Joint LUT ({joint_total_calls}) should use fewer 6S calls than "
+        f"direct ({direct_calls})."
+    )
 
 
 def test_worker_library_backend_slices_batches_and_merges_outputs(

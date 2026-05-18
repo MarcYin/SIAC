@@ -929,6 +929,73 @@ def _should_use_scene_lut(
     return (float(direct_case_count) / float(lut_case_count)) >= required_speedup
 
 
+def _build_joint_grid_search_lut_plan(
+    case_arrays: dict[str, np.ndarray],
+    *,
+    aot_axis: np.ndarray,
+    tcwv_axis: np.ndarray,
+    max_nodes_per_axis: int,
+    max_cases: int,
+) -> _SceneLUTPlan:
+    """Build a scene-LUT plan with explicit aot/tcwv axes for joint grid-search reuse.
+
+    Unlike :func:`_build_scene_lut_plan`, this builder takes the aot550 and
+    tcwv_cm axes as inputs (rather than deriving them from per-pixel
+    candidate values). The remaining six geometric/atmospheric axes are
+    derived from the per-pixel ``case_arrays`` as usual. The trimming step
+    that reduces total case count to fit ``max_cases`` only shrinks the
+    geometric axes — the explicit aot/tcwv axes are preserved because their
+    nodes must coincide with the grid-search candidate values for the
+    block-grid-search reuse to be numerically exact at the grid points.
+    """
+    aot_axis_arr = np.ascontiguousarray(
+        np.unique(np.asarray(aot_axis, dtype=np.float64))
+    )
+    tcwv_axis_arr = np.ascontiguousarray(
+        np.unique(np.asarray(tcwv_axis, dtype=np.float64))
+    )
+    if aot_axis_arr.size == 0:
+        aot_axis_arr = np.zeros(1, dtype=np.float64)
+    if tcwv_axis_arr.size == 0:
+        tcwv_axis_arr = np.zeros(1, dtype=np.float64)
+    fixed_axes = {"aot550", "tcwv_cm"}
+    axes: dict[str, np.ndarray] = {}
+    for name in _CASE_ARRAY_NAMES:
+        if name == "aot550":
+            axes[name] = aot_axis_arr
+        elif name == "tcwv_cm":
+            axes[name] = tcwv_axis_arr
+        else:
+            axes[name] = _build_scene_lut_axis(
+                np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis
+            )
+
+    # Shrink only the geometric axes to fit the case budget.
+    while _scene_lut_case_count(axes) > max_cases:
+        reducible = [
+            name for name in _CASE_ARRAY_NAMES
+            if name not in fixed_axes and axes[name].size > 1
+        ]
+        if not reducible:
+            break
+        name = max(reducible, key=lambda item: axes[item].size)
+        axes[name] = _build_scene_lut_axis(
+            np.asarray(case_arrays[name], dtype=np.float64), axes[name].size - 1
+        )
+
+    mesh = np.meshgrid(*(axes[name] for name in _CASE_ARRAY_NAMES), indexing="ij")
+    grid_case_arrays = {
+        name: np.ascontiguousarray(mesh[idx].reshape(-1), dtype=np.float64)
+        for idx, name in enumerate(_CASE_ARRAY_NAMES)
+    }
+    return _SceneLUTPlan(
+        axes=axes,
+        grid_case_arrays=grid_case_arrays,
+        direct_case_count=int(np.asarray(case_arrays[_CASE_ARRAY_NAMES[0]]).size),
+        lut_case_count=int(grid_case_arrays[_CASE_ARRAY_NAMES[0]].size),
+    )
+
+
 @dataclass(frozen=True)
 class _NativeBatchResult:
     outputs: dict[str, np.ndarray]
@@ -950,6 +1017,167 @@ class _SceneLUTPlan:
     grid_case_arrays: dict[str, np.ndarray]
     direct_case_count: int
     lut_case_count: int
+
+
+class JointGridSearchLUT:
+    """Precomputed RT-coefficient LUT spanning a 2-D (aot, tcwv) grid.
+
+    Built once via :meth:`SixSNativeRunner.build_joint_grid_search_lut`, then
+    queried via :meth:`evaluate` to retrieve per-band ``xap``/``xbp``/``xcp``
+    DataArrays matching the scene template — without invoking the native 6S
+    runner again.
+
+    The LUT spans the cross-product of the caller-supplied ``aot_axis`` and
+    ``tcwv_axis`` with the (coarsened) per-pixel geometric/atmospheric axes
+    (sza, saa, vza, vaa, tco3, elevation). At evaluate time the per-pixel
+    geometric/atmospheric coordinates are looked up directly while the
+    aot/tcwv coordinates are broadcast scalars — typically equal to one of
+    the LUT node values, in which case the lookup is exact (no aot/tcwv
+    interpolation error). This is the key invariant the block-grid-search
+    relies on for numerical equivalence with the per-candidate scene-LUT
+    path.
+    """
+
+    def __init__(
+        self,
+        *,
+        prepared: _PreparedSceneInputs,
+        plan: _SceneLUTPlan,
+        band_native_outputs: list[_NativeBatchResult],
+        selected_names: tuple[str, ...],
+    ) -> None:
+        from scipy.interpolate import RegularGridInterpolator
+
+        self._prepared = prepared
+        self._plan = plan
+        self._selected_names = selected_names
+        self._n_pixels = int(np.count_nonzero(prepared.valid_mask))
+        # Names of axes that genuinely vary in the LUT (some may collapse to
+        # a single node, e.g. when the scene is uniform in that dimension).
+        self._varying_axes: tuple[str, ...] = tuple(
+            name for name in _CASE_ARRAY_NAMES if plan.axes[name].size > 1
+        )
+        self._varying_is_atmo: tuple[bool, ...] = tuple(
+            name in {"aot550", "tcwv_cm"} for name in self._varying_axes
+        )
+
+        # Per-pixel sample points for the varying geometric axes are constant
+        # across all evaluate() calls — precompute the columns once.
+        self._geom_columns: list[np.ndarray] = []
+        for name in self._varying_axes:
+            if name in {"aot550", "tcwv_cm"}:
+                self._geom_columns.append(np.empty(0, dtype=np.float64))  # placeholder
+            else:
+                self._geom_columns.append(
+                    np.ascontiguousarray(
+                        np.asarray(prepared.case_arrays[name], dtype=np.float64)
+                    )
+                )
+
+        # Build a RegularGridInterpolator per (band, output_name). These reuse
+        # the underlying LUT values; only the per-pixel sample points change
+        # between evaluate() calls.
+        full_shape = tuple(int(plan.axes[name].size) for name in _CASE_ARRAY_NAMES)
+        varying_axes_values = tuple(plan.axes[name] for name in self._varying_axes)
+        self._band_interpolators: list[dict[str, Any]] = []
+        for native_outputs in band_native_outputs:
+            band_interp: dict[str, Any] = {}
+            for name in selected_names:
+                values = np.asarray(
+                    native_outputs.outputs[name], dtype=np.float64
+                ).reshape(full_shape)
+                reduced = values
+                for axis_index in reversed(range(len(_CASE_ARRAY_NAMES))):
+                    if plan.axes[_CASE_ARRAY_NAMES[axis_index]].size == 1:
+                        reduced = np.take(reduced, 0, axis=axis_index)
+                if not self._varying_axes:
+                    band_interp[name] = _ScalarInterpolator(float(reduced))
+                else:
+                    band_interp[name] = RegularGridInterpolator(
+                        varying_axes_values,
+                        np.ascontiguousarray(reduced, dtype=np.float64),
+                        method="linear",
+                        bounds_error=False,
+                        fill_value=np.nan,
+                    )
+            self._band_interpolators.append(band_interp)
+
+        # If the scene has zero valid pixels we can short-circuit evaluate().
+        self._empty = self._n_pixels == 0
+
+    @property
+    def band_count(self) -> int:
+        return len(self._band_interpolators)
+
+    @property
+    def template(self) -> xr.DataArray:
+        return self._prepared.template
+
+    @property
+    def selected_names(self) -> tuple[str, ...]:
+        return self._selected_names
+
+    @property
+    def plan(self) -> _SceneLUTPlan:
+        return self._plan
+
+    def evaluate(self, aot_val: float, tcwv_val: float) -> list[dict[str, xr.DataArray]]:
+        """Return per-band xap/xbp/xcp DataArrays for the given (aot, tcwv)."""
+        prepared = self._prepared
+        if self._empty:
+            return [
+                _nan_output_arrays(prepared.template, self._selected_names)
+                for _ in self._band_interpolators
+            ]
+
+        if self._varying_axes:
+            n_pixels = self._n_pixels
+            sample_columns: list[np.ndarray] = []
+            for idx, name in enumerate(self._varying_axes):
+                if name == "aot550":
+                    sample_columns.append(
+                        np.full(n_pixels, float(aot_val), dtype=np.float64)
+                    )
+                elif name == "tcwv_cm":
+                    sample_columns.append(
+                        np.full(n_pixels, float(tcwv_val), dtype=np.float64)
+                    )
+                else:
+                    sample_columns.append(self._geom_columns[idx])
+            sample_points = np.column_stack(sample_columns)
+        else:
+            sample_points = np.empty((0, 0), dtype=np.float64)
+
+        results: list[dict[str, xr.DataArray]] = []
+        flat_valid_mask = prepared.flat_valid_mask
+        template = prepared.template
+        for band_interp in self._band_interpolators:
+            outputs_by_name: dict[str, xr.DataArray] = {}
+            for name in self._selected_names:
+                interpolator = band_interp[name]
+                if self._varying_axes:
+                    interpolated = np.ascontiguousarray(
+                        interpolator(sample_points), dtype=np.float64
+                    )
+                else:
+                    interpolated = np.full(self._n_pixels, float(interpolator()), dtype=np.float64)
+                full = np.full(template.size, np.nan, dtype=np.float64)
+                full[flat_valid_mask] = interpolated
+                outputs_by_name[name] = _as_output_array(full, template, name)
+            results.append(outputs_by_name)
+        return results
+
+
+class _ScalarInterpolator:
+    """Stand-in for RegularGridInterpolator when the LUT is fully degenerate."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: float) -> None:
+        self._value = float(value)
+
+    def __call__(self, points: np.ndarray | None = None) -> float:
+        return self._value
 
 
 def _load_extension_module(module_path: Path) -> Any:
@@ -1274,6 +1502,77 @@ class SixSNativeRunner:
                 prepared=prepared, band=band, selected_names=selected_names, plan=plan
             )
         return None
+
+    def build_joint_grid_search_lut(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: np.ndarray,
+        tcwv_axis: np.ndarray,
+        bands: list[SensorBand],
+        output_variables: tuple[str, ...] | list[str] | None = None,
+    ) -> JointGridSearchLUT | None:
+        """Build a joint scene-LUT covering an explicit (aot, tcwv) grid.
+
+        Returns ``None`` when the optimization is disabled by config, the
+        scene has no valid pixels, or the runner is configured to bypass the
+        scene-LUT entirely (``sixs.mode == "direct"``). In all of those
+        cases the caller should fall back to the per-candidate
+        :meth:`compute_coefficients` path.
+        """
+        if not bands:
+            return None
+        if not bool(getattr(self._config, "joint_grid_search_lut_enabled", True)):
+            return None
+        if str(self._config.mode) == "direct":
+            return None
+        prepared = self._prepare_scene_inputs(geometry=geometry, atmo_state=atmo_state)
+        if not np.any(prepared.valid_mask):
+            return None
+        max_nodes_per_axis = int(
+            getattr(
+                self._config,
+                "joint_grid_search_lut_max_nodes_per_axis",
+                self._config.scene_lut_max_nodes_per_axis,
+            )
+        )
+        max_cases = int(
+            getattr(
+                self._config,
+                "joint_grid_search_lut_max_cases",
+                max(self._config.scene_lut_max_cases, 16384),
+            )
+        )
+        plan = _build_joint_grid_search_lut_plan(
+            prepared.case_arrays,
+            aot_axis=np.asarray(aot_axis, dtype=np.float64),
+            tcwv_axis=np.asarray(tcwv_axis, dtype=np.float64),
+            max_nodes_per_axis=max_nodes_per_axis,
+            max_cases=max_cases,
+        )
+        if plan.lut_case_count <= 0:
+            return None
+        selected_names = _to_native_output_names(
+            output_variables or getattr(self._config, "output_variables", None)
+        )
+        band_outputs: list[_NativeBatchResult] = []
+        logger.debug(
+            "Building joint grid-search LUT: %d pixels, %d cases per band, %d bands.",
+            plan.direct_case_count,
+            plan.lut_case_count,
+            len(bands),
+        )
+        for band in bands:
+            native_kwargs = self._band_native_kwargs(prepared, band)
+            native_kwargs.update(plan.grid_case_arrays)
+            band_outputs.append(self._run_native_batch(**native_kwargs))
+        return JointGridSearchLUT(
+            prepared=prepared,
+            plan=plan,
+            band_native_outputs=band_outputs,
+            selected_names=selected_names,
+        )
 
     def _compute_band_outputs_multi(
         self,
