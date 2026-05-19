@@ -274,16 +274,33 @@ class TestAtmosphericCorrector:
         assert set(result.boa.data_vars) == {"B02", "B03", "B04"}
         assert late_calls == ["B03", "B04"]
 
-    def test_parallel_correction_matches_serial_and_preserves_writer_order(
+    def test_parallel_correction_matches_serial_and_writes_each_band_once(
         self, sample_inputs, mock_rt_model
     ):
-        """Parallel band correction should remain numerically stable and deterministic in output ordering."""
+        """Parallel band correction should remain numerically stable; the writer
+        callback should fire exactly once per band.
+
+        Wave 18e moved the per-band COG write inside the same executor task
+        as the per-band compute, so writes happen as bands finish — the
+        observable order is no longer deterministic (it depends on which
+        thread finishes its compute first, which varies with system load).
+        The previous test asserted strict list order ``["B02", "B03", "B04"]``
+        which passed in isolation by luck of thread scheduling but failed
+        intermittently under suite-level load. The new contract — every
+        band is written exactly once — is what actually matters for the
+        downstream COG outputs (each file is independent and named after
+        the band).
+        """
+        import threading
+
         toa, geometry, atmo_state = sample_inputs
 
         writer_calls: list[str] = []
+        writer_lock = threading.Lock()
 
         def _writer(band_name: str, data: xr.DataArray) -> xr.DataArray:
-            writer_calls.append(band_name)
+            with writer_lock:
+                writer_calls.append(band_name)
             return data
 
         serial = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG, correction_workers=1)
@@ -297,7 +314,11 @@ class TestAtmosphericCorrector:
             np.testing.assert_allclose(
                 serial_result.boa[name].values, parallel_result.boa[name].values, rtol=1e-6
             )
-        assert writer_calls == ["B02", "B03", "B04"]
+        # Each input band must be written exactly once — order isn't constrained.
+        assert sorted(writer_calls) == ["B02", "B03", "B04"]
+        assert len(writer_calls) == len(set(writer_calls)), (
+            f"writer was called more than once for some band: {writer_calls}"
+        )
 
     def test_correct_resamples_coefficients_to_band_grid(self):
         """Coefficient computation may stay on the atmospheric grid and upsample afterwards."""
