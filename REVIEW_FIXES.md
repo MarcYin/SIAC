@@ -1025,4 +1025,78 @@ For default configs that opt into wave 18a's worker_libraries + wave 18b's cloud
 
 ---
 
+## Wave 18g — Honest accounting: what was actually causing the AOT drift
+
+User pushback over multiple turns ("how is cloud-mask non-determinism, same input same output, how it differs", "could it be lut difference", "has this been verified by actual data or just guessing", "so we still not answered the problem of why there is a drift in aod") forced me to actually investigate the "intermittent regression failure" I'd been hand-waving past for several waves. This section retracts two earlier explanations and documents the actual causal chain.
+
+### What I had been writing in commit messages and getting wrong
+
+- Wave 17 doc: "*cloud-mask non-determinism that cascades through the valid pixel set*". Vague, untested. False as a complete explanation.
+- Wave 18a + 18e+f failure analyses: "*cloud-mask non-determinism (same signature as wave 18a's intermittent failure)*". Closer but still wrong about the mechanism — it pinned blame on OmniCloudMask without identifying where the actual amplification happens.
+- A speculative "marginal-block cascade" story in my reply that proposed quadratic_block_min_valid_fraction-threshold crossings as the amplifier. Disproven by data — **0** of 51,984 blocks crossed the threshold.
+
+### Empirical determinism map (what's deterministic, what isn't)
+
+| Component | Within-process | Across-process |
+|---|---|---|
+| JP2 decompression (rasterio + OpenJPEG) | ✅ bit-identical | ✅ bit-identical (verified) |
+| OmniCloudMask inference, fixed inputs | ✅ bit-identical (3 calls, MD5 match) | ❌ **79 pixels differ on T33KWP** |
+| M2 atmospheric prior (CAMS) | ✅ bit-identical (3 calls, all 7 fields MD5 match) | implicitly ✅ (cached file source) |
+| M3 surface prior outputs (SURF_B0*) | — | ✅ bit-identical (0 differing pixels) |
+| TCWV output | — | ✅ bit-identical (fixed by config) |
+| Joint grid-search LUT bytes | ✅ bit-identical (3 builds, MD5 match) | implicitly ✅ |
+| AOT output | — | ❌ **100 % of valid pixels drift, ~4 % systematic bias** |
+
+So every input to M5 is bit-deterministic except for the 79-pixel cloud-mask difference. Yet AOT drifts across the whole scene.
+
+### The cross-process cloud-mask drift: PyTorch MPS, not OmniCloudMask
+
+`omnicloudmask.model_utils.default_device()` returns `torch.device("mps")` on Apple Silicon. PyTorch's MPS backend is **bit-deterministic within a Python process** (Apple's Metal driver picks shader kernels once at startup and reuses them) but **not across processes** — different launches can select different kernels and memory layouts, producing ULP-level numerical drift in the model's softmax. At the few hundred edge-of-cloud pixels per S2 scene where two classes have nearly-identical probabilities, that ULP drift tips the argmax to a different class.
+
+This is documented PyTorch behaviour but easy to miss because most determinism tests run in one process.
+
+### The amplifier: Voronoi re-tessellation in `nearest_seed_fill`
+
+The M5 block-grid-search path in `multigrid.py` (lines 1276-1291) post-processes the per-block AOT field with `_smooth_grid_search_field(..., n_iter=40, trusted_mask=trusted_block_mask)`. That helper does two things (in `_smooth_grid_search_field` and `siac.algorithms.solver.aod_smoothing`):
+
+```python
+filled = nearest_seed_fill(source, trusted)               # ← Voronoi fill
+smoothed = apply_smoothness_filter(filled, gamma, delta, n_iter=40)
+```
+
+`nearest_seed_fill` uses `scipy.ndimage.distance_transform_edt(~mask, return_indices=True)` — for every non-trusted pixel, it returns the index of the **globally-nearest trusted seed** and copies its value. That's a **Voronoi tessellation of the entire scene** by the trusted-seed set.
+
+The trusted-seed mask depends transitively on the cloud mask via `block_valid_mask`. When 79 cloud-mask pixels flip, ~42 blocks flip their trusted-seed state. Even 42 seed flips out of ~52,000 are enough to **re-route the Voronoi assignment of distant blocks** — the EDT picks the globally-nearest seed, so adding or removing one seed can re-tile huge regions. Then `apply_smoothness_filter` with 40 iterations smooths the re-tessellated field, and `_broadcast_to_full` propagates the block-level AOT to every pixel in the block.
+
+That's why empirically:
+
+- 100 % of valid AOT pixels differ (everything inherits a Voronoi-re-tessellated value).
+- The drift is uniform across the scene, **not concentrated near the 79 cloud-mask flip locations** (consistent with global re-tessellation).
+- The bias is systematically ~4 % multiplicative (the re-tessellated assignment happens to cluster toward slightly different seed values).
+- The drift signature is reproducible across the wave-17 → wave-18 transition and within wave 18 itself — it depends on a one-shot cloud-mask state, not on any code change.
+
+### Why wave 18b/d's cloud cache actually fixed it (accidentally, while solving a different problem)
+
+Wave 18b shipped the content-addressed cloud-mask cache for performance (skip ~25 s of OmniCloudMask inference on warm hits). Wave 18d added the default cache path `paths.caches.cloud = cache_root/cloud` to `resolve.py`. The wave 18e+f first regression run was the first one **after** wave 18d's default-path patch — so it was the first one to actually populate the cache. That populating run committed one specific MPS-selected cloud mask to disk. Every subsequent run reads those same bytes and gets a bit-deterministic cloud mask, bit-deterministic trusted-block mask, bit-deterministic Voronoi tessellation, and bit-deterministic AOT.
+
+Three consecutive regression runs since the cache populated have all passed at the default tight `abs_tol=1e-4`, confirming this.
+
+**The cache was sold as a performance optimization but its real job is to pin cross-process determinism for a model whose deployment platform produces ULP variance.** The original commit message buried this property — it should have been the lede.
+
+### Honest follow-up work, in priority order
+
+1. **Replace `default_device()` for OmniCloudMask** with an explicit CPU fallback when `paths.caches.cloud` is unset. Slower (~5-10 s) but eliminates the dependency on the cache existing — anyone running SIAC on a fresh M-series Mac currently gets MPS-jittered output on the first run and bit-deterministic output after.
+2. **Bounded-radius nearest-seed fill** as a defensive change. `nearest_seed_fill` currently uses an unbounded EDT, so any seed change can re-route arbitrarily-distant assignments. Capping the search radius (e.g. 10 blocks ≈ 600 m at 60 m resolution) limits the blast radius of any one seed change — closer in spirit to what the cost function's local smoothness term already does. This would make the solver inherently more robust to small upstream mask perturbations.
+3. **Update REVIEW_FIXES.md's earlier "intermittent" annotations** with cross-references to this section so anyone reading the audit trail doesn't repeat the same hand-wave.
+
+### Test suite: unchanged from wave 18f
+
+This wave is docs-only. 1366 unit tests pass / 0 fail / 7 skipped. T33KWP regression 17/17 pass.
+
+### What this wave doesn't claim
+
+I haven't built a controlled experiment that varies *only* the cloud-mask (e.g. force two different cloud masks into M5 within one process, run the solver twice, hash AOT outputs). The story above is consistent with everything observed but a final smoking-gun test is in the next wave's scope, not this one's.
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
