@@ -477,6 +477,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             allow_upsample_to_target=settings["allow_upsample_to_target"],
             unmapped_to_missing=settings["unmapped_to_missing"],
             cloud_cache_dir=settings.get("cache_dir"),
+            inference_device=settings.get("inference_device"),
         )
         self._last_cloud_classes = cloud_classes
 
@@ -922,6 +923,11 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             "resolution_policy": "auto",
             "allow_upsample_to_target": False,
             "unmapped_to_missing": True,
+            # Wave 19a: default to CPU for bit-deterministic cross-process
+            # OmniCloudMask inference. Override via the config field
+            # ``algorithms.cloud_mask.inference_device`` (e.g. ``"auto"``,
+            # ``"mps"``, ``"cuda"``) when determinism isn't required.
+            "inference_device": "cpu",
         }
         cloud_mask_config = (
             self.config.get("cloud_mask", {}) if isinstance(self.config, dict) else {}

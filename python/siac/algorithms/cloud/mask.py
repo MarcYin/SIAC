@@ -330,6 +330,7 @@ def build_cloud_classes(
     allow_upsample_to_target: bool = False,
     unmapped_to_missing: bool = True,
     cloud_cache_dir: Path | str | None = None,
+    inference_device: str | None = None,
 ) -> xr.DataArray:
     """Build standardized cloud classes (0/1/2/3) from model/file/user inputs."""
     if len(toa.data_vars) == 0:
@@ -395,9 +396,17 @@ def build_cloud_classes(
         # Wave 18: cache the cloud-classifier output under a content-hash
         # key so subsequent runs on the same TOA inputs skip the ~25s
         # PyTorch inference. The cache also pins outputs deterministically
-        # across runs (OmniCloudMask's pytorch backend has a few hundred
-        # edge-of-cloud pixels' worth of run-to-run variance — see wave 17
-        # for the cascade effect this caused before being absorbed).
+        # across runs.
+        #
+        # Wave 19a: ``inference_device`` defaults to CPU (see
+        # ``OmniCloudMaskProvider.DEFAULT_INFERENCE_DEVICE``) so even the
+        # first run — before the cache is populated — produces
+        # bit-deterministic output across processes. GPU backends
+        # (MPS / CUDA) are within-process deterministic but pick different
+        # shader kernels per process launch, producing ULP softmax drift
+        # that cascades through M5's Voronoi-fill amplifier into 100% of
+        # AOT pixels. CPU adds ~5-10 s but is reproducible. Override via
+        # the ``cloud_mask.inference_device`` config field.
         out = maybe_run_with_cache(
             cache_dir=cloud_cache_dir,
             red=red,
@@ -405,8 +414,13 @@ def build_cloud_classes(
             nir=nir,
             class_mapping=class_mapping,
             target_resolution_m=target_resolution_m,
-            extra_namespace=f"provider={provider};unmapped_to_missing={unmapped_to_missing}",
-            compute_fn=lambda: OmniCloudMaskProvider().predict(
+            extra_namespace=(
+                f"provider={provider};unmapped_to_missing={unmapped_to_missing}"
+                f";inference_device={inference_device or '<default>'}"
+            ),
+            compute_fn=lambda: OmniCloudMaskProvider(
+                inference_device=inference_device,
+            ).predict(
                 red,
                 green,
                 nir,

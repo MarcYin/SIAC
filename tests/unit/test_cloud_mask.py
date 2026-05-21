@@ -218,6 +218,11 @@ def test_build_cloud_classes_auto_mode_uses_provider(monkeypatch: pytest.MonkeyP
     cfg = _sensor_config_with_duplicate_red()
 
     class _FakeProvider:
+        def __init__(self, *args, **kwargs):
+            # Accept the wave-19a inference_device kwarg threaded through
+            # by build_cloud_classes — the fake just ignores it.
+            self._kwargs = kwargs
+
         def predict(self, red, green, nir, class_mapping=None, unmapped_to_missing=True):  # noqa: ANN001
             assert red.shape == green.shape == nir.shape
             # returns already standardized classes
@@ -249,6 +254,9 @@ def test_build_cloud_classes_auto_late_loads_missing_green_band(monkeypatch: pyt
     toa.attrs["_siac_toa_band_loader"] = _load_band
 
     class _FakeProvider:
+        def __init__(self, *args, **kwargs):
+            self._kwargs = kwargs
+
         def predict(self, red, green, nir, class_mapping=None, unmapped_to_missing=True):  # noqa: ANN001
             del class_mapping, unmapped_to_missing
             assert float(red.mean()) == pytest.approx(0.4)
@@ -626,15 +634,22 @@ def test_build_cloud_classes_user_callable_shape_reproject_and_provider_error(
 
 def test_omnicloud_default_predictor_and_normalize_paths(monkeypatch: pytest.MonkeyPatch):
     module_fn = ModuleType("omnicloudmask")
-    module_fn.predict_from_array = lambda arr: (arr[0] > 0).astype(np.uint8)  # type: ignore[attr-defined]
+    # The OCM predict_from_array signature accepts optional kwargs (incl.
+    # inference_device) — accept them so the partial(...) wrapper that
+    # _default_predictor now constructs (wave 19a) still works.
+    module_fn.predict_from_array = lambda arr, **_kwargs: (arr[0] > 0).astype(np.uint8)  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module_fn)
-    assert callable(OmniCloudMaskProvider()._default_predictor())
+    # Pass the CPU default explicitly — the provider's default ("cpu")
+    # would also work but spelling it out shows what's being tested.
+    assert callable(OmniCloudMaskProvider()._default_predictor(inference_device="cpu"))
+    # Auto mode (inference_device=None to predict_from_array) is also valid.
+    assert callable(OmniCloudMaskProvider()._default_predictor(inference_device=None))
 
     # module with no supported entrypoint should raise immediately.
     module_none = ModuleType("omnicloudmask")
     monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module_none)
     with pytest.raises(RuntimeError, match="predict_from_array"):
-        OmniCloudMaskProvider()._default_predictor()
+        OmniCloudMaskProvider()._default_predictor(inference_device="cpu")
 
     red = xr.DataArray(np.array([[0.1, 0.2]], dtype=np.float32), dims=["y", "x"])
     green = xr.DataArray(np.array([[0.1, 0.2]], dtype=np.float32), dims=["y", "x"])
@@ -705,3 +720,80 @@ def test_classes_to_bool_mask_preserves_shape():
     assert mask.dtype == bool
     # Class 1 (clear) should be False (not cloudy), others True
     assert mask.values[0, 1] is np.bool_(False)
+
+
+# ---------------------------------------------------------------------------
+# Wave 19a: OmniCloudMaskProvider inference_device handling
+# ---------------------------------------------------------------------------
+
+
+class TestOmniCloudMaskInferenceDevice:
+    """OmniCloudMaskProvider's ``inference_device`` knob (wave 19a).
+
+    Defaults to CPU for cross-process determinism — see the module
+    docstring on ``DEFAULT_INFERENCE_DEVICE`` for the cascade analysis.
+    Tests here verify the partial-binding logic, not actual GPU usage.
+    """
+
+    @pytest.fixture
+    def _fake_omnicloudmask(self, monkeypatch: pytest.MonkeyPatch):
+        """Stub the omnicloudmask module with a predict_from_array that
+        echoes back the inference_device it was called with."""
+        module = ModuleType("omnicloudmask")
+        last_call = {}
+
+        def _predict(arr, **kwargs):
+            last_call.update(kwargs)
+            # Return a 1-channel uint8 mask matching the input height/width.
+            _, h, w = arr.shape
+            return np.zeros((h, w), dtype=np.uint8)
+
+        module.predict_from_array = _predict  # type: ignore[attr-defined]
+        monkeypatch.setitem(__import__("sys").modules, "omnicloudmask", module)
+        return last_call
+
+    def test_default_is_cpu(self, _fake_omnicloudmask):
+        """Default ``OmniCloudMaskProvider()`` pins inference_device='cpu'."""
+        red = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+        green = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+        nir = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+
+        OmniCloudMaskProvider().predict(red, green, nir)
+
+        assert _fake_omnicloudmask.get("inference_device") == "cpu"
+
+    def test_explicit_cuda(self, _fake_omnicloudmask):
+        """Explicit ``inference_device='cuda'`` is forwarded verbatim."""
+        red = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+        green = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+        nir = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+
+        OmniCloudMaskProvider(inference_device="cuda").predict(red, green, nir)
+        assert _fake_omnicloudmask.get("inference_device") == "cuda"
+
+    def test_auto_does_not_pin_device(self, _fake_omnicloudmask):
+        """``inference_device='auto'`` lets OmniCloudMask pick its own
+        default device (i.e. doesn't pass inference_device through)."""
+        red = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+        green = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+        nir = xr.DataArray(np.zeros((4, 4), dtype=np.float32), dims=("y", "x"))
+
+        OmniCloudMaskProvider(inference_device="auto").predict(red, green, nir)
+        # When auto: no inference_device kwarg was passed to predict_from_array
+        # (the library picks via default_device()).
+        assert "inference_device" not in _fake_omnicloudmask
+
+    def test_config_default_is_cpu(self):
+        """CloudMaskAlgorithmConfig.inference_device default is 'cpu'."""
+        from siac.config.algorithms import CloudMaskAlgorithmConfig
+
+        cfg = CloudMaskAlgorithmConfig()
+        assert cfg.inference_device == "cpu"
+
+    def test_config_override_to_auto(self):
+        """The field accepts 'auto', 'cuda', 'mps' as override values."""
+        from siac.config.algorithms import CloudMaskAlgorithmConfig
+
+        for device in ("auto", "cuda", "mps"):
+            cfg = CloudMaskAlgorithmConfig(inference_device=device)
+            assert cfg.inference_device == device

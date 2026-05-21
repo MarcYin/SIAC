@@ -303,6 +303,11 @@ class TestSentinel2Internals:
         )
 
         class _FakeProvider:
+            def __init__(self, *args, **kwargs):
+                # Wave 19a: build_cloud_classes now constructs the provider
+                # with ``inference_device`` — accept and ignore it here.
+                self._kwargs = kwargs
+
             def predict(self, red, green, nir, **_kwargs):  # noqa: ANN001
                 del green, nir
                 return xr.full_like(red, 1, dtype=np.uint8)

@@ -688,6 +688,21 @@ class CloudMaskAlgorithmConfig(SIACBaseModel):
     resolution_policy: ResolutionPolicy = ResolutionPolicy.AUTO
     allow_upsample_to_target: bool = False
     user_callable: Any | None = None
+    #: Torch device for OmniCloudMask inference. Defaults to ``"cpu"``
+    #: because PyTorch's MPS (Apple GPU) and CUDA backends are NOT
+    #: bit-deterministic across processes — Apple's Metal driver and
+    #: NVIDIA's cuDNN can pick different shader kernels per process
+    #: launch, producing ULP-level softmax drift at edge-of-cloud pixels.
+    #: Wave 18g of REVIEW_FIXES.md traces how a 79-pixel cloud-mask
+    #: difference cascades through M5's Voronoi-fill amplifier
+    #: (``nearest_seed_fill``) into 100 % of AOT pixels drifting with a
+    #: ~4 % multiplicative bias.
+    #:
+    #: Set to ``"auto"`` to let OmniCloudMask pick its own default
+    #: (typically the fastest available device — non-deterministic on
+    #: GPU). Set to ``"cuda"`` or ``"mps"`` for explicit GPU
+    #: acceleration. Keep ``"cpu"`` for scientific reproducibility.
+    inference_device: str = "cpu"
 
     @field_validator("external_mask_path", mode="before")
     @classmethod

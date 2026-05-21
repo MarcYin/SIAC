@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING, cast
 
@@ -13,15 +15,69 @@ from siac.algorithms.cloud.mapping import apply_class_mapping
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+logger = logging.getLogger(__name__)
+
+
+#: Default OmniCloudMask inference device.
+#:
+#: PyTorch's MPS (Apple GPU) and CUDA backends are bit-deterministic
+#: *within* a Python process but **not across processes** — Apple's
+#: Metal driver and NVIDIA's cuDNN can pick different shader kernels or
+#: algorithms on different process launches, producing ULP-level softmax
+#: drift that flips argmax at edge-of-cloud pixels. Wave 18g of
+#: ``REVIEW_FIXES.md`` traces how 79 such pixel flips (0.0024 % on a
+#: typical S2 scene) propagate through the M5 solver's Voronoi-fill
+#: amplifier to produce 100 % of AOT pixels drifting with a ~4 %
+#: multiplicative bias. CPU inference is bit-deterministic across
+#: processes, so we default to it.
+#:
+#: The performance cost on T33KWP-sized scenes is ~5-10 s per scene
+#: (CPU ~25 s vs MPS ~15 s for the OCM inference); negligible against
+#: the ~8 min total pipeline wall-clock. Override via the
+#: ``OmniCloudMaskProvider(inference_device=...)`` constructor or the
+#: ``cloud_mask.inference_device`` config field if cross-process
+#: determinism isn't required.
+DEFAULT_INFERENCE_DEVICE: str = "cpu"
+
 
 class OmniCloudMaskProvider:
     """Run OmniCloudMask and return SIAC-standardized cloud classes."""
 
-    def __init__(self, predictor: Callable[[np.ndarray], np.ndarray] | None = None):
+    def __init__(
+        self,
+        predictor: Callable[[np.ndarray], np.ndarray] | None = None,
+        *,
+        inference_device: str | None = None,
+    ) -> None:
+        """Construct the provider.
+
+        Args:
+            predictor: Optional pre-built predictor callable. When provided,
+                bypasses the lazy ``omnicloudmask.predict_from_array`` resolve
+                and the ``inference_device`` argument is ignored. Used by
+                tests to inject deterministic stubs.
+            inference_device: Torch device name passed to
+                ``omnicloudmask.predict_from_array`` (e.g. ``"cpu"``,
+                ``"cuda"``, ``"mps"``). ``None`` selects
+                :data:`DEFAULT_INFERENCE_DEVICE` (CPU). Pass the string
+                ``"auto"`` to let OmniCloudMask pick its own default
+                (``default_device()`` — typically the fastest available
+                GPU). See the module docstring on
+                :data:`DEFAULT_INFERENCE_DEVICE` for why CPU is the
+                conservative default.
+        """
         self._predictor = predictor
+        if inference_device is None:
+            self._inference_device: str | None = DEFAULT_INFERENCE_DEVICE
+        elif str(inference_device).lower() == "auto":
+            self._inference_device = None  # let OCM pick default_device()
+        else:
+            self._inference_device = str(inference_device)
 
     @staticmethod
-    def _default_predictor() -> Callable[[np.ndarray], np.ndarray]:
+    def _default_predictor(
+        inference_device: str | None,
+    ) -> Callable[[np.ndarray], np.ndarray]:
         try:
             omnicloudmask = import_module("omnicloudmask")
         except ImportError as exc:
@@ -41,7 +97,25 @@ class OmniCloudMaskProvider:
                 "omnicloudmask does not expose a callable predict_from_array() entrypoint"
             )
 
-        return cast("Callable[[np.ndarray], np.ndarray]", predict_from_array)
+        if inference_device is None:
+            # Let OmniCloudMask pick — non-deterministic on GPU backends.
+            logger.info(
+                "OmniCloudMask: using library default device (non-deterministic "
+                "across processes on GPU backends). Set "
+                "cloud_mask.inference_device='cpu' for bit-deterministic results."
+            )
+            return cast(
+                "Callable[[np.ndarray], np.ndarray]", predict_from_array
+            )
+        logger.info(
+            "OmniCloudMask: pinning inference_device=%r for cross-process "
+            "determinism.",
+            inference_device,
+        )
+        return cast(
+            "Callable[[np.ndarray], np.ndarray]",
+            partial(predict_from_array, inference_device=inference_device),
+        )
 
     @staticmethod
     def _normalize_raw_output(raw: np.ndarray, template: xr.DataArray) -> xr.DataArray:
@@ -77,7 +151,7 @@ class OmniCloudMaskProvider:
         if red.shape != green.shape or red.shape != nir.shape:
             raise ValueError("red, green, and nir arrays must have identical shape")
 
-        predictor = self._predictor or self._default_predictor()
+        predictor = self._predictor or self._default_predictor(self._inference_device)
         red_np = np.asarray(red.values, dtype=np.float32)
         green_np = np.asarray(green.values, dtype=np.float32)
         nir_np = np.asarray(nir.values, dtype=np.float32)

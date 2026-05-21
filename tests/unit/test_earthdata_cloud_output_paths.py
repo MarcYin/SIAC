@@ -188,7 +188,8 @@ def test_omnicloudmask_helpers_cover_import_and_normalization_paths(
 
     monkeypatch.setattr(omnicloudmask_mod, "import_module", _raise_import)
     with pytest.raises(ImportError, match="omnicloudmask is required"):
-        OmniCloudMaskProvider()._default_predictor()
+        # Wave 19a made inference_device a required kwarg on _default_predictor.
+        OmniCloudMaskProvider()._default_predictor(inference_device="cpu")
 
     template = xr.DataArray(
         np.zeros((2, 2), dtype=np.float32), dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
