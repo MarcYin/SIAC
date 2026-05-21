@@ -1099,4 +1099,64 @@ I haven't built a controlled experiment that varies *only* the cloud-mask (e.g. 
 
 ---
 
+## Wave 19 — Make first-run cross-process determinism the default
+
+Wave 18g identified two operational risks: (a) anyone running SIAC on a fresh Apple Silicon machine *without* the populated cloud-mask cache from wave 18d would hit the MPS-shader-selection variance and get the wave-18g cascade; (b) the wave 18d ``cached_reproject_match`` infrastructure was wired into one call site only (``monthly_composite_store``, a write-time path that doesn't fire on T33KWP regression). This wave closes both gaps.
+
+### Wave 19a — Default OmniCloudMask to CPU (`83929ed`)
+
+**Change.** ``OmniCloudMaskProvider`` now defaults to ``inference_device="cpu"`` instead of using ``omnicloudmask.default_device()`` (which returns MPS on Apple Silicon and CUDA where available). CPU is bit-deterministic across processes on every platform; MPS and CUDA are not.
+
+**Implementation.**
+
+- New module-level constant ``DEFAULT_INFERENCE_DEVICE = "cpu"``.
+- ``OmniCloudMaskProvider(inference_device=...)`` accepts ``"cpu"``, ``"cuda"``, ``"mps"``, ``"auto"`` (lets OmniCloudMask pick its own default), or ``None`` (uses the module default).
+- ``_default_predictor(inference_device)`` wraps ``predict_from_array`` via ``functools.partial`` so the device gets pinned at every call.
+- ``CloudMaskAlgorithmConfig.inference_device: str = "cpu"`` is the user-facing knob, with documentation tying the default to wave 18g's cascade analysis.
+- The cache-key extra_namespace in ``build_cloud_classes`` now includes ``inference_device``, so the cache file ``58/586503fb...npz`` written by an MPS run won't accidentally serve a CPU caller (and vice versa).
+
+**Performance impact.** First cache-miss run is ~5-10 s slower on Apple Silicon (CPU OmniCloudMask inference vs MPS). Cached hits are unaffected — the cache key match short-circuits before any device choice.
+
+**Tests.** ``TestOmniCloudMaskInferenceDevice`` (5 tests) verifies default-is-cpu, explicit-cuda forwarding, auto-does-not-pin-device, config-default-is-cpu, config-override-to-auto. Three pre-existing tests updated for the new constructor signature.
+
+### Wave 19b — Wire `cached_reproject_match` into MCD43 + CAMS (`b9a1a76`)
+
+The wave 18d infrastructure now reaches the two scene-time call sites that actually fire on T33KWP regression and on any other live scene.
+
+**MCD43 tile reprojection** (``adapters/earthdata.merge_reprojected_tiles``):
+
+- New ``cache_dir`` + ``source_identity`` kwargs route the merged + reprojected output through ``cached_reproject_match``.
+- ``MCD43EarthAccessProvider`` (and its VNP43 / MCD19 siblings) gain a ``reproject_cache_dir`` constructor field, threaded from ``paths.caches.reproject`` in the assembly layer.
+- ``source_identity`` is derived from the sorted set of input tile basenames plus the requested band+dataset spec: ``"mcd43:T1.hdf;T2.hdf|B01:Param;B02:Param"``. Two scenes asking for the same tiles + datasets at the same target grid hit the cache; any change (different tiles, different dates, different band) busts it.
+
+**CAMS atmospheric prior reprojection** (``algorithms/grid/assembler._resample_atmo_state``):
+
+- New ``cache_dir`` + ``scene_identity`` kwargs wrap each of the seven CAMS atmo fields (aot, tcwv, tco3, aot_unc, tcwv_unc, tco3_unc, elevation) with ``cached_reproject_match``.
+- Per-field identity: ``f"cams-atmo:{scene_identity}:{field_name}"`` where ``scene_identity`` folds CRS + rounded scene bounds + sensing time + aerosol resolution. Same scene+date → same identity → cache hit.
+- ``assemble_grids`` accepts a top-level ``reproject_cache_dir`` kwarg; pipeline.py threads ``paths.caches.reproject`` through ``_call_grid_assembler``.
+- Failures inside the cache wrapper (missing CRS, etc.) log-and-fall-back to the legacy ``_resample_da`` path so the cache can't break a working scene.
+
+**Performance impact.** No measurable change on T33KWP regression (492 s vs 491 s prior). The wins are for users running live MCD43 (cache amortises the multi-tile warp across scenes that share tiles) and for repeated runs of the same scene+date (CAMS atmo reprojection is ~7 × warp.reproject calls = ~21 s of the wave-17 35 s reproject-total).
+
+### Goldens refresh
+
+Switching to CPU OmniCloudMask shifts the cloud mask by ~1100 pixels (0.1 % of the 3.35 M-pixel CLOUD raster) relative to the MPS-captured bytes that lived in wave 18d's golden capture. ``CLOUD.mean`` shifts from ``0.22078055`` → ``0.22191794`` (delta ``1.1e-3``, well above the regression's ``abs_tol=1e-4``). Goldens refreshed from a fresh CPU-derived T33KWP run.
+
+The shift in downstream products (AOT, BOA bands) is at the 5th-6th decimal — ULP noise that the existing 1e-4 tolerance was already absorbing. Interesting empirical finding: **the ~1100-pixel cloud-mask change between MPS and CPU does NOT trigger the wave-18g Voronoi cascade**, while the ~79-pixel MPS-process-to-process change did. This refines the wave-18g hypothesis: the cascade depends specifically on which *blocks* the cloud-mask differences land in, not on the raw pixel count. Worth a follow-up investigation but not blocking.
+
+### Test suite
+
+- **Unit: 1371 passed / 0 failed / 7 skipped** (+5 new wave-19a tests).
+- **T33KWP regression: 17 / 17 passed at 8m 12s (492 s)** against the CPU-derived goldens.
+
+### Cumulative across all 19 waves
+
+- 63 source files modified, plus 19 new
+- 47 commits on the working branch
+- **Test delta vs original baseline (20 failed / 1097 passed): +274 passes / −20 failures / −8 errors**
+- Pipeline correctness: S2 angles (wave 14), no silent fallbacks (wave 15), joint-LUT determinism (wave 17), cloud-mask determinism via cache+CPU (waves 18b, 18d, 19a)
+- Pipeline performance: **8.2 min on T33KWP** (wave 18e/f) — 3.5× faster than the corrected baseline. Wave 19b's reproject cache adds no measurable T33KWP win but unlocks ~21 s of warp.reproject savings on cached re-runs and on live-MCD43 multi-scene workflows.
+
+---
+
 *This report is generated, not curated. Trust but verify each row before acting on it.*
