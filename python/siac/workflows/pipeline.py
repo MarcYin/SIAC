@@ -183,8 +183,7 @@ def _maybe_submit_lut_preload(
         if axes is not None:
             aot_axis, tcwv_axis = axes
             logger.info(
-                "Starting joint grid-search LUT preload in parallel (%d band%s, "
-                "aot:%d × tcwv:%d).",
+                "Starting joint grid-search LUT preload in parallel (%d band%s, aot:%d × tcwv:%d).",
                 len(bands),
                 "" if len(bands) == 1 else "s",
                 int(aot_axis.size),

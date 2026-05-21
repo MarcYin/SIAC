@@ -47,6 +47,7 @@ def _is_remote_uri(path: str) -> bool:
     """Return True if ``path`` looks like a URI that fsspec can open."""
     return bool(_REMOTE_SCHEME_RE.match(path))
 
+
 logger = logging.getLogger(__name__)
 
 

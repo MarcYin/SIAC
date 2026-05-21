@@ -20,7 +20,6 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import logging
-import os
 import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
@@ -224,7 +223,7 @@ def write_raster(
     try:
         data.rio.to_raster(str(tmp_path), **write_kwargs)
         if tmp_path.exists():
-            os.replace(str(tmp_path), str(path))
+            tmp_path.replace(path)
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
@@ -286,7 +285,7 @@ def write_cog(
     try:
         data.rio.to_raster(str(tmp_path), **write_kwargs)
         if tmp_path.exists():
-            os.replace(str(tmp_path), str(path))
+            tmp_path.replace(path)
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
@@ -479,7 +478,7 @@ def write_netcdf(
     try:
         payload.to_netcdf(str(tmp_path), encoding=encoding, **kwargs)
         if tmp_path.exists():
-            os.replace(str(tmp_path), str(path))
+            tmp_path.replace(path)
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()

@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 import xarray as xr
 
-
 # =============================================================================
 # Build-state preflight
 # =============================================================================
@@ -40,6 +39,7 @@ def pytest_report_header(config) -> list[str]:  # noqa: ARG001
             f"Run `pixi run build-rust` to fix. (cause: {exc})"
         ]
     return ["siac._rust: built ✓"]
+
 
 # =============================================================================
 # Network isolation

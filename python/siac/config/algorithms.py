@@ -401,10 +401,7 @@ class SixSAlgorithmConfig(SIACBaseModel):
             raise ValueError(
                 "sixs.scene_lut_max_cases must be >= sixs.scene_lut_max_nodes_per_axis."
             )
-        if (
-            self.joint_grid_search_lut_max_cases
-            < self.joint_grid_search_lut_max_nodes_per_axis
-        ):
+        if self.joint_grid_search_lut_max_cases < self.joint_grid_search_lut_max_nodes_per_axis:
             raise ValueError(
                 "sixs.joint_grid_search_lut_max_cases must be >= "
                 "sixs.joint_grid_search_lut_max_nodes_per_axis."

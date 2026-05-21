@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from pathlib import Path
 import xarray as xr
 
 from siac.storage.writers import (
@@ -88,6 +91,7 @@ class TestFalseColourPreview:
         assert result == out_path
 
         from PIL import Image
+
         img = Image.open(out_path)
         # Stride is 4096 // 1024 = 4 → output is 1024×1024 (or a hair less).
         assert max(img.size) <= 4096 // 4
@@ -107,15 +111,14 @@ class TestCloudMaskPreview:
                 "B02": _band((4096, 4096), value=0.08),
             }
         )
-        cloud = xr.DataArray(
-            np.zeros((4096, 4096), dtype=bool), dims=("y", "x"), name="cloud_mask"
-        )
+        cloud = xr.DataArray(np.zeros((4096, 4096), dtype=bool), dims=("y", "x"), name="cloud_mask")
         # Stripe a few cloudy pixels so the overlay code path is exercised.
         cloud.values[100:200, 100:300] = True
         out_path = tmp_path / "cloud_mask.png"
         result = write_cloud_mask_preview(boa, cloud, out_path, max_size_px=1024)
         assert result == out_path
         from PIL import Image
+
         img = Image.open(out_path)
         assert max(img.size) <= 4096 // 4
 
@@ -129,9 +132,7 @@ class TestCloudMaskPreview:
         )
         # Cloud mask at a coarser grid (1/8 the resolution) — must be
         # resized to match the (downsampled) BOA preview.
-        cloud = xr.DataArray(
-            np.zeros((256, 256), dtype=bool), dims=("y", "x"), name="cloud_mask"
-        )
+        cloud = xr.DataArray(np.zeros((256, 256), dtype=bool), dims=("y", "x"), name="cloud_mask")
         cloud.values[10:30, 10:50] = True
         out_path = tmp_path / "cloud_mask.png"
         result = write_cloud_mask_preview(boa, cloud, out_path, max_size_px=1024)
@@ -147,10 +148,16 @@ class TestFieldPreview:
         )
         out_path = tmp_path / "aot.png"
         result = write_field_preview(
-            field, out_path, vmin=0.0, vmax=0.5, palette="magma", max_size_px=1024,
+            field,
+            out_path,
+            vmin=0.0,
+            vmax=0.5,
+            palette="magma",
+            max_size_px=1024,
         )
         assert result == out_path
         from PIL import Image
+
         img = Image.open(out_path)
         # Output includes a colour bar + label rows so height > main panel.
         # Just check the width is bounded.

@@ -1519,12 +1519,7 @@ class _EarthAccessBRDFProvider:
             requested_keys = sorted(
                 f"{spec.band_name}:{spec.parameter_dataset}" for _band, spec in requested
             )
-            source_identity = (
-                "mcd43:"
-                + ";".join(tile_keys)
-                + "|"
-                + ";".join(requested_keys)
-            )
+            source_identity = "mcd43:" + ";".join(tile_keys) + "|" + ";".join(requested_keys)
         return self._merge_reprojected_tiles(
             payload_tiles,
             bounds=bounds,

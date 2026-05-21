@@ -177,9 +177,7 @@ class TestAtmosphericCorrector:
         import time
 
         toa, geometry, atmo_state = sample_inputs
-        corrector = AtmosphericCorrector(
-            mock_rt_model, SENTINEL2A_CONFIG, correction_workers=4
-        )
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG, correction_workers=4)
 
         write_intervals: list[tuple[float, float]] = []
         write_lock = threading.Lock()

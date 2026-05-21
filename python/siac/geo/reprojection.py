@@ -79,8 +79,7 @@ def _resolve_resampling(
         method = RESAMPLING_METHODS.get(resampling)
         if method is None:
             raise ValueError(
-                f"Unknown resampling method: {resampling!r}; "
-                f"valid: {sorted(RESAMPLING_METHODS)}"
+                f"Unknown resampling method: {resampling!r}; valid: {sorted(RESAMPLING_METHODS)}"
             )
         return method
     raise TypeError(
@@ -219,11 +218,9 @@ def reproject_dataset_match(
     """
     # Resolve once for the whole dataset only when an explicit choice is
     # given; ``None`` means "decide per variable".
-    explicit_resampling: Resampling | None
-    if resampling is None:
-        explicit_resampling = None
-    else:
-        explicit_resampling = _resolve_resampling(resampling)
+    explicit_resampling: Resampling | None = (
+        None if resampling is None else _resolve_resampling(resampling)
+    )
 
     reprojected_vars = {}
 

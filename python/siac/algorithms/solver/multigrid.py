@@ -79,12 +79,8 @@ def derive_grid_search_axes(
 
     n_aot = max(3, int(config.grid_search_aot_points))
     n_tcwv = max(3, int(config.grid_search_tcwv_points))
-    aot_axis = np.linspace(
-        config.aot_bounds[0], config.aot_bounds[1], n_aot, dtype=np.float32
-    )
-    tcwv_axis = np.linspace(
-        config.tcwv_bounds[0], config.tcwv_bounds[1], n_tcwv, dtype=np.float32
-    )
+    aot_axis = np.linspace(config.aot_bounds[0], config.aot_bounds[1], n_aot, dtype=np.float32)
+    tcwv_axis = np.linspace(config.tcwv_bounds[0], config.tcwv_bounds[1], n_tcwv, dtype=np.float32)
     return aot_axis, tcwv_axis
 
 

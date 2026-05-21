@@ -108,9 +108,7 @@ def test_parse_sun_angles_reads_unprefixed_values_list() -> None:
     # Zenith grid from the fixture is the 3x3 we ship in the XML.
     assert "zenith" in parsed and "azimuth" in parsed
     expected_zen = np.array([[30.0, 31.0, 32.0], [30.5, 31.5, 32.5], [31.0, 32.0, 33.0]])
-    expected_az = np.array(
-        [[120.0, 121.0, 122.0], [120.5, 121.5, 122.5], [121.0, 122.0, 123.0]]
-    )
+    expected_az = np.array([[120.0, 121.0, 122.0], [120.5, 121.5, 122.5], [121.0, 122.0, 123.0]])
     assert np.allclose(parsed["zenith"], expected_zen.astype(np.float32))
     assert np.allclose(parsed["azimuth"], expected_az.astype(np.float32))
 

@@ -105,7 +105,7 @@ class _EarthAccessMAIACAODProvider:
                         resolution=resolution,
                         short_name=used_short_name,
                     )
-                except (OSError, ValueError, KeyError, RuntimeError) as exc:
+                except (OSError, ValueError, KeyError, RuntimeError):
                     # Narrowed (REVIEW.md §2.1, §3.3 mcd19_earthaccess.py:108).
                     # OSError covers HDF/NetCDF I/O; ValueError/KeyError cover
                     # malformed metadata; RuntimeError covers gdal/rasterio

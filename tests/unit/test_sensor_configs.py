@@ -260,21 +260,28 @@ class TestRegisterApi:
 class TestSentinel2ConfigSharedLayout:
     """The S2A/S2B/S2C de-dup helper preserves the shared band layout."""
 
-    @pytest.mark.parametrize(
-        "cfg", [SENTINEL2A_CONFIG, SENTINEL2B_CONFIG, SENTINEL2C_CONFIG]
-    )
+    @pytest.mark.parametrize("cfg", [SENTINEL2A_CONFIG, SENTINEL2B_CONFIG, SENTINEL2C_CONFIG])
     def test_band_count(self, cfg: SensorConfig) -> None:
         assert len(cfg.bands) == 13
 
-    @pytest.mark.parametrize(
-        "cfg", [SENTINEL2A_CONFIG, SENTINEL2B_CONFIG, SENTINEL2C_CONFIG]
-    )
+    @pytest.mark.parametrize("cfg", [SENTINEL2A_CONFIG, SENTINEL2B_CONFIG, SENTINEL2C_CONFIG])
     def test_band_names_and_indices_match(self, cfg: SensorConfig) -> None:
         # All three S2 satellites share band names and indices verbatim;
         # only band centres / FWHMs differ between satellites.
         assert cfg.band_names == (
-            "B01", "B02", "B03", "B04", "B05", "B06", "B07",
-            "B08", "B8A", "B09", "B10", "B11", "B12",
+            "B01",
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B09",
+            "B10",
+            "B11",
+            "B12",
         )
         assert tuple(b.band_index for b in cfg.bands) == tuple(range(13))
 

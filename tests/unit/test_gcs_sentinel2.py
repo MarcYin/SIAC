@@ -304,7 +304,9 @@ def test_download_with_retry_log_uses_one_based_iteration(monkeypatch, tmp_path:
     )
 
     # Two transient failures, two retry warnings.
-    retry_messages = [r.getMessage() for r in caplog.records if "Retrying download" in r.getMessage()]
+    retry_messages = [
+        r.getMessage() for r in caplog.records if "Retrying download" in r.getMessage()
+    ]
     assert len(retry_messages) == 2
     # ``attempts = retries + 1`` so total iteration count is 4. Retry log
     # should report ``2/4`` and ``3/4`` (1-based next iteration / total).

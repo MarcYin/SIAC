@@ -797,8 +797,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         if values_list is None:
             logger.warning(
-                "Sentinel-2 angle grid Values_List missing; "
-                "falling back to uniform %.1fdeg grid.",
+                "Sentinel-2 angle grid Values_List missing; falling back to uniform %.1fdeg grid.",
                 DEFAULT_S2_ANGLE_GRID_DEG,
             )
             return np.full((23, 23), DEFAULT_S2_ANGLE_GRID_DEG)
@@ -811,8 +810,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         if not rows:
             logger.warning(
-                "Sentinel-2 angle grid Values_List empty; "
-                "falling back to uniform %.1fdeg grid.",
+                "Sentinel-2 angle grid Values_List empty; falling back to uniform %.1fdeg grid.",
                 DEFAULT_S2_ANGLE_GRID_DEG,
             )
             return np.full((23, 23), DEFAULT_S2_ANGLE_GRID_DEG)

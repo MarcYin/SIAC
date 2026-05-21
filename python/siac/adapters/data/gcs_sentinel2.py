@@ -21,9 +21,10 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import requests  # type: ignore[import-untyped]
+if TYPE_CHECKING:
+    import requests  # type: ignore[import-untyped]
 
 from siac.adapters._http import make_session
 from siac.adapters.data.s2_data_source import S2Product, S2Query

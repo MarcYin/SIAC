@@ -157,9 +157,7 @@ def test_t33kwp_sixs_tcwv_within_tolerance(regression_run: Path, golden: dict) -
     assert_stats_within_tolerance(actual, golden["products"]["TCWV"], name="TCWV")
 
 
-def test_t33kwp_sixs_cloud_mask_within_tolerance(
-    regression_run: Path, golden: dict
-) -> None:
+def test_t33kwp_sixs_cloud_mask_within_tolerance(regression_run: Path, golden: dict) -> None:
     prefix = _resolve_output_prefix(regression_run)
     actual = capture_product_stats(regression_run / f"{prefix}_CLOUD.tif")
     # Cloud mask is binary — slightly looser valid_fraction bound since the
@@ -197,9 +195,7 @@ def test_t33kwp_sixs_boa_band_within_tolerance(
         pytest.skip(f"No golden for BOA_{band}")
     prefix = _resolve_output_prefix(regression_run)
     actual = capture_product_stats(regression_run / f"{prefix}_BOA_{band}.tif")
-    assert_stats_within_tolerance(
-        actual, golden["products"][f"BOA_{band}"], name=f"BOA_{band}"
-    )
+    assert_stats_within_tolerance(actual, golden["products"][f"BOA_{band}"], name=f"BOA_{band}")
 
 
 def test_t33kwp_sixs_stac_properties(regression_run: Path, golden: dict) -> None:
@@ -218,9 +214,7 @@ def test_t33kwp_sixs_stac_properties(regression_run: Path, golden: dict) -> None
                 f"STAC property {key}: golden {golden_val}, actual {a}"
             )
         else:
-            assert a == golden_val, (
-                f"STAC property {key}: golden {golden_val!r}, actual {a!r}"
-            )
+            assert a == golden_val, f"STAC property {key}: golden {golden_val!r}, actual {a!r}"
 
     # bbox: 4-element or 6-element (antimeridian-aware).
     assert actual["bbox"] == pytest.approx(golden["bbox"], abs=1e-6), (

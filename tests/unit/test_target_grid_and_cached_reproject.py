@@ -7,9 +7,12 @@ that the pipeline can adopt incrementally without breaking existing
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from pathlib import Path
 import pytest
 import rioxarray  # noqa: F401  # registers .rio accessor
 import xarray as xr
@@ -22,7 +25,6 @@ from siac.geo.cached_reprojection import (
     save_cached_reprojection,
 )
 from siac.geo.target_grid import TargetGrid
-
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -95,9 +97,7 @@ class TestTargetGrid:
     def test_signature_absorbs_tiny_bounds_noise(self) -> None:
         """Bounds rounded to 6 decimal places so float-roundtrip noise doesn't bust cache."""
         a = _build_grid(bounds=(0.0, 0.0, 1000.0, 1000.0))
-        b = _build_grid(
-            bounds=(0.0 + 1e-9, 0.0, 1000.0 + 1e-9, 1000.0)
-        )  # sub-micrometre noise
+        b = _build_grid(bounds=(0.0 + 1e-9, 0.0, 1000.0 + 1e-9, 1000.0))  # sub-micrometre noise
         assert a.signature() == b.signature()
 
     def test_from_template_round_trip(self) -> None:
@@ -165,12 +165,8 @@ class TestCacheKey:
         assert a != b
 
     def test_key_changes_with_resampling(self) -> None:
-        a = compute_cache_key(
-            target=_build_grid(), source_identity="x", resampling="nearest"
-        )
-        b = compute_cache_key(
-            target=_build_grid(), source_identity="x", resampling="bilinear"
-        )
+        a = compute_cache_key(target=_build_grid(), source_identity="x", resampling="nearest")
+        b = compute_cache_key(target=_build_grid(), source_identity="x", resampling="bilinear")
         assert a != b
 
     def test_key_changes_with_extra_namespace(self) -> None:
@@ -209,9 +205,7 @@ class TestPersistence:
         save_cached_reprojection(tmp_path, key, reprojected)
         loaded = load_cached_reprojection(tmp_path, key, target=grid)
         assert loaded is not None
-        np.testing.assert_allclose(
-            loaded.values, reprojected.values, rtol=1e-6, atol=1e-6
-        )
+        np.testing.assert_allclose(loaded.values, reprojected.values, rtol=1e-6, atol=1e-6)
 
     def test_roundtrip_preserves_crs(self, tmp_path: Path) -> None:
         grid = _build_grid(crs="EPSG:32634")
@@ -238,9 +232,7 @@ class TestPersistence:
         src = _gradient_source()
         from siac.geo.reprojection import reproject_match
 
-        small_out = reproject_match(
-            src, grid_small.as_template_da(), resampling="bilinear"
-        )
+        small_out = reproject_match(src, grid_small.as_template_da(), resampling="bilinear")
         save_cached_reprojection(tmp_path, "d" * 64, small_out)
         # Now ask for the cache under the same key but expect the BIG shape:
         # load must return None (treats it as a miss rather than crashing).
@@ -283,12 +275,8 @@ class TestCachedReprojectMatch:
             cache_dir=None,
             resampling="bilinear",
         )
-        uncached_out = reproject_match(
-            src, grid.as_template_da(), resampling="bilinear"
-        )
-        np.testing.assert_allclose(
-            cached_out.values, uncached_out.values, rtol=1e-6, atol=1e-6
-        )
+        uncached_out = reproject_match(src, grid.as_template_da(), resampling="bilinear")
+        np.testing.assert_allclose(cached_out.values, uncached_out.values, rtol=1e-6, atol=1e-6)
 
     def test_miss_then_hit_returns_identical_data(self, tmp_path: Path) -> None:
         grid = _build_grid()
@@ -320,13 +308,9 @@ class TestCachedReprojectMatch:
 
         def _explode(*args, **kwargs):
             call_count["n"] += 1
-            raise AssertionError(
-                "cache hit must not invoke reproject_match"
-            )
+            raise AssertionError("cache hit must not invoke reproject_match")
 
-        monkeypatch.setattr(
-            "siac.geo.cached_reprojection.reproject_match", _explode
-        )
+        monkeypatch.setattr("siac.geo.cached_reprojection.reproject_match", _explode)
 
         # Second call must come entirely from cache; no reproject_match.
         result = cached_reproject_match(
@@ -335,9 +319,7 @@ class TestCachedReprojectMatch:
         assert call_count["n"] == 0
         assert result.shape == grid.shape
 
-    def test_different_source_identity_misses_cache(
-        self, tmp_path: Path
-    ) -> None:
+    def test_different_source_identity_misses_cache(self, tmp_path: Path) -> None:
         grid = _build_grid()
         src_a = _gradient_source()
         src_b = _gradient_source(shape=(60, 60))  # same shape, different conceptually
@@ -367,9 +349,7 @@ class TestCachedReprojectMatch:
                 resampling="bilinear",
             )
 
-    def test_accepts_template_da_in_addition_to_target_grid(
-        self, tmp_path: Path
-    ) -> None:
+    def test_accepts_template_da_in_addition_to_target_grid(self, tmp_path: Path) -> None:
         """Legacy callers that pass a template DataArray must still work."""
         grid = _build_grid()
         template_da = grid.as_template_da()
@@ -409,8 +389,10 @@ class TestCachedReprojectMatch:
         )
         # The two namespaces produced different stored entries.
         from siac.geo.cached_reprojection import (
-            compute_cache_key as _compute,
             _cache_path as _path,
+        )
+        from siac.geo.cached_reprojection import (
+            compute_cache_key as _compute,
         )
 
         key_a = _compute(

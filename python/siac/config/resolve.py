@@ -85,9 +85,7 @@ def resolve_paths(system: SystemConfig) -> ResolvedPathsConfig:
             brdf=_resolve_cache_dir(system.paths.caches.brdf, defaults.brdf),
             s2=_resolve_cache_dir(system.paths.caches.s2, defaults.s2),
             cloud=_resolve_cache_dir(system.paths.caches.cloud, defaults.cloud),
-            reproject=_resolve_cache_dir(
-                system.paths.caches.reproject, defaults.reproject
-            ),
+            reproject=_resolve_cache_dir(system.paths.caches.reproject, defaults.reproject),
         ),
     )
 

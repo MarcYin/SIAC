@@ -175,9 +175,7 @@ class SensorConfig:
         if self.aerosol_solver_band_names:
             band_lookup = {b.name: b for b in self.bands}
             preferred = [
-                band_lookup[name]
-                for name in self.aerosol_solver_band_names
-                if name in band_lookup
+                band_lookup[name] for name in self.aerosol_solver_band_names if name in band_lookup
             ]
             if len(preferred) == len(self.aerosol_solver_band_names) and preferred:
                 return preferred

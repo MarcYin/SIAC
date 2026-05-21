@@ -88,15 +88,12 @@ class TargetGrid:
         except Exception:
             # Fallback to bounds + shape arithmetic if the affine
             # transform isn't recoverable. Identical for square pixels.
-            height = int(template.shape[-2])
             width = int(template.shape[-1])
-            x_min, y_min, x_max, y_max = bounds
+            x_min, _y_min, x_max, _y_max = bounds
             resolution = float((x_max - x_min) / max(width, 1))
 
         if template.ndim < 2:
-            raise ValueError(
-                f"Template DataArray must be at least 2-D; got shape {template.shape}"
-            )
+            raise ValueError(f"Template DataArray must be at least 2-D; got shape {template.shape}")
         shape = (int(template.shape[-2]), int(template.shape[-1]))
 
         return cls(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -63,8 +62,10 @@ def _as_data_array(value: object) -> xr.DataArray:
 # ``siac.geo.resample`` and the surface-prior pipelines can use it without
 # the previous ``geo -> runtime`` layering inversion (REVIEW.md §1.4). The
 # re-export here keeps backward compatibility for any caller still doing
-# ``from siac.runtime.models import copy_spatial_metadata_like``.
-from siac.geo._spatial import copy_spatial_metadata_like as copy_spatial_metadata_like
+# ``from siac.runtime.models import copy_spatial_metadata_like``. ``E402``
+# is suppressed because the import is intentionally below the docstring
+# preamble — the comment block explains why.
+from siac.geo._spatial import copy_spatial_metadata_like as copy_spatial_metadata_like  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -310,7 +311,7 @@ class RTCoefficients:
         selected = self.output_names if names is None else tuple(names)
         return {name: self.get_output(name) for name in selected}
 
-    def resample_to_template(self, template: xr.DataArray) -> "RTCoefficients":
+    def resample_to_template(self, template: xr.DataArray) -> RTCoefficients:
         """Resample every field of this coefficient bundle to *template* grid.
 
         The function used to live in ``siac.geo.resample`` and reach back
@@ -325,9 +326,12 @@ class RTCoefficients:
         )
 
         resampled_extras: dict[str, xr.DataArray] = {}
-        for name, field in self.extras.items():
-            resampled = resample_field_or_param_stack_to_template(field, template)
-            resampled_extras[name] = field if resampled is None else resampled
+        # ``extra_field`` (not ``field``) — the latter is the
+        # ``dataclasses.field`` imported above; reusing the name as a loop
+        # variable triggers F402.
+        for name, extra_field in self.extras.items():
+            resampled = resample_field_or_param_stack_to_template(extra_field, template)
+            resampled_extras[name] = extra_field if resampled is None else resampled
 
         return RTCoefficients(
             xap=resample_field_to_template(self.xap, template),

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 import xarray as xr
 
 from siac.algorithms.cloud.cache import (
@@ -36,12 +38,18 @@ def test_cache_key_is_deterministic_across_calls() -> None:
     mapping = {1: [0], 2: [1, 2], 3: [3]}
 
     key_a = compute_cache_key(
-        red=red, green=green, nir=nir,
-        class_mapping=mapping, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping=mapping,
+        target_resolution_m=10.0,
     )
     key_b = compute_cache_key(
-        red=red, green=green, nir=nir,
-        class_mapping=mapping, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping=mapping,
+        target_resolution_m=10.0,
     )
     assert key_a == key_b
     # SHA-256 hex length.
@@ -55,12 +63,18 @@ def test_cache_key_changes_with_pixel_values() -> None:
     nir = _band(value=0.3)
 
     key_a = compute_cache_key(
-        red=red_a, green=green, nir=nir,
-        class_mapping=None, target_resolution_m=10.0,
+        red=red_a,
+        green=green,
+        nir=nir,
+        class_mapping=None,
+        target_resolution_m=10.0,
     )
     key_b = compute_cache_key(
-        red=red_b, green=green, nir=nir,
-        class_mapping=None, target_resolution_m=10.0,
+        red=red_b,
+        green=green,
+        nir=nir,
+        class_mapping=None,
+        target_resolution_m=10.0,
     )
     assert key_a != key_b
 
@@ -70,12 +84,16 @@ def test_cache_key_changes_with_class_mapping() -> None:
     green = _band()
     nir = _band()
     key_a = compute_cache_key(
-        red=red, green=green, nir=nir,
+        red=red,
+        green=green,
+        nir=nir,
         class_mapping={1: [0]},
         target_resolution_m=10.0,
     )
     key_b = compute_cache_key(
-        red=red, green=green, nir=nir,
+        red=red,
+        green=green,
+        nir=nir,
         class_mapping={1: [0], 3: [1]},
         target_resolution_m=10.0,
     )
@@ -87,12 +105,18 @@ def test_cache_key_changes_with_target_resolution() -> None:
     green = _band()
     nir = _band()
     key_a = compute_cache_key(
-        red=red, green=green, nir=nir,
-        class_mapping=None, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping=None,
+        target_resolution_m=10.0,
     )
     key_b = compute_cache_key(
-        red=red, green=green, nir=nir,
-        class_mapping=None, target_resolution_m=20.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping=None,
+        target_resolution_m=20.0,
     )
     assert key_a != key_b
 
@@ -119,9 +143,7 @@ def test_load_with_missing_cache_returns_none(tmp_path: Path) -> None:
 def test_load_with_shape_mismatch_returns_none(tmp_path: Path) -> None:
     # Stored at one shape, asked back with a different template shape.
     save_cached_cloud_classes(tmp_path, "f" * 64, _classes(shape=(8, 12)))
-    out = load_cached_cloud_classes(
-        tmp_path, "f" * 64, template=_band(shape=(4, 6))
-    )
+    out = load_cached_cloud_classes(tmp_path, "f" * 64, template=_band(shape=(4, 6)))
     assert out is None
 
 
@@ -139,8 +161,11 @@ def test_maybe_run_with_cache_misses_then_hits(tmp_path: Path) -> None:
 
     out_a = maybe_run_with_cache(
         cache_dir=tmp_path,
-        red=red, green=green, nir=nir,
-        class_mapping={1: [0]}, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping={1: [0]},
+        target_resolution_m=10.0,
         compute_fn=_compute,
     )
     assert call_count["n"] == 1
@@ -149,8 +174,11 @@ def test_maybe_run_with_cache_misses_then_hits(tmp_path: Path) -> None:
     # Same inputs → second call must NOT invoke compute_fn.
     out_b = maybe_run_with_cache(
         cache_dir=tmp_path,
-        red=red, green=green, nir=nir,
-        class_mapping={1: [0]}, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping={1: [0]},
+        target_resolution_m=10.0,
         compute_fn=_compute,
     )
     assert call_count["n"] == 1, "cache hit must short-circuit compute"
@@ -167,8 +195,11 @@ def test_maybe_run_with_cache_disabled_when_cache_dir_is_none() -> None:
 
     out = maybe_run_with_cache(
         cache_dir=None,
-        red=_band(), green=_band(), nir=_band(),
-        class_mapping=None, target_resolution_m=10.0,
+        red=_band(),
+        green=_band(),
+        nir=_band(),
+        class_mapping=None,
+        target_resolution_m=10.0,
         compute_fn=_compute,
     )
     assert call_count["n"] == 1
@@ -185,15 +216,21 @@ def test_extra_namespace_partitions_the_cache(tmp_path: Path) -> None:
 
     out_a = maybe_run_with_cache(
         cache_dir=tmp_path,
-        red=red, green=green, nir=nir,
-        class_mapping=None, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping=None,
+        target_resolution_m=10.0,
         compute_fn=lambda: classes_a,
         extra_namespace="caller_a",
     )
     out_b = maybe_run_with_cache(
         cache_dir=tmp_path,
-        red=red, green=green, nir=nir,
-        class_mapping=None, target_resolution_m=10.0,
+        red=red,
+        green=green,
+        nir=nir,
+        class_mapping=None,
+        target_resolution_m=10.0,
         compute_fn=lambda: classes_b,
         extra_namespace="caller_b",
     )

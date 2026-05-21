@@ -30,7 +30,6 @@ from siac.algorithms.rt.direct.sixs_build import (
     resolve_build_paths,
 )
 from siac.algorithms.rt.direct.sixs_native import (
-    JointGridSearchLUT,
     _build_joint_grid_search_lut_plan,
     _build_scene_lut_plan,
     _build_spectral_response,
@@ -1084,15 +1083,9 @@ def test_joint_grid_search_lut_evaluate_matches_direct_at_grid_points(
             # template at one step in the pipeline, so absolute differences
             # at the float32 epsilon scale (~1e-7 for unit-magnitude values,
             # less for these ~0.01-scale coefficients) are expected.
-            np.testing.assert_allclose(
-                joint_xap, direct.xap.values, rtol=1.0e-6, atol=1.0e-9
-            )
-            np.testing.assert_allclose(
-                joint_xbp, direct.xbp.values, rtol=1.0e-6, atol=1.0e-9
-            )
-            np.testing.assert_allclose(
-                joint_xcp, direct.xcp.values, rtol=1.0e-6, atol=1.0e-9
-            )
+            np.testing.assert_allclose(joint_xap, direct.xap.values, rtol=1.0e-6, atol=1.0e-9)
+            np.testing.assert_allclose(joint_xbp, direct.xbp.values, rtol=1.0e-6, atol=1.0e-9)
+            np.testing.assert_allclose(joint_xcp, direct.xcp.values, rtol=1.0e-6, atol=1.0e-9)
 
 
 def test_joint_grid_search_lut_disabled_returns_none(
@@ -1197,10 +1190,26 @@ def test_joint_grid_search_lut_amortises_native_calls(
         outputs = {
             name: np.zeros(n_cases, dtype=np.float64)
             for name in (
-                "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm", "rho_atm_pol",
-                "trans_solar", "trans_view", "spher_albedo", "raylscatd",
-                "aerscatd", "raylscatu", "aerscatu", "transm_h2o", "transm_o3",
-                "transm_other", "dwn_irr_dir", "dwn_irr_dif", "dwn_irr_env",
+                "xap",
+                "xbp",
+                "xcp",
+                "tgasm",
+                "totg",
+                "rho_atm",
+                "rho_atm_pol",
+                "trans_solar",
+                "trans_view",
+                "spher_albedo",
+                "raylscatd",
+                "aerscatd",
+                "raylscatu",
+                "aerscatu",
+                "transm_h2o",
+                "transm_o3",
+                "transm_other",
+                "dwn_irr_dir",
+                "dwn_irr_dif",
+                "dwn_irr_env",
                 "rad_path",
             )
         }
@@ -1217,8 +1226,13 @@ def test_joint_grid_search_lut_amortises_native_calls(
     geometry = _sample_geometry((4, 4))
     atmo = _sample_atmo((4, 4))
     bands = [
-        SensorBand(name=f"B{i:02d}", center_wavelength=400.0 + 50 * i,
-                   bandwidth=30.0, resolution=10.0, band_index=i)
+        SensorBand(
+            name=f"B{i:02d}",
+            center_wavelength=400.0 + 50 * i,
+            bandwidth=30.0,
+            resolution=10.0,
+            band_index=i,
+        )
         for i in range(3)
     ]
 
@@ -1266,16 +1280,13 @@ def test_joint_grid_search_lut_amortises_native_calls(
                 elevation=atmo.elevation,
             )
             for band in bands:
-                backend.compute_coefficients(
-                    geometry, atmo_at, band, compute_jacobian=False
-                )
+                backend.compute_coefficients(geometry, atmo_at, band, compute_jacobian=False)
     direct_calls = call_counter["count"]
     assert direct_calls == n_candidates * len(bands)
 
     # The headline assertion — the joint path must use far fewer 6S calls.
     assert joint_total_calls < direct_calls, (
-        f"Joint LUT ({joint_total_calls}) should use fewer 6S calls than "
-        f"direct ({direct_calls})."
+        f"Joint LUT ({joint_total_calls}) should use fewer 6S calls than direct ({direct_calls})."
     )
 
 
@@ -1321,11 +1332,27 @@ def test_prepare_correction_scene_shares_prep_across_bands(
             outputs={
                 name: np.ascontiguousarray(np.zeros(n_cases, dtype=np.float64))
                 for name in (
-                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
-                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
-                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
-                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
-                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                    "xap",
+                    "xbp",
+                    "xcp",
+                    "tgasm",
+                    "totg",
+                    "rho_atm",
+                    "rho_atm_pol",
+                    "trans_solar",
+                    "trans_view",
+                    "spher_albedo",
+                    "raylscatd",
+                    "aerscatd",
+                    "raylscatu",
+                    "aerscatu",
+                    "transm_h2o",
+                    "transm_o3",
+                    "transm_other",
+                    "dwn_irr_dir",
+                    "dwn_irr_dif",
+                    "dwn_irr_env",
+                    "rad_path",
                 )
             },
             status=np.zeros(n_cases, dtype=np.int32),
@@ -1336,8 +1363,13 @@ def test_prepare_correction_scene_shares_prep_across_bands(
     geometry = _sample_geometry((4, 4))
     atmo = _sample_atmo((4, 4))
     bands = [
-        SensorBand(name=f"B{i:02d}", center_wavelength=400.0 + 50.0 * i,
-                   bandwidth=30.0, resolution=10.0, band_index=i)
+        SensorBand(
+            name=f"B{i:02d}",
+            center_wavelength=400.0 + 50.0 * i,
+            bandwidth=30.0,
+            resolution=10.0,
+            band_index=i,
+        )
         for i in range(5)
     ]
 
@@ -1400,11 +1432,24 @@ def test_compute_coefficients_with_prepared_matches_per_band(
             {
                 name: np.zeros(n_cases, dtype=np.float64)
                 for name in (
-                    "tgasm", "totg", "rho_atm", "rho_atm_pol", "trans_solar",
-                    "trans_view", "spher_albedo", "raylscatd", "aerscatd",
-                    "raylscatu", "aerscatu", "transm_h2o", "transm_o3",
-                    "transm_other", "dwn_irr_dir", "dwn_irr_dif",
-                    "dwn_irr_env", "rad_path",
+                    "tgasm",
+                    "totg",
+                    "rho_atm",
+                    "rho_atm_pol",
+                    "trans_solar",
+                    "trans_view",
+                    "spher_albedo",
+                    "raylscatd",
+                    "aerscatd",
+                    "raylscatu",
+                    "aerscatu",
+                    "transm_h2o",
+                    "transm_o3",
+                    "transm_other",
+                    "dwn_irr_dir",
+                    "dwn_irr_dif",
+                    "dwn_irr_env",
+                    "rad_path",
                 )
             }
         )
@@ -1421,18 +1466,18 @@ def test_compute_coefficients_with_prepared_matches_per_band(
     geometry = _sample_geometry((4, 4))
     atmo = _sample_atmo((4, 4))
     bands = [
-        SensorBand(name="B04", center_wavelength=665.0, bandwidth=30.0,
-                   resolution=10.0, band_index=3),
-        SensorBand(name="B08", center_wavelength=842.0, bandwidth=115.0,
-                   resolution=10.0, band_index=7),
+        SensorBand(
+            name="B04", center_wavelength=665.0, bandwidth=30.0, resolution=10.0, band_index=3
+        ),
+        SensorBand(
+            name="B08", center_wavelength=842.0, bandwidth=115.0, resolution=10.0, band_index=7
+        ),
     ]
 
     # Per-band reference.
     per_band_results = []
     for band in bands:
-        coeffs = backend.compute_coefficients(
-            geometry, atmo, band, compute_jacobian=False
-        )
+        coeffs = backend.compute_coefficients(geometry, atmo, band, compute_jacobian=False)
         per_band_results.append((coeffs.xap.values, coeffs.xbp.values, coeffs.xcp.values))
 
     # Shared-prep variant.
@@ -1440,13 +1485,9 @@ def test_compute_coefficients_with_prepared_matches_per_band(
     shared_prep_results = []
     for band in bands:
         coeffs = backend.compute_coefficients_with_prepared(prepared, band)
-        shared_prep_results.append(
-            (coeffs.xap.values, coeffs.xbp.values, coeffs.xcp.values)
-        )
+        shared_prep_results.append((coeffs.xap.values, coeffs.xbp.values, coeffs.xcp.values))
 
-    for (xap_a, xbp_a, xcp_a), (xap_b, xbp_b, xcp_b) in zip(
-        per_band_results, shared_prep_results
-    ):
+    for (xap_a, xbp_a, xcp_a), (xap_b, xbp_b, xcp_b) in zip(per_band_results, shared_prep_results):
         np.testing.assert_array_equal(xap_a, xap_b)
         np.testing.assert_array_equal(xbp_a, xbp_b)
         np.testing.assert_array_equal(xcp_a, xcp_b)
@@ -1486,11 +1527,27 @@ def test_preload_joint_grid_search_lut_serves_subsequent_build(
             outputs={
                 name: np.ascontiguousarray(np.zeros(n_cases, dtype=np.float64))
                 for name in (
-                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
-                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
-                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
-                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
-                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                    "xap",
+                    "xbp",
+                    "xcp",
+                    "tgasm",
+                    "totg",
+                    "rho_atm",
+                    "rho_atm_pol",
+                    "trans_solar",
+                    "trans_view",
+                    "spher_albedo",
+                    "raylscatd",
+                    "aerscatd",
+                    "raylscatu",
+                    "aerscatu",
+                    "transm_h2o",
+                    "transm_o3",
+                    "transm_other",
+                    "dwn_irr_dir",
+                    "dwn_irr_dif",
+                    "dwn_irr_env",
+                    "rad_path",
                 )
             },
             status=np.zeros(n_cases, dtype=np.int32),
@@ -1501,8 +1558,13 @@ def test_preload_joint_grid_search_lut_serves_subsequent_build(
     geometry = _sample_geometry((4, 4))
     atmo = _sample_atmo((4, 4))
     bands = [
-        SensorBand(name=f"B{i:02d}", center_wavelength=400.0 + 50.0 * i,
-                   bandwidth=30.0, resolution=10.0, band_index=i)
+        SensorBand(
+            name=f"B{i:02d}",
+            center_wavelength=400.0 + 50.0 * i,
+            bandwidth=30.0,
+            resolution=10.0,
+            band_index=i,
+        )
         for i in range(3)
     ]
     aot_axis = np.array([0.1, 0.2, 0.3], dtype=np.float64)
@@ -1510,8 +1572,11 @@ def test_preload_joint_grid_search_lut_serves_subsequent_build(
 
     # Preload: builds once, caches.
     preloaded = backend.preload_joint_grid_search_lut(
-        geometry=geometry, atmo_state=atmo,
-        aot_axis=aot_axis, tcwv_axis=tcwv_axis, bands=bands,
+        geometry=geometry,
+        atmo_state=atmo,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        bands=bands,
     )
     assert preloaded is not None
     n_preload_calls = native_calls["count"]
@@ -1521,8 +1586,11 @@ def test_preload_joint_grid_search_lut_serves_subsequent_build(
 
     # Subsequent build with matching args: SHOULD NOT trigger new 6S calls.
     joint = backend.build_joint_grid_search_lut(
-        geometry=geometry, atmo_state=atmo,
-        aot_axis=aot_axis, tcwv_axis=tcwv_axis, bands=bands,
+        geometry=geometry,
+        atmo_state=atmo,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        bands=bands,
     )
     assert joint is preloaded, "build should return the cached preloaded LUT"
     assert native_calls["count"] == n_preload_calls, (
@@ -1531,8 +1599,11 @@ def test_preload_joint_grid_search_lut_serves_subsequent_build(
 
     # The cache is single-shot: a third call rebuilds fresh.
     joint2 = backend.build_joint_grid_search_lut(
-        geometry=geometry, atmo_state=atmo,
-        aot_axis=aot_axis, tcwv_axis=tcwv_axis, bands=bands,
+        geometry=geometry,
+        atmo_state=atmo,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        bands=bands,
     )
     assert joint2 is not preloaded
     assert native_calls["count"] == 2 * n_preload_calls, (
@@ -1566,11 +1637,27 @@ def test_preload_joint_grid_search_lut_signature_mismatch_misses_cache(
             outputs={
                 name: np.ascontiguousarray(np.zeros(n_cases, dtype=np.float64))
                 for name in (
-                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
-                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
-                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
-                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
-                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                    "xap",
+                    "xbp",
+                    "xcp",
+                    "tgasm",
+                    "totg",
+                    "rho_atm",
+                    "rho_atm_pol",
+                    "trans_solar",
+                    "trans_view",
+                    "spher_albedo",
+                    "raylscatd",
+                    "aerscatd",
+                    "raylscatu",
+                    "aerscatu",
+                    "transm_h2o",
+                    "transm_o3",
+                    "transm_other",
+                    "dwn_irr_dir",
+                    "dwn_irr_dif",
+                    "dwn_irr_env",
+                    "rad_path",
                 )
             },
             status=np.zeros(n_cases, dtype=np.int32),
@@ -1580,18 +1667,21 @@ def test_preload_joint_grid_search_lut_signature_mismatch_misses_cache(
 
     geometry = _sample_geometry((4, 4))
     atmo = _sample_atmo((4, 4))
-    band = SensorBand(name="B04", center_wavelength=665.0,
-                      bandwidth=30.0, resolution=10.0, band_index=3)
+    band = SensorBand(
+        name="B04", center_wavelength=665.0, bandwidth=30.0, resolution=10.0, band_index=3
+    )
 
     backend.preload_joint_grid_search_lut(
-        geometry=geometry, atmo_state=atmo,
+        geometry=geometry,
+        atmo_state=atmo,
         aot_axis=np.array([0.1, 0.2]),
         tcwv_axis=np.array([1.0, 2.0]),
         bands=[band],
     )
     # Different aot_axis → signature mismatch → cache miss → rebuild.
     joint_b = backend.build_joint_grid_search_lut(
-        geometry=geometry, atmo_state=atmo,
+        geometry=geometry,
+        atmo_state=atmo,
         aot_axis=np.array([0.5, 0.8]),  # different
         tcwv_axis=np.array([1.0, 2.0]),
         bands=[band],
@@ -1631,8 +1721,6 @@ def test_joint_grid_search_lut_band_parallel_runs_each_band_on_a_session(
     )
     runner = backend._runner
 
-    session_call_counts: list[int] = []
-
     class _StubSession:
         def __init__(self, marker: int) -> None:
             self._marker = marker
@@ -1648,11 +1736,27 @@ def test_joint_grid_search_lut_band_parallel_runs_each_band_on_a_session(
             outputs = {
                 name: np.zeros(n_cases, dtype=np.float64)
                 for name in (
-                    "xap", "xbp", "xcp", "tgasm", "totg", "rho_atm",
-                    "rho_atm_pol", "trans_solar", "trans_view", "spher_albedo",
-                    "raylscatd", "aerscatd", "raylscatu", "aerscatu",
-                    "transm_h2o", "transm_o3", "transm_other", "dwn_irr_dir",
-                    "dwn_irr_dif", "dwn_irr_env", "rad_path",
+                    "xap",
+                    "xbp",
+                    "xcp",
+                    "tgasm",
+                    "totg",
+                    "rho_atm",
+                    "rho_atm_pol",
+                    "trans_solar",
+                    "trans_view",
+                    "spher_albedo",
+                    "raylscatd",
+                    "aerscatd",
+                    "raylscatu",
+                    "aerscatu",
+                    "transm_h2o",
+                    "transm_o3",
+                    "transm_other",
+                    "dwn_irr_dir",
+                    "dwn_irr_dif",
+                    "dwn_irr_env",
+                    "rad_path",
                 )
             }
             outputs["xap"] = np.full(n_cases, wlinf, dtype=np.float64)
@@ -1727,8 +1831,7 @@ def test_joint_grid_search_lut_band_parallel_runs_each_band_on_a_session(
         # Our SensorBand has bandwidth=30.0 (nm) so wlinf = center/1000 - 0.015 µm.
         expected_wlinf = (band.center_wavelength - 15.0) / 1000.0
         assert np.allclose(finite, expected_wlinf, rtol=1e-3, atol=1e-3), (
-            f"Band {band.name}: expected xap≈{expected_wlinf:.4f}, "
-            f"got {finite[:3]}"
+            f"Band {band.name}: expected xap≈{expected_wlinf:.4f}, got {finite[:3]}"
         )
 
 

@@ -12,11 +12,14 @@ import logging
 import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
 import numpy as np
-import requests
 import xarray as xr
+
+if TYPE_CHECKING:
+    import requests
 
 from siac.adapters._http import make_session
 from siac.geo.reprojection import transform_bounds

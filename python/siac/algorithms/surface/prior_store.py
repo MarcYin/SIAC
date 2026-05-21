@@ -73,9 +73,7 @@ def _interpolate_doy(
     # ``max(doy_sorted)`` (typically 365 or 366 from the source DOY axis) as a
     # consistent year length when computing wrap-around gaps.
     year_length = int(max(int(doy_sorted[-1]), 365))
-    if year_length < 366 and (
-        np.any(doy_sorted >= 366) or target_doy >= 366
-    ):
+    if year_length < 366 and (np.any(doy_sorted >= 366) or target_doy >= 366):
         year_length = 366
 
     idx_after = np.searchsorted(doy_sorted, target_doy)
@@ -86,9 +84,7 @@ def _interpolate_doy(
         doy_hi = doy_sorted[0]
         gap = (year_length - doy_lo) + doy_hi
         dist_lo = (
-            (year_length - doy_lo) + target_doy
-            if target_doy < doy_lo
-            else target_doy - doy_lo
+            (year_length - doy_lo) + target_doy if target_doy < doy_lo else target_doy - doy_lo
         )
         weight = dist_lo / gap if gap > 0 else 0.5
     elif idx_after >= len(doy_sorted):

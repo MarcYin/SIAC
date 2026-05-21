@@ -14,13 +14,17 @@ Subsequent calls to :func:`get_sensor_config` resolve the new entry.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from siac.catalog.sensors.landsat import LANDSAT8_OLI_CONFIG, LANDSAT9_OLI2_CONFIG
 from siac.catalog.sensors.sentinel2 import (
     SENTINEL2A_CONFIG,
     SENTINEL2B_CONFIG,
     SENTINEL2C_CONFIG,
 )
-from siac.domain.sensors import SensorConfig
+
+if TYPE_CHECKING:
+    from siac.domain.sensors import SensorConfig
 
 SENSOR_CONFIGS: dict[tuple[str, str], SensorConfig] = {
     ("MSI", "S2A"): SENTINEL2A_CONFIG,

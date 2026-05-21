@@ -462,9 +462,7 @@ def download_cdse(
         # Wrap the streaming GET in ``with`` so the underlying connection is
         # released even if iter_content raises mid-transfer (REVIEW.md §3.3
         # copernicus_dataspace.py:374-389).
-        with session.get(
-            product.source_url, headers=headers, stream=True, timeout=300
-        ) as resp:
+        with session.get(product.source_url, headers=headers, stream=True, timeout=300) as resp:
             resp.raise_for_status()
 
             with tempfile.NamedTemporaryFile(

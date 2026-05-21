@@ -11,6 +11,7 @@ clear ``ImportError`` from their module body. Those files are listed in
 ``KNOWN_BROKEN`` and skipped so the rest of the suite can guard against
 *new* regressions.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -52,8 +53,7 @@ KNOWN_BROKEN: dict[str, str] = {
     # are now correct), but it imports from `tools.compare_rt_backends` which
     # is broken (see above). Skip until the sibling tool is repaired.
     "pixel_aot_curve.py": (
-        "Imports helpers from tools/compare_rt_backends.py, which is broken "
-        "(see entry above)."
+        "Imports helpers from tools/compare_rt_backends.py, which is broken (see entry above)."
     ),
 }
 

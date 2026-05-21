@@ -104,12 +104,9 @@ class OmniCloudMaskProvider:
                 "across processes on GPU backends). Set "
                 "cloud_mask.inference_device='cpu' for bit-deterministic results."
             )
-            return cast(
-                "Callable[[np.ndarray], np.ndarray]", predict_from_array
-            )
+            return cast("Callable[[np.ndarray], np.ndarray]", predict_from_array)
         logger.info(
-            "OmniCloudMask: pinning inference_device=%r for cross-process "
-            "determinism.",
+            "OmniCloudMask: pinning inference_device=%r for cross-process determinism.",
             inference_device,
         )
         return cast(

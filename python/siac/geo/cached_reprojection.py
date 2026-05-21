@@ -35,7 +35,6 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 import xarray as xr
 
 from siac.geo.reprojection import reproject_match
@@ -53,7 +52,7 @@ logger = logging.getLogger(__name__)
 CACHE_FORMAT_VERSION: str = "reproject-v1"
 
 
-def _stable_resampling_repr(resampling: str | "Resampling" | None) -> str:
+def _stable_resampling_repr(resampling: str | Resampling | None) -> str:
     """Deterministic string for the resampling enum/string/None."""
     if resampling is None:
         return "auto"
@@ -70,7 +69,7 @@ def compute_cache_key(
     *,
     target: TargetGrid,
     source_identity: str,
-    resampling: str | "Resampling" | None,
+    resampling: str | Resampling | None,
     extra_namespace: str = "",
 ) -> str:
     """Compute the deterministic cache key for this reprojection request."""
@@ -93,9 +92,7 @@ def _cache_path(cache_dir: Path, key: str) -> Path:
     return Path(cache_dir) / key[:2] / f"{key}.nc"
 
 
-def _restore_crs(
-    da: xr.DataArray, target: TargetGrid
-) -> xr.DataArray:
+def _restore_crs(da: xr.DataArray, target: TargetGrid) -> xr.DataArray:
     """Ensure rioxarray CRS metadata is set on a freshly-loaded DataArray."""
     import rioxarray  # noqa: F401  # registers .rio accessor
 
@@ -131,8 +128,7 @@ def load_cached_reprojection(
         ds = xr.open_dataset(path, decode_coords="all", engine=None)
     except (OSError, ValueError, KeyError) as exc:
         logger.warning(
-            "Reproject cache hit at %s failed to load (%s: %s); "
-            "recomputing.",
+            "Reproject cache hit at %s failed to load (%s: %s); recomputing.",
             path,
             type(exc).__name__,
             exc,
@@ -143,8 +139,7 @@ def load_cached_reprojection(
         # path below. If the file uses an older layout fall through.
         if "data" not in ds.data_vars:
             logger.warning(
-                "Reproject cache file %s has unexpected layout (vars=%s); "
-                "recomputing.",
+                "Reproject cache file %s has unexpected layout (vars=%s); recomputing.",
                 path,
                 list(ds.data_vars),
             )
@@ -154,8 +149,7 @@ def load_cached_reprojection(
         ds.close()
         if out.shape[-2:] != target.shape:
             logger.info(
-                "Reproject cache shape mismatch at %s (%s vs expected %s); "
-                "recomputing.",
+                "Reproject cache shape mismatch at %s (%s vs expected %s); recomputing.",
                 path,
                 out.shape[-2:],
                 target.shape,
@@ -165,10 +159,10 @@ def load_cached_reprojection(
         logger.info("Reproject cache HIT: %s", path)
         return out
     finally:
-        try:
+        import contextlib
+
+        with contextlib.suppress(Exception):
             ds.close()
-        except Exception:
-            pass
 
 
 def save_cached_reprojection(
@@ -181,9 +175,7 @@ def save_cached_reprojection(
         return
     path = _cache_path(Path(cache_dir), key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{key}.", suffix=".nc", dir=str(path.parent)
-    )
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{key}.", suffix=".nc", dir=str(path.parent))
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
@@ -199,7 +191,7 @@ def save_cached_reprojection(
             }
         }
         ds.to_netcdf(tmp_path, encoding=encoding)
-        os.replace(tmp_path, path)
+        tmp_path.replace(path)
         logger.info(
             "Reproject cache MISS → wrote %s (%.1f MB)",
             path,
@@ -225,7 +217,7 @@ def cached_reproject_match(
     *,
     source_identity: str,
     cache_dir: Path | str | None = None,
-    resampling: str | "Resampling" | None = None,
+    resampling: str | Resampling | None = None,
     extra_namespace: str = "",
     nodata: float | None = None,
 ) -> xr.DataArray:

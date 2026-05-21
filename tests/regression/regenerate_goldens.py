@@ -44,8 +44,19 @@ _STAC_KEYS_TO_CAPTURE: tuple[str, ...] = (
 
 # Sentinel-2 band layout. Edit if a new scene captures a different sensor.
 _S2_BANDS: tuple[str, ...] = (
-    "B01", "B02", "B03", "B04", "B05", "B06", "B07",
-    "B08", "B8A", "B09", "B10", "B11", "B12",
+    "B01",
+    "B02",
+    "B03",
+    "B04",
+    "B05",
+    "B06",
+    "B07",
+    "B08",
+    "B8A",
+    "B09",
+    "B10",
+    "B11",
+    "B12",
 )
 
 
@@ -84,7 +95,9 @@ def _stat_dict(path: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     parser.add_argument(
         "--output-dir",
         required=True,
@@ -140,9 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"Missing STAC sidecar {stac_path}")
     stac = json.loads(stac_path.read_text())
     selected_props = {
-        k: stac["properties"][k]
-        for k in _STAC_KEYS_TO_CAPTURE
-        if k in stac["properties"]
+        k: stac["properties"][k] for k in _STAC_KEYS_TO_CAPTURE if k in stac["properties"]
     }
 
     # Read existing meta (if any) to preserve non-numerical context fields.

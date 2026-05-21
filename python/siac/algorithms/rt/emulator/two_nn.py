@@ -137,9 +137,7 @@ class TwoLayerNNEmulator:
         for path in found_files:
             name = path.stem
             for part in name.split("_"):
-                if part.startswith("B") and (
-                    part[1:].isdigit() or part.upper() in ("B8A",)
-                ):
+                if part.startswith("B") and (part[1:].isdigit() or part.upper() in ("B8A",)):
                     available.append(part)
                     break
 

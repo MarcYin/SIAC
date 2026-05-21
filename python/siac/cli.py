@@ -201,12 +201,8 @@ def _resolve_cli_aoi(args: argparse.Namespace) -> Any | None:
         try:
             geojson = _parse_wkt(args.aoi_wkt, _target_crs=None)
         except (ValueError, AttributeError) as exc:
-            raise ConfigurationError(
-                f"Failed to parse --aoi-wkt as WKT: {exc}"
-            ) from exc
-        return AOI.from_geojson(
-            geojson, crs=cast("str | None", getattr(args, "aoi_crs", None))
-        )
+            raise ConfigurationError(f"Failed to parse --aoi-wkt as WKT: {exc}") from exc
+        return AOI.from_geojson(geojson, crs=cast("str | None", getattr(args, "aoi_crs", None)))
     return None
 
 

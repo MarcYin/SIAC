@@ -9,7 +9,6 @@ dtype-aware default resampling for ``check_rasters_aligned``,
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -24,10 +23,6 @@ from siac.geo._crs_compat import (
     crs_equivalent,
     default_resampling_for_dtype,
 )
-
-if TYPE_CHECKING:
-    pass
-
 
 # =============================================================================
 # crs_equivalent
@@ -163,7 +158,7 @@ def test_read_zarr_array_remote_scheme_uses_mapper(
     monkeypatch.setattr(
         readers_mod.xr,
         "open_zarr",
-        lambda obj, chunks=None: xr.Dataset({"v": xr.DataArray([1], dims=["x"])}),
+        lambda _obj, chunks=None: xr.Dataset({"v": xr.DataArray([1], dims=["x"])}),  # noqa: ARG005
     )
 
     readers_mod.read_zarr_array(url)
@@ -183,7 +178,7 @@ def test_read_zarr_array_local_path_does_not_use_mapper(
     monkeypatch.setattr(
         readers_mod.xr,
         "open_zarr",
-        lambda obj, chunks=None: xr.Dataset({"v": xr.DataArray([1], dims=["x"])}),
+        lambda _obj, chunks=None: xr.Dataset({"v": xr.DataArray([1], dims=["x"])}),  # noqa: ARG005
     )
 
     readers_mod.read_zarr_array("/tmp/local.zarr")
@@ -244,9 +239,7 @@ def test_reproject_match_default_uses_nearest_for_integer(
         captured["resampling"] = resampling
         return self
 
-    monkeypatch.setattr(
-        type(src.rio), "reproject_match", _fake_match, raising=True
-    )
+    monkeypatch.setattr(type(src.rio), "reproject_match", _fake_match, raising=True)
 
     reproj_mod.reproject_match(src, target)  # resampling defaults to None
     assert captured["resampling"] is Resampling.nearest

@@ -12,8 +12,6 @@ import numpy as np
 import pytest
 import xarray as xr
 
-pytestmark = pytest.mark.integration
-
 from siac.algorithms.grid.assembler import assemble_grids
 from siac.domain import SensorBand, SensorConfig
 from siac.runtime import (
@@ -33,6 +31,8 @@ from siac.runtime.validation import (
     validate_surface_prior,
 )
 from siac.workflows.pipeline import run_pipeline
+
+pytestmark = pytest.mark.integration
 
 # ── Synthetic data builders ──────────────────────────────────────────
 

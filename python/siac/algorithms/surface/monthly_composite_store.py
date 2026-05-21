@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 from contextlib import suppress
 from dataclasses import dataclass
@@ -326,7 +325,7 @@ def _write_monthly_geotiff_period(
         # Atomic swap: remove the previous period and rename staging.
         if period_root.exists() and period_root.is_dir():
             shutil.rmtree(period_root)
-        os.replace(staging_root, period_root)
+        staging_root.replace(period_root)
     except BaseException:
         # On any failure remove the staging directory so it doesn't
         # confuse the next attempt.

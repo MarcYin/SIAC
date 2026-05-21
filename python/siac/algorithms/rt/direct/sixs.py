@@ -143,9 +143,7 @@ class SixSBackend:
         helper the prep runs once and is reused by
         :meth:`compute_coefficients_with_prepared` for each band.
         """
-        return self._runner.prepare_correction_scene(
-            geometry=geometry, atmo_state=atmo_state
-        )
+        return self._runner.prepare_correction_scene(geometry=geometry, atmo_state=atmo_state)
 
     def compute_coefficients_with_prepared(
         self,

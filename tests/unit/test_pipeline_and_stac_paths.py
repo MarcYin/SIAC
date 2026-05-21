@@ -175,9 +175,7 @@ def test_stac_helper_functions_cover_fallback_and_optional_paths(tmp_path: Path)
         sizes={"y": 2, "x": 3},
     )
     assert stac_mod._native_bounds(first_band, (1.0, 2.0, 3.0, 4.0)) == (1.0, 2.0, 3.0, 4.0)
-    bbox, geometry, antimeridian = stac_mod._wgs84_bounds_and_geometry(
-        (1.0, 2.0, 3.0, 4.0), None
-    )
+    bbox, geometry, antimeridian = stac_mod._wgs84_bounds_and_geometry((1.0, 2.0, 3.0, 4.0), None)
     assert bbox == [1.0, 2.0, 3.0, 4.0]
     assert geometry["coordinates"][0][0] == [1.0, 2.0]
     assert antimeridian is False

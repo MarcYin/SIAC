@@ -60,9 +60,7 @@ def _stable_class_mapping_repr(
     """Return a deterministic string representation of the class mapping."""
     if class_mapping is None:
         return "null"
-    items = sorted(
-        (int(k), sorted(int(x) for x in v)) for k, v in class_mapping.items()
-    )
+    items = sorted((int(k), sorted(int(x) for x in v)) for k, v in class_mapping.items())
     return json.dumps(items, separators=(",", ":"))
 
 
@@ -81,7 +79,7 @@ def compute_cache_key(
     h.update(b"\0")
     h.update(extra_namespace.encode("utf-8"))
     h.update(b"\0")
-    h.update(f"target_resolution_m={float(target_resolution_m):.6f}".encode("utf-8"))
+    h.update(f"target_resolution_m={float(target_resolution_m):.6f}".encode())
     h.update(b"\0")
     h.update(_stable_class_mapping_repr(class_mapping).encode("utf-8"))
     for label, arr in (("red", red), ("green", green), ("nir", nir)):
@@ -131,8 +129,7 @@ def load_cached_cloud_classes(
         return None
     if values.shape != template.shape:
         logger.info(
-            "Cloud-mask cache shape mismatch at %s (%s vs expected %s); "
-            "recomputing.",
+            "Cloud-mask cache shape mismatch at %s (%s vs expected %s); recomputing.",
             path,
             values.shape,
             template.shape,
@@ -160,15 +157,13 @@ def save_cached_cloud_classes(
     # destination doesn't already end with that suffix, so we build the
     # tempfile name to already include it and capture the exact resulting
     # path from numpy via tempfile's deterministic name.
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{key}.", suffix=".npz", dir=str(path.parent)
-    )
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{key}.", suffix=".npz", dir=str(path.parent))
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
         values = np.ascontiguousarray(np.asarray(classes.values, dtype=np.uint8))
         np.savez(tmp_path, values=values)
-        os.replace(tmp_path, path)
+        tmp_path.replace(path)
         logger.info("Cloud-mask cache MISS → wrote %s", path)
     except (OSError, ValueError) as exc:
         logger.warning(

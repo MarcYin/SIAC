@@ -101,9 +101,7 @@ class AtmosphericCorrector:
         # purely additive — no behaviour changes for backends that haven't
         # opted in.
         prepare_fn = getattr(self.rt_model, "prepare_correction_scene", None)
-        compute_with_prep = getattr(
-            self.rt_model, "compute_coefficients_with_prepared", None
-        )
+        compute_with_prep = getattr(self.rt_model, "compute_coefficients_with_prepared", None)
         prepared_scene: Any | None = None
         if callable(prepare_fn) and callable(compute_with_prep) and len(work_items) > 1:
             try:
@@ -123,17 +121,13 @@ class AtmosphericCorrector:
             if prepared_scene is not None:
                 coeffs = compute_with_prep(prepared_scene, band_spec)
             else:
-                coeffs = self.rt_model.compute_coefficients(
-                    geometry, atmo_state, band_spec, False
-                )
+                coeffs = self.rt_model.compute_coefficients(geometry, atmo_state, band_spec, False)
             coeffs = resample_coefficients_to_template(coeffs, band_data)
             boa = coeffs.apply_correction(band_data)
             # Reflectance validity range — siac.constants.
             from siac.constants import BOA_VALID_MAX, BOA_VALID_MIN
 
-            band_valid = (
-                np.isfinite(boa) & (boa > BOA_VALID_MIN) & (boa < BOA_VALID_MAX)
-            )
+            band_valid = np.isfinite(boa) & (boa > BOA_VALID_MIN) & (boa < BOA_VALID_MAX)
             masked_boa = boa.where(band_valid)
             return masked_boa, (~band_valid), (time.perf_counter() - t_band)
 
@@ -150,18 +144,14 @@ class AtmosphericCorrector:
             band_spec: Any,
             band_data: xr.DataArray,
         ) -> tuple[xr.DataArray, xr.DataArray, float, float]:
-            masked_boa, band_invalid, compute_s = _correct_single_band(
-                band_spec, band_data
-            )
+            masked_boa, band_invalid, compute_s = _correct_single_band(band_spec, band_data)
             t_write_band = time.perf_counter()
             if boa_band_writer is not None:
                 masked_boa = boa_band_writer(band_name_local, masked_boa)
             write_s = time.perf_counter() - t_write_band
             return masked_boa, band_invalid, compute_s, write_s
 
-        per_band_full: dict[
-            str, tuple[xr.DataArray, xr.DataArray, float, float]
-        ] = {}
+        per_band_full: dict[str, tuple[xr.DataArray, xr.DataArray, float, float]] = {}
         t_compute_phase = time.perf_counter()
         if self.correction_workers > 1 and len(work_items) > 1:
             max_workers = min(self.correction_workers, len(work_items))

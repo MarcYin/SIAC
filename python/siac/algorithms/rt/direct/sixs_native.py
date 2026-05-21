@@ -948,12 +948,8 @@ def _build_joint_grid_search_lut_plan(
     nodes must coincide with the grid-search candidate values for the
     block-grid-search reuse to be numerically exact at the grid points.
     """
-    aot_axis_arr = np.ascontiguousarray(
-        np.unique(np.asarray(aot_axis, dtype=np.float64))
-    )
-    tcwv_axis_arr = np.ascontiguousarray(
-        np.unique(np.asarray(tcwv_axis, dtype=np.float64))
-    )
+    aot_axis_arr = np.ascontiguousarray(np.unique(np.asarray(aot_axis, dtype=np.float64)))
+    tcwv_axis_arr = np.ascontiguousarray(np.unique(np.asarray(tcwv_axis, dtype=np.float64)))
     if aot_axis_arr.size == 0:
         aot_axis_arr = np.zeros(1, dtype=np.float64)
     if tcwv_axis_arr.size == 0:
@@ -973,8 +969,7 @@ def _build_joint_grid_search_lut_plan(
     # Shrink only the geometric axes to fit the case budget.
     while _scene_lut_case_count(axes) > max_cases:
         reducible = [
-            name for name in _CASE_ARRAY_NAMES
-            if name not in fixed_axes and axes[name].size > 1
+            name for name in _CASE_ARRAY_NAMES if name not in fixed_axes and axes[name].size > 1
         ]
         if not reducible:
             break
@@ -1090,9 +1085,7 @@ class JointGridSearchLUT:
                 self._geom_columns.append(np.empty(0, dtype=np.float64))  # placeholder
             else:
                 self._geom_columns.append(
-                    np.ascontiguousarray(
-                        np.asarray(prepared.case_arrays[name], dtype=np.float64)
-                    )
+                    np.ascontiguousarray(np.asarray(prepared.case_arrays[name], dtype=np.float64))
                 )
 
         # Build a RegularGridInterpolator per (band, output_name). These reuse
@@ -1104,9 +1097,9 @@ class JointGridSearchLUT:
         for native_outputs in band_native_outputs:
             band_interp: dict[str, Any] = {}
             for name in selected_names:
-                values = np.asarray(
-                    native_outputs.outputs[name], dtype=np.float64
-                ).reshape(full_shape)
+                values = np.asarray(native_outputs.outputs[name], dtype=np.float64).reshape(
+                    full_shape
+                )
                 reduced = values
                 for axis_index in reversed(range(len(_CASE_ARRAY_NAMES))):
                     if plan.axes[_CASE_ARRAY_NAMES[axis_index]].size == 1:
@@ -1156,13 +1149,9 @@ class JointGridSearchLUT:
             sample_columns: list[np.ndarray] = []
             for idx, name in enumerate(self._varying_axes):
                 if name == "aot550":
-                    sample_columns.append(
-                        np.full(n_pixels, float(aot_val), dtype=np.float64)
-                    )
+                    sample_columns.append(np.full(n_pixels, float(aot_val), dtype=np.float64))
                 elif name == "tcwv_cm":
-                    sample_columns.append(
-                        np.full(n_pixels, float(tcwv_val), dtype=np.float64)
-                    )
+                    sample_columns.append(np.full(n_pixels, float(tcwv_val), dtype=np.float64))
                 else:
                     sample_columns.append(self._geom_columns[idx])
             sample_points = np.column_stack(sample_columns)
@@ -1197,7 +1186,10 @@ class _ScalarInterpolator:
     def __init__(self, value: float) -> None:
         self._value = float(value)
 
-    def __call__(self, points: np.ndarray | None = None) -> float:
+    def __call__(self, points: np.ndarray | None = None) -> float:  # noqa: ARG002
+        # ``points`` is accepted but unused — kept for signature parity
+        # with ``scipy.interpolate.RegularGridInterpolator.__call__``,
+        # which the JointGridSearchLUT calls polymorphically.
         return self._value
 
 
@@ -1596,8 +1588,7 @@ class SixSNativeRunner:
             output_variables=output_variables,
         )
         logger.info(
-            "Preloaded joint grid-search LUT in parallel with prior fetch "
-            "(%d bands, %d cases).",
+            "Preloaded joint grid-search LUT in parallel with prior fetch (%d bands, %d cases).",
             len(bands),
             joint.plan.lut_case_count,
         )
@@ -1687,9 +1678,7 @@ class SixSNativeRunner:
             plan.lut_case_count,
             len(bands),
         )
-        band_outputs = self._run_joint_lut_bands(
-            prepared=prepared, plan=plan, bands=bands
-        )
+        band_outputs = self._run_joint_lut_bands(prepared=prepared, plan=plan, bands=bands)
         return JointGridSearchLUT(
             prepared=prepared,
             plan=plan,
@@ -1750,9 +1739,7 @@ class SixSNativeRunner:
             kwargs.update(plan.grid_case_arrays)
             band_kwargs.append(kwargs)
 
-        def _run_single_band(
-            session: _SixSExtensionModule, band_index: int
-        ) -> _NativeBatchResult:
+        def _run_single_band(session: _SixSExtensionModule, band_index: int) -> _NativeBatchResult:
             kwargs = band_kwargs[band_index]
             result = session.run_batch(n_threads=per_worker_threads, **kwargs)
             failed = result.status != 0
@@ -1760,8 +1747,7 @@ class SixSNativeRunner:
                 for _name, values in result.outputs.items():
                     values[failed] = np.nan
                 logger.warning(
-                    "6S native runner returned %d non-zero status values "
-                    "for joint-LUT band #%d.",
+                    "6S native runner returned %d non-zero status values for joint-LUT band #%d.",
                     int(np.count_nonzero(failed)),
                     band_index,
                 )
@@ -1882,9 +1868,7 @@ class SixSNativeRunner:
             native_outputs = self._run_native_batch(
                 **self._band_native_kwargs(prepared_scene.prepared, band)
             )
-        return self._render_native_outputs(
-            prepared_scene.prepared, selected_names, native_outputs
-        )
+        return self._render_native_outputs(prepared_scene.prepared, selected_names, native_outputs)
 
     def _prepare_scene_inputs(
         self,

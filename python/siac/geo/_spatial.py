@@ -18,8 +18,10 @@ import copy_spatial_metadata_like`` keep working.
 from __future__ import annotations
 
 from contextlib import suppress
+from typing import TYPE_CHECKING
 
-import xarray as xr
+if TYPE_CHECKING:
+    import xarray as xr
 
 
 def copy_spatial_metadata_like(data: xr.DataArray, reference: xr.DataArray) -> xr.DataArray:

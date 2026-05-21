@@ -177,9 +177,7 @@ def test_stac_asset_and_projection_helpers_cover_failure_paths(tmp_path: Path) -
     native_bounds = stac_mod._native_bounds(SimpleNamespace(rio=_RaisingRio()), (1, 2, 3, 4))
     assert native_bounds == (1.0, 2.0, 3.0, 4.0)
 
-    bbox, geometry, antimeridian = stac_mod._wgs84_bounds_and_geometry(
-        native_bounds, crs=None
-    )
+    bbox, geometry, antimeridian = stac_mod._wgs84_bounds_and_geometry(native_bounds, crs=None)
     assert bbox == [1.0, 2.0, 3.0, 4.0]
     assert geometry["coordinates"][0][0] == [1.0, 2.0]
     assert antimeridian is False

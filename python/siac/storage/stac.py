@@ -383,8 +383,7 @@ def build_stac_item_from_result(
         else:
             item_id = f"siac-{uuid.uuid4()}"
             logger.warning(
-                "output_dir.name=%r is not a valid STAC item id; "
-                "generated UUID-based fallback %r.",
+                "output_dir.name=%r is not a valid STAC item id; generated UUID-based fallback %r.",
                 candidate,
                 item_id,
             )
@@ -438,9 +437,9 @@ def build_stac_item_from_result(
         raise ValueError(
             "STAC item generation requires a datetime: "
             "metadata['observation_time'] must be a `datetime` instance "
-            "(got %r). If only a temporal range is available, set "
-            "start_datetime/end_datetime in the result metadata first."
-            % (observation_time,)
+            f"(got {observation_time!r}). If only a temporal range is "
+            "available, set start_datetime/end_datetime in the result "
+            "metadata first."
         )
     properties: dict[str, Any] = {
         "created": _isoformat_utc(datetime.now(timezone.utc)),
