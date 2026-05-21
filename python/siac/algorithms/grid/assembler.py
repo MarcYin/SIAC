@@ -605,8 +605,61 @@ def _resample_atmo_state(
     target_shape: tuple[int, int],
     *,
     template: xr.DataArray | None = None,
+    cache_dir: Path | str | None = None,
+    scene_identity: str | None = None,
 ) -> AtmosphericState:
-    """Resample all atmospheric state fields to target shape."""
+    """Resample all atmospheric state fields to target shape.
+
+    Wave 19b: when both ``cache_dir`` and ``scene_identity`` are provided,
+    each of the seven CAMS atmo-prior fields routes through
+    ``cached_reproject_match`` keyed by
+    ``f"cams-atmo:{scene_identity}:{field_name}"``. The CAMS reprojection
+    from native 5×5 lat/lon to the scene UTM grid is one of the larger
+    per-field warp costs in the wave-17 profile (~3 s × 7 fields ≈ 21 s).
+    On subsequent runs of the same scene+date the cache hits and skips
+    the warp entirely. Both args default to ``None`` for backwards
+    compatibility (no caching).
+    """
+    if cache_dir is not None and scene_identity:
+        from siac.geo.cached_reprojection import cached_reproject_match
+        from siac.geo.target_grid import TargetGrid
+
+        def _cached(field: xr.DataArray, field_name: str, resampling: str) -> xr.DataArray:
+            """Cache one field's reprojection under a per-field identity."""
+            if template is None:
+                return _resample_da(field, target_shape, resampling, template=template)
+            # Only cache the same-CRS reproject path — if the field is
+            # already on the target grid we still pay one call to
+            # _resample_da (which is a near-no-op), but we don't add
+            # a cache layer where there's nothing to cache.
+            try:
+                return cached_reproject_match(
+                    field,
+                    TargetGrid.from_template(template),
+                    source_identity=f"cams-atmo:{scene_identity}:{field_name}",
+                    cache_dir=cache_dir,
+                    resampling=resampling,
+                )
+            except Exception:
+                # Any failure inside the cache wrapper (e.g. missing CRS
+                # on the source) falls back to the legacy resample path.
+                logger.debug(
+                    "Atmo prior cache wrapper failed for %s; using legacy resample",
+                    field_name,
+                    exc_info=True,
+                )
+                return _resample_da(field, target_shape, resampling, template=template)
+
+        return AtmosphericState(
+            aot=_cached(atmo.aot, "aot", "bilinear"),
+            tcwv=_cached(atmo.tcwv, "tcwv", "bilinear"),
+            tco3=_cached(atmo.tco3, "tco3", "bilinear"),
+            aot_unc=_cached(atmo.aot_unc, "aot_unc", "bilinear"),
+            tcwv_unc=_cached(atmo.tcwv_unc, "tcwv_unc", "bilinear"),
+            tco3_unc=_cached(atmo.tco3_unc, "tco3_unc", "bilinear"),
+            elevation=_cached(atmo.elevation, "elevation", "bilinear"),
+        )
+
     return AtmosphericState(
         aot=_resample_da(atmo.aot, target_shape, "bilinear", template=template),
         tcwv=_resample_da(atmo.tcwv, target_shape, "bilinear", template=template),
@@ -721,6 +774,7 @@ def assemble_grids(
     water_mask_cache_dir: str | Path | None = None,
     water_mask_buffer_pixels: int = 0,
     solver_band_names: tuple[str, ...] | None = None,
+    reproject_cache_dir: str | Path | None = None,
 ) -> SolverInputBundle:
     """Resample and align all upstream outputs to solver grids.
 
@@ -854,8 +908,28 @@ def assemble_grids(
             template=target_template,
             assume_aligned_native_grid=True,
         )
+        # Wave 19b: derive a per-scene identity for the atmo-prior cache.
+        # The atmo prior depends on (bounds, sensing time, source) — those
+        # uniquely pin the bytes returned by CAMSProvider.get_prior. We
+        # round to whole metres / second to absorb any insignificant
+        # float-roundtrip variance across runs.
+        atmo_scene_identity: str | None = None
+        if reproject_cache_dir is not None:
+            obs_time = obs.metadata.get("observation_time")
+            obs_time_key = obs_time.isoformat() if obs_time is not None else "unknown"
+            atmo_scene_identity = (
+                f"{obs.crs}:"
+                f"{round(obs.bounds[0])}:{round(obs.bounds[1])}:"
+                f"{round(obs.bounds[2])}:{round(obs.bounds[3])}:"
+                f"{obs_time_key}:res{int(round(resolved_aerosol_resolution))}m"
+            )
         atmo_future = pool.submit(
-            _resample_atmo_state, atmo, target_shape, template=target_template
+            _resample_atmo_state,
+            atmo,
+            target_shape,
+            template=target_template,
+            cache_dir=reproject_cache_dir,
+            scene_identity=atmo_scene_identity,
         )
         surface_future = pool.submit(
             _resample_surface_prior, surface_aligned, target_shape, template=target_template

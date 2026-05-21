@@ -101,6 +101,17 @@ def _build_vnp19_provider(
     )
 
 
+def _resolve_reproject_cache_dir(config: Any) -> Any:
+    """Pull ``paths.caches.reproject`` through to the BRDF providers (wave 19b).
+
+    Returns None when the cache is unconfigured; the providers default to
+    no cache (legacy behaviour).
+    """
+    paths = getattr(config, "paths", None)
+    caches = getattr(paths, "caches", None) if paths is not None else None
+    return getattr(caches, "reproject", None) if caches is not None else None
+
+
 @BRDF_PROVIDER_REGISTRY.register("mcd43")
 def _build_mcd43_provider(config: Any, auth: CredentialManager | None = None) -> Any:
     from siac.adapters.brdf.mcd43_earthaccess import MCD43EarthAccessProvider
@@ -108,6 +119,7 @@ def _build_mcd43_provider(config: Any, auth: CredentialManager | None = None) ->
     return MCD43EarthAccessProvider(
         cache_dir=config.providers.brdf.cache_dir,
         source=earthaccess_source_from_auth(auth),
+        reproject_cache_dir=_resolve_reproject_cache_dir(config),
     )
 
 
@@ -118,6 +130,7 @@ def _build_vnp43_provider(config: Any, auth: CredentialManager | None = None) ->
     return VNP43EarthAccessProvider(
         cache_dir=config.providers.brdf.cache_dir,
         source=earthaccess_source_from_auth(auth),
+        reproject_cache_dir=_resolve_reproject_cache_dir(config),
     )
 
 
@@ -128,6 +141,7 @@ def _build_mcd19_brdf_provider(config: Any, auth: CredentialManager | None = Non
     return MCD19EarthAccessProvider(
         cache_dir=config.providers.brdf.cache_dir,
         source=earthaccess_source_from_auth(auth),
+        reproject_cache_dir=_resolve_reproject_cache_dir(config),
     )
 
 

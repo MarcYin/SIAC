@@ -260,6 +260,7 @@ def _call_grid_assembler(
     water_mask_cache_dir: str | Path | None = None,
     water_mask_buffer_pixels: int = 0,
     solver_band_names: tuple[str, ...] | None = None,
+    reproject_cache_dir: str | Path | None = None,
 ) -> SolverInputBundle:
     """Call the grid assembler with the current standardized interface."""
     return grid_assembler(
@@ -273,6 +274,7 @@ def _call_grid_assembler(
         water_mask_cache_dir=water_mask_cache_dir,
         water_mask_buffer_pixels=water_mask_buffer_pixels,
         solver_band_names=solver_band_names,
+        reproject_cache_dir=reproject_cache_dir,
     )
 
 
@@ -433,6 +435,12 @@ def _run_tail(
     )
     water_mask_buffer_pixels = int(getattr(solver_config, "water_mask_buffer_pixels", 0))
     solver_band_names = _requested_solver_band_names(config)
+    # Wave 19b: pull the cached-reprojection directory through to the
+    # grid assembler so the CAMS atmo-state reproject (one of the larger
+    # warp.reproject costs in the wave-17 profile) can be served from
+    # disk on repeated runs over the same scene+date.
+    caches = getattr(paths_config, "caches", None) if paths_config is not None else None
+    reproject_cache_dir = getattr(caches, "reproject", None) if caches is not None else None
 
     t0 = time.monotonic()
     logger.info("M4: Assembling solver grids...")
@@ -449,6 +457,7 @@ def _run_tail(
             water_mask_cache_dir=water_mask_cache_dir,
             water_mask_buffer_pixels=water_mask_buffer_pixels,
             solver_band_names=solver_band_names,
+            reproject_cache_dir=reproject_cache_dir,
         )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)

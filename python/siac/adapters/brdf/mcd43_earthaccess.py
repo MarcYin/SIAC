@@ -213,6 +213,7 @@ class _EarthAccessBRDFProvider:
         provider: str | None = None,
         probe_earthdata: bool = True,
         max_granules: int = 64,
+        reproject_cache_dir: str | Path | None = None,
     ) -> None:
         runtime = build_earthaccess_runtime(
             cache_dir=cache_dir,
@@ -226,6 +227,13 @@ class _EarthAccessBRDFProvider:
         self.short_name = short_name
         self.provider = provider
         self.probe_earthdata = probe_earthdata
+        # Wave 19b: content-addressed cache for the merged + reprojected
+        # tile output. None disables caching (default — preserves
+        # backwards compatibility). Threaded through to
+        # ``_merge_reprojected_tiles`` via ``paths.caches.reproject``.
+        self.reproject_cache_dir = (
+            Path(reproject_cache_dir).expanduser() if reproject_cache_dir else None
+        )
         resolved_max_granules = int(max_granules)
         self.max_granules = -1 if resolved_max_granules < 0 else max(1, resolved_max_granules)
 
@@ -885,6 +893,8 @@ class _EarthAccessBRDFProvider:
         resampling: Resampling,
         nodata: float | None,
         target_template: xr.DataArray | None = None,
+        cache_dir: Path | str | None = None,
+        source_identity: str | None = None,
     ) -> xr.DataArray:
         return merge_reprojected_tiles(
             arrays,
@@ -894,6 +904,8 @@ class _EarthAccessBRDFProvider:
             resampling=resampling,
             nodata=nodata,
             target_template=target_template,
+            cache_dir=cache_dir,
+            source_identity=source_identity,
         )
 
     @staticmethod
@@ -1496,6 +1508,23 @@ class _EarthAccessBRDFProvider:
             return payload
 
         payload_tiles = [self._load_native_requested_payload(path, requested) for path in paths]
+        # Wave 19b: content-addressed source identity is the sorted set of
+        # source HDF tile basenames plus the requested band+dataset spec.
+        # Two scenes asking for the same MCD43 tiles + same datasets at the
+        # same target grid will hit the cache; any change (tile rotation,
+        # different dates, different band) busts it.
+        source_identity = None
+        if self.reproject_cache_dir is not None:
+            tile_keys = sorted(Path(p).name for p in paths)
+            requested_keys = sorted(
+                f"{spec.band_name}:{spec.parameter_dataset}" for _band, spec in requested
+            )
+            source_identity = (
+                "mcd43:"
+                + ";".join(tile_keys)
+                + "|"
+                + ";".join(requested_keys)
+            )
         return self._merge_reprojected_tiles(
             payload_tiles,
             bounds=bounds,
@@ -1504,6 +1533,8 @@ class _EarthAccessBRDFProvider:
             resampling=Resampling.nearest,
             nodata=np.nan,
             target_template=target_template,
+            cache_dir=self.reproject_cache_dir,
+            source_identity=source_identity,
         )
 
     def _load_requested_payload_vrt(

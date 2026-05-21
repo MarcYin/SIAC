@@ -185,8 +185,19 @@ def merge_reprojected_tiles(
     resampling: Resampling,
     nodata: float | None,
     target_template: xr.DataArray | None = None,
+    cache_dir: Path | str | None = None,
+    source_identity: str | None = None,
 ) -> xr.DataArray:
-    """Merge native tiles by reading a virtual mosaic directly onto the target AOI."""
+    """Merge native tiles by reading a virtual mosaic directly onto the target AOI.
+
+    Wave 19b: when both ``cache_dir`` and ``source_identity`` are provided,
+    the merged output is persisted to disk under a content-hash cache —
+    subsequent calls with matching inputs skip the reproject + merge work
+    entirely. The caller is responsible for choosing a ``source_identity``
+    that uniquely identifies the tile set (e.g.
+    ``";".join(sorted(tile_paths))`` for MCD43 — same paths = same data).
+    Both args default to ``None`` for backwards compatibility.
+    """
     if not arrays:
         raise ValueError("Expected at least one array to merge")
 
@@ -214,6 +225,30 @@ def merge_reprojected_tiles(
         else:
             resolved_resolution = normalized_resolution
             target = build_target_template(bounds, crs, resolved_resolution)
+
+    # Wave 19b: try the disk cache first when the caller provided both a
+    # cache_dir and a stable source_identity. Cache key folds in the
+    # target grid signature + identity + resampling, so any of these
+    # changing produces a fresh compute.
+    if cache_dir is not None and source_identity:
+        from siac.geo.cached_reprojection import (
+            compute_cache_key,
+            load_cached_reprojection,
+            save_cached_reprojection,
+        )
+        from siac.geo.target_grid import TargetGrid
+
+        target_grid = TargetGrid.from_template(target)
+        key = compute_cache_key(
+            target=target_grid,
+            source_identity=source_identity,
+            resampling=resampling.name if hasattr(resampling, "name") else str(resampling),
+            extra_namespace=f"merge_reprojected_tiles;nodata={nodata!r}",
+        )
+        cached = load_cached_reprojection(cache_dir, key, target=target_grid)
+        if cached is not None:
+            return cached.astype(np.float32)
+
     if reproject_native_to_target is not _DEFAULT_REPROJECT_NATIVE_TO_TARGET:
         reprojected = [
             reproject_native_to_target(
@@ -230,16 +265,21 @@ def merge_reprojected_tiles(
         merged = reprojected[0].astype(np.float32)
         for arr in reprojected[1:]:
             merged = merged.where(np.isfinite(merged), arr.astype(np.float32))
-        return merged.astype(np.float32)
-    return _merge_tiles_via_vrt(
-        arrays,
-        bounds=bounds,
-        crs=crs,
-        resolution=resolved_resolution,
-        resampling=resampling,
-        nodata=nodata,
-        target=target,
-    )
+        result = merged.astype(np.float32)
+    else:
+        result = _merge_tiles_via_vrt(
+            arrays,
+            bounds=bounds,
+            crs=crs,
+            resolution=resolved_resolution,
+            resampling=resampling,
+            nodata=nodata,
+            target=target,
+        )
+
+    if cache_dir is not None and source_identity:
+        save_cached_reprojection(cache_dir, key, result)
+    return result
 
 
 def reproject_native_to_target(
