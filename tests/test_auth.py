@@ -253,9 +253,14 @@ class TestProviderAdapters:
         mgr = CredentialManager()
         assert isinstance(mgr.cdse(), CDSEAuth)
 
-    @patch("siac.adapters.auth.requests.delete")
-    @patch("siac.adapters.auth.requests.post")
-    def test_cdse_temporary_s3_credentials_roundtrip(self, mock_post, mock_delete):
+    def test_cdse_temporary_s3_credentials_roundtrip(self, monkeypatch):
+        """The CDSE auth path goes through a shared retry-enabled requests.Session
+        (see ``_get_session`` in ``siac.adapters.auth``), so patching
+        ``requests.post``/``requests.delete`` at the module level no longer
+        intercepts the call — patch the session instead.
+        """
+        from unittest.mock import MagicMock
+
         class _Resp:
             def __init__(self, body):
                 self._body = body
@@ -266,11 +271,14 @@ class TestProviderAdapters:
             def json(self):
                 return self._body
 
+        session = MagicMock()
+        session.post.return_value = _Resp({"access_id": "ak", "secret": "sk"})
+        session.delete.return_value = _Resp({})
+        monkeypatch.setattr("siac.adapters.auth._get_session", lambda: session)
+
         mgr = CredentialManager()
         mgr.set_credentials("cdse", key="user", secret="pass")
         mgr._oauth_tokens["cdse"] = OAuthToken(access_token="tok", expires_at=float("inf"))
-        mock_post.return_value = _Resp({"access_id": "ak", "secret": "sk"})
-        mock_delete.return_value = _Resp({})
 
         creds = mgr.cdse().create_temporary_s3_credentials()
         assert creds.access_key_id == "ak"
@@ -279,14 +287,13 @@ class TestProviderAdapters:
         assert creds.storage_options()["key"] == "ak"
 
         mgr.cdse().revoke_temporary_s3_credentials("ak")
-        assert mock_post.call_count == 1
-        assert mock_delete.call_count == 1
+        assert session.post.call_count == 1
+        assert session.delete.call_count == 1
 
-    @patch("siac.adapters.auth.requests.delete")
-    @patch("siac.adapters.auth.requests.post")
-    def test_cdse_temporary_s3_context_verifies_with_retry(
-        self, mock_post, mock_delete, monkeypatch
-    ):
+    def test_cdse_temporary_s3_context_verifies_with_retry(self, monkeypatch):
+        """Same session-vs-requests patching fix as above (see comment)."""
+        from unittest.mock import MagicMock
+
         class _Resp:
             def __init__(self, body):
                 self._body = body
@@ -309,11 +316,14 @@ class TestProviderAdapters:
                     raise PermissionError("InvalidAccessKeyId")
                 return [f"{path}/ok"]
 
+        session = MagicMock()
+        session.post.return_value = _Resp({"access_id": "ak", "secret": "sk"})
+        session.delete.return_value = _Resp({})
+        monkeypatch.setattr("siac.adapters.auth._get_session", lambda: session)
+
         mgr = CredentialManager()
         mgr.set_credentials("cdse", key="user", secret="pass")
         mgr._oauth_tokens["cdse"] = OAuthToken(access_token="tok", expires_at=float("inf"))
-        mock_post.return_value = _Resp({"access_id": "ak", "secret": "sk"})
-        mock_delete.return_value = _Resp({})
         monkeypatch.setitem(sys.modules, "s3fs", SimpleNamespace(S3FileSystem=_FakeS3FS))
         monkeypatch.setattr("siac.adapters.auth.time.sleep", lambda _seconds: None)
 
@@ -322,10 +332,11 @@ class TestProviderAdapters:
             assert creds.secret_access_key == "sk"
 
         assert attempts["count"] == 3
-        assert mock_delete.call_count == 1
+        assert session.delete.call_count == 1
 
-    @patch("siac.adapters.auth.requests.post")
-    def test_cdse_temporary_s3_credentials_missing_fields_raise(self, mock_post):
+    def test_cdse_temporary_s3_credentials_missing_fields_raise(self, monkeypatch):
+        from unittest.mock import MagicMock
+
         class _Resp:
             def __init__(self, body):
                 self._body = body
@@ -336,10 +347,13 @@ class TestProviderAdapters:
             def json(self):
                 return self._body
 
+        session = MagicMock()
+        session.post.return_value = _Resp({"access_id": "ak"})
+        monkeypatch.setattr("siac.adapters.auth._get_session", lambda: session)
+
         mgr = CredentialManager()
         mgr.set_credentials("cdse", key="user", secret="pass")
         mgr._oauth_tokens["cdse"] = OAuthToken(access_token="tok", expires_at=float("inf"))
-        mock_post.return_value = _Resp({"access_id": "ak"})
 
         with pytest.raises(AuthenticationError, match="missing secret"):
             mgr.cdse().create_temporary_s3_credentials()
@@ -415,6 +429,8 @@ class TestCDSEBackendWithAuth:
 
 class TestCDSETokenExchange:
     def test_exchange_success_and_missing_token(self, monkeypatch):
+        from unittest.mock import MagicMock
+
         class _Resp:
             def __init__(self, body):
                 self._body = body
@@ -425,17 +441,14 @@ class TestCDSETokenExchange:
             def json(self):
                 return self._body
 
-        monkeypatch.setattr(
-            "siac.adapters.auth.requests.post",
-            lambda *_args, **_kwargs: _Resp({"access_token": "abc", "expires_in": 123}),
-        )
+        session = MagicMock()
+        session.post.return_value = _Resp({"access_token": "abc", "expires_in": 123})
+        monkeypatch.setattr("siac.adapters.auth._get_session", lambda: session)
+
         token, exp = _cdse_token_exchange("u", "p")
         assert token == "abc"
         assert exp == 123
 
-        monkeypatch.setattr(
-            "siac.adapters.auth.requests.post",
-            lambda *_args, **_kwargs: _Resp({"expires_in": 123}),
-        )
+        session.post.return_value = _Resp({"expires_in": 123})
         with pytest.raises(AuthenticationError, match="access_token"):
             _cdse_token_exchange("u", "p")

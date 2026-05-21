@@ -57,6 +57,7 @@ def test_load_band_rsrf_uses_sampled_curve_directly(
 
 def test_load_sensor_config_with_rsrf_realizes_band_spec(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     base_band = SENTINEL2C_CONFIG.get_band("B02")
     base_config = SensorConfig(
@@ -65,6 +66,18 @@ def test_load_sensor_config_with_rsrf_realizes_band_spec(
         bands=(base_band,),
     )
 
+    # Stub the rsrf-root resolver so the test doesn't try to download the
+    # rsrf release snapshot from GitHub (which the CI sandbox blocks via
+    # the autouse ``_block_network`` fixture in conftest.py).
+    fake_root = tmp_path / "rsrf-runtime"
+    (fake_root / "data" / "registry").mkdir(parents=True)
+    (fake_root / "data" / "registry" / "sensors.parquet").touch()
+    (fake_root / "data" / "registry" / "bands.parquet").touch()
+    (fake_root / "data" / "canonical").mkdir()
+    monkeypatch.setattr(
+        "siac.adapters.rsrf._default_rsrf_root",
+        lambda: fake_root,
+    )
     monkeypatch.setattr(
         "siac.adapters.rsrf.rsrf.load_response_definition",
         lambda *_args, **_kwargs: BandSpec(
