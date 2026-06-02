@@ -49,6 +49,7 @@ class MonthlyCompositeProviderKind(SIACEnum):
     GENERATED_BRDF = "generated_brdf"
     USER_CALLABLE = "user_callable"
     PREPARED_STORE = "prepared_store"
+    BESTPIXEL = "bestpixel"
 
 
 class AtmosphericParameterName(SIACEnum):

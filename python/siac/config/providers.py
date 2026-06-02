@@ -166,7 +166,36 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
     store_path: Path | None = None
     strict_coverage: bool = True
 
-    @field_validator("store_path", mode="before")
+    # --- bestpixel provider (kind == "bestpixel") -----------------------
+    #: STAC source the ``bestpixel`` package composites from. One of
+    #: ``"auto" | "earth-search" | "pc" | "hls" | "mcd43a4"``.
+    bestpixel_endpoint: str = "pc"
+    #: Canonical bestpixel band names to request. ``None`` selects a
+    #: default set spanning visible→SWIR (coastal, blue, green, red, nir,
+    #: swir16, swir22) which covers SIAC's Route-B visible + query bands.
+    bestpixel_bands: tuple[str, ...] | None = None
+    #: Number of full calendar years before the observation year to build
+    #: monthly composites for (e.g. 5 → the five years preceding the scene).
+    bestpixel_lookback_years: int = 5
+    #: Calendar months (1–12) to composite. ``None`` (default) composites only
+    #: the scene's own acquisition month each year, so the surface prior is
+    #: seasonally matched (e.g. a March scene -> March of each lookback year).
+    #: Set explicitly to widen the seasonal window (e.g. [2, 3, 4]) or to
+    #: composite a full year ([1, 2, ..., 12]).
+    bestpixel_months: tuple[int, ...] | None = None
+    #: Output CRS bestpixel composites in: ``"utm"`` or ``"native"``.
+    bestpixel_output_crs: str = "utm"
+    #: Fixed clearest-observations-per-chunk depth.
+    bestpixel_top_k: int = 3
+    #: Drop source scenes whose cloud cover exceeds this percent.
+    bestpixel_max_cloud_cover: float = 90.0
+    #: Composite build resolution in metres. ``None`` builds composites at
+    #: the Route-B database resolution SIAC requests at runtime.
+    bestpixel_resolution_m: float | None = None
+    #: Optional on-disk cache directory passed straight to bestpixel.
+    bestpixel_disk_cache: Path | None = None
+
+    @field_validator("store_path", "bestpixel_disk_cache", mode="before")
     @classmethod
     def normalize_store_path(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)

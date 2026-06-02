@@ -93,8 +93,14 @@ docs = [
 dask = [
     "dask[distributed]>=2024.1.0",
 ]
+# Optional best-pixel monthly-composite surface-prior provider
+# (providers.monthly_composites.kind = "bestpixel"). Imported lazily by
+# siac.adapters.bestpixel, so it is never required for the core install.
+bestpixel = [
+    "bestpixel>=0.1.1",
+]
 all = [
-    "siac[dev,docs,dask]",
+    "siac[dev,docs,dask,bestpixel]",
 ]
 
 [project.urls]

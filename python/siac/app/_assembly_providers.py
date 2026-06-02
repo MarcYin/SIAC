@@ -302,6 +302,28 @@ def _build_prepared_store_monthly_composite_provider(
     return _PreparedStoreMonthlyCompositeProvider()
 
 
+@MONTHLY_COMPOSITE_PROVIDER_REGISTRY.register("bestpixel")
+def _build_bestpixel_monthly_composite_provider(
+    config: Any,
+    _auth: CredentialManager | None = None,
+) -> Any:
+    from siac.adapters.bestpixel import BestPixelMonthlyCompositeProvider
+
+    mc = config.providers.monthly_composites
+    disk_cache = getattr(mc, "bestpixel_disk_cache", None)
+    return BestPixelMonthlyCompositeProvider(
+        endpoint=mc.bestpixel_endpoint,
+        bands=mc.bestpixel_bands,
+        lookback_years=mc.bestpixel_lookback_years,
+        months=mc.bestpixel_months,
+        output_crs=mc.bestpixel_output_crs,
+        top_k=mc.bestpixel_top_k,
+        max_cloud_cover=mc.bestpixel_max_cloud_cover,
+        resolution_m=mc.bestpixel_resolution_m,
+        disk_cache=str(disk_cache) if disk_cache is not None else None,
+    )
+
+
 def _assert_matching_store_grid(
     grid: Any,
     *,
