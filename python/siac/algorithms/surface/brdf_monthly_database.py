@@ -31,12 +31,34 @@ class _MonthlyPredictionDiagnostics:
     knn_feature_distance: xr.DataArray
 
 
-def _feature_names_for_query_bands(query_bands: Sequence[str]) -> tuple[str, ...]:
+def _query_feature_names(query_bands: Sequence[str]) -> tuple[str, ...]:
+    """Names for the per-pixel current-observation query-band features."""
     if len(query_bands) == 3:
-        return ("nir", "swir1", "swir2", "median_nir", "median_swir1", "median_swir2")
-    query_names = tuple(f"query_{idx}" for idx in range(len(query_bands)))
-    median_names = tuple(f"median_query_{idx}" for idx in range(len(query_bands)))
-    return query_names + median_names
+        return ("nir", "swir1", "swir2")
+    return tuple(f"query_{idx}" for idx in range(len(query_bands)))
+
+
+def _median_feature_names(
+    query_bands: Sequence[str],
+    visible_bands: Sequence[str],
+    *,
+    include_visible: bool,
+) -> tuple[str, ...]:
+    """Names for the temporal-median ("climatology") key features.
+
+    Always includes the NIR/SWIR query medians; when ``include_visible`` is set
+    (the ``monthly_database_median_key="all"`` option) it also appends the
+    per-pixel temporal median of the visible bands as a full-spectrum location
+    fingerprint.
+    """
+    query_median: tuple[str, ...]
+    if len(query_bands) == 3:
+        query_median = ("median_nir", "median_swir1", "median_swir2")
+    else:
+        query_median = tuple(f"median_query_{idx}" for idx in range(len(query_bands)))
+    if not include_visible:
+        return query_median
+    return query_median + tuple(f"median_{name}" for name in visible_bands)
 
 
 def _dataset_to_cube(
@@ -279,14 +301,24 @@ def build_monthly_composite_database(
     query_bands: Sequence[str],
     visible_bands: Sequence[str],
     max_source_fit_rmse: float | None = None,
+    median_key: str = "query",
 ) -> MonthlyCompositeDatabase:
-    """Build the Route-B database from one or more monthly composites."""
+    """Build the Route-B database from one or more monthly composites.
+
+    ``median_key`` controls the kNN lookup key's "climatology" block:
+    ``"query"`` (default) appends only the temporal median of the NIR/SWIR query
+    bands; ``"all"`` additionally appends the temporal median of the visible
+    bands as a full-spectrum per-pixel fingerprint.
+    """
     if len(composites) < 1:
         raise ValueError("Route-B monthly database requires at least one monthly composite")
     if len(query_bands) < 1:
         raise ValueError("query_bands must not be empty")
     if len(visible_bands) < 1:
         raise ValueError("visible_bands must not be empty")
+    if median_key not in ("query", "all"):
+        raise ValueError(f"median_key must be 'query' or 'all', got {median_key!r}")
+    include_visible_median = median_key == "all"
 
     query_names = tuple(query_bands)
     visible_names = tuple(visible_bands)
@@ -307,6 +339,13 @@ def build_monthly_composite_database(
     )
 
     query_values = np.empty((n_composites, n_query, ny, nx), dtype=np.float32)
+    # Per-composite visible stack is only needed when the visible temporal
+    # median feeds the lookup key (median_key="all").
+    visible_stack = (
+        np.empty((n_composites, n_visible, ny, nx), dtype=np.float32)
+        if include_visible_median
+        else None
+    )
     entries_visible = np.empty((n_composites * n_pixels, n_visible), dtype=np.float32)
     entries_quality = np.empty(n_composites * n_pixels, dtype=np.float32)
     entries_source_fit_rmse = np.zeros(n_composites * n_pixels, dtype=np.float32)
@@ -319,6 +358,8 @@ def build_monthly_composite_database(
         visible_values = composite.reflectance.sel(band=list(visible_names)).values.astype(
             np.float32
         )
+        if visible_stack is not None:
+            visible_stack[index] = visible_values
         quality_values = composite.quality.values.astype(np.float32)
         source_fit_rmse = getattr(composite, "source_fit_rmse", None)
         source_fit_values = (
@@ -332,10 +373,18 @@ def build_monthly_composite_database(
         entries_quality[start:end] = quality_values.reshape(n_pixels)
         entries_source_fit_rmse[start:end] = source_fit_values.reshape(n_pixels)
 
-    median_summary = np.nanmedian(query_values, axis=0)
+    # Temporal-median ("climatology") key block: always the NIR/SWIR query
+    # medians, optionally extended with the visible-band medians.
+    query_median = np.nanmedian(query_values, axis=0)  # (n_query, ny, nx)
+    if include_visible_median and visible_stack is not None:
+        visible_median = np.nanmedian(visible_stack, axis=0)  # (n_visible, ny, nx)
+        median_summary = np.concatenate([query_median, visible_median], axis=0)
+    else:
+        median_summary = query_median
+    median_block = int(median_summary.shape[0])
 
-    entries_features = np.empty((n_composites * n_pixels, n_query * 2), dtype=np.float32)
-    median_flat = median_summary.reshape(n_query, n_pixels).T
+    entries_features = np.empty((n_composites * n_pixels, n_query + median_block), dtype=np.float32)
+    median_flat = median_summary.reshape(median_block, n_pixels).T
     for index in range(n_composites):
         start = index * n_pixels
         end = start + n_pixels
@@ -360,12 +409,16 @@ def build_monthly_composite_database(
         int(n_composites * n_pixels),
     )
 
+    median_feature_names = _median_feature_names(
+        query_names, visible_names, include_visible=include_visible_median
+    )
+    feature_names = _query_feature_names(query_names) + median_feature_names
     median_summary_da = copy_spatial_metadata_like(
         xr.DataArray(
             median_summary,
             dims=["feature", "y", "x"],
             coords={
-                "feature": list(_feature_names_for_query_bands(query_names)[len(query_names) :]),
+                "feature": list(median_feature_names),
                 "y": first.coords["y"],
                 "x": first.coords["x"],
             },
@@ -381,7 +434,7 @@ def build_monthly_composite_database(
         median_summary=median_summary_da,
         visible_band_names=visible_names,
         query_band_names=query_names,
-        feature_names=_feature_names_for_query_bands(query_names),
+        feature_names=feature_names,
         y_coords=first.coords["y"],
         x_coords=first.coords["x"],
         composites=tuple(composites),

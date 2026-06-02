@@ -117,6 +117,55 @@ def test_monthly_composite_database_uses_median_summary_in_query() -> None:
     assert np.all(visible_quality.values >= 0.0)
 
 
+def test_monthly_composite_database_all_median_key_appends_visible_fingerprint() -> None:
+    composites = [_make_composite(i) for i in range(15)]
+    default_db = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+    )
+    all_db = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+        median_key="all",
+    )
+
+    # Default key: [query(3) | median_query(3)] = 6 features.
+    assert default_db.entries_features.shape[1] == 6
+    assert default_db.median_summary.sizes["feature"] == 3
+
+    # "all" key appends the per-pixel visible temporal medians as a fingerprint:
+    # [query(3) | median_query(3) | median_visible(2)] = 8 features.
+    assert all_db.feature_names == (
+        "nir",
+        "swir1",
+        "swir2",
+        "median_nir",
+        "median_swir1",
+        "median_swir2",
+        "median_B02",
+        "median_B03",
+    )
+    assert all_db.entries_features.shape[1] == 8
+    assert all_db.median_summary.sizes["feature"] == 5
+
+    corrected = xr.Dataset(
+        {
+            "B08": xr.DataArray(np.full((2, 1), 0.47, dtype=np.float32), dims=["y", "x"]),
+            "B11": xr.DataArray(np.full((2, 1), 0.37, dtype=np.float32), dims=["y", "x"]),
+            "B12": xr.DataArray(np.full((2, 1), 0.27, dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+    visible, visible_unc, _ = all_db.predict_visible(corrected, k_neighbors=1)
+    b02 = visible.sel(band="B02").values[:, 0]
+    # The fingerprint preserves (and sharpens) per-pixel separation: the dark
+    # pixel stays dark, the bright pixel stays bright.
+    assert b02[0] < 0.20 < b02[1]
+    assert np.all(np.isfinite(visible.values))
+    assert visible_unc.shape == visible.shape
+
+
 def test_monthly_composite_database_accepts_query_on_coarser_grid() -> None:
     composites = [_make_composite(i) for i in range(15)]
     database = build_monthly_composite_database(

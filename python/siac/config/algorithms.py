@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import Field, field_validator, model_validator
 
@@ -63,6 +63,13 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     monthly_database_resolution_policy: MonthlyDatabaseResolutionPolicy = (
         MonthlyDatabaseResolutionPolicy.PROVIDER_OR_COARSER
     )
+    #: kNN spectral-lookup key for the Route-B monthly database. ``"query"``
+    #: (default) keys on ``[corrected NIR/SWIR | temporal median of NIR/SWIR]``.
+    #: ``"all"`` additionally appends the per-pixel temporal median of the
+    #: *visible* bands — a full-spectrum location fingerprint — so neighbours are
+    #: matched on each pixel's multi-year climatology as well as its current
+    #: SWIR signal. Default preserves the original behaviour (and goldens).
+    monthly_database_median_key: Literal["query", "all"] = "query"
     psf_sigma_x: float = Field(default=29.75, gt=0.0)
     psf_sigma_y: float = Field(default=39.0, gt=0.0)
     apply_psf: bool = True

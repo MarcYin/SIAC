@@ -137,8 +137,14 @@ def build_monthly_surface_prior_database(
     spectral_library: SpectralMappingConfig | None = None,
     spectral_k_neighbors: int = 5,
     max_source_fit_rmse: float | None = None,
+    median_key: str = "query",
 ) -> MonthlyCompositeDatabase:
-    """Build a Route-B database from prepared monthly composites."""
+    """Build a Route-B database from prepared monthly composites.
+
+    ``median_key`` is forwarded to :func:`build_monthly_composite_database` to
+    select the kNN lookup-key climatology block (``"query"`` = NIR/SWIR medians
+    only, ``"all"`` = also visible-band medians).
+    """
     target_bands = _deduplicate_bands([*visible_bands, *query_bands])
     source_bands = tuple(monthly_composites.source_bands) or tuple(target_bands)
     if not monthly_composites.source_bands:
@@ -178,6 +184,7 @@ def build_monthly_surface_prior_database(
         query_bands=tuple(band.name for band in query_bands),
         visible_bands=tuple(band.name for band in visible_bands),
         max_source_fit_rmse=max_source_fit_rmse,
+        median_key=median_key,
     )
     logger.info(
         "Monthly surface-prior database complete: entries=%d visible_bands=%d query_bands=%d",

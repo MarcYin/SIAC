@@ -259,6 +259,9 @@ def prepare_monthly_surface_prior_runtime(
         target_bands=[*visible_bands, *query_bands],
         context="Route-B monthly-database surface priors",
     )
+    median_key = str(
+        getattr(config.algorithms.surface_prior, "monthly_database_median_key", "query")
+    )
     database = build_database_fn(
         monthly_composites=monthly_composites,
         geometry=database_geometry,
@@ -267,6 +270,7 @@ def prepare_monthly_surface_prior_runtime(
         spectral_library=spectral_library,
         spectral_k_neighbors=spectral_k_neighbors,
         max_source_fit_rmse=max_source_fit_rmse,
+        median_key=median_key,
     )
     return MonthlySurfacePriorRuntime(
         visible_bands=visible_bands,
