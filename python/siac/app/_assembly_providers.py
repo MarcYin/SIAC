@@ -320,6 +320,7 @@ def _build_bestpixel_monthly_composite_provider(
         top_k=mc.bestpixel_top_k,
         max_cloud_cover=mc.bestpixel_max_cloud_cover,
         resolution_m=mc.bestpixel_resolution_m,
+        fetch_resolution_m=mc.bestpixel_fetch_resolution_m,
         disk_cache=str(disk_cache) if disk_cache is not None else None,
     )
 

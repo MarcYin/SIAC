@@ -229,6 +229,7 @@ class BestPixelMonthlyCompositeProvider:
         top_k: int = 3,
         max_cloud_cover: float = 90.0,
         resolution_m: float | None = None,
+        fetch_resolution_m: float | None = None,
         disk_cache: str | None = None,
     ) -> None:
         if lookback_years <= 0:
@@ -250,6 +251,9 @@ class BestPixelMonthlyCompositeProvider:
         self._top_k = int(top_k)
         self._max_cloud_cover = float(max_cloud_cover)
         self._resolution_m = float(resolution_m) if resolution_m is not None else None
+        self._fetch_resolution_m = (
+            float(fetch_resolution_m) if fetch_resolution_m is not None else None
+        )
         self._disk_cache = disk_cache
         # Validate band names + tag with the endpoint's source basis eagerly so
         # config errors (e.g. coastal requested with mcd43a4) surface at build
@@ -295,17 +299,26 @@ class BestPixelMonthlyCompositeProvider:
         import bestpixel as bp  # lazy optional dependency
 
         database_res = float(resolution)
-        fetch_res = database_res
+        # Optionally fetch finer than the prior grid and area-average down, to
+        # trade resolution for a smoother (lower-noise) prior.
+        fetch_res = (
+            self._fetch_resolution_m
+            if (self._fetch_resolution_m is not None and self._fetch_resolution_m < database_res)
+            else database_res
+        )
+        downsample = fetch_res < database_res
 
         target_template = _build_target_template(observation.bounds, observation.crs, database_res)
         logger.info(
             "bestpixel: building composites endpoint=%s bbox=%s years=%s months=%s "
-            "res=%.1f bands=%s grid=%dx%d",
+            "fetch_res=%.1f prior_res=%.1f%s bands=%s grid=%dx%d",
             self._endpoint,
             [round(v, 4) for v in bbox],
             list(years),
             list(months),
+            float(fetch_res),
             database_res,
+            " (area-averaged)" if downsample else "",
             list(self._bands),
             int(target_template.sizes["y"]),
             int(target_template.sizes["x"]),
@@ -340,6 +353,9 @@ class BestPixelMonthlyCompositeProvider:
                 )
             )
 
+        # Area-average when fetching finer than the prior grid; bilinear when
+        # the grids match (no resolution change).
+        reflectance_resampling = "average" if downsample else "bilinear"
         composites: list[MonthlyBestPixelComposite] = []
         skipped: list[tuple[int, int]] = []
         for (year, month), period in zip(period_specs, fetched, strict=True):
@@ -349,6 +365,7 @@ class BestPixelMonthlyCompositeProvider:
                     target_template,
                     year=year,
                     month=month,
+                    reflectance_resampling=reflectance_resampling,
                 )
                 if period is not None
                 else None
@@ -438,6 +455,7 @@ class BestPixelMonthlyCompositeProvider:
         *,
         year: int,
         month: int,
+        reflectance_resampling: str = "bilinear",
     ) -> MonthlyBestPixelComposite | None:
         grid = period["grid"]
         source_crs = str(grid.get("crs") or f"EPSG:{int(grid['epsg'])}")
@@ -472,11 +490,14 @@ class BestPixelMonthlyCompositeProvider:
         quality_cost = _quality_to_cost(quality)
         quality_da = _make_source_da(quality_cost, x_coords, y_coords, source_crs)
 
+        # Average quality cost too when downsampling so it reflects the cell's
+        # mean rather than a single sub-pixel sample.
+        quality_resampling = "average" if reflectance_resampling == "average" else "nearest"
         reflectance_aligned = reproject_match(
-            reflectance_da, target_template, resampling="bilinear", nodata=np.nan
+            reflectance_da, target_template, resampling=reflectance_resampling, nodata=np.nan
         ).astype(np.float32)
         quality_aligned = reproject_match(
-            quality_da, target_template, resampling="nearest", nodata=np.nan
+            quality_da, target_template, resampling=quality_resampling, nodata=np.nan
         ).astype(np.float32)
         sample_index = _sample_index_from(reflectance_aligned, quality_aligned)
 

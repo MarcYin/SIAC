@@ -192,6 +192,13 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
     #: Composite build resolution in metres. ``None`` builds composites at
     #: the Route-B database resolution SIAC requests at runtime.
     bestpixel_resolution_m: float | None = None
+    #: When set (finer than ``bestpixel_resolution_m``), fetch composites at
+    #: this resolution and then spatially AREA-AVERAGE them down to
+    #: ``bestpixel_resolution_m`` before use as the surface prior. Averaging
+    #: N:1 reduces per-pixel noise ~sqrt(N) — trades resolution for a smoother,
+    #: lower-outlier prior. ``None`` fetches directly at the build resolution
+    #: (no averaging).
+    bestpixel_fetch_resolution_m: float | None = None
     #: Optional on-disk cache directory passed straight to bestpixel.
     bestpixel_disk_cache: Path | None = None
 

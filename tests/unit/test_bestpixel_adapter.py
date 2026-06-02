@@ -277,6 +277,45 @@ def test_factory_builds_bestpixel_provider_from_config(
     assert {c.month for c in collection.composites} == {6, 7, 8}
 
 
+def test_fetch_resolution_fetches_fine_then_area_averages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+    _install_fake_bestpixel(monkeypatch, seen=seen)
+    observation, x, y = _observation()  # prior grid at _RES (60 m)
+
+    provider = BestPixelMonthlyCompositeProvider(
+        endpoint="pc",
+        lookback_years=1,
+        resolution_m=_RES,  # prior / database grid = 60 m
+        fetch_resolution_m=30.0,  # fetch finer, then average down to 60 m
+    )
+    collection = provider.get_monthly_composites(observation, _RES)
+
+    # bestpixel was asked to FETCH at the fine resolution (30 m), not the prior
+    # resolution — the adapter area-averages from 30 m down to the 60 m grid.
+    assert seen["resolution"] == 30.0
+
+    # The composite still lands on the observation's 60 m prior grid.
+    composite = collection.composites[0]
+    assert composite.reflectance.shape == (len(provider.source_bands), y.size, x.size)
+    np.testing.assert_allclose(composite.reflectance.coords["x"].values, x)
+    assert np.isfinite(composite.reflectance.values).any()
+
+
+def test_fetch_resolution_none_fetches_at_prior_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+    _install_fake_bestpixel(monkeypatch, seen=seen)
+    observation, _x, _y = _observation()
+
+    provider = BestPixelMonthlyCompositeProvider(endpoint="pc", lookback_years=1, resolution_m=_RES)
+    provider.get_monthly_composites(observation, _RES)
+    # No fetch override -> fetch directly at the prior resolution (no averaging).
+    assert seen["resolution"] == _RES
+
+
 def _install_flaky_bestpixel(monkeypatch: pytest.MonkeyPatch) -> None:
     """A fake bestpixel that errors on Aprils and returns nodata for Februaries."""
     width, height = 6, 5
