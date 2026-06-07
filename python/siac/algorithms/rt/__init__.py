@@ -7,6 +7,7 @@ Provides pluggable RT backends:
 - direct: Direct native RT backends (slow, any sensor)
 """
 
+from siac.algorithms.rt.direct import LibRadtranBackend as LibRadtranBackend
 from siac.algorithms.rt.direct import SixSBackend as SixSBackend
 from siac.algorithms.rt.emulator import EmulatorRegistry as EmulatorRegistry
 from siac.algorithms.rt.emulator import TwoLayerNNEmulator as TwoLayerNNEmulator

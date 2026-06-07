@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 TwoLayerNNEmulator: Any | None = None
 ZarrLUTBackend: Any | None = None
 SixSBackend: Any | None = None
+LibRadtranBackend: Any | None = None
 
 _SENSOR_DEFAULTS: dict[str, tuple[str, str]] = {
     "s2": ("MSI", "S2A"),
@@ -100,6 +101,22 @@ def build_rt_model(
             sixs_config=rt_config.sixs,
             sensor_config=sensor_config,
             rt_setup=resolve_effective_rt_setup(rt_config, "sixs"),
+        )
+
+    if backend == "libradtran":
+        libradtran_backend_cls = LibRadtranBackend
+        if libradtran_backend_cls is None:
+            from siac.algorithms.rt.direct.libradtran import (
+                LibRadtranBackend as libradtran_backend_cls,
+            )
+
+        # Construction is cheap and engine-free (libRadtran is fetched/compiled
+        # lazily on the first compute_coefficients call), so a missing uvspec
+        # surfaces as a clear runtime error rather than here.
+        return libradtran_backend_cls(
+            libradtran_config=rt_config.libradtran,
+            sensor_config=sensor_config,
+            rt_setup=resolve_effective_rt_setup(rt_config, "libradtran"),
         )
 
     raise ValueError(f"Cannot resolve RT model from config: backend={rt_config.backend!r}")
