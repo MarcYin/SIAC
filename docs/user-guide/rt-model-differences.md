@@ -69,6 +69,59 @@ generic setup can still be used to assert that same preset explicitly, but any
 attempt to change atmosphere shape, aerosol family, surface target, BRDF, or
 atmospheric-correction semantics is rejected during configuration.
 
+### Direct libRadtran (`uvspec`)
+
+`backend = "libradtran"` runs the real libRadtran `uvspec` engine on demand
+instead of reading the precomputed remote LUT. It reproduces the same preset the
+remote LUT encodes (`us_standard_62` / `continental_average` / homogeneous
+Lambertian, two-albedo method) but computes the `TOA_rho`/`Eg_rho` spectral
+terms itself, so it is parameterised by libRadtran physics directly rather than
+a frozen table. Because `uvspec` is far too slow per pixel, this backend mirrors
+6S `scene_lut`: it builds a small grid over the scene's AOT/TCWV ranges at the
+scene-mean geometry (one `uvspec` run per node per surface albedo), assembles an
+in-memory dataset in the *same schema* as the remote LUT, and then reuses the
+exact LUT spectral path (RSRF convolution + coefficient derivation) for per-pixel
+interpolation. The output therefore shares the LUT route's `xap`/`xbp`/`xcp`
+interface and its finite-input requirement (geometry and atmosphere must be
+finite; it does not NaN-mask like native 6S).
+
+libRadtran is compiled from source on first use (or via
+`pixi run -e libradtran build-libradtran`). See `algorithms.rt.libradtran.*` for
+configuration (grid sizing, wavelength window, stream count, reference albedos)
+and `tools/compare_libradtran_to_remote_lut.py` for a numeric cross-check
+against the remote LUT.
+
+#### Resolution and memory budget (defaults)
+
+A single `reptran fine` `uvspec` over the full 340–2500 nm window needs
+**~50–75 GB** of RAM (the 1 nm output grid makes DISORT hold large per-wavelength
+arrays, and `fine` has the most internal representative wavelengths). Running a
+few of those at once was the cause of past >100 GB out-of-memory blow-ups. The
+defaults are therefore tuned to stay small:
+
+- **`mol_abs_param = "reptran medium"`** as the base band model for the spectral
+  *windows* (~12 GB/process, ~4× faster than `fine`; holds <0.5% vs `fine`
+  outside the deep water bands).
+- **`adaptive_deep_water_fine = True`** upgrades only the deep H₂O absorption
+  bands (`DEEP_WATER_H2O_BANDS_NM`: ~0.94/1.13/1.38/1.88 µm) to `reptran fine`
+  via per-region segmentation — fine accuracy where water-vapour absorption is
+  strong, cheap base everywhere else. Each `uvspec` segment is then ≤~9 GB.
+- **`memory_budget_gb = 30`** is a hard ceiling on *total* concurrent `uvspec`
+  memory. The worker pool is sized so `heaviest_process × workers ≤
+  min(0.7 × available_RAM, memory_budget_gb)`, and **cgroup/SLURM `--mem` limits
+  are detected and respected** (plain available-RAM probes ignore them, which
+  over-subscribed limited cluster tasks). A single process larger than the whole
+  budget still runs one-at-a-time, with a warning.
+
+With these defaults a scene build peaks at roughly **18–27 GB** regardless of how
+much RAM the host advertises. To reproduce the exact production-`fine` LUT
+everywhere instead, set `mol_abs_param = "reptran fine"` and
+`adaptive_deep_water_fine = false` (and raise `memory_budget_gb` on a
+large-memory machine); set explicit `mol_abs_regions` to override the adaptive
+band choice. The build harness fetches/merges every reptran resolution the
+config will use (base **and** region/adaptive-fine), so a fresh adaptive build
+pulls both `medium` and `fine` tables from the one `reptran` archive.
+
 ## Why `xap`, `xbp`, and `xcp` Matter
 
 SIAC applies the atmospheric-correction coefficients through the BOA formula:
