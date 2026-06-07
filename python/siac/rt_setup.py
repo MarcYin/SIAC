@@ -38,6 +38,16 @@ DEFAULT_LUT_RT_SETUP = RTSetupConfig(
     surface=RTSurfaceSetupConfig(mode="homogeneous_lambertian"),
 )
 
+#: The direct libRadtran (uvspec) backend reproduces the same preset the remote
+#: LUT encodes. Unlike the ``sixs`` backend, ``continental_average`` IS the
+#: native aerosol here (libRadtran runs OPAC ``continental_average`` directly),
+#: so it is permitted rather than rejected.
+DEFAULT_LIBRADTRAN_RT_SETUP = RTSetupConfig(
+    atmosphere=RTAtmosphereSetupConfig(profile="us_standard_62"),
+    aerosol=RTAerosolSetupConfig(profile="continental_average"),
+    surface=RTSurfaceSetupConfig(mode="homogeneous_lambertian"),
+)
+
 _SIXS_UNSUPPORTED_RT_AEROSOLS = {"continental_average"}
 
 
@@ -101,6 +111,10 @@ def resolve_backend_rt_setup(backend: str, setup: Any) -> RTSetupConfig:
                 "for the packaged libRadtran continental-average preset."
             )
         return effective
+    if backend == "libradtran":
+        # The direct libRadtran backend runs the continental_average preset
+        # natively, so (unlike sixs) the aerosol family is not rejected.
+        return _merge_rt_setup(DEFAULT_LIBRADTRAN_RT_SETUP, requested)
     if backend == "lut":
         validate_lut_requested_setup(requested)
         return DEFAULT_LUT_RT_SETUP.model_copy(deep=True)

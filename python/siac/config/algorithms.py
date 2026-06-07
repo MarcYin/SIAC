@@ -9,6 +9,9 @@ from pydantic import Field, field_validator, model_validator
 
 from siac.config._base import SIACBaseModel
 from siac.config.types import (
+    DEFAULT_LIBRADTRAN_OPTPROP_URL,
+    DEFAULT_LIBRADTRAN_REPTRAN_URL,
+    DEFAULT_LIBRADTRAN_SOURCE_URL,
     DEFAULT_SIXS_SOURCE_URL,
     AtmosphericParameterName,
     CloudMaskMode,
@@ -416,6 +419,152 @@ class SixSAlgorithmConfig(SIACBaseModel):
         return self
 
 
+class LibRadtranAlgorithmConfig(SIACBaseModel):
+    """Configuration for the libRadtran (``uvspec``) RT backend.
+
+    The backend compiles libRadtran from source (autotools) and drives the
+    ``uvspec`` binary in batch over a scene-scoped grid, then interpolates
+    per-pixel — mirroring 6S's ``scene_lut`` mode. It reproduces the libRadtran
+    preset the public remote LUT encodes (US Standard atmosphere,
+    ``continental_average`` aerosol, homogeneous Lambertian surface) via the
+    two-albedo method, yielding the same ``TOA_rho1/2`` + ``Eg_rho1/2`` spectral
+    terms the LUT stores.
+    """
+
+    #: libRadtran core source tarball plus the auxiliary-data archives. The
+    #: reptran (1nm molecular absorption) and OPAC optical-property
+    #: (``continental_average`` aerosol) archives are fetched separately and
+    #: merged into the build's ``data/`` directory.
+    source_url: str = DEFAULT_LIBRADTRAN_SOURCE_URL
+    reptran_url: str = DEFAULT_LIBRADTRAN_REPTRAN_URL
+    optprop_url: str = DEFAULT_LIBRADTRAN_OPTPROP_URL
+    #: Pre-unpacked source tree (skips download).
+    source_dir: Path | None = None
+    #: Build/cache root. Defaults to ``~/.cache/siac/libradtran/<profile>``.
+    build_dir: Path | None = None
+    #: Explicit path to a prebuilt ``uvspec`` binary (skips the build).
+    uvspec_path: Path | None = None
+    #: Explicit path to the libRadtran ``data/`` directory (inferred from the
+    #: build tree when unset).
+    data_dir: Path | None = None
+    auto_build: bool = True
+    build_profile: SixSBuildProfile = SixSBuildProfile.RELEASE
+    #: Max concurrent ``uvspec`` subprocesses. ``None`` -> a small memory-bound
+    #: default (never ``os.cpu_count()``); always further capped by memory.
+    native_threads: int | None = Field(default=None, ge=1)
+    #: Hard ceiling (GB) on TOTAL estimated concurrent ``uvspec`` memory. The
+    #: worker pool is sized so ``heaviest_process_estimate x workers`` stays under
+    #: ``min(0.7 x detected-available-RAM, memory_budget_gb)``, and cgroup/SLURM
+    #: ``--mem`` limits are detected and respected. Default 30 GB is a
+    #: conservative single-node budget; raise it on large-memory machines. A
+    #: single process larger than the budget runs one-at-a-time with a warning.
+    memory_budget_gb: float | None = Field(default=30.0, gt=0.0)
+    #: Per-``uvspec`` subprocess timeout (seconds): a wedged run raises instead
+    #: of blocking a pool worker forever. Generous by default.
+    uvspec_timeout_s: float = Field(default=1800.0, gt=0.0)
+    #: Scene-grid sizing (mirrors the 6S scene-LUT budget). Each grid node runs
+    #: ``uvspec`` once per surface albedo.
+    scene_lut_min_pixels: int = Field(default=512, ge=1)
+    scene_lut_max_nodes_per_axis: int = Field(default=4, ge=1)
+    scene_lut_max_cases: int = Field(default=512, ge=1)
+    #: DISORT polar-stream count (even, >= 2).
+    number_of_streams: int = Field(default=16, ge=2)
+    #: Base molecular-absorption band model (``mol_abs_param``) for the spectral
+    #: *windows*. Defaults to ``"reptran medium"``: it holds <0.5% vs ``fine``
+    #: outside the deep water bands at ~12 GB/process, versus ~50-75 GB for
+    #: ``fine`` over the full 340-2500 nm range (the cause of past >100 GB OOMs).
+    #: The deep H2O absorption bands are upgraded to ``"reptran fine"``
+    #: automatically (see ``adaptive_deep_water_fine``), so fine accuracy is kept
+    #: where it actually matters. Set ``"reptran fine"`` to match the production
+    #: LUT setting everywhere (far higher memory), or ``"reptran"`` (coarse,
+    #: bundled, no download). reptran ``medium``/``fine`` tables are auto-fetched
+    #: from the same ``reptran`` archive by the build harness.
+    mol_abs_param: str = "reptran medium"
+    #: Optional per-spectral-region band models. Each entry ``(lo_nm, hi_nm,
+    #: model)`` overrides ``mol_abs_param`` over ``[lo_nm, hi_nm]``; ``mol_abs_param``
+    #: covers everything else. ``uvspec`` is run once per resulting contiguous
+    #: segment and the 1 nm pieces are stitched. Use this to spend ``"reptran
+    #: fine"`` only in the deep H2O bands (see ``DEEP_WATER_H2O_BANDS_NM``) while a
+    #: cheap ``"reptran"`` base covers the windows. Region boundaries should fall
+    #: OUTSIDE every band's response support (a runtime warning fires otherwise),
+    #: since the band models differ ~1-2% across a seam. ``None`` (default) uses a
+    #: single global ``mol_abs_param`` for the whole window.
+    mol_abs_regions: tuple[tuple[float, float, str], ...] | None = None
+    #: When ``True`` (default) AND ``mol_abs_regions`` is unset, the deep H2O
+    #: absorption bands (``DEEP_WATER_H2O_BANDS_NM``) overlapping the window are
+    #: run at ``"reptran fine"`` over the ``mol_abs_param`` base - the adaptive
+    #: scheme: cheap base in the windows, fine only where strong water-vapour
+    #: absorption needs it, keeping each ``uvspec`` process small (~7-12 GB) so a
+    #: scene build fits ``memory_budget_gb``. An explicit ``mol_abs_regions``
+    #: takes precedence; set ``False`` for one global ``mol_abs_param``.
+    adaptive_deep_water_fine: bool = True
+    #: Output spectral window (nm) and resampling step for each node's spectrum.
+    #: The reference LUT spans 340-2600 nm at 1 nm; 340 nm covers every S2 band's
+    #: response support.
+    wavelength_min_nm: float = Field(default=340.0, gt=0.0)
+    wavelength_max_nm: float = Field(default=2500.0, gt=0.0)
+    wavelength_step_nm: float = Field(default=1.0, gt=0.0)
+    #: The two Lambertian surface albedos of the two-albedo method; persisted as
+    #: dataset attrs so the coefficient derivation reads them back.
+    rho1: float = Field(default=0.15, ge=0.0, le=1.0)
+    rho2: float = Field(default=0.5, ge=0.0, le=1.0)
+    #: Per-pixel interpolation method over the assembled scene LUT.
+    interpolation_method: LUTInterpolationMethod = LUTInterpolationMethod.LINEAR
+
+    @field_validator("source_dir", "build_dir", "uvspec_path", "data_dir", mode="before")
+    @classmethod
+    def normalize_local_paths(cls, value: Any) -> Path | None:
+        return _coerce_pathlike(value)
+
+    @field_validator("source_url", "reptran_url", "optprop_url")
+    @classmethod
+    def require_https_urls(cls, value: str) -> str:
+        # The build harness downloads + compiles these archives; require TLS so a
+        # plaintext or non-http(s) override cannot inject build inputs.
+        if not str(value).lower().startswith("https://"):
+            raise ValueError("libradtran archive URLs must use https://.")
+        return value
+
+    @field_validator("mol_abs_regions", mode="before")
+    @classmethod
+    def normalize_mol_abs_regions(cls, value: Any) -> tuple[tuple[float, float, str], ...] | None:
+        if value is None:
+            return None
+        regions: list[tuple[float, float, str]] = []
+        for item in value:
+            lo, hi, model = item
+            regions.append((float(lo), float(hi), str(model)))
+        regions.sort(key=lambda r: r[0])
+        return tuple(regions)
+
+    @model_validator(mode="after")
+    def validate_libradtran(self) -> LibRadtranAlgorithmConfig:
+        if self.number_of_streams % 2 != 0:
+            raise ValueError("libradtran.number_of_streams must be even (DISORT requirement).")
+        if self.wavelength_max_nm <= self.wavelength_min_nm:
+            raise ValueError("libradtran.wavelength_max_nm must exceed wavelength_min_nm.")
+        if self.scene_lut_max_cases < self.scene_lut_max_nodes_per_axis:
+            raise ValueError(
+                "libradtran.scene_lut_max_cases must be >= scene_lut_max_nodes_per_axis."
+            )
+        if not 0.0 <= self.rho1 < self.rho2 <= 1.0:
+            raise ValueError("libradtran requires 0 <= rho1 < rho2 <= 1.")
+        if self.mol_abs_regions:
+            prev_hi: float | None = None
+            for lo, hi, _model in self.mol_abs_regions:
+                if hi <= lo:
+                    raise ValueError("libradtran.mol_abs_regions entries require lo_nm < hi_nm.")
+                if lo < self.wavelength_min_nm or hi > self.wavelength_max_nm:
+                    raise ValueError(
+                        "libradtran.mol_abs_regions must lie within "
+                        "[wavelength_min_nm, wavelength_max_nm]."
+                    )
+                if prev_hi is not None and lo < prev_hi:
+                    raise ValueError("libradtran.mol_abs_regions must not overlap.")
+                prev_hi = hi
+        return self
+
+
 class RTAtmosphereSetupConfig(SIACBaseModel):
     profile: SixSAtmosphericProfile | None = None
     columns_mode: SixSAtmosphericColumnsMode | None = None
@@ -574,6 +723,7 @@ class RTAlgorithmConfig(SIACBaseModel):
     lut_storage_options: dict[str, Any] = Field(default_factory=dict)
     setup: RTSetupConfig = Field(default_factory=RTSetupConfig)
     sixs: SixSAlgorithmConfig = Field(default_factory=SixSAlgorithmConfig)
+    libradtran: LibRadtranAlgorithmConfig = Field(default_factory=LibRadtranAlgorithmConfig)
     fallback_to_lut: bool = True
 
 

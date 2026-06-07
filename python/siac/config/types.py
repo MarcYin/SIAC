@@ -210,6 +210,7 @@ class RTBackend(SIACEnum):
     EMULATOR = "emulator"
     LUT = "lut"
     SIXS = "sixs"
+    LIBRADTRAN = "libradtran"
 
 
 class LUTInterpolationMethod(SIACEnum):
@@ -271,6 +272,22 @@ class BOADType(SIACEnum):
 
 
 DEFAULT_SIXS_SOURCE_URL = "https://salsa.umd.edu/files/6S/6sV2.1.tar"
+
+#: libRadtran source + auxiliary-data archives compiled from source for the
+#: ``backend = "libradtran"`` RT model. 2.0.6 is the only version the upstream
+#: server still serves (older version URLs redirect to it); it reproduces the
+#: same RT preset the remote ``libradtran_continental_average_lut_1nm.zarr.zip``
+#: LUT encodes. ``reptran`` (molecular absorption band model) and the OPAC
+#: optical properties (``continental_average`` aerosol) are separate downloads
+#: that must be merged into the source tree's ``data/`` directory before
+#: building (they are not bundled in the core tarball).
+DEFAULT_LIBRADTRAN_SOURCE_URL = "https://www.libradtran.org/download/libRadtran-2.0.6.tar.gz"
+DEFAULT_LIBRADTRAN_REPTRAN_URL = (
+    "https://www.libradtran.org/lib/exe/fetch.php?media=download:reptran_2024_all.tar.gz"
+)
+DEFAULT_LIBRADTRAN_OPTPROP_URL = (
+    "https://www.libradtran.org/lib/exe/fetch.php?media=download:optprop_v2.1.tar.gz"
+)
 
 _REMOTE_URI_SCHEMES = {"http", "https", "s3", "file", "gs"}
 
