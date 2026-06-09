@@ -25,8 +25,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -34,13 +36,14 @@ import xarray as xr
 
 from siac.algorithms.rt.direct.libradtran_build import LibRadtranPaths, ensure_libradtran
 from siac.algorithms.rt.lut.backend import ZarrLUTBackend
+from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from siac.config.algorithms import LibRadtranAlgorithmConfig
     from siac.domain.sensors import SensorBand, SensorConfig
-    from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
+    from siac.runtime import GeometryAngles, RTCoefficients
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +267,69 @@ def _axis_from_scene(values: xr.DataArray, n_nodes: int) -> np.ndarray:
     return cast("np.ndarray", np.linspace(lo, hi, max(2, int(n_nodes)), dtype=np.float64))
 
 
+#: Node ceilings for the joint grid-search LUT. The solver's aot axis is
+#: ``grid_search_aot_points`` nodes (~40); each node is one uvspec run per albedo,
+#: so we thin to ~16 (off-node candidates are linearly interpolated - the same
+#: approximation the scene-LUT path already makes in geometry). tcwv collapses to
+#: one node when the stage fixes tcwv, so a small ceiling is plenty.
+_JOINT_LUT_MAX_AOT_NODES = 16
+_JOINT_LUT_MAX_TCWV_NODES = 4
+
+
+def _subsample_axis(axis: np.ndarray, max_nodes: int) -> np.ndarray:
+    """Unique, sorted axis thinned to <= ``max_nodes`` nodes (endpoints kept)."""
+    axis = np.unique(np.asarray(axis, dtype=np.float64))
+    if axis.size <= max_nodes or axis.size == 0:
+        return axis
+    idx = np.unique(np.linspace(0, axis.size - 1, max_nodes).round().astype(int))
+    return cast("np.ndarray", axis[idx])
+
+
+class _LibRadtranJointGridSearchLUT:
+    """Joint (aot x tcwv) grid-search LUT backed by one in-memory spectral LUT.
+
+    Built once by :meth:`LibRadtranRunner.build_joint_grid_search_lut`; each
+    block-grid-search candidate is served by :meth:`evaluate`, which interpolates
+    the prebuilt scene LUT instead of launching a fresh ``uvspec`` build. This is
+    the libRadtran analogue of the 6S ``JointGridSearchLUT`` amortisation - it is
+    what makes a full per-pixel AOD retrieval tractable (otherwise every one of
+    the ~40 aot candidates rebuilds the multi-minute scene LUT).
+    """
+
+    def __init__(
+        self,
+        *,
+        backend: _InMemorySpectralLUTBackend,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        bands: list[SensorBand],
+        node_count: int,
+    ) -> None:
+        self._backend = backend
+        self._geometry = geometry
+        self._atmo = atmo_state
+        self._bands = bands
+        finite = int(np.count_nonzero(np.isfinite(np.asarray(atmo_state.aot.values))))
+        self.plan = SimpleNamespace(lut_case_count=int(node_count), direct_case_count=finite)
+
+    def evaluate(self, aot_val: float, tcwv_val: float) -> list[dict[str, xr.DataArray]]:
+        """Per-band xap/xbp/xcp for one (aot, tcwv) candidate via interpolation."""
+        atmo = AtmosphericState(
+            aot=xr.full_like(self._atmo.aot, float(aot_val)),
+            tcwv=xr.full_like(self._atmo.tcwv, float(tcwv_val)),
+            tco3=self._atmo.tco3,
+            aot_unc=self._atmo.aot_unc,
+            tcwv_unc=self._atmo.tcwv_unc,
+            tco3_unc=self._atmo.tco3_unc,
+            elevation=self._atmo.elevation,
+        )
+        outputs: list[dict[str, xr.DataArray]] = []
+        for band in self._bands:
+            coeffs = self._backend.compute_coefficients(self._geometry, atmo, band)
+            outputs.append({"xap": coeffs.xap, "xbp": coeffs.xbp, "xcp": coeffs.xcp})
+        return outputs
+
+
 class LibRadtranRunner:
     """Build a scene-scoped libRadtran spectral LUT and derive RT coefficients."""
 
@@ -282,6 +348,12 @@ class LibRadtranRunner:
         self._scene_key: tuple[float, ...] | None = None
         self._scene_backend: _InMemorySpectralLUTBackend | None = None
         self._straddle_warned: set[str] = set()
+        # Serializes scene-LUT construction. The solver evaluates bands on worker
+        # threads that can all miss the empty cache at once and each launch a full
+        # (~5-9 GB) uvspec build of the SAME scene (signature ignores the band) -
+        # 3-4 concurrent builds blew past RAM and were jetsam-killed. The lock
+        # collapses that race to a single build; the rest reuse the warm cache.
+        self._build_lock = threading.Lock()
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
         self._observation_time = observation_time
@@ -375,6 +447,61 @@ class LibRadtranRunner:
         backend = self._scene_backend_for(geometry, atmo_state)
         return backend.compute_coefficients(geometry, atmo_state, band)
 
+    def build_joint_grid_search_lut(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: np.ndarray,
+        tcwv_axis: np.ndarray,
+        bands: list[SensorBand],
+        output_variables: tuple[str, ...] | None = None,
+    ) -> _LibRadtranJointGridSearchLUT:
+        """Build one scene LUT spanning the grid-search range, served by interp.
+
+        The block-grid-search calls the RT model with many ``(aot, tcwv)``
+        candidates. Each ``compute_coefficients`` call would otherwise rebuild
+        the multi-minute ``uvspec`` scene LUT (its cache signature varies with
+        the per-candidate aot/tcwv range). Here we build a single in-memory
+        spectral LUT whose aot/tcwv nodes ARE the grid-search axes - so lookups
+        are exact at the nodes and within-range elsewhere - then serve every
+        candidate by interpolation. Mirrors the 6S joint-LUT amortisation.
+        """
+        _ = output_variables  # xap/xbp/xcp are derived uniformly
+        if bands:
+            for band in bands:
+                self._warn_band_straddle(band)
+        aot_nodes = _subsample_axis(
+            np.asarray(aot_axis, dtype=np.float64), _JOINT_LUT_MAX_AOT_NODES
+        )
+        tcwv_nodes = _subsample_axis(
+            np.asarray(tcwv_axis, dtype=np.float64), _JOINT_LUT_MAX_TCWV_NODES
+        )
+        with self._build_lock:
+            dataset = self._build_scene_lut(
+                geometry,
+                atmo_state,
+                aot_axis_override=aot_nodes,
+                tcwv_axis_override=tcwv_nodes,
+            )
+            backend = _InMemorySpectralLUTBackend(
+                dataset,
+                interpolation_method=str(self._config.interpolation_method),
+                rt_setup=self._rt_setup,
+            )
+            # Cache as the scene backend so a same-scene compute_coefficients call
+            # reuses it (the joint LUT spans the full search range, so prior-range
+            # values fall inside it) rather than launching another build.
+            self._scene_backend = backend
+            self._scene_key = self._scene_signature(geometry, atmo_state)
+        return _LibRadtranJointGridSearchLUT(
+            backend=backend,
+            geometry=geometry,
+            atmo_state=atmo_state,
+            bands=list(bands),
+            node_count=int(aot_nodes.size * max(1, tcwv_nodes.size)),
+        )
+
     def _scene_backend_for(
         self,
         geometry: GeometryAngles,
@@ -383,15 +510,21 @@ class LibRadtranRunner:
         key = self._scene_signature(geometry, atmo_state)
         if self._scene_backend is not None and key == self._scene_key:
             return self._scene_backend
-        dataset = self._build_scene_lut(geometry, atmo_state)
-        backend = _InMemorySpectralLUTBackend(
-            dataset,
-            interpolation_method=str(self._config.interpolation_method),
-            rt_setup=self._rt_setup,
-        )
-        self._scene_backend = backend
-        self._scene_key = key
-        return backend
+        with self._build_lock:
+            # Re-check under the lock: a concurrent caller may have just built
+            # this exact scene while we waited, so reuse it rather than launch a
+            # second redundant (and memory-doubling) uvspec build.
+            if self._scene_backend is not None and key == self._scene_key:
+                return self._scene_backend
+            dataset = self._build_scene_lut(geometry, atmo_state)
+            backend = _InMemorySpectralLUTBackend(
+                dataset,
+                interpolation_method=str(self._config.interpolation_method),
+                rt_setup=self._rt_setup,
+            )
+            self._scene_backend = backend
+            self._scene_key = key
+            return backend
 
     def _scene_signature(
         self,
@@ -414,6 +547,9 @@ class LibRadtranRunner:
         self,
         geometry: GeometryAngles,
         atmo_state: AtmosphericState,
+        *,
+        aot_axis_override: np.ndarray | None = None,
+        tcwv_axis_override: np.ndarray | None = None,
     ) -> xr.Dataset:
         paths = self._ensure_paths()
         cfg = self._config
@@ -433,8 +569,19 @@ class LibRadtranRunner:
             int(cfg.scene_lut_max_nodes_per_axis),
             max(2, int(math.isqrt(int(cfg.scene_lut_max_cases) // 2))),
         )
-        aot_axis = _axis_from_scene(atmo_state.aot, n_nodes)
-        tcwv_axis = _axis_from_scene(atmo_state.tcwv, n_nodes)
+        # Explicit overrides let the joint grid-search LUT span the solver's full
+        # (aot, tcwv) search range with asymmetric node counts (many aot nodes,
+        # one fixed-tcwv node) instead of the per-scene prior range.
+        aot_axis = (
+            np.asarray(aot_axis_override, dtype=np.float64)
+            if aot_axis_override is not None
+            else _axis_from_scene(atmo_state.aot, n_nodes)
+        )
+        tcwv_axis = (
+            np.asarray(tcwv_axis_override, dtype=np.float64)
+            if tcwv_axis_override is not None
+            else _axis_from_scene(atmo_state.tcwv, n_nodes)
+        )
 
         # Endpoint-safe 1 nm (or wavelength_step_nm) grid: linspace pins both ends
         # exactly, so a non-integer step can't overshoot wavelength_max_nm (which

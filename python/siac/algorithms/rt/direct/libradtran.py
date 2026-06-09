@@ -93,6 +93,31 @@ class LibRadtranBackend:
             raise NotImplementedError("The libRadtran backend does not expose Jacobians yet.")
         return [self.compute_coefficients(geometry, atmo_state, band) for band in bands]
 
+    def build_joint_grid_search_lut(
+        self,
+        *,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        aot_axis: Any,
+        tcwv_axis: Any,
+        bands: list[SensorBand],
+    ) -> Any:
+        """Amortise the block-grid-search RT cost across (aot, tcwv) candidates.
+
+        The solver probes the RT model with many candidate ``(aot, tcwv)`` pairs.
+        Without this hook each call would rebuild the (multi-minute) ``uvspec``
+        scene LUT. Here the runner builds one scene LUT spanning the grid-search
+        range and returns a joint LUT that serves each candidate by
+        interpolation - the same amortisation 6S uses. Mirrors ``SixSBackend``.
+        """
+        return self._runner.build_joint_grid_search_lut(
+            geometry=geometry,
+            atmo_state=atmo_state,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            bands=bands,
+        )
+
     @staticmethod
     def _coerce_result(outputs: Any) -> RTCoefficients:
         if isinstance(outputs, RTCoefficients):
