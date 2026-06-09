@@ -314,6 +314,13 @@ class SixSAlgorithmConfig(SIACBaseModel):
     auto_build: bool = True
     compiler: str = "gfortran"
     build_profile: SixSBuildProfile = SixSBuildProfile.RELEASE
+    #: Persistent on-disk cache of the native scene-LUT grid batch (the Fortran
+    #: RT compute), keyed by the exact batch inputs + compiled-module identity. A
+    #: re-run of the same scene reuses the grid coefficients instead of
+    #: recomputing; the cheap per-pixel interpolation is never cached.
+    run_cache_enabled: bool = True
+    #: Cache directory; defaults to ``~/.cache/siac/rt6s/run_cache``.
+    run_cache_dir: Path | None = None
     mode: SixSMode = SixSMode.AUTO
     #: Parallelism mode for 6S native calls.
     #:
@@ -375,7 +382,7 @@ class SixSAlgorithmConfig(SIACBaseModel):
     day: int = Field(default=1, ge=1, le=31)
     output_variables: tuple[str, ...] = SIXS_DEFAULT_OUTPUT_VARIABLES
 
-    @field_validator("source_dir", "build_dir", "module_path", mode="before")
+    @field_validator("source_dir", "build_dir", "module_path", "run_cache_dir", mode="before")
     @classmethod
     def normalize_local_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)
@@ -449,6 +456,18 @@ class LibRadtranAlgorithmConfig(SIACBaseModel):
     data_dir: Path | None = None
     auto_build: bool = True
     build_profile: SixSBuildProfile = SixSBuildProfile.RELEASE
+    #: Persistent on-disk cache of ``uvspec`` run outputs (per-node spectra),
+    #: keyed by the exact deck text. A cache hit skips the ``uvspec`` subprocess
+    #: entirely, so re-running a scene - or reusing nodes across the retrieval /
+    #: diagnostics / correction scene-LUT builds - costs no radiative-transfer
+    #: time. The compiled engine is always reused when present (see
+    #: ``ensure_libradtran``); this additionally caches the *runs*.
+    run_cache_enabled: bool = True
+    #: Directory for the run-output cache. Defaults to
+    #: ``~/.cache/siac/libradtran/uvspec_run_cache``. Keys embed the engine data
+    #: path (which carries the libRadtran version), so different builds never
+    #: collide in a shared cache directory.
+    run_cache_dir: Path | None = None
     #: Max concurrent ``uvspec`` subprocesses. ``None`` -> a small memory-bound
     #: default (never ``os.cpu_count()``); always further capped by memory.
     native_threads: int | None = Field(default=None, ge=1)
@@ -511,7 +530,9 @@ class LibRadtranAlgorithmConfig(SIACBaseModel):
     #: Per-pixel interpolation method over the assembled scene LUT.
     interpolation_method: LUTInterpolationMethod = LUTInterpolationMethod.LINEAR
 
-    @field_validator("source_dir", "build_dir", "uvspec_path", "data_dir", mode="before")
+    @field_validator(
+        "source_dir", "build_dir", "uvspec_path", "data_dir", "run_cache_dir", mode="before"
+    )
     @classmethod
     def normalize_local_paths(cls, value: Any) -> Path | None:
         return _coerce_pathlike(value)

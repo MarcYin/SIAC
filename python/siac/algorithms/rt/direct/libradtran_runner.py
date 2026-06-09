@@ -19,6 +19,7 @@ reflectance — obtained directly via uvspec ``output_quantity reflectivity``.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
@@ -34,6 +35,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import xarray as xr
 
+from siac.algorithms.rt._run_cache import resolve_run_cache_dir
 from siac.algorithms.rt.direct.libradtran_build import LibRadtranPaths, ensure_libradtran
 from siac.algorithms.rt.lut.backend import ZarrLUTBackend
 from siac.runtime import AtmosphericState
@@ -354,6 +356,19 @@ class LibRadtranRunner:
         # 3-4 concurrent builds blew past RAM and were jetsam-killed. The lock
         # collapses that race to a single build; the rest reuse the warm cache.
         self._build_lock = threading.Lock()
+        # Persistent on-disk cache of uvspec run outputs (deck text -> spectra).
+        # A hit skips the uvspec subprocess entirely, so re-running a scene - or
+        # reusing nodes across the retrieval/diagnostics/correction builds - costs
+        # no radiative-transfer time. ``None`` disables it.
+        self._run_cache_dir: Path | None = None
+        if bool(getattr(libradtran_config, "run_cache_enabled", True)):
+            self._run_cache_dir = resolve_run_cache_dir(
+                getattr(libradtran_config, "run_cache_dir", None),
+                subpath="libradtran/uvspec_run_cache",
+            )
+        self._cache_stats_lock = threading.Lock()
+        self._run_cache_hits = 0
+        self._run_cache_misses = 0
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
         self._observation_time = observation_time
@@ -658,10 +673,19 @@ class LibRadtranRunner:
             workers,
             heaviest_gb,
         )
+        cache_hits0, cache_misses0 = self._run_cache_hits, self._run_cache_misses
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for i_aot, i_tcwv, i_rho, seg_idx, toa_vals, eg_vals in pool.map(_run_job, jobs):
                 toa[i_rho, i_aot, i_tcwv][seg_masks[seg_idx]] = toa_vals
                 eg[i_rho, i_aot, i_tcwv][seg_masks[seg_idx]] = eg_vals
+        if self._run_cache_dir is not None:
+            logger.info(
+                "libradtran: scene LUT done - %d uvspec run(s): %d from cache, %d computed (cache=%s)",
+                len(jobs),
+                self._run_cache_hits - cache_hits0,
+                self._run_cache_misses - cache_misses0,
+                self._run_cache_dir,
+            )
 
         return self._assemble_dataset(
             toa=toa,
@@ -830,6 +854,28 @@ class LibRadtranRunner:
         paths: LibRadtranPaths,
         deck: str,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        # Persistent run cache: the deck text fully determines uvspec's output
+        # (disort is deterministic; the deck embeds the versioned data path), so a
+        # SHA-256 of the deck is an exact key. A hit skips the subprocess entirely.
+        cache_file: Path | None = None
+        if self._run_cache_dir is not None:
+            digest = hashlib.sha256(deck.encode("utf-8")).hexdigest()
+            cache_file = self._run_cache_dir / f"{digest}.npz"
+            cached = self._load_cached_run(cache_file)
+            if cached is not None:
+                self._record_cache(hit=True)
+                return cached
+        result = self._invoke_uvspec(paths, deck)
+        if cache_file is not None:
+            self._record_cache(hit=False)
+            self._store_cached_run(cache_file, result)
+        return result
+
+    def _invoke_uvspec(
+        self,
+        paths: LibRadtranPaths,
+        deck: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         # Run in a private scratch cwd: uvspec writes a ``randomseed`` artifact
         # to its working directory, and the thread pool runs several at once, so
         # each needs its own dir to avoid littering the project / racing.
@@ -856,6 +902,52 @@ class LibRadtranRunner:
             tail = result.stderr.strip()[-600:]
             raise RuntimeError(f"uvspec failed (exit {result.returncode}): {tail}")
         return parse_uvspec_table(result.stdout)
+
+    @staticmethod
+    def _load_cached_run(
+        cache_file: Path,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        if not cache_file.exists():
+            return None
+        try:
+            with np.load(cache_file) as data:
+                return (
+                    np.asarray(data["wl"], dtype=np.float64),
+                    np.asarray(data["eg"], dtype=np.float64),
+                    np.asarray(data["toa"], dtype=np.float64),
+                )
+        except Exception:
+            # A truncated/corrupt entry (crash mid-write, disk issue) is treated
+            # as a miss and recomputed rather than failing the run.
+            logger.debug("Ignoring unreadable uvspec cache entry %s", cache_file, exc_info=True)
+            return None
+
+    def _store_cached_run(
+        self,
+        cache_file: Path,
+        result: tuple[np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        wl, eg, toa = result
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            # Unique temp file + atomic rename: a crash or concurrent writer must
+            # never leave a half-written entry that reads back as valid. Passing a
+            # file handle to np.savez avoids its ".npz" auto-suffix on the temp.
+            tmp = cache_file.with_name(
+                f".{cache_file.stem}.{os.getpid()}.{threading.get_ident()}.npz.tmp"
+            )
+            with tmp.open("wb") as handle:
+                np.savez(handle, wl=wl, eg=eg, toa=toa)
+            tmp.replace(cache_file)
+        except Exception:
+            logger.debug("Failed to write uvspec cache entry %s", cache_file, exc_info=True)
+
+    def _record_cache(self, *, hit: bool) -> None:
+        with self._cache_stats_lock:
+            if hit:
+                self._run_cache_hits += 1
+            else:
+                self._run_cache_misses += 1
 
     def _uvspec_env(self) -> dict[str, str]:
         env = dict(os.environ)

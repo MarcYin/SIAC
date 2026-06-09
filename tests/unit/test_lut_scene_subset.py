@@ -360,3 +360,41 @@ def test_preload_scene_subset_retries_transient_lut_io(monkeypatch):
 
     assert calls["n"] == 2
     assert calls["reloads"] == 1
+
+
+def test_scene_subset_disk_cache_reused_across_backends(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A re-run loads the materialised scene subset from disk (no re-fetch)."""
+    lut = _spectral_lut()
+    kw = {
+        "sza": np.full((2, 2), 19.5, dtype=np.float32),
+        "vza": np.full((2, 2), 9.8, dtype=np.float32),
+        "raa": np.full((2, 2), 88.0, dtype=np.float32),
+        "tco3": np.full((2, 2), 300.0, dtype=np.float32),
+        "elevation": np.full((2, 2), 0.5, dtype=np.float32),
+    }
+    b1 = ZarrLUTBackend("dummy.zarr.zip", scene_cache_dir=tmp_path)
+    b1._lut = lut
+    key1, sub1 = b1._get_or_build_spectral_scene_subset(**kw)
+    path = b1._scene_subset_cache_path(key1)
+    assert path is not None and path.exists()
+
+    # Fresh backend, same cache dir: it must load from disk, not re-subset.
+    b2 = ZarrLUTBackend("dummy.zarr.zip", scene_cache_dir=tmp_path)
+    b2._lut = lut
+    monkeypatch.setattr(
+        b2,
+        "_subset_spectral_lut_for_scene",
+        lambda *_a, **_k: pytest.fail("subset rebuilt despite a warm disk cache"),
+    )
+    key2, sub2 = b2._get_or_build_spectral_scene_subset(**kw)
+    assert key2 == key1
+    for var in ("TOA_rho1", "Eg_rho1"):
+        np.testing.assert_allclose(sub2[var].values, sub1[var].values)
+
+
+def test_scene_subset_disk_cache_disabled() -> None:
+    backend = ZarrLUTBackend("dummy.zarr.zip", scene_cache_enabled=False)
+    assert backend._scene_cache_dir is None
+    assert backend._scene_subset_cache_path((1.0, 2.0, 3.0)) is None

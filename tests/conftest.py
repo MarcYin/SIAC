@@ -66,6 +66,24 @@ def _block_network(monkeypatch, request):
 
 
 # =============================================================================
+# RT run-cache isolation
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rt_run_cache(monkeypatch, tmp_path_factory):
+    """Redirect every RT run cache (libRadtran/6S/remote-LUT) to a throwaway dir.
+
+    The backends persist RT computations under ``~/.cache/siac`` by default.
+    Pointing ``SIAC_RT_RUN_CACHE_ROOT`` at a fresh per-test directory keeps tests
+    from reading or writing the developer's real cache and from seeing stale
+    cross-test hits (e.g. native-call-count assertions short-circuiting on a warm
+    cache). A test may still set an explicit cache dir on its own config.
+    """
+    monkeypatch.setenv("SIAC_RT_RUN_CACHE_ROOT", str(tmp_path_factory.mktemp("rt_run_cache")))
+
+
+# =============================================================================
 # Geometry fixtures
 # =============================================================================
 

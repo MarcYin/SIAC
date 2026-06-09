@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import importlib.machinery
 import importlib.util
 import logging
@@ -10,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
+from siac.algorithms.rt._run_cache import resolve_run_cache_dir
 from siac.algorithms.rt.direct.sixs_build import ensure_native_sixs_module
 from siac.geo.resample import resample_field_to_template, shares_template_grid
 from siac.runtime.models import copy_spatial_metadata_like
@@ -1439,6 +1442,20 @@ class SixSNativeRunner:
         #: requests (e.g. across solver stages) recompute fresh inputs.
         self._cached_joint_lut: JointGridSearchLUT | None = None
         self._cached_joint_lut_signature: tuple | None = None
+        # Persistent on-disk cache of the native scene-LUT GRID batch (the
+        # Fortran RT compute). Keyed by the exact batch inputs + module identity,
+        # so a re-run of the same scene reuses the small grid coefficients
+        # instead of recomputing. Only the bounded grid batch is cached; the
+        # cheap per-pixel interpolation is not. ``None`` disables it.
+        self._run_cache_dir: Path | None = None
+        if bool(getattr(sixs_config, "run_cache_enabled", True)):
+            self._run_cache_dir = resolve_run_cache_dir(
+                getattr(sixs_config, "run_cache_dir", None),
+                subpath="rt6s/run_cache",
+            )
+        self._native_cache_lock = threading.Lock()
+        self._native_cache_hits = 0
+        self._native_cache_misses = 0
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
         self._observation_time = observation_time
@@ -2074,7 +2091,7 @@ class SixSNativeRunner:
     ) -> _NativeBatchResult:
         native_kwargs = self._band_native_kwargs(prepared, band)
         native_kwargs.update(plan.grid_case_arrays)
-        lut_outputs = self._run_native_batch(**native_kwargs)
+        lut_outputs = self._run_native_batch_cached(native_kwargs)
         interpolated_outputs = _interpolate_scene_lut_outputs(
             plan,
             lut_outputs,
@@ -2083,6 +2100,89 @@ class SixSNativeRunner:
         )
         status = np.zeros(plan.direct_case_count, dtype=np.int32)
         return _NativeBatchResult(outputs=interpolated_outputs, status=status)
+
+    def _run_native_batch_cached(self, native_kwargs: dict[str, Any]) -> _NativeBatchResult:
+        """Run the native grid batch, served from disk when the inputs repeat.
+
+        The grid batch is a pure, deterministic function of ``native_kwargs`` and
+        the compiled module, so a SHA-256 of (all kwargs + module identity) is an
+        exact key. A hit returns the cached grid coefficients without invoking
+        the Fortran kernel.
+        """
+        key = self._native_grid_cache_key(native_kwargs)
+        if key is not None:
+            cached = self._load_native_grid(key)
+            if cached is not None:
+                with self._native_cache_lock:
+                    self._native_cache_hits += 1
+                return cached
+        result = self._run_native_batch(**native_kwargs)
+        if key is not None:
+            with self._native_cache_lock:
+                self._native_cache_misses += 1
+            self._store_native_grid(key, result)
+        return result
+
+    def _native_grid_cache_key(self, native_kwargs: dict[str, Any]) -> str | None:
+        if self._run_cache_dir is None:
+            return None
+        h = hashlib.sha256()
+        h.update(b"sixs-grid-batch-cache-v1\x00")
+        # Module identity: a rebuilt 6S binary must invalidate the cache.
+        h.update(str(self._module_path).encode("utf-8"))
+        try:
+            stat = Path(self._module_path).stat()
+            h.update(f"{stat.st_mtime_ns}:{stat.st_size}".encode())
+        except OSError:
+            pass
+        for name in sorted(native_kwargs):
+            h.update(name.encode("utf-8"))
+            h.update(b"\x00")
+            arr = np.asarray(native_kwargs[name])
+            if arr.dtype == object:
+                h.update(repr(native_kwargs[name]).encode("utf-8"))
+            else:
+                h.update(str(arr.dtype).encode("utf-8"))
+                h.update(str(arr.shape).encode("utf-8"))
+                h.update(np.ascontiguousarray(arr).tobytes())
+            h.update(b"\x00")
+        return h.hexdigest()
+
+    def _load_native_grid(self, key: str) -> _NativeBatchResult | None:
+        if self._run_cache_dir is None:
+            return None
+        path = self._run_cache_dir / f"{key}.npz"
+        if not path.exists():
+            return None
+        try:
+            with np.load(path) as data:
+                status = np.asarray(data["__status__"])
+                outputs = {
+                    str(name)[4:]: np.asarray(data[name])
+                    for name in data.files
+                    if str(name).startswith("out_")
+                }
+            return _NativeBatchResult(outputs=outputs, status=status)
+        except Exception:
+            logger.debug("Ignoring unreadable 6S grid-batch cache %s", path, exc_info=True)
+            return None
+
+    def _store_native_grid(self, key: str, result: _NativeBatchResult) -> None:
+        if self._run_cache_dir is None:
+            return
+        path = self._run_cache_dir / f"{key}.npz"
+        try:
+            self._run_cache_dir.mkdir(parents=True, exist_ok=True)
+            payload = {f"out_{name}": np.asarray(arr) for name, arr in result.outputs.items()}
+            payload["__status__"] = np.asarray(result.status)
+            # Unique temp + atomic rename so a crash/concurrent writer never
+            # leaves a half-written entry that reads back as valid.
+            tmp = path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}.npz.tmp")
+            with tmp.open("wb") as handle:
+                np.savez(handle, **payload)
+            tmp.replace(path)
+        except Exception:
+            logger.debug("Failed to write 6S grid-batch cache %s", path, exc_info=True)
 
     def _ensure_openmp_session(self) -> _SixSExtensionModule:
         if self._openmp_session is None:

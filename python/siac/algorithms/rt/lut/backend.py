@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
@@ -13,6 +14,7 @@ import numpy as np
 import xarray as xr
 
 from siac.adapters.rsrf import coerce_band_rsrf
+from siac.algorithms.rt._run_cache import resolve_run_cache_dir
 from siac.algorithms.rt.lut._spectral_math import (
     build_point_interpolation_coords,
     build_spectral_integration_weights,
@@ -91,6 +93,8 @@ class ZarrLUTBackend:
         chunk_cache_size: int = 128 * 1024 * 1024,  # 128 MB
         storage_options: dict[str, Any] | None = None,
         rt_setup: Any | None = None,
+        scene_cache_enabled: bool = True,
+        scene_cache_dir: str | Path | None = None,
     ):
         self.lut_path = str(lut_path)
         if interpolation_method not in self._SUPPORTED_INTERPOLATION_METHODS:
@@ -104,6 +108,14 @@ class ZarrLUTBackend:
         self.storage_options = dict(storage_options or {})
         self._rt_setup = rt_setup
         self._scene_subset_logged = False
+        # Persistent on-disk cache of the materialised scene subset. The remote
+        # LUT references are already cached (lut_refs/), but the chunk BYTES are
+        # otherwise re-fetched over HTTP in every fresh process; persisting the
+        # small grid-snapped scene subset lets a re-run of the same scene load it
+        # from local disk with no network. ``None`` disables it.
+        self._scene_cache_dir: Path | None = None
+        if scene_cache_enabled:
+            self._scene_cache_dir = resolve_run_cache_dir(scene_cache_dir, subpath="lut_subsets")
 
         # Lazy load the LUT
         self._lut: xr.Dataset | None = None
@@ -1011,6 +1023,17 @@ class ZarrLUTBackend:
                 ):
                     return scene_key, self._spectral_scene_subset
 
+            # Persistent disk cache: a prior run materialised this scene subset,
+            # so load it from local disk instead of re-fetching chunks over HTTP.
+            disk_subset = self._load_scene_subset_from_disk(scene_key)
+            if disk_subset is not None:
+                with self._cache_lock:
+                    self._spectral_scene_key = scene_key
+                    self._spectral_scene_subset = disk_subset
+                    self._spectral_band_grid_cache.clear()
+                    self._scene_subset_logged = False
+                return scene_key, disk_subset
+
             _t0 = time.perf_counter()
             subset = self._subset_spectral_lut_for_scene(
                 self.lut,
@@ -1033,6 +1056,7 @@ class ZarrLUTBackend:
             if hasattr(subset, "compute"):
                 subset = subset.compute(scheduler="threads", num_workers=8)
             logger.info("subset.compute() (materialise) %.3f s", time.perf_counter() - _t0)
+            self._store_scene_subset_to_disk(scene_key, subset)
 
             with self._cache_lock:
                 if self._spectral_scene_key != scene_key:
@@ -1043,6 +1067,44 @@ class ZarrLUTBackend:
                 if self._spectral_scene_subset is None:
                     self._spectral_scene_subset = subset
                 return scene_key, self._spectral_scene_subset
+
+    def _scene_subset_cache_path(self, scene_key: tuple[float, ...]) -> Path | None:
+        """On-disk path for this LUT + grid-snapped scene subset (or None)."""
+        if self._scene_cache_dir is None:
+            return None
+        stem = Path(self.lut_path).name or "lut"
+        # Key on LUT identity + the grid-snapped scene key, so different LUTs or
+        # scenes never collide and a re-run of the same scene hits.
+        raw = self.lut_path + "|" + ",".join(f"{v:.6g}" for v in scene_key)
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        return self._scene_cache_dir / f"{stem}.{digest}.subset.nc"
+
+    def _load_scene_subset_from_disk(self, scene_key: tuple[float, ...]) -> xr.Dataset | None:
+        path = self._scene_subset_cache_path(scene_key)
+        if path is None or not path.exists():
+            return None
+        try:
+            subset = xr.open_dataset(path).load()
+            logger.info("LUT scene subset loaded from disk cache %s", path)
+            return subset
+        except Exception:
+            # A truncated/corrupt entry is treated as a miss and rebuilt.
+            logger.debug("Ignoring unreadable LUT scene-subset cache %s", path, exc_info=True)
+            return None
+
+    def _store_scene_subset_to_disk(self, scene_key: tuple[float, ...], subset: xr.Dataset) -> None:
+        path = self._scene_subset_cache_path(scene_key)
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Unique temp + atomic rename so a crash/concurrent writer never
+            # leaves a half-written entry that reads back as valid.
+            tmp = path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}.nc.tmp")
+            subset.to_netcdf(tmp)
+            tmp.replace(path)
+        except Exception:
+            logger.debug("Failed to write LUT scene-subset cache %s", path, exc_info=True)
 
     def _get_or_build_spectral_band_grids(
         self,

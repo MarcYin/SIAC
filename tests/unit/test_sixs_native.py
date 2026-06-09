@@ -30,6 +30,7 @@ from siac.algorithms.rt.direct.sixs_build import (
     resolve_build_paths,
 )
 from siac.algorithms.rt.direct.sixs_native import (
+    SixSNativeRunner,
     _build_joint_grid_search_lut_plan,
     _build_scene_lut_plan,
     _build_spectral_response,
@@ -1943,3 +1944,73 @@ def test_worker_library_backend_slices_batches_and_merges_outputs(
     np.testing.assert_allclose(result.outputs["xcp"], np.arange(5, dtype=np.float64) + 2.0)
     assert sessions[0].chunk_sizes == [2, 1]
     assert sessions[1].chunk_sizes == [2]
+
+
+def test_native_grid_batch_cache_skips_recompute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The native scene-LUT grid batch is served from disk when inputs repeat."""
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _cfg: tmp_path / "fake_module.so",
+    )
+    cache = tmp_path / "cache"
+    runner = SixSNativeRunner(
+        sixs_config=SixSAlgorithmConfig(run_cache_dir=str(cache)), rt_setup=RTSetupConfig()
+    )
+    calls = {"n": 0}
+
+    def _fake_batch(**_kwargs: object) -> _NativeBatchResult:
+        calls["n"] += 1
+        return _NativeBatchResult(
+            outputs={"xap": np.array([1.0, 2.0]), "xbp": np.array([0.1, 0.2])},
+            status=np.zeros(2, dtype=np.int32),
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _fake_batch)
+    kwargs = {"sza": np.array([30.0, 31.0]), "aot": np.array([0.1, 0.2]), "streams": 16}
+
+    r1 = runner._run_native_batch_cached(kwargs)
+    r2 = runner._run_native_batch_cached(kwargs)
+    assert calls["n"] == 1  # second call served from disk
+    assert (runner._native_cache_hits, runner._native_cache_misses) == (1, 1)
+    np.testing.assert_array_equal(r1.outputs["xap"], r2.outputs["xap"])
+    np.testing.assert_array_equal(r1.status, r2.status)
+
+    # A fresh runner sharing the cache dir also hits (cross-run reuse).
+    runner2 = SixSNativeRunner(
+        sixs_config=SixSAlgorithmConfig(run_cache_dir=str(cache)), rt_setup=RTSetupConfig()
+    )
+
+    def _must_not_run(**_kwargs: object) -> _NativeBatchResult:
+        pytest.fail("native batch must not run for a cached grid")
+
+    monkeypatch.setattr(runner2, "_run_native_batch", _must_not_run)
+    r3 = runner2._run_native_batch_cached(kwargs)
+    np.testing.assert_array_equal(r1.outputs["xbp"], r3.outputs["xbp"])
+    assert (runner2._native_cache_hits, runner2._native_cache_misses) == (1, 0)
+
+
+def test_native_grid_batch_cache_disabled_recomputes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "siac.algorithms.rt.direct.sixs_native.ensure_native_sixs_module",
+        lambda _cfg: tmp_path / "fake_module.so",
+    )
+    runner = SixSNativeRunner(
+        sixs_config=SixSAlgorithmConfig(run_cache_enabled=False), rt_setup=RTSetupConfig()
+    )
+    assert runner._run_cache_dir is None
+    calls = {"n": 0}
+
+    def _fake_batch(**_kwargs: object) -> _NativeBatchResult:
+        calls["n"] += 1
+        return _NativeBatchResult(
+            outputs={"xap": np.array([1.0])}, status=np.zeros(1, dtype=np.int32)
+        )
+
+    monkeypatch.setattr(runner, "_run_native_batch", _fake_batch)
+    runner._run_native_batch_cached({"a": np.array([1.0])})
+    runner._run_native_batch_cached({"a": np.array([1.0])})
+    assert calls["n"] == 2  # caching off => native batch runs every time

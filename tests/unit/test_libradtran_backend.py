@@ -667,3 +667,89 @@ def test_deep_water_bands_constant_avoids_s2_surface_centers() -> None:
     s2_centers = [443, 490, 560, 665, 705, 740, 783, 833, 865, 1614, 2202]
     for lo, hi in DEEP_WATER_H2O_BANDS_NM:
         assert not any(lo < c < hi for c in s2_centers), (lo, hi)
+
+
+def _fake_spectrum() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    wl = np.array([490.0, 491.0, 492.0], dtype=np.float64)
+    eg = np.array([0.80, 0.81, 0.82], dtype=np.float64)
+    toa = np.array([0.10, 0.11, 0.12], dtype=np.float64)
+    return wl, eg, toa
+
+
+def test_run_cache_skips_uvspec_on_repeat_deck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An identical deck is served from disk on the second call (and re-runs)."""
+    runner = LibRadtranRunner(libradtran_config=LibRadtranAlgorithmConfig(run_cache_dir=tmp_path))
+    assert runner._run_cache_dir == tmp_path
+    paths = LibRadtranPaths(uvspec=tmp_path / "uvspec", data_dir=tmp_path / "data")
+    calls = {"n": 0}
+
+    def _fake_invoke(
+        _paths: LibRadtranPaths, _deck: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        calls["n"] += 1
+        return _fake_spectrum()
+
+    monkeypatch.setattr(runner, "_invoke_uvspec", _fake_invoke)
+
+    deck = "mol_abs_param reptran\nwavelength 490 492\n"
+    wl1, eg1, toa1 = runner._run_uvspec(paths, deck)
+    wl2, eg2, toa2 = runner._run_uvspec(paths, deck)
+
+    assert calls["n"] == 1  # second call served from disk, not uvspec
+    assert (runner._run_cache_hits, runner._run_cache_misses) == (1, 1)
+    np.testing.assert_array_equal(wl1, wl2)
+    np.testing.assert_array_equal(eg1, eg2)
+    np.testing.assert_array_equal(toa1, toa2)
+
+    # A fresh runner sharing the cache dir also hits (cross-run / cross-process).
+    runner2 = LibRadtranRunner(libradtran_config=LibRadtranAlgorithmConfig(run_cache_dir=tmp_path))
+
+    def _must_not_run(*_a: object, **_k: object) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        pytest.fail("uvspec must not run for a cached deck")
+
+    monkeypatch.setattr(runner2, "_invoke_uvspec", _must_not_run)
+    wl3, _eg3, _toa3 = runner2._run_uvspec(paths, deck)
+    np.testing.assert_array_equal(wl1, wl3)
+    assert (runner2._run_cache_hits, runner2._run_cache_misses) == (1, 0)
+
+
+def test_run_cache_disabled_always_invokes_uvspec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = LibRadtranRunner(libradtran_config=LibRadtranAlgorithmConfig(run_cache_enabled=False))
+    assert runner._run_cache_dir is None
+    paths = LibRadtranPaths(uvspec=tmp_path / "uvspec", data_dir=tmp_path / "data")
+    calls = {"n": 0}
+
+    def _fake_invoke(
+        _paths: LibRadtranPaths, _deck: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        calls["n"] += 1
+        return _fake_spectrum()
+
+    monkeypatch.setattr(runner, "_invoke_uvspec", _fake_invoke)
+    runner._run_uvspec(paths, "same-deck")
+    runner._run_uvspec(paths, "same-deck")
+    assert calls["n"] == 2  # caching off => uvspec runs every time
+
+
+def test_run_cache_distinct_decks_recompute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = LibRadtranRunner(libradtran_config=LibRadtranAlgorithmConfig(run_cache_dir=tmp_path))
+    paths = LibRadtranPaths(uvspec=tmp_path / "uvspec", data_dir=tmp_path / "data")
+    calls = {"n": 0}
+
+    def _fake_invoke(
+        _paths: LibRadtranPaths, _deck: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        calls["n"] += 1
+        return _fake_spectrum()
+
+    monkeypatch.setattr(runner, "_invoke_uvspec", _fake_invoke)
+    runner._run_uvspec(paths, "deck-A")
+    runner._run_uvspec(paths, "deck-B")
+    assert calls["n"] == 2  # distinct decks => distinct keys => both computed
+    assert runner._run_cache_misses == 2
