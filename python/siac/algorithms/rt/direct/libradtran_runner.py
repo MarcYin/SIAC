@@ -145,6 +145,17 @@ class _InMemorySpectralLUTBackend(ZarrLUTBackend):
             "<in-memory-libradtran>",
             interpolation_method=interpolation_method,
             rt_setup=rt_setup,
+            # The on-disk scene-subset cache keys on ``lut_path`` (here a constant
+            # placeholder) + grid-snapped scene coords. It exists only to avoid
+            # re-fetching the REMOTE LUT's HTTP chunk bytes - an in-memory dataset
+            # has no network cost, and the placeholder is NOT content-identifying,
+            # so two different in-memory scene LUTs (e.g. coarse vs fine, or
+            # different scenes that snap to the same key) would COLLIDE and serve
+            # each other's stale subset - silently freezing the aot interpolation.
+            # Disable it: the within-process ``_spectral_scene_subset`` cache still
+            # serves every band of this scene, and the expensive uvspec runs are
+            # already cached at the run-cache layer.
+            scene_cache_enabled=False,
         )
         self._dataset = dataset
 

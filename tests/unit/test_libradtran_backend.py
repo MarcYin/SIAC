@@ -255,6 +255,53 @@ def test_in_memory_spectral_backend_returns_finite_coefficients() -> None:
     assert np.all(np.isfinite(coeffs.xcp.values))
 
 
+def test_in_memory_backend_does_not_use_disk_scene_subset_cache(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: distinct in-memory scene LUTs must not collide on the on-disk
+    scene-subset cache.
+
+    That disk cache keys on ``lut_path`` + grid-snapped scene coords, but for an
+    in-memory LUT ``lut_path`` is a constant ``"<in-memory-libradtran>"``
+    placeholder - NOT content-identifying. With the cache enabled, two backends
+    fed different datasets but queried on the same scene resolve to the same disk
+    path, so the second loads the first's STALE subset and returns its
+    coefficients - silently freezing/aliasing the RT (observed as a libRadtran
+    AOT retrieval whose aot interpolation collapsed). The in-memory backend now
+    disables that disk cache (the within-process subset cache still serves every
+    band of the scene, and the costly uvspec runs are cached at the run-cache
+    layer). It exists only to skip re-fetching the REMOTE LUT's HTTP chunks.
+    """
+    monkeypatch.setenv("SIAC_RT_RUN_CACHE_ROOT", str(tmp_path))
+
+    ds_a = _synthetic_spectral_lut()
+    ds_b = _synthetic_spectral_lut()
+    # Same coords (=> identical scene key) but markedly different RT: brighter
+    # path radiance (drives xbp/xcp) and lower transmittance (drives xap).
+    ds_b["TOA_rho1"] = ds_b["TOA_rho1"] + 0.05
+    ds_b["TOA_rho2"] = ds_b["TOA_rho2"] + 0.05
+    ds_b["Eg_rho1"] = ds_b["Eg_rho1"] - 0.08
+    ds_b["Eg_rho2"] = ds_b["Eg_rho2"] - 0.08
+
+    backend_a = _InMemorySpectralLUTBackend(ds_a)
+    backend_b = _InMemorySpectralLUTBackend(ds_b)
+    assert backend_a._scene_cache_dir is None  # disk subset cache disabled
+    assert backend_b._scene_cache_dir is None
+
+    geom, atmo = _scene()
+    band = _band()
+    coeffs_a = backend_a.compute_coefficients(geom, atmo, band)
+    coeffs_b = backend_b.compute_coefficients(geom, atmo, band)
+
+    # Distinct RT content => distinct coefficients (no cross-backend cache bleed).
+    # Before the fix, backend_b loaded backend_a's stale disk subset and returned
+    # backend_a's coefficients, so every term matched.
+    assert not np.allclose(coeffs_a.xap.values, coeffs_b.xap.values)
+    assert not np.allclose(coeffs_a.xbp.values, coeffs_b.xbp.values)
+    # And the in-memory backends wrote no subset into the shared cache root.
+    assert not list(tmp_path.rglob("*.subset.nc"))
+
+
 # --------------------------------------------------------------------------- #
 # RT setup + config wiring
 # --------------------------------------------------------------------------- #
