@@ -17,6 +17,12 @@ if TYPE_CHECKING:
     from siac.domain.spectral import RelativeSpectralResponse
 
 
+#: SIAC atmospheric state carries tcwv in cm of precipitable water, while the
+#: spectral LUT schema (the libRadtran ``*_lut_1nm`` zarr and the in-memory
+#: libRadtran scene LUT that mirrors it) stores its ``tcwv`` axis in mm.
+_TCWV_CM_TO_LUT_MM = 10.0
+
+
 def build_point_interpolation_coords(
     lut: xr.Dataset,
     *,
@@ -25,10 +31,19 @@ def build_point_interpolation_coords(
     require_finite_values: Callable[..., np.ndarray],
     sanitize_point_values: Callable[[np.ndarray, np.ndarray], np.ndarray],
 ) -> dict[str, xr.DataArray]:
-    """Build point interpolation coordinates for variables solved per-pixel."""
+    """Build point interpolation coordinates for variables solved per-pixel.
+
+    ``aot`` is unitless on both sides. ``tcwv`` arrives in SIAC state units
+    (cm) and is converted to the LUT axis unit (mm) BEFORE clipping to the
+    axis envelope — querying cm values against the mm axis silently evaluated
+    the LUT at a ~10x too-dry atmosphere (retrieved AOT biased low).
+    """
     coords = {
         "aot": xr.DataArray(require_finite_values(aot, name="aot"), dims=["point"]),
-        "tcwv": xr.DataArray(require_finite_values(tcwv, name="tcwv"), dims=["point"]),
+        "tcwv": xr.DataArray(
+            require_finite_values(tcwv, name="tcwv") * _TCWV_CM_TO_LUT_MM,
+            dims=["point"],
+        ),
     }
     for name in ("aot", "tcwv"):
         if name not in lut.coords:

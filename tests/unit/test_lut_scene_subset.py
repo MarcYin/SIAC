@@ -21,7 +21,8 @@ def _spectral_lut() -> xr.Dataset:
         "ozone": np.array([250.0, 280.0, 310.0, 340.0], dtype=np.float32),
         "altitude": np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32),
         "aot": np.linspace(0.01, 1.0, 5, dtype=np.float32),
-        "tcwv": np.linspace(0.1, 6.0, 6, dtype=np.float32),
+        # Schema units: the spectral LUT tcwv axis is mm (state tcwv is cm).
+        "tcwv": np.array([1.0, 5.0, 10.0, 20.0, 40.0, 60.0], dtype=np.float32),
         "wavelength": np.linspace(400.0, 700.0, 7, dtype=np.float32),
     }
     data = np.random.default_rng(0).random(shape, dtype=np.float32)
@@ -45,7 +46,8 @@ def test_subset_spectral_lut_uses_angle_means_and_range_filters():
         sza=np.full((2, 2), 19.5, dtype=np.float32),
         vza=np.full((2, 2), 9.8, dtype=np.float32),
         raa=np.full((2, 2), 88.0, dtype=np.float32),
-        tco3=np.array([[270.0, 300.0], [290.0, 295.0]], dtype=np.float32),
+        # State units: tco3 in atm-cm (the subset converts to the DU axis).
+        tco3=np.array([[0.27, 0.30], [0.29, 0.295]], dtype=np.float32),
         elevation=np.array([[0.2, 1.8], [1.2, 0.7]], dtype=np.float32),
     )
 
@@ -67,20 +69,77 @@ def test_build_aot_tcwv_point_coords_clips_to_lut_axes():
     lut = xr.Dataset(
         coords={
             "aot": np.array([0.01, 0.5, 1.0], dtype=np.float32),
-            "tcwv": np.array([0.1, 2.0, 6.0], dtype=np.float32),
+            "tcwv": np.array([1.0, 20.0, 60.0], dtype=np.float32),  # mm axis
         }
     )
 
     coords = backend._build_aot_tcwv_point_coords(
         lut,
         aot=np.array([-1.0, 0.2, 5.0], dtype=np.float32),
-        tcwv=np.array([-3.0, 3.0, 10.0], dtype=np.float32),
+        # tcwv queries arrive in cm; conversion to mm happens BEFORE clipping.
+        tcwv=np.array([-0.3, 3.0, 10.0], dtype=np.float32),
     )
 
     assert coords["aot"].dims == ("point",)
     assert coords["tcwv"].dims == ("point",)
     np.testing.assert_allclose(coords["aot"].values, np.array([0.01, 0.2, 1.0], dtype=np.float32))
-    np.testing.assert_allclose(coords["tcwv"].values, np.array([0.1, 3.0, 6.0], dtype=np.float32))
+    np.testing.assert_allclose(coords["tcwv"].values, np.array([1.0, 30.0, 60.0], dtype=np.float32))
+
+
+def test_point_coords_tcwv_cm_query_lands_on_mm_axis_node():
+    """Regression: SIAC state tcwv (cm) must be converted to the LUT's mm axis.
+
+    Before the fix the cm value was interpolated directly on the mm axis, so a
+    1.5 cm (15 mm) atmosphere was evaluated at 1.5 mm — a ~10x too-dry LUT
+    lookup that biased every remote-LUT AOT retrieval low.
+    """
+    backend = ZarrLUTBackend("dummy")
+    lut = xr.Dataset(
+        coords={
+            "aot": np.array([0.05, 0.10, 0.15], dtype=np.float32),
+            "tcwv": np.array([0.0, 5.0, 15.0, 30.0], dtype=np.float32),  # mm
+        }
+    )
+
+    coords = backend._build_aot_tcwv_point_coords(
+        lut,
+        aot=np.array([0.10], dtype=np.float32),
+        tcwv=np.array([1.5], dtype=np.float32),  # cm
+    )
+
+    np.testing.assert_allclose(coords["tcwv"].values, np.array([15.0], dtype=np.float32))
+
+
+def test_subset_ozone_atm_cm_selects_correct_du_node():
+    """Regression: tco3 (atm-cm) must be converted to the LUT's DU ozone axis.
+
+    Before the fix the DU axis [200..600] was sliced with ~0.3 (atm-cm), the
+    slice came back empty, and the nearest-value fallback pinned EVERY scene to
+    the 200 DU edge node (too little Chappuis absorption -> AOT biased low).
+    """
+    backend = ZarrLUTBackend("dummy")
+    ozone_axis = np.array([200.0, 250.0, 300.0, 350.0], dtype=np.float32)
+    wavelength = np.linspace(400.0, 700.0, 5, dtype=np.float32)
+    # Encode the ozone node index in the data so the selection is observable.
+    data = np.broadcast_to(
+        ozone_axis[:, None], (ozone_axis.size, wavelength.size)
+    ).astype(np.float32)
+    lut = xr.Dataset(
+        {"TOA_rho1": (("ozone", "wavelength"), data)},
+        coords={"ozone": ozone_axis, "wavelength": wavelength},
+    )
+
+    subset = backend._subset_spectral_lut_for_scene(
+        lut,
+        sza=np.full((2, 2), 30.0, dtype=np.float32),
+        vza=np.full((2, 2), 5.0, dtype=np.float32),
+        raa=np.full((2, 2), 60.0, dtype=np.float32),
+        tco3=np.full((2, 2), 0.30, dtype=np.float32),  # atm-cm == 300 DU
+        elevation=np.zeros((2, 2), dtype=np.float32),
+    )
+
+    assert "ozone" not in subset.dims
+    np.testing.assert_allclose(subset["TOA_rho1"].values, np.full(5, 300.0, dtype=np.float32))
 
 
 def test_build_aot_tcwv_point_coords_rejects_nonfinite_values():
@@ -207,7 +266,7 @@ def test_compute_coefficients_spectral_interpolates_after_wavelength_collapse(mo
         raa=np.full_like(aot, 88.0),
         aot=aot,
         tcwv=tcwv,
-        tco3=np.full_like(aot, 290.0),
+        tco3=np.full_like(aot, 0.29),
         elevation=np.full_like(aot, 1.0),
         band=band,
     )

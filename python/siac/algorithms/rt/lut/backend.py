@@ -1074,8 +1074,11 @@ class ZarrLUTBackend:
             return None
         stem = Path(self.lut_path).name or "lut"
         # Key on LUT identity + the grid-snapped scene key, so different LUTs or
-        # scenes never collide and a re-run of the same scene hits.
-        raw = self.lut_path + "|" + ",".join(f"{v:.6g}" for v in scene_key)
+        # scenes never collide and a re-run of the same scene hits. The version
+        # token invalidates entries written by older subset logic (v2: ozone
+        # range now converted atm-cm -> DU before slicing; pre-v2 entries were
+        # silently pinned to the 200 DU edge node and must not be served).
+        raw = "v2|" + self.lut_path + "|" + ",".join(f"{v:.6g}" for v in scene_key)
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
         return self._scene_cache_dir / f"{stem}.{digest}.subset.nc"
 
@@ -1238,7 +1241,14 @@ class ZarrLUTBackend:
             if dim in out.dims and out.sizes.get(dim, 0) == 1:
                 out = out.squeeze(dim=dim, drop=True)
 
-        for dim, scene_values in {"ozone": tco3, "altitude": elevation}.items():
+        # The spectral-LUT schema stores ozone in Dobson units while the SIAC
+        # state carries tco3 in atm-cm (DU / 1000). Convert BEFORE slicing:
+        # slicing the DU axis [200..600] with atm-cm values (~0.3) selected an
+        # empty range, and the nearest-value fallback then silently pinned every
+        # scene to the 200 DU edge node (visibly wrong Chappuis-band absorption,
+        # AOT biased low). Altitude is km on both sides.
+        ozone_du = np.asarray(tco3, dtype=np.float64) * 1000.0
+        for dim, scene_values in {"ozone": ozone_du, "altitude": elevation}.items():
             if dim not in out.coords:
                 continue
             axis = np.asarray(out.coords[dim].values, dtype=np.float32)
@@ -1266,7 +1276,7 @@ class ZarrLUTBackend:
         aot: np.ndarray,
         tcwv: np.ndarray,
     ) -> dict[str, xr.DataArray]:
-        """Build per-pixel LUT coordinates for unitless AOT and TCWV in cm."""
+        """Build per-pixel LUT coordinates (aot unitless; tcwv cm -> LUT mm axis)."""
         return cast(
             "dict[str, xr.DataArray]",
             build_point_interpolation_coords(

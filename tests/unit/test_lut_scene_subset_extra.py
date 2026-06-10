@@ -181,16 +181,16 @@ def test_build_point_coords_weight_helpers_and_reference_attrs() -> None:
     empty_axis_lut = xr.Dataset(
         coords={
             "aot": np.array([], dtype=np.float32),
-            "tcwv": np.array([0.5, 2.0], dtype=np.float32),
+            "tcwv": np.array([5.0, 20.0], dtype=np.float32),  # mm axis
         }
     )
     coords = backend._build_aot_tcwv_point_coords(
         empty_axis_lut,
         aot=np.array([0.2, 0.4], dtype=np.float32),
-        tcwv=np.array([1.0, 3.0], dtype=np.float32),
+        tcwv=np.array([1.0, 3.0], dtype=np.float32),  # cm -> 10/30 mm
     )
     np.testing.assert_allclose(coords["aot"].values, np.array([0.2, 0.4], dtype=np.float32))
-    np.testing.assert_allclose(coords["tcwv"].values, np.array([1.0, 2.0], dtype=np.float32))
+    np.testing.assert_allclose(coords["tcwv"].values, np.array([10.0, 20.0], dtype=np.float32))
 
     band = SensorBand("B03", 560.0, 35.0, 10.0, 0)
     no_wavelength = xr.Dataset()

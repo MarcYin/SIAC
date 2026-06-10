@@ -730,6 +730,11 @@ class LibRadtranRunner:
         def _cube(values: np.ndarray) -> np.ndarray:
             return values[np.newaxis, np.newaxis, np.newaxis, np.newaxis, np.newaxis, :, :, :]
 
+        # Axis units follow the remote spectral-LUT schema (ozone in DU, tcwv in
+        # MM) — the inherited ZarrLUTBackend evaluation converts the SIAC state
+        # (tco3 atm-cm, tcwv cm) into these units, so the in-memory axes must
+        # match or every per-pixel tcwv lookup lands ~10x too dry. ``tcwv_axis``
+        # arrives in cm (state units, also used for the uvspec decks).
         coords = {
             "sza": np.array([sza_deg], dtype=np.float32),
             "vza": np.array([vza_deg], dtype=np.float32),
@@ -737,7 +742,7 @@ class LibRadtranRunner:
             "ozone": np.array([ozone_du], dtype=np.float32),
             "altitude": np.array([altitude_km], dtype=np.float32),
             "aot": aot_axis.astype(np.float32),
-            "tcwv": tcwv_axis.astype(np.float32),
+            "tcwv": (tcwv_axis * 10.0).astype(np.float32),
             "wavelength": wl_grid.astype(np.float32),
         }
         # No ``solar_irradiance`` variable: the remote libRadtran LUT does not

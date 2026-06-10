@@ -208,7 +208,8 @@ def test_parse_uvspec_table_rejects_odd_rows() -> None:
 def _synthetic_spectral_lut() -> xr.Dataset:
     dims = ("sza", "vza", "raa", "ozone", "altitude", "aot", "tcwv", "wavelength")
     aot = np.linspace(0.05, 0.5, 4, dtype=np.float32)
-    tcwv = np.linspace(0.5, 3.0, 4, dtype=np.float32)
+    # Schema units: the spectral-LUT tcwv axis is mm (SIAC state tcwv is cm).
+    tcwv = np.linspace(5.0, 30.0, 4, dtype=np.float32)
     wl = np.linspace(400.0, 900.0, 51, dtype=np.float32)
     aot_b = aot[:, None, None]
     tcwv_b = tcwv[None, :, None]

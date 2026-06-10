@@ -22,20 +22,21 @@ def test_build_point_interpolation_coords_requires_finite_and_clips_axes() -> No
     lut = xr.Dataset(
         coords={
             "aot": np.array([0.01, 0.5, 1.0], dtype=np.float32),
-            "tcwv": np.array([0.1, 2.0, 6.0], dtype=np.float32),
+            "tcwv": np.array([1.0, 20.0, 60.0], dtype=np.float32),  # mm axis
         }
     )
 
     coords = build_point_interpolation_coords(
         lut,
         aot=np.array([-1.0, 0.2, 5.0], dtype=np.float32),
-        tcwv=np.array([-3.0, 3.0, 10.0], dtype=np.float32),
+        # tcwv queries in cm; converted to the mm axis BEFORE clipping.
+        tcwv=np.array([-0.3, 3.0, 10.0], dtype=np.float32),
         require_finite_values=lambda values, *, name: np.asarray(values, dtype=np.float32),  # noqa: ARG005
         sanitize_point_values=lambda values, axis: np.clip(values, axis.min(), axis.max()),
     )
 
     np.testing.assert_allclose(coords["aot"].values, np.array([0.01, 0.2, 1.0], dtype=np.float32))
-    np.testing.assert_allclose(coords["tcwv"].values, np.array([0.1, 3.0, 6.0], dtype=np.float32))
+    np.testing.assert_allclose(coords["tcwv"].values, np.array([1.0, 30.0, 60.0], dtype=np.float32))
 
 
 def test_build_spectral_integration_weights_supports_gaussian_and_rsrf_paths() -> None:
