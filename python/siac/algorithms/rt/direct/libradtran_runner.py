@@ -282,7 +282,15 @@ def _axis_from_scene(values: xr.DataArray, n_nodes: int) -> np.ndarray:
     # (uvspec rejects a negative aerosol optical depth / column water amount).
     if lo < 0.0:
         lo, hi = 0.0, max(hi, 1.0e-3)
-    return cast("np.ndarray", np.linspace(lo, hi, max(2, int(n_nodes)), dtype=np.float64))
+    axis = np.linspace(lo, hi, max(2, int(n_nodes)), dtype=np.float64)
+    # Quantize for run-cache key stability (the scene min/max inherit any
+    # cross-process jitter in upstream resampling; see _DECK_AXIS_DECIMALS).
+    axis = _round_axis(axis)
+    if axis.size == 1:
+        # A scene range narrower than the quantum collapsed to one node; keep
+        # this function's >=2-node contract with a one-quantum-wide axis.
+        axis = np.array([axis[0], axis[0] + 10.0**-_DECK_AXIS_DECIMALS], dtype=np.float64)
+    return cast("np.ndarray", axis)
 
 
 #: Node ceilings for the joint grid-search LUT. The solver's aot axis is
@@ -293,10 +301,44 @@ def _axis_from_scene(values: xr.DataArray, n_nodes: int) -> np.ndarray:
 _JOINT_LUT_MAX_AOT_NODES = 16
 _JOINT_LUT_MAX_TCWV_NODES = 4
 
+#: Quantization (decimal places) for every continuous scalar embedded in a
+#: uvspec deck. The persistent run cache keys on a SHA-256 of the deck text, so
+#: any input that is not bit-reproducible across processes busts all keys at
+#: once. The scene means are NOT bit-reproducible: on T33KWP the solver-grid
+#: sza mean was observed to flip between 37.575276... and 37.575361... deg
+#: across identical re-runs (~9e-5 deg apart, straddling the deck's 4-dp
+#: format boundary), recomputing all 32 joint-LUT uvspec runs (~14 min) on
+#: every retrieval. Rounding to these quanta is far above that jitter and far
+#: below RT sensitivity (1e-3 deg in sza shifts sec(sza) by ~2e-5 relative;
+#: 1e-4 in aot shifts TOA reflectance by ~1e-5), so deck text - and therefore
+#: the cache key - is stable across re-runs of the same scene.
+_DECK_ANGLE_DECIMALS = 3
+_DECK_AXIS_DECIMALS = 4
+_DECK_TCO3_ATMCM_DECIMALS = 5
+_DECK_ELEVATION_KM_DECIMALS = 4
+
+
+def _round_axis(axis: np.ndarray) -> np.ndarray:
+    """Quantize axis values for deck/cache-key stability (see _DECK_*_DECIMALS).
+
+    ``np.unique`` collapses any nodes that the rounding made identical, so the
+    returned axis is strictly increasing (duplicate coords would break the
+    in-memory LUT's interpolation).
+    """
+    return cast(
+        "np.ndarray",
+        np.unique(np.round(np.asarray(axis, dtype=np.float64), _DECK_AXIS_DECIMALS)),
+    )
+
 
 def _subsample_axis(axis: np.ndarray, max_nodes: int) -> np.ndarray:
-    """Unique, sorted axis thinned to <= ``max_nodes`` nodes (endpoints kept)."""
-    axis = np.unique(np.asarray(axis, dtype=np.float64))
+    """Unique, sorted axis thinned to <= ``max_nodes`` nodes (endpoints kept).
+
+    Axis values are quantized first (``_round_axis``) so the downstream deck
+    text - and the persistent run-cache key derived from it - cannot vary with
+    sub-1e-4 jitter in the solver's candidate derivation.
+    """
+    axis = _round_axis(axis)
     if axis.size <= max_nodes or axis.size == 0:
         return axis
     idx = np.unique(np.linspace(0, axis.size - 1, max_nodes).round().astype(int))
@@ -543,6 +585,17 @@ class LibRadtranRunner:
             self._warn_band_straddle(band)
         aot_nodes = _subsample_axis(aot_axis, _JOINT_LUT_MAX_AOT_NODES)
         tcwv_nodes = _subsample_axis(tcwv_axis, _JOINT_LUT_MAX_TCWV_NODES)
+        # Full-precision trace of the node axes: any change here (vs a prior
+        # run of the same scene) flips every uvspec deck's run-cache key, so a
+        # mysterious "0 from cache" re-run is diagnosable from DEBUG logs.
+        logger.debug(
+            "libradtran: joint grid-search nodes aot=%s tcwv=%s "
+            "(thinned from %d aot / %d tcwv solver candidates)",
+            np.array2string(aot_nodes, precision=17, max_line_width=10_000),
+            np.array2string(tcwv_nodes, precision=17, max_line_width=10_000),
+            int(np.asarray(aot_axis).size),
+            int(np.asarray(tcwv_axis).size),
+        )
         with self._build_lock:
             # Cache as the scene backend so a same-scene compute_coefficients call
             # reuses it (the joint LUT spans the full search range, so prior-range
@@ -637,13 +690,20 @@ class LibRadtranRunner:
 
         # Geometry + slow-varying gases collapse to the scene mean (one node):
         # the spectral-LUT consumer selects geometry by nearest-to-scene-mean
-        # and averages ozone/altitude over their range anyway.
-        sza_deg = _scene_mean_deg(geometry.sza)
-        vza_deg = _scene_mean_deg(geometry.vza)
-        raa_deg = _fold_raa_deg(_scene_mean_deg(geometry.raa))
-        ozone_du = _scene_mean(atmo_state.tco3) * TCO3_ATMCM_TO_DU
-        altitude_km = max(0.0, _scene_mean(atmo_state.elevation))
-        tco3_atmcm = _scene_mean(atmo_state.tco3)
+        # and averages ozone/altitude over their range anyway. Every scalar is
+        # quantized (see _DECK_*_DECIMALS) because it is embedded in the deck
+        # text that keys the persistent run cache: upstream resampling is not
+        # bit-reproducible across processes (observed ~9e-5 deg flips in the
+        # T33KWP solver-grid sza mean), and an unrounded mean recomputes every
+        # uvspec run on every retrieval of the same scene.
+        sza_deg = round(_scene_mean_deg(geometry.sza), _DECK_ANGLE_DECIMALS)
+        vza_deg = round(_scene_mean_deg(geometry.vza), _DECK_ANGLE_DECIMALS)
+        raa_deg = round(_fold_raa_deg(_scene_mean_deg(geometry.raa)), _DECK_ANGLE_DECIMALS)
+        tco3_atmcm = round(_scene_mean(atmo_state.tco3), _DECK_TCO3_ATMCM_DECIMALS)
+        ozone_du = tco3_atmcm * TCO3_ATMCM_TO_DU
+        altitude_km = round(
+            max(0.0, _scene_mean(atmo_state.elevation)), _DECK_ELEVATION_KM_DECIMALS
+        )
 
         n_nodes = min(
             int(cfg.scene_lut_max_nodes_per_axis),
@@ -651,16 +711,31 @@ class LibRadtranRunner:
         )
         # Explicit overrides let the joint grid-search LUT span the solver's full
         # (aot, tcwv) search range with asymmetric node counts (many aot nodes,
-        # one fixed-tcwv node) instead of the per-scene prior range.
+        # one fixed-tcwv node) instead of the per-scene prior range. Overrides
+        # are re-quantized here (idempotent for the joint path, which rounds in
+        # _subsample_axis) so no caller can reintroduce jittery deck values.
         aot_axis = (
-            np.asarray(aot_axis_override, dtype=np.float64)
+            _round_axis(aot_axis_override)
             if aot_axis_override is not None
             else _axis_from_scene(atmo_state.aot, n_nodes)
         )
         tcwv_axis = (
-            np.asarray(tcwv_axis_override, dtype=np.float64)
+            _round_axis(tcwv_axis_override)
             if tcwv_axis_override is not None
             else _axis_from_scene(atmo_state.tcwv, n_nodes)
+        )
+        # Full-precision trace of every deck-embedded scalar (the run-cache key
+        # inputs); compare across runs when diagnosing unexpected cache misses.
+        logger.debug(
+            "libradtran: deck scalars sza=%r vza=%r raa=%r tco3_atmcm=%r altitude_km=%r "
+            "aot_axis=%s tcwv_axis=%s",
+            sza_deg,
+            vza_deg,
+            raa_deg,
+            tco3_atmcm,
+            altitude_km,
+            np.array2string(aot_axis, precision=17, max_line_width=10_000),
+            np.array2string(tcwv_axis, precision=17, max_line_width=10_000),
         )
 
         # Endpoint-safe 1 nm (or wavelength_step_nm) grid: linspace pins both ends

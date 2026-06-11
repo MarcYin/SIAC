@@ -32,6 +32,7 @@ from siac.algorithms.rt.direct.libradtran_runner import (
     _axis_from_scene,
     _InMemorySpectralLUTBackend,
     _LibRadtranJointGridSearchLUT,
+    _subsample_axis,
     build_uvspec_deck,
     parse_uvspec_table,
 )
@@ -341,6 +342,135 @@ def test_in_memory_backend_does_not_use_disk_scene_subset_cache(
     assert not np.allclose(coeffs_a.xbp.values, coeffs_b.xbp.values)
     # And the in-memory backends wrote no subset into the shared cache root.
     assert not list(tmp_path.rglob("*.subset.nc"))
+
+
+# --------------------------------------------------------------------------- #
+# Run-cache key stability (deck-input quantization)
+# --------------------------------------------------------------------------- #
+
+
+def test_subsample_axis_quantizes_candidates() -> None:
+    """Axis nodes are rounded to 1e-4 and jitter-duplicates are collapsed.
+
+    The persistent uvspec run cache keys on a SHA-256 of the deck text, so
+    sub-1e-4 jitter in solver candidate derivation must not reach the deck.
+    """
+    jitter = 3.0e-5  # below half the 1e-4 quantum
+    axis_a = np.array([0.001, 0.6258, 1.2505, 2.5])
+    axis_b = axis_a + np.array([0.0, jitter, -jitter, 0.0])
+    np.testing.assert_array_equal(_subsample_axis(axis_a, 16), _subsample_axis(axis_b, 16))
+    # Two candidates that only differ by jitter collapse to one node rather
+    # than producing two nodes 3e-5 apart (which would break monotonicity
+    # after rounding).
+    collapsed = _subsample_axis(np.array([0.2, 0.2 + jitter, 0.5]), 16)
+    np.testing.assert_array_equal(collapsed, np.array([0.2, 0.5]))
+
+
+def _jitter_scene(
+    sza_deg: float,
+    tco3_atmcm: float,
+    elevation_km: float,
+) -> tuple[GeometryAngles, AtmosphericState]:
+    """A constant-field scene whose means are exactly the given scalars."""
+
+    def _const(value: float) -> xr.DataArray:
+        return _da([[value, value], [value, value]])
+
+    geom = GeometryAngles.from_degrees(
+        _const(sza_deg), _const(150.0), _const(8.452), _const(271.888)
+    )
+    zeros = _const(0.0)
+    atmo = AtmosphericState(
+        aot=_da([[0.15, 0.25], [0.20, 0.30]]),
+        tcwv=_da([[3.4, 3.6], [3.5, 3.5]]),
+        tco3=_const(tco3_atmcm),
+        aot_unc=zeros,
+        tcwv_unc=zeros,
+        tco3_unc=zeros,
+        elevation=_const(elevation_km),
+    )
+    return geom, atmo
+
+
+def test_joint_lut_deck_keys_stable_under_observed_scene_jitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: cross-process float jitter must not bust the uvspec run cache.
+
+    On T33KWP the solver-grid sza scene mean was observed to flip between
+    37.575276073309546 and 37.57536191017928 deg across identical re-runs
+    (upstream resampling is not bit-reproducible across processes). The deck
+    formats ``sza %.4f``, so the unrounded means straddle the fourth decimal
+    (37.5753 vs 37.5754) and every joint-LUT deck changed its SHA-256 run-cache
+    key: re-running the same scene recomputed all 32 uvspec runs (~14 min)
+    instead of hitting the persistent cache. Scene scalars and candidate axes
+    are now quantized before deck formatting, so both observed states (and any
+    sub-quantum jitter in the axes) must produce byte-identical deck sets.
+    """
+    captured: dict[str, list[str]] = {"decks": []}
+
+    def fake_run_uvspec(self, paths, deck):  # noqa: ANN001, ARG001
+        captured["decks"].append(deck)
+        wl = np.linspace(400.0, 500.0, 11)
+        return wl, np.full(11, 0.8), np.full(11, 0.12)
+
+    monkeypatch.setattr(LibRadtranRunner, "_run_uvspec", fake_run_uvspec)
+    monkeypatch.setattr(
+        LibRadtranRunner,
+        "_ensure_paths",
+        lambda _self: LibRadtranPaths(
+            uvspec=Path("/nonexistent/uvspec"), data_dir=Path("/nonexistent/data")
+        ),
+    )
+
+    def build_decks(
+        sza_deg: float,
+        tco3_atmcm: float,
+        elevation_km: float,
+        axis_jitter: float,
+    ) -> list[str]:
+        cfg = LibRadtranAlgorithmConfig(
+            wavelength_min_nm=400.0,
+            wavelength_max_nm=500.0,
+            wavelength_step_nm=10.0,
+            mol_abs_param="reptran",
+            adaptive_deep_water_fine=False,
+            scene_lut_max_nodes_per_axis=3,
+            run_cache_enabled=False,
+        )
+        runner = LibRadtranRunner(libradtran_config=cfg)
+        geom, atmo = _jitter_scene(sza_deg, tco3_atmcm, elevation_km)
+        aot_axis = np.array([0.001, 0.6258, 1.2505, 1.8753, 2.5]) + axis_jitter
+        tcwv_axis = np.array([3.5029406547546387]) + axis_jitter
+        captured["decks"] = []
+        runner.build_joint_grid_search_lut(
+            geometry=geom,
+            atmo_state=atmo,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            bands=[_band()],
+        )
+        return sorted(captured["decks"])
+
+    # Run 1 / run 2: the two sza states observed on T33KWP, plus sub-quantum
+    # jitter on tco3 (quantum 1e-5), elevation (1e-4 km) and both axes (1e-4).
+    # The axis jitter is negative so every jittered value stays inside its
+    # quantization cell, mirroring the observed phenomenon (the two sza states
+    # sit in the same 1e-3 cell). Jitter that crosses a cell boundary still
+    # changes the key - the quantum is chosen >> observed jitter to make that
+    # rare, where unquantized values made a miss CERTAIN.
+    decks_run1 = build_decks(37.575276073309546, 0.300001, 0.05001, 0.0)
+    decks_run2 = build_decks(37.57536191017928, 0.300003, 0.05004, -3.0e-5)
+
+    # 5 aot nodes x 1 tcwv node x 2 albedos x 1 segment = 10 uvspec decks.
+    assert len(decks_run1) == 10
+    # The regression: byte-identical decks => identical SHA-256 run-cache keys.
+    assert decks_run1 == decks_run2
+    # Both observed sza states quantize to the same deck line.
+    assert all("sza 37.5750" in deck for deck in decks_run1)
+    # Axis jitter is absorbed by the 1e-4 quantization.
+    assert any("aerosol_set_tau_at_wvl 550 0.625800" in deck for deck in decks_run1)
+    assert all("mol_modify H2O 35.029000 MM" in deck for deck in decks_run1)
 
 
 # --------------------------------------------------------------------------- #
