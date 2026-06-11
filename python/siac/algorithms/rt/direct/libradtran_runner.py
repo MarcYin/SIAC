@@ -24,7 +24,6 @@ import logging
 import math
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -40,6 +39,7 @@ from siac.algorithms.rt._run_cache import (
     resolve_run_cache_dir,
     store_cache_entry,
 )
+from siac.algorithms.rt.direct._build_common import prepend_conda_lib_path
 from siac.algorithms.rt.direct.libradtran_build import LibRadtranPaths, ensure_libradtran
 from siac.algorithms.rt.lut.backend import ZarrLUTBackend
 from siac.algorithms.rt.lut.constants import TCO3_ATMCM_TO_DU, TCWV_CM_TO_LUT_MM
@@ -1088,10 +1088,4 @@ class LibRadtranRunner:
                 self._run_cache_misses += 1
 
     def _uvspec_env(self) -> dict[str, str]:
-        env = dict(os.environ)
-        prefix = env.get("CONDA_PREFIX")
-        if prefix:
-            lib = str(Path(prefix) / "lib")
-            var = "DYLD_FALLBACK_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
-            env[var] = lib + os.pathsep + env.get(var, "")
-        return env
+        return prepend_conda_lib_path(dict(os.environ))

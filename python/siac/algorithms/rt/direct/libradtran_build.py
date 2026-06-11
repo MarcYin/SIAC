@@ -21,7 +21,6 @@ Pixi ``libradtran`` environment.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import os
 import platform
@@ -33,7 +32,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import requests  # type: ignore[import-untyped]
+from siac.algorithms.rt.direct._build_common import (
+    archive_sha256,
+    conda_prefix,
+    fetch_archive,
+    prepend_conda_lib_path,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -159,62 +163,21 @@ def _required_reptran_resolutions(config: LibRadtranAlgorithmConfig) -> list[str
 
 
 def _archive_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return archive_sha256(path)
 
 
 def _fetch_archive(
     url: str, archive_path: Path, *, expected_sha256: str | None, env_var: str
 ) -> None:
     """Download ``url`` to ``archive_path`` atomically and verify its SHA-256."""
-    if not archive_path.exists():
-        logger.info("Downloading libRadtran archive %s -> %s", url, archive_path.name)
-        # Unique temp name so concurrent builds of the same profile don't clobber
-        # each other's partial download.
-        tmp_path = archive_path.with_suffix(archive_path.suffix + f".{os.getpid()}.tmp")
-        try:
-            written = 0
-            with requests.get(url, timeout=900, stream=True) as response:
-                response.raise_for_status()
-                with tmp_path.open("wb") as fh:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if not chunk:
-                            continue
-                        written += len(chunk)
-                        if written > _MAX_DOWNLOAD_BYTES:
-                            raise RuntimeError(
-                                f"libRadtran download {url} exceeded the "
-                                f"{_MAX_DOWNLOAD_BYTES // 1024**3} GB cap; aborting."
-                            )
-                        fh.write(chunk)
-            tmp_path.replace(archive_path)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-            raise
-
-    expected = os.environ.get(env_var) or expected_sha256
-    if expected:
-        actual = _archive_sha256(archive_path)
-        if actual.lower() != expected.lower():
-            # Remove the poisoned/corrupt archive so the next run re-downloads it.
-            with contextlib.suppress(OSError):
-                archive_path.unlink()
-            raise RuntimeError(
-                f"libRadtran archive from {url} has SHA-256 {actual!r} but expected "
-                f"{expected!r}; the cached file has been removed. Re-run to re-download, or set "
-                f"{env_var} to the new hash if the change is intentional."
-            )
-    else:
-        logger.warning(
-            "libRadtran archive checksum not configured (%s); proceeding without integrity "
-            "verification of %s.",
-            env_var,
-            archive_path.name,
-        )
+    fetch_archive(
+        url,
+        archive_path,
+        expected_sha256=expected_sha256,
+        sha_env_var=env_var,
+        max_bytes=_MAX_DOWNLOAD_BYTES,
+        what="libRadtran",
+    )
 
 
 def _safe_members(
@@ -353,7 +316,7 @@ def _merge_reptran(archive_path: Path, source_dir: Path, resolution: str) -> Non
 
 
 def _conda_prefix() -> str:
-    return os.environ.get("CONDA_PREFIX") or sys.prefix
+    return conda_prefix()
 
 
 def _configure_args() -> list[str]:
@@ -375,9 +338,7 @@ def _build_environment() -> dict[str, str]:
     lib = str(Path(prefix) / "lib")
     env["CPPFLAGS"] = f"-I{inc} " + env.get("CPPFLAGS", "")
     env["LDFLAGS"] = f"-L{lib} " + env.get("LDFLAGS", "")
-    rpath_var = "DYLD_FALLBACK_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
-    env[rpath_var] = lib + os.pathsep + env.get(rpath_var, "")
-    return env
+    return prepend_conda_lib_path(env)
 
 
 def _run(cmd: list[str], *, cwd: Path, env: dict[str, str], step: str) -> None:

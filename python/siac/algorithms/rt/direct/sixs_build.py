@@ -22,8 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import requests
-
+from siac.algorithms.rt.direct._build_common import archive_sha256, fetch_archive
 from siac.sixs_outputs import SIXS_CORE_OUTPUT_SPECS
 
 if TYPE_CHECKING:
@@ -1614,16 +1613,13 @@ def _prepare_source_tree(config: SixSAlgorithmConfig, paths: SixSBuildPaths) -> 
 #: ``SIAC_SIXS_SOURCE_SHA256`` env var to override per-run).
 _SIXS_SOURCE_SHA256: str | None = None
 
+#: Hard cap for the streamed source download (the real tarball is ~3 MB).
+_MAX_SOURCE_DOWNLOAD_BYTES = 1 * 1024**3
+
 
 def _archive_sha256(path: Path) -> str:
     """SHA-256 of *path* in fixed-size chunks (avoid loading the whole tarball)."""
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return archive_sha256(path)
 
 
 def _fetch_and_unpack_source(source_url: str, archive_path: Path, upstream_dir: Path) -> Path:
@@ -1642,39 +1638,15 @@ def _fetch_and_unpack_source(source_url: str, archive_path: Path, upstream_dir: 
       override). When the constant is ``None``, the check is skipped
       with a one-line warning.
     """
-    import os
-
-    if not archive_path.exists():
-        logger.info("Downloading 6SV2.1 source from %s", source_url)
-        tmp_path = archive_path.with_suffix(archive_path.suffix + ".tmp")
-        try:
-            response = requests.get(source_url, timeout=120)
-            response.raise_for_status()
-            tmp_path.write_bytes(response.content)
-            tmp_path.replace(archive_path)
-        except BaseException:
-            if tmp_path.exists():
-                with __import__("contextlib").suppress(OSError):
-                    tmp_path.unlink()
-            raise
-
-    expected = os.environ.get("SIAC_SIXS_SOURCE_SHA256") or _SIXS_SOURCE_SHA256
-    if expected:
-        actual = _archive_sha256(archive_path)
-        if actual.lower() != expected.lower():
-            raise RuntimeError(
-                f"6SV2.1 archive at {archive_path} has SHA-256 {actual!r} but "
-                f"expected {expected!r}. Either the upstream source has changed "
-                "or the cached archive is corrupt — delete it and re-run, or "
-                "set SIAC_SIXS_SOURCE_SHA256 to the new hash if the change is "
-                "intentional."
-            )
-    else:
-        logger.warning(
-            "6SV2.1 archive checksum not configured (set "
-            "SIAC_SIXS_SOURCE_SHA256 or update _SIXS_SOURCE_SHA256 in "
-            "sixs_build.py); proceeding without integrity verification."
-        )
+    fetch_archive(
+        source_url,
+        archive_path,
+        expected_sha256=_SIXS_SOURCE_SHA256,
+        sha_env_var="SIAC_SIXS_SOURCE_SHA256",
+        max_bytes=_MAX_SOURCE_DOWNLOAD_BYTES,
+        timeout_s=120.0,
+        what="6SV2.1",
+    )
 
     if upstream_dir.exists() and (upstream_dir / "main.f").exists():
         return upstream_dir

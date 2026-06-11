@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    import requests  # type: ignore[import-untyped]
+    import requests
 
 from siac.adapters._http import make_session
 from siac.adapters.data.s2_data_source import S2Product, S2Query

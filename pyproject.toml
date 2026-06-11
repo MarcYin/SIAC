@@ -210,6 +210,9 @@ module = [
     # not installed in the CI environment.
     "bestpixel",
     "bestpixel.*",
+    # No bundled type stubs.
+    "requests",
+    "requests.*",
 ]
 ignore_missing_imports = true
 

@@ -85,7 +85,7 @@ class _HTTPRangeFileSystem(AsyncFileSystem):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        import requests  # type: ignore[import-untyped]
+        import requests
 
         self.timeout = timeout
         self.headers = {
