@@ -20,7 +20,7 @@ from siac.app.planning import build_execution_plan
 from siac.app.requests import SceneProcessRequest
 from siac.config import SIACConfig
 from siac.runtime import AtmosphericState, SolverInputBundle, SurfacePrior
-from siac.workflows.pipeline import _aerosol_resolution
+from siac.workflows.scene_setup import aerosol_resolution
 
 LOGGER = logging.getLogger("compare_surface_prior_experiment")
 PRIOR_BANDS = ("B01", "B02", "B04")
@@ -36,7 +36,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--config", type=Path, required=True, help="SIAC TOML config.")
     parser.add_argument("--input-path", type=Path, required=True, help="Scene SAFE path.")
-    parser.add_argument("--output-dir", type=Path, required=True, help="Directory for experiment outputs.")
+    parser.add_argument(
+        "--output-dir", type=Path, required=True, help="Directory for experiment outputs."
+    )
     parser.add_argument(
         "--stored-surface-prior",
         type=Path,
@@ -65,7 +67,9 @@ def setup_logging(level: str) -> None:
     )
 
 
-def _sample_pairs(x: np.ndarray, y: np.ndarray, max_points: int = SCATTER_MAX_POINTS) -> tuple[np.ndarray, np.ndarray]:
+def _sample_pairs(
+    x: np.ndarray, y: np.ndarray, max_points: int = SCATTER_MAX_POINTS
+) -> tuple[np.ndarray, np.ndarray]:
     if x.size <= max_points:
         return x, y
     order = np.argsort(x, kind="mergesort")
@@ -102,12 +106,18 @@ def _linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float | None, float | Non
     return _safe_float(slope), _safe_float(intercept)
 
 
-def _flatten_valid(a: xr.DataArray, b: xr.DataArray, mask: xr.DataArray | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _flatten_valid(
+    a: xr.DataArray, b: xr.DataArray, mask: xr.DataArray | np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     valid = np.asarray(mask, dtype=bool) & np.isfinite(a.values) & np.isfinite(b.values)
-    return a.values[valid].astype(np.float32, copy=False), b.values[valid].astype(np.float32, copy=False)
+    return a.values[valid].astype(np.float32, copy=False), b.values[valid].astype(
+        np.float32, copy=False
+    )
 
 
-def _pair_metrics(a: xr.DataArray, b: xr.DataArray, mask: xr.DataArray | np.ndarray) -> dict[str, Any]:
+def _pair_metrics(
+    a: xr.DataArray, b: xr.DataArray, mask: xr.DataArray | np.ndarray
+) -> dict[str, Any]:
     av, bv = _flatten_valid(a, b, mask)
     if av.size == 0:
         return {"valid_count": 0}
@@ -249,9 +259,13 @@ def _plot_map(data: xr.DataArray, *, title: str, path: Path, cmap: str = "RdBu_r
     red = np.clip(norm, 0.0, 1.0)
     blue = np.clip(-norm, 0.0, 1.0)
     white = 1.0 - np.abs(norm)
-    rgb[..., 0] = np.where(finite_mask, np.round(255.0 * (red + white)).clip(0, 255), 220).astype(np.uint8)
+    rgb[..., 0] = np.where(finite_mask, np.round(255.0 * (red + white)).clip(0, 255), 220).astype(
+        np.uint8
+    )
     rgb[..., 1] = np.where(finite_mask, np.round(255.0 * white).clip(0, 255), 220).astype(np.uint8)
-    rgb[..., 2] = np.where(finite_mask, np.round(255.0 * (blue + white)).clip(0, 255), 220).astype(np.uint8)
+    rgb[..., 2] = np.where(finite_mask, np.round(255.0 * (blue + white)).clip(0, 255), 220).astype(
+        np.uint8
+    )
 
     image = Image.fromarray(rgb, mode="RGB")
     if max(image.size) < 600:
@@ -300,7 +314,9 @@ def _build_plan(config_path: Path, input_path: Path, sensor: str) -> tuple[Any, 
     return config, plan, observation
 
 
-def _compute_direct_prior(config: Any, plan: Any, observation: Any, resolution: float) -> SurfacePrior:
+def _compute_direct_prior(
+    config: Any, plan: Any, observation: Any, resolution: float
+) -> SurfacePrior:
     kernel_config = config.model_copy(deep=True)
     kernel_config.surface_prior.method = "kernel_model"
     provider = resolve_surface_prior_provider(kernel_config, auth=plan.auth)
@@ -332,10 +348,7 @@ def _simulate_toa(
         simulated = coeffs.simulate_toa(surface).astype(np.float32)
         residual = (simulated - observed).astype(np.float32)
         band_valid = (
-            valid_mask
-            & np.isfinite(observed)
-            & np.isfinite(surface)
-            & np.isfinite(simulated)
+            valid_mask & np.isfinite(observed) & np.isfinite(surface) & np.isfinite(simulated)
         ).astype(bool)
         simulated_bands.append(simulated.expand_dims(band=[band.name]))
         residual_bands.append(residual.expand_dims(band=[band.name]))
@@ -355,7 +368,7 @@ def main() -> None:
 
     LOGGER.info("Building execution plan and observation bundle")
     config, plan, observation = _build_plan(args.config, args.input_path, args.sensor)
-    resolution = _aerosol_resolution(config)
+    resolution = aerosol_resolution(config)
 
     LOGGER.info("Fetching atmospheric prior at %.1f m", resolution)
     atmo_prior = plan.atmo_provider(
@@ -418,7 +431,9 @@ def main() -> None:
             "config": str(args.config),
             "input_path": str(args.input_path),
             "output_dir": str(args.output_dir),
-            "stored_surface_prior": str(args.stored_surface_prior) if args.stored_surface_prior else None,
+            "stored_surface_prior": str(args.stored_surface_prior)
+            if args.stored_surface_prior
+            else None,
             "observation_time": str(observation.metadata["observation_time"]),
             "bounds": [float(v) for v in observation.bounds],
             "crs": observation.crs,
@@ -456,7 +471,9 @@ def main() -> None:
         x, y = _flatten_valid(direct_band, monthly_band, common_mask)
         annotate_lines = [
             f"n={metrics.get('valid_count', 0)}",
-            f"bias={metrics.get('bias_a_minus_b'):.5f}" if metrics.get("bias_a_minus_b") is not None else "bias=n/a",
+            f"bias={metrics.get('bias_a_minus_b'):.5f}"
+            if metrics.get("bias_a_minus_b") is not None
+            else "bias=n/a",
             f"rmse={metrics.get('rmse'):.5f}" if metrics.get("rmse") is not None else "rmse=n/a",
             f"corr={metrics.get('corr'):.3f}" if metrics.get("corr") is not None else "corr=n/a",
         ]
@@ -483,7 +500,9 @@ def main() -> None:
             stored_band = stored[band_name].astype(np.float32)
             monthly_band = _surface_prior_band(monthly_prior, band_name)
             mask = np.isfinite(stored_band) & np.isfinite(monthly_band)
-            summary["stored_repro_metrics"][band_name] = _pair_metrics(monthly_band, stored_band, mask)
+            summary["stored_repro_metrics"][band_name] = _pair_metrics(
+                monthly_band, stored_band, mask
+            )
         stored.close()
 
     toa_rows: list[dict[str, Any]] = []
@@ -536,7 +555,9 @@ def main() -> None:
             direct_rmse = direct_metrics.get("rmse")
             rmse_improvement_pct = None
             if monthly_rmse not in (None, 0.0) and direct_rmse is not None:
-                rmse_improvement_pct = 100.0 * (float(monthly_rmse) - float(direct_rmse)) / float(monthly_rmse)
+                rmse_improvement_pct = (
+                    100.0 * (float(monthly_rmse) - float(direct_rmse)) / float(monthly_rmse)
+                )
 
             summary["toa_metrics"][scenario_name][band_name] = {
                 "monthly_database": monthly_metrics,
@@ -581,8 +602,12 @@ def main() -> None:
                 title=f"{scenario_name} Monthly TOA Scatter {band_name}",
                 path=args.output_dir / f"toa_scatter_{scenario_name}_monthly_{band_name}.png",
                 annotate_lines=[
-                    f"bias={monthly_metrics.get('bias'):.5f}" if monthly_metrics.get("bias") is not None else "bias=n/a",
-                    f"rmse={monthly_metrics.get('rmse'):.5f}" if monthly_metrics.get("rmse") is not None else "rmse=n/a",
+                    f"bias={monthly_metrics.get('bias'):.5f}"
+                    if monthly_metrics.get("bias") is not None
+                    else "bias=n/a",
+                    f"rmse={monthly_metrics.get('rmse'):.5f}"
+                    if monthly_metrics.get("rmse") is not None
+                    else "rmse=n/a",
                 ],
             )
             _plot_scatter(
@@ -593,14 +618,19 @@ def main() -> None:
                 title=f"{scenario_name} Direct TOA Scatter {band_name}",
                 path=args.output_dir / f"toa_scatter_{scenario_name}_direct_{band_name}.png",
                 annotate_lines=[
-                    f"bias={direct_metrics.get('bias'):.5f}" if direct_metrics.get("bias") is not None else "bias=n/a",
-                    f"rmse={direct_metrics.get('rmse'):.5f}" if direct_metrics.get("rmse") is not None else "rmse=n/a",
+                    f"bias={direct_metrics.get('bias'):.5f}"
+                    if direct_metrics.get("bias") is not None
+                    else "bias=n/a",
+                    f"rmse={direct_metrics.get('rmse'):.5f}"
+                    if direct_metrics.get("rmse") is not None
+                    else "rmse=n/a",
                 ],
             )
             _plot_map(
                 (np.abs(monthly_resid) - np.abs(direct_resid)).astype(np.float32),
                 title=f"|Monthly resid| - |Direct resid| {scenario_name} {band_name}",
-                path=args.output_dir / f"toa_abs_residual_improvement_{scenario_name}_{band_name}.png",
+                path=args.output_dir
+                / f"toa_abs_residual_improvement_{scenario_name}_{band_name}.png",
             )
             _plot_scatter(
                 dx,
@@ -616,7 +646,9 @@ def main() -> None:
                         if attribution["corr_delta_prior_vs_delta_residual"] is not None
                         else "corr=n/a"
                     ),
-                    f"slope={attribution['fit_slope']:.3f}" if attribution["fit_slope"] is not None else "slope=n/a",
+                    f"slope={attribution['fit_slope']:.3f}"
+                    if attribution["fit_slope"] is not None
+                    else "slope=n/a",
                 ],
                 diagonal=False,
             )

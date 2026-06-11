@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from siac.config.system import ExecutionRuntimeConfig
+from siac.workflows.scene_setup import aerosol_resolution
 
 if TYPE_CHECKING:
     from siac.domain.sensors import SensorConfig
@@ -158,10 +159,7 @@ def _resolve_execution_settings(
 
 
 def _aerosol_resolution(config: Any) -> float:
-    solver_config = getattr(getattr(config, "algorithms", None), "solver", None)
-    if solver_config is not None:
-        return float(getattr(solver_config, "aerosol_resolution", 120.0))
-    return 120.0
+    return float(aerosol_resolution(config))
 
 
 def _requested_solver_band_names(config: Any) -> tuple[str, ...] | None:

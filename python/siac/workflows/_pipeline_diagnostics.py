@@ -16,6 +16,7 @@ from siac.runtime import (
     SolverInputBundle,
 )
 from siac.workflows._pipeline_config import _MAX_SCATTER_POINTS_PER_BAND
+from siac.workflows.scene_setup import select_band_slice as _select_band_slice
 
 Float32Array: TypeAlias = npt.NDArray[np.float32]
 
@@ -25,24 +26,6 @@ def _sample_scatter_values(values: np.ndarray, *, max_points: int) -> Float32Arr
         return cast("Float32Array", values.astype(np.float32, copy=False))
     indices = np.linspace(0, values.size - 1, max_points, dtype=np.int64)
     return cast("Float32Array", values[indices].astype(np.float32, copy=False))
-
-
-def _select_band_slice(
-    data: xr.DataArray,
-    *,
-    band_name: str,
-    band_index: int,
-) -> xr.DataArray | None:
-    if "band" not in data.dims:
-        return data
-    band_coord = data.coords.get("band")
-    if band_coord is not None:
-        band_values = [str(value) for value in np.asarray(band_coord.values).tolist()]
-        if band_name in band_values:
-            return cast("xr.DataArray", data.sel(band=band_name, drop=True))
-        if np.asarray(band_coord.values).dtype.kind in {"U", "S", "O"}:
-            return None
-    return cast("xr.DataArray", data.isel(band=band_index, drop=True))
 
 
 def _finite_diagnostic_field(

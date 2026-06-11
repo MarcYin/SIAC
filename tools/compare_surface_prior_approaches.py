@@ -11,27 +11,39 @@ import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
-from siac.algorithms.solver.multigrid import build_solver_valid_mask
-from siac.algorithms.surface.swir_refine import resample_geometry_for_surface_prior
-from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.adapters.earthdata import earthaccess_cache_dir
 from siac.adapters.earthdata_common import build_target_template
-from siac.app._assembly_surface import (
-    _select_visible_surface_prior_bands,
-    prepare_monthly_surface_prior_runtime as _prepare_monthly_surface_prior_runtime,
-    query_monthly_surface_prior as _query_monthly_surface_prior,
-    surface_prior_brdf_request as _surface_prior_brdf_request,
-    surface_prior_mapping_state as _surface_prior_mapping_state,
-)
+from siac.algorithms.solver.multigrid import build_solver_valid_mask
+from siac.algorithms.surface.kernel_model import KernelModelDeriver
+from siac.algorithms.surface.swir_refine import resample_geometry_for_surface_prior
 from siac.app._assembly_providers import (
     resolve_brdf_provider,
     resolve_monthly_composite_provider,
+)
+from siac.app._assembly_surface import (
+    _select_visible_surface_prior_bands,
+)
+from siac.app._assembly_surface import (
+    prepare_monthly_surface_prior_runtime as _prepare_monthly_surface_prior_runtime,
+)
+from siac.app._assembly_surface import (
+    query_monthly_surface_prior as _query_monthly_surface_prior,
+)
+from siac.app._assembly_surface import (
+    surface_prior_brdf_request as _surface_prior_brdf_request,
+)
+from siac.app._assembly_surface import (
+    surface_prior_mapping_state as _surface_prior_mapping_state,
 )
 from siac.app.planning import build_execution_plan
 from siac.app.requests import SceneProcessRequest
 from siac.config import SIACConfig
 from siac.runtime import AtmosphericState, GeometryAngles, SurfacePrior
-from siac.workflows.pipeline import _call_grid_assembler, _resample_field_to_template, _select_band_slice
+from siac.workflows.scene_setup import (
+    call_grid_assembler,
+    resample_field_to_template,
+    select_band_slice,
+)
 
 LOGGER = logging.getLogger("compare_surface_prior_approaches")
 
@@ -110,9 +122,13 @@ def _infer_input_path(config: Any, explicit_input: Path | None) -> Path:
         return explicit_input
     if getattr(config.run, "input_path", None) is not None:
         return Path(config.run.input_path)
-    s2_cache = getattr(config.paths.caches, "s2", None) or getattr(config.s2_data, "cache_dir", None)
+    s2_cache = getattr(config.paths.caches, "s2", None) or getattr(
+        config.s2_data, "cache_dir", None
+    )
     if s2_cache is None:
-        raise ValueError("Could not infer input path: no explicit --input and no S2 cache configured.")
+        raise ValueError(
+            "Could not infer input path: no explicit --input and no S2 cache configured."
+        )
     safes = sorted(Path(s2_cache).glob("*.SAFE"))
     if len(safes) != 1:
         raise ValueError(
@@ -207,7 +223,9 @@ def _surface_prior_metrics(
 def _same_spatial_grid(left: SurfacePrior, right: SurfacePrior) -> bool:
     left_boa = left.boa
     right_boa = right.boa
-    if left_boa.sizes.get("y") != right_boa.sizes.get("y") or left_boa.sizes.get("x") != right_boa.sizes.get("x"):
+    if left_boa.sizes.get("y") != right_boa.sizes.get("y") or left_boa.sizes.get(
+        "x"
+    ) != right_boa.sizes.get("x"):
         return False
     for axis in ("y", "x"):
         left_coord = np.asarray(left_boa.coords[axis].values)
@@ -288,9 +306,9 @@ def _align_banded_to_template(
         return _align_single_band(data, template, resampling=resampling)
     band_values = [str(value) for value in np.asarray(data.coords["band"].values)]
     aligned = [
-        _align_single_band(data.sel(band=band_name, drop=True), template, resampling=resampling).assign_coords(
-            band=band_name
-        )
+        _align_single_band(
+            data.sel(band=band_name, drop=True), template, resampling=resampling
+        ).assign_coords(band=band_name)
         for band_name in band_values
     ]
     return xr.concat(aligned, dim="band").astype(np.float32)
@@ -300,10 +318,19 @@ def _align_surface_prior_to_reference(
     prior: SurfacePrior,
     reference_prior: SurfacePrior,
 ) -> SurfacePrior:
-    template = reference_prior.boa.isel(band=0, drop=True) if "band" in reference_prior.boa.dims else reference_prior.boa
+    template = (
+        reference_prior.boa.isel(band=0, drop=True)
+        if "band" in reference_prior.boa.dims
+        else reference_prior.boa
+    )
     aligned_boa = _align_banded_to_template(prior.boa, template, resampling=Resampling.bilinear)
     aligned_unc = _align_banded_to_template(prior.boa_unc, template, resampling=Resampling.bilinear)
-    aligned_mask = _align_banded_to_template(prior.mask.astype(np.float32), template, resampling=Resampling.nearest) > 0.5
+    aligned_mask = (
+        _align_banded_to_template(
+            prior.mask.astype(np.float32), template, resampling=Resampling.nearest
+        )
+        > 0.5
+    )
     return SurfacePrior(
         boa=aligned_boa.astype(np.float32),
         boa_unc=aligned_unc.astype(np.float32),
@@ -325,19 +352,21 @@ def _align_geometry_to_template(
     )
 
 
-def _reconstruct_run_atmosphere(reference_output_dir: Path, atmo_prior: AtmosphericState) -> AtmosphericState:
+def _reconstruct_run_atmosphere(
+    reference_output_dir: Path, atmo_prior: AtmosphericState
+) -> AtmosphericState:
     aux = xr.load_dataset(reference_output_dir / "auxiliary.nc")
     template = aux["aot"].astype(np.float32)
-    prior_aot = _resample_field_to_template(atmo_prior.aot, template).astype(np.float32)
-    prior_tcwv = _resample_field_to_template(atmo_prior.tcwv, template).astype(np.float32)
+    prior_aot = resample_field_to_template(atmo_prior.aot, template).astype(np.float32)
+    prior_tcwv = resample_field_to_template(atmo_prior.tcwv, template).astype(np.float32)
     return AtmosphericState(
         aot=xr.where(np.isfinite(template), template, prior_aot).astype(np.float32),
         tcwv=xr.where(np.isfinite(aux["tcwv"]), aux["tcwv"], prior_tcwv).astype(np.float32),
-        tco3=_resample_field_to_template(atmo_prior.tco3, template).astype(np.float32),
-        aot_unc=_resample_field_to_template(atmo_prior.aot_unc, template).astype(np.float32),
-        tcwv_unc=_resample_field_to_template(atmo_prior.tcwv_unc, template).astype(np.float32),
-        tco3_unc=_resample_field_to_template(atmo_prior.tco3_unc, template).astype(np.float32),
-        elevation=_resample_field_to_template(atmo_prior.elevation, template).astype(np.float32),
+        tco3=resample_field_to_template(atmo_prior.tco3, template).astype(np.float32),
+        aot_unc=resample_field_to_template(atmo_prior.aot_unc, template).astype(np.float32),
+        tcwv_unc=resample_field_to_template(atmo_prior.tcwv_unc, template).astype(np.float32),
+        tco3_unc=resample_field_to_template(atmo_prior.tco3_unc, template).astype(np.float32),
+        elevation=resample_field_to_template(atmo_prior.elevation, template).astype(np.float32),
     )
 
 
@@ -381,7 +410,7 @@ def _toa_simulation_metrics(
     label: str,
 ) -> tuple[dict[str, Any], xr.Dataset]:
     aerosol_resolution = float(plan.config.solver.aerosol_resolution)
-    solver_inputs = _call_grid_assembler(
+    solver_inputs = call_grid_assembler(
         plan.grid_assembler,
         obs,
         atmo_state,
@@ -399,8 +428,8 @@ def _toa_simulation_metrics(
     outputs = xr.Dataset()
     for band_index, band in enumerate(solver_inputs.bands):
         band_name = band.name
-        toa_band = _select_band_slice(solver_inputs.toa, band_name=band_name, band_index=band_index)
-        surface_band = _select_band_slice(
+        toa_band = select_band_slice(solver_inputs.toa, band_name=band_name, band_index=band_index)
+        surface_band = select_band_slice(
             solver_inputs.surface_prior.boa,
             band_name=band_name,
             band_index=band_index,
@@ -446,7 +475,9 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def _finite_quantile_limits(values: np.ndarray, low: float = 0.02, high: float = 0.98) -> tuple[float, float]:
+def _finite_quantile_limits(
+    values: np.ndarray, low: float = 0.02, high: float = 0.98
+) -> tuple[float, float]:
     finite = values[np.isfinite(values)]
     if finite.size == 0:
         return (0.0, 1.0)
@@ -475,7 +506,9 @@ def _plot_prior_maps(
             ]
         )
     )
-    delta_low, delta_high = _finite_quantile_limits(np.asarray(delta.values, dtype=np.float32).ravel())
+    delta_low, delta_high = _finite_quantile_limits(
+        np.asarray(delta.values, dtype=np.float32).ravel()
+    )
     delta_abs = max(abs(delta_low), abs(delta_high))
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), constrained_layout=True)
@@ -504,14 +537,8 @@ def _plot_toa_residuals(
 ) -> None:
     if plt is None:
         return
-    valid_monthly = (
-        np.isfinite(observed.values)
-        & np.isfinite(simulated_monthly.values)
-    )
-    valid_direct = (
-        np.isfinite(observed.values)
-        & np.isfinite(simulated_direct.values)
-    )
+    valid_monthly = np.isfinite(observed.values) & np.isfinite(simulated_monthly.values)
+    valid_direct = np.isfinite(observed.values) & np.isfinite(simulated_direct.values)
     obs_monthly = np.asarray(observed.values[valid_monthly], dtype=np.float32)
     sim_monthly = np.asarray(simulated_monthly.values[valid_monthly], dtype=np.float32)
     obs_direct = np.asarray(observed.values[valid_direct], dtype=np.float32)
@@ -519,8 +546,16 @@ def _plot_toa_residuals(
     residual_monthly = sim_monthly - obs_monthly
     residual_direct = sim_direct - obs_direct
 
-    all_obs = np.concatenate([obs_monthly, obs_direct]) if obs_monthly.size and obs_direct.size else obs_monthly
-    all_sim = np.concatenate([sim_monthly, sim_direct]) if sim_monthly.size and sim_direct.size else sim_monthly
+    all_obs = (
+        np.concatenate([obs_monthly, obs_direct])
+        if obs_monthly.size and obs_direct.size
+        else obs_monthly
+    )
+    all_sim = (
+        np.concatenate([sim_monthly, sim_direct])
+        if sim_monthly.size and sim_direct.size
+        else sim_monthly
+    )
     if all_obs.size == 0 or all_sim.size == 0:
         return
     lower = float(min(np.nanmin(all_obs), np.nanmin(all_sim)))
@@ -606,7 +641,9 @@ def _resolve_exact_day_brdf_paths(
         provider=brdf_provider.provider,
         count=-1,
     )
-    exact_day_granules = [granule for granule in granules if granule_stamp in _granule_name(granule)]
+    exact_day_granules = [
+        granule for granule in granules if granule_stamp in _granule_name(granule)
+    ]
     if not exact_day_granules:
         raise RuntimeError(f"No exact-day BRDF granules found for {granule_stamp}")
 
@@ -704,8 +741,12 @@ def main() -> None:
         aerosol_resolution,
     )
 
-    reference_output_dir = args.reference_output_dir.resolve() if args.reference_output_dir is not None else None
-    stored_prior_path = reference_output_dir / "surface_prior.nc" if reference_output_dir is not None else None
+    reference_output_dir = (
+        args.reference_output_dir.resolve() if args.reference_output_dir is not None else None
+    )
+    stored_prior_path = (
+        reference_output_dir / "surface_prior.nc" if reference_output_dir is not None else None
+    )
     use_reference_monthly = (
         args.monthly_source in {"auto", "reference"}
         and stored_prior_path is not None
@@ -725,7 +766,9 @@ def main() -> None:
             observation=obs,
             resolution=aerosol_resolution,
         )
-        monthly_prior = _query_monthly_surface_prior(obs, atmo_prior, plan.rt_model, monthly_runtime)
+        monthly_prior = _query_monthly_surface_prior(
+            obs, atmo_prior, plan.rt_model, monthly_runtime
+        )
         monthly_source_label = "recomputed_monthly_database"
 
     LOGGER.info("Preparing direct same-day MCD43 runtime")
@@ -753,11 +796,17 @@ def main() -> None:
 
     if reference_output_dir is not None:
         auxiliary_path = reference_output_dir / "auxiliary.nc"
-        if stored_prior_path is not None and stored_prior_path.exists() and not use_reference_monthly:
+        if (
+            stored_prior_path is not None
+            and stored_prior_path.exists()
+            and not use_reference_monthly
+        ):
             LOGGER.info("Comparing recomputed monthly prior against stored run prior")
             stored_prior = _surface_prior_from_reference(stored_prior_path)
             if _same_spatial_grid(monthly_prior, stored_prior):
-                summary["stored_run_surface_prior_metrics"] = _surface_prior_metrics(monthly_prior, stored_prior)
+                summary["stored_run_surface_prior_metrics"] = _surface_prior_metrics(
+                    monthly_prior, stored_prior
+                )
             else:
                 summary["stored_run_surface_prior_metrics"] = {
                     "skipped": True,
@@ -867,7 +916,9 @@ def main() -> None:
         }
 
     for band_name in ("B01", "B02", "B04"):
-        if band_name not in [str(value) for value in np.asarray(monthly_prior.boa.coords["band"].values)]:
+        if band_name not in [
+            str(value) for value in np.asarray(monthly_prior.boa.coords["band"].values)
+        ]:
             continue
         _plot_prior_maps(
             monthly_prior.boa.sel(band=band_name, drop=True),

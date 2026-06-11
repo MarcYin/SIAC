@@ -79,6 +79,7 @@ from siac.workflows._pipeline_outputs import (
 from siac.workflows._pipeline_outputs import (
     surface_template as _surface_template,
 )
+from siac.workflows.scene_setup import call_grid_assembler as _call_grid_assembler
 
 if TYPE_CHECKING:
     from siac.domain.aoi import AOI
@@ -244,37 +245,6 @@ def _maybe_submit_lut_preload(
 def _surface_prior_requires_atmo(provider: SurfacePriorFn) -> bool:
     """Return whether the surface-prior provider depends on the M2 result."""
     return bool(getattr(provider, "requires_atmo_prior", False))
-
-
-def _call_grid_assembler(
-    grid_assembler: GridAssemblerFn,
-    obs: ObservationBundle,
-    atmo: AtmosphericState,
-    surface: SurfacePrior,
-    rt_model: Any,
-    *,
-    aerosol_resolution_m: float,
-    sharp_transition_filter: Any | None = None,
-    water_mask_path: str | Path | None = None,
-    water_mask_cache_dir: str | Path | None = None,
-    water_mask_buffer_pixels: int = 0,
-    solver_band_names: tuple[str, ...] | None = None,
-    reproject_cache_dir: str | Path | None = None,
-) -> SolverInputBundle:
-    """Call the grid assembler with the current standardized interface."""
-    return grid_assembler(
-        obs,
-        atmo,
-        surface,
-        rt_model,
-        aerosol_resolution_m=aerosol_resolution_m,
-        sharp_transition_filter=sharp_transition_filter,
-        water_mask_path=water_mask_path,
-        water_mask_cache_dir=water_mask_cache_dir,
-        water_mask_buffer_pixels=water_mask_buffer_pixels,
-        solver_band_names=solver_band_names,
-        reproject_cache_dir=reproject_cache_dir,
-    )
 
 
 def _call_with_retries(

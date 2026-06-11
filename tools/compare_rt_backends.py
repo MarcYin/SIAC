@@ -19,7 +19,7 @@ from siac.app.planning import build_execution_plan
 from siac.app.requests import SceneProcessRequest
 from siac.config import SIACConfig
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients, SurfacePrior
-from siac.workflows.pipeline import _aerosol_resolution, _call_grid_assembler, _select_band_slice
+from siac.workflows.scene_setup import aerosol_resolution, call_grid_assembler, select_band_slice
 
 LOGGER = logging.getLogger("compare_rt_backends")
 
@@ -190,12 +190,14 @@ def _surface_prior_from_reference(path: Path) -> SurfacePrior:
     return SurfacePrior(boa=boa, boa_unc=boa_unc, kernels=None, mask=mask)
 
 
-def _resample_field_to_template(field: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
+def resample_field_to_template(field: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
     if tuple(field.shape) == tuple(template.shape) and field.dims == template.dims:
         coords_match = all(
             dim in field.coords
             and dim in template.coords
-            and np.array_equal(np.asarray(field.coords[dim].values), np.asarray(template.coords[dim].values))
+            and np.array_equal(
+                np.asarray(field.coords[dim].values), np.asarray(template.coords[dim].values)
+            )
             for dim in template.dims
         )
         if coords_match:
@@ -220,7 +222,9 @@ def _resample_field_to_template(field: xr.DataArray, template: xr.DataArray) -> 
 
     src = np.asarray(field.values, dtype=np.float32)
     if src.ndim != 2 or len(template.dims) != 2:
-        raise ValueError(f"Cannot resample field with dims {field.dims} to template dims {template.dims}")
+        raise ValueError(
+            f"Cannot resample field with dims {field.dims} to template dims {template.dims}"
+        )
 
     from scipy import ndimage
 
@@ -244,19 +248,21 @@ def _resample_field_to_template(field: xr.DataArray, template: xr.DataArray) -> 
     )
 
 
-def _reconstruct_run_atmosphere(reference_output_dir: Path, atmo_prior: AtmosphericState) -> AtmosphericState:
+def _reconstruct_run_atmosphere(
+    reference_output_dir: Path, atmo_prior: AtmosphericState
+) -> AtmosphericState:
     aux = xr.load_dataset(reference_output_dir / "auxiliary.nc")
     template = aux["aot"].astype(np.float32)
-    prior_aot = _resample_field_to_template(atmo_prior.aot, template)
-    prior_tcwv = _resample_field_to_template(atmo_prior.tcwv, template)
+    prior_aot = resample_field_to_template(atmo_prior.aot, template)
+    prior_tcwv = resample_field_to_template(atmo_prior.tcwv, template)
     return AtmosphericState(
         aot=xr.where(np.isfinite(template), template, prior_aot).astype(np.float32),
         tcwv=xr.where(np.isfinite(aux["tcwv"]), aux["tcwv"], prior_tcwv).astype(np.float32),
-        tco3=_resample_field_to_template(atmo_prior.tco3, template).astype(np.float32),
-        aot_unc=_resample_field_to_template(atmo_prior.aot_unc, template).astype(np.float32),
-        tcwv_unc=_resample_field_to_template(atmo_prior.tcwv_unc, template).astype(np.float32),
-        tco3_unc=_resample_field_to_template(atmo_prior.tco3_unc, template).astype(np.float32),
-        elevation=_resample_field_to_template(atmo_prior.elevation, template).astype(np.float32),
+        tco3=resample_field_to_template(atmo_prior.tco3, template).astype(np.float32),
+        aot_unc=resample_field_to_template(atmo_prior.aot_unc, template).astype(np.float32),
+        tcwv_unc=resample_field_to_template(atmo_prior.tcwv_unc, template).astype(np.float32),
+        tco3_unc=resample_field_to_template(atmo_prior.tco3_unc, template).astype(np.float32),
+        elevation=resample_field_to_template(atmo_prior.elevation, template).astype(np.float32),
     )
 
 
@@ -271,8 +277,9 @@ def _load_dem_elevation(template: xr.DataArray, dem_path: str | Path) -> xr.Data
     if target_crs is None:
         raise ValueError("Template grid does not have a CRS; cannot project DEM elevation.")
 
-    with rasterio.open(str(dem_path)) as src:
-        with WarpedVRT(
+    with (
+        rasterio.open(str(dem_path)) as src,
+        WarpedVRT(
             src,
             crs=str(target_crs),
             transform=template.rio.transform(recalc=True),
@@ -281,8 +288,9 @@ def _load_dem_elevation(template: xr.DataArray, dem_path: str | Path) -> xr.Data
             resampling=Resampling.bilinear,
             src_nodata=src.nodata,
             nodata=np.nan,
-        ) as vrt:
-            values = vrt.read(1, out_dtype="float32", masked=True).filled(np.nan)
+        ) as vrt,
+    ):
+        values = vrt.read(1, out_dtype="float32", masked=True).filled(np.nan)
 
     # Match the master branch convention: DEM is converted from meters to km and gaps are filled with 0.
     values_km = np.where(np.isfinite(values), values * np.float32(0.001), np.float32(0.0))
@@ -384,16 +392,18 @@ def _toa_metrics(
 
 def _geometry_on_template(geometry: GeometryAngles, template: xr.DataArray) -> GeometryAngles:
     return GeometryAngles(
-        sza=_resample_field_to_template(geometry.sza, template),
-        saa=_resample_field_to_template(geometry.saa, template),
-        vza=_resample_field_to_template(geometry.vza, template),
-        vaa=_resample_field_to_template(geometry.vaa, template),
+        sza=resample_field_to_template(geometry.sza, template),
+        saa=resample_field_to_template(geometry.saa, template),
+        vza=resample_field_to_template(geometry.vza, template),
+        vaa=resample_field_to_template(geometry.vaa, template),
     )
 
 
 def _build_emulator_backend(config: Any, plan: Any, obs: Any, emulator_dir: Path) -> Any:
-    if any(emulator_dir.glob("*_xap.npz")) and any(emulator_dir.glob("*_xbp.npz")) and any(
-        emulator_dir.glob("*_xcp.npz")
+    if (
+        any(emulator_dir.glob("*_xap.npz"))
+        and any(emulator_dir.glob("*_xbp.npz"))
+        and any(emulator_dir.glob("*_xcp.npz"))
     ):
         LOGGER.info("Using legacy split-format emulator adapter for %s", emulator_dir)
         return LegacySplitEmulator(
@@ -409,7 +419,9 @@ def _build_emulator_backend(config: Any, plan: Any, obs: Any, emulator_dir: Path
     try:
         return build_rt_model(emulator_config, auth=plan.auth, sensor_config=obs.sensor_config)
     except Exception as exc:
-        LOGGER.warning("Native emulator loader unavailable; trying legacy split-format adapter (%s)", exc)
+        LOGGER.warning(
+            "Native emulator loader unavailable; trying legacy split-format adapter (%s)", exc
+        )
         return LegacySplitEmulator(
             emulator_dir=emulator_dir,
             sensor_id=obs.sensor_config.sensor_id,
@@ -431,10 +443,12 @@ def main() -> None:
 
     LOGGER.info("Preprocessing observation from %s", args.input)
     obs = plan.preprocessor(plan.input_path, plan.runtime_aoi)
-    aerosol_resolution = _aerosol_resolution(plan.config)
+    aerosol_resolution = aerosol_resolution(plan.config)
 
     LOGGER.info("Fetching atmospheric prior")
-    atmo_prior = plan.atmo_provider(obs.bounds, obs.crs, obs.metadata["observation_time"], aerosol_resolution)
+    atmo_prior = plan.atmo_provider(
+        obs.bounds, obs.crs, obs.metadata["observation_time"], aerosol_resolution
+    )
     run_atmo = _reconstruct_run_atmosphere(args.reference_output_dir, atmo_prior)
     surface_prior = _surface_prior_from_reference(args.reference_output_dir / "surface_prior.nc")
 
@@ -459,7 +473,7 @@ def main() -> None:
 
     for scenario_name, atmosphere in {"atmo_prior": atmo_prior, "run_solution": run_atmo}.items():
         LOGGER.info("Assembling solver grid for scenario %s", scenario_name)
-        solver_inputs = _call_grid_assembler(
+        solver_inputs = call_grid_assembler(
             plan.grid_assembler,
             obs,
             atmosphere,
@@ -467,14 +481,14 @@ def main() -> None:
             lut_rt,
             aerosol_resolution_m=float(aerosol_resolution),
         )
-        valid_mask = (
-            solver_inputs.cloud_mask.values.astype(bool) == 0
-        )
+        valid_mask = solver_inputs.cloud_mask.values.astype(bool) == 0
         rt_atmo = solver_inputs.atmo_prior
         if args.elevation_source == "dem":
             dem_path = getattr(config.paths, "dem", None)
             if dem_path is None:
-                raise ValueError("elevation_source='dem' requires config.paths.dem to be configured.")
+                raise ValueError(
+                    "elevation_source='dem' requires config.paths.dem to be configured."
+                )
             dem_elevation = _load_dem_elevation(solver_inputs.atmo_prior.aot, dem_path)
             rt_atmo = _with_elevation(solver_inputs.atmo_prior, dem_elevation)
         geometry = _geometry_on_template(solver_inputs.geometry, rt_atmo.aot)
@@ -494,8 +508,10 @@ def main() -> None:
 
         for band_index, band in enumerate(solver_inputs.bands):
             band_name = band.name
-            observed = _select_band_slice(solver_inputs.toa, band_name=band_name, band_index=band_index)
-            surface = _select_band_slice(
+            observed = select_band_slice(
+                solver_inputs.toa, band_name=band_name, band_index=band_index
+            )
+            surface = select_band_slice(
                 solver_inputs.surface_prior.boa,
                 band_name=band_name,
                 band_index=band_index,
@@ -516,21 +532,27 @@ def main() -> None:
                 "toa": toa_metrics,
             }
 
-            coeff_ds.update({f"{band_name}_{name}": band_coeff_ds[name] for name in band_coeff_ds.data_vars})
+            coeff_ds.update(
+                {f"{band_name}_{name}": band_coeff_ds[name] for name in band_coeff_ds.data_vars}
+            )
             toa_ds[f"observed_toa_{band_name}"] = observed.astype(np.float32)
             toa_ds[f"simulated_toa_lut_{band_name}"] = simulated_lut
             toa_ds[f"simulated_toa_emulator_{band_name}"] = simulated_emulator
-            toa_ds[f"simulated_toa_emulator_minus_lut_{band_name}"] = (simulated_emulator - simulated_lut).astype(
+            toa_ds[f"simulated_toa_emulator_minus_lut_{band_name}"] = (
+                simulated_emulator - simulated_lut
+            ).astype(np.float32)
+            toa_ds[f"residual_toa_lut_{band_name}"] = (simulated_lut - observed).astype(np.float32)
+            toa_ds[f"residual_toa_emulator_{band_name}"] = (simulated_emulator - observed).astype(
                 np.float32
             )
-            toa_ds[f"residual_toa_lut_{band_name}"] = (simulated_lut - observed).astype(np.float32)
-            toa_ds[f"residual_toa_emulator_{band_name}"] = (simulated_emulator - observed).astype(np.float32)
 
         summary["scenarios"][scenario_name] = scenario_summary
         coeff_ds.to_netcdf(args.output_dir / f"coefficients_{scenario_name}.nc")
         toa_ds.to_netcdf(args.output_dir / f"toa_{scenario_name}.nc")
 
-    (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    (args.output_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    )
     LOGGER.info("RT backend comparison written to %s", args.output_dir)
 
 

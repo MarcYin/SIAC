@@ -32,7 +32,7 @@ from siac.app.planning import build_execution_plan
 from siac.app.requests import SceneProcessRequest
 from siac.config import SIACConfig
 from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
-from siac.workflows.pipeline import _aerosol_resolution, _call_grid_assembler, _select_band_slice
+from siac.workflows.scene_setup import aerosol_resolution, call_grid_assembler, select_band_slice
 
 LOGGER = logging.getLogger("pixel_aot_curve")
 DEFAULT_AOT_VALUES = "0.001,0.05,0.1,0.2,0.4,0.8,1.2,1.6,2.0"
@@ -178,7 +178,9 @@ def _prior_position(prior: float | None, values: list[float], *, tol: float = 1.
     return "within_curve"
 
 
-def _nearest_curve_point(prior: float | None, points: list[dict[str, float]]) -> dict[str, float] | None:
+def _nearest_curve_point(
+    prior: float | None, points: list[dict[str, float]]
+) -> dict[str, float] | None:
     if prior is None or not np.isfinite(prior):
         return None
     finite_points = [point for point in points if np.isfinite(point["corrected_boa"])]
@@ -224,7 +226,12 @@ def _sample_optional_prior(
 
 
 def _auto_surface_prior_comparison(reference_output_dir: Path) -> Path | None:
-    candidate = reference_output_dir.parent / "experiments" / "surface_prior_compare_sync" / "surface_prior_comparison.nc"
+    candidate = (
+        reference_output_dir.parent
+        / "experiments"
+        / "surface_prior_compare_sync"
+        / "surface_prior_comparison.nc"
+    )
     return candidate if candidate.exists() else None
 
 
@@ -240,8 +247,10 @@ def _build_optional_emulator_backend(
     if not emulator_dir.exists():
         return None, f"Emulator directory does not exist: {emulator_dir}"
 
-    if any(emulator_dir.glob("*_xap.npz")) and any(emulator_dir.glob("*_xbp.npz")) and any(
-        emulator_dir.glob("*_xcp.npz")
+    if (
+        any(emulator_dir.glob("*_xap.npz"))
+        and any(emulator_dir.glob("*_xbp.npz"))
+        and any(emulator_dir.glob("*_xcp.npz"))
     ):
         return (
             LegacySplitEmulator(
@@ -257,7 +266,9 @@ def _build_optional_emulator_backend(
     emulator_config.rt_model.fallback_to_lut = False
     emulator_config.paths.emulator_dir = emulator_dir
     try:
-        return build_rt_model(emulator_config, auth=plan.auth, sensor_config=obs.sensor_config), None
+        return build_rt_model(
+            emulator_config, auth=plan.auth, sensor_config=obs.sensor_config
+        ), None
     except Exception as exc:  # pragma: no cover - depends on local emulator installation
         return None, f"Failed to build emulator backend: {exc}"
 
@@ -301,8 +312,12 @@ def _summarize_backend_curve(
     curve_values = [point["corrected_boa"] for point in points]
     summary: dict[str, Any] = {
         "direction": _classify_curve(curve_values),
-        "curve_min_boa": float(np.nanmin(curve_values)) if np.isfinite(curve_values).any() else float("nan"),
-        "curve_max_boa": float(np.nanmax(curve_values)) if np.isfinite(curve_values).any() else float("nan"),
+        "curve_min_boa": float(np.nanmin(curve_values))
+        if np.isfinite(curve_values).any()
+        else float("nan"),
+        "curve_max_boa": float(np.nanmax(curve_values))
+        if np.isfinite(curve_values).any()
+        else float("nan"),
         "points": points,
         "priors": {},
     }
@@ -330,12 +345,22 @@ def _figure_basename(label: str) -> str:
     return safe or "pixel"
 
 
-def _curve_value_bounds(_pixel_result: dict[str, Any], band_result: dict[str, Any]) -> tuple[float, float]:
+def _curve_value_bounds(
+    _pixel_result: dict[str, Any], band_result: dict[str, Any]
+) -> tuple[float, float]:
     values: list[float] = []
-    values.extend(point["corrected_boa"] for point in band_result["lut"]["points"] if np.isfinite(point["corrected_boa"]))
+    values.extend(
+        point["corrected_boa"]
+        for point in band_result["lut"]["points"]
+        if np.isfinite(point["corrected_boa"])
+    )
     emulator = band_result.get("emulator", {})
     if emulator.get("available"):
-        values.extend(point["corrected_boa"] for point in emulator["points"] if np.isfinite(point["corrected_boa"]))
+        values.extend(
+            point["corrected_boa"]
+            for point in emulator["points"]
+            if np.isfinite(point["corrected_boa"])
+        )
     for key in ("surface_prior_input", "monthly_prior", "direct_prior"):
         value = band_result.get(key)
         if value is not None and np.isfinite(value):
@@ -396,7 +421,15 @@ def _plot_band_panel(ax: Any, *, pixel_result: dict[str, Any], band_result: dict
     if emulator.get("available"):
         emu_x = [point["aot"] for point in emulator["points"]]
         emu_y = [point["corrected_boa"] for point in emulator["points"]]
-        ax.plot(emu_x, emu_y, color="#ff7f0e", marker="s", linewidth=1.8, linestyle="--", label="Emulator")
+        ax.plot(
+            emu_x,
+            emu_y,
+            color="#ff7f0e",
+            marker="s",
+            linewidth=1.8,
+            linestyle="--",
+            label="Emulator",
+        )
 
     prior_styles = [
         ("surface_prior_input", band_result.get("surface_prior_input"), "#2ca02c", "Surface prior"),
@@ -409,7 +442,9 @@ def _plot_band_panel(ax: Any, *, pixel_result: dict[str, Any], band_result: dict
 
     solved_aot = pixel_result["reference_run_state"]["aot"]
     if solved_aot is not None and np.isfinite(solved_aot):
-        ax.axvline(float(solved_aot), color="#4d4d4d", linewidth=1.4, linestyle="-.", label="Solved AOT")
+        ax.axvline(
+            float(solved_aot), color="#4d4d4d", linewidth=1.4, linestyle="-.", label="Solved AOT"
+        )
 
     ax.axvline(0.001, color="#9a9a9a", linewidth=1.0, linestyle="--", alpha=0.9, label="AOT floor")
     ax.set_xscale("log")
@@ -460,7 +495,9 @@ def _draw_band_panel_pil(
     def xmap(aot: float) -> float:
         if max_log == min_log:
             return float((chart_left + chart_right) / 2)
-        return chart_left + (np.log10(aot) - min_log) / (max_log - min_log) * (chart_right - chart_left)
+        return chart_left + (np.log10(aot) - min_log) / (max_log - min_log) * (
+            chart_right - chart_left
+        )
 
     def ymap(value: float) -> float:
         if ymax == ymin:
@@ -487,21 +524,36 @@ def _draw_band_panel_pil(
         if value is None or not np.isfinite(value):
             continue
         yy = ymap(float(value))
-        _draw_dash_line(draw, (chart_left, yy), (chart_right, yy), color=color, width=2, dash=10, gap=6)
+        _draw_dash_line(
+            draw, (chart_left, yy), (chart_right, yy), color=color, width=2, dash=10, gap=6
+        )
         draw.text((chart_right - 110, yy - 10), label, fill=color, font=small_font)
 
     solved_aot = pixel_result["reference_run_state"]["aot"]
     if solved_aot is not None and np.isfinite(solved_aot) and solved_aot > 0:
         xx = xmap(float(solved_aot))
-        _draw_dash_line(draw, (xx, chart_top), (xx, chart_bottom), color="#4d4d4d", width=2, dash=12, gap=4)
-        draw.text((min(xx + 4, chart_right - 70), chart_top + 4), "Solved AOT", fill="#4d4d4d", font=small_font)
+        _draw_dash_line(
+            draw, (xx, chart_top), (xx, chart_bottom), color="#4d4d4d", width=2, dash=12, gap=4
+        )
+        draw.text(
+            (min(xx + 4, chart_right - 70), chart_top + 4),
+            "Solved AOT",
+            fill="#4d4d4d",
+            font=small_font,
+        )
 
     if min(all_aot) <= 0.001 <= max(all_aot):
         xx = xmap(0.001)
-        _draw_dash_line(draw, (xx, chart_top), (xx, chart_bottom), color="#8c8c8c", width=1, dash=4, gap=4)
+        _draw_dash_line(
+            draw, (xx, chart_top), (xx, chart_bottom), color="#8c8c8c", width=1, dash=4, gap=4
+        )
 
     lut_points = band_result["lut"]["points"]
-    lut_xy = [(xmap(point["aot"]), ymap(point["corrected_boa"])) for point in lut_points if np.isfinite(point["corrected_boa"])]
+    lut_xy = [
+        (xmap(point["aot"]), ymap(point["corrected_boa"]))
+        for point in lut_points
+        if np.isfinite(point["corrected_boa"])
+    ]
     if len(lut_xy) >= 2:
         draw.line(lut_xy, fill="#1f77b4", width=3)
     for xx, yy in lut_xy:
@@ -509,7 +561,11 @@ def _draw_band_panel_pil(
 
     if emulator.get("available"):
         emu_points = emulator["points"]
-        emu_xy = [(xmap(point["aot"]), ymap(point["corrected_boa"])) for point in emu_points if np.isfinite(point["corrected_boa"])]
+        emu_xy = [
+            (xmap(point["aot"]), ymap(point["corrected_boa"]))
+            for point in emu_points
+            if np.isfinite(point["corrected_boa"])
+        ]
         if len(emu_xy) >= 2:
             _draw_dash_line(draw, emu_xy[0], emu_xy[1], color="#ff7f0e", width=2, dash=5, gap=4)
             for start, end in zip(emu_xy[:-1], emu_xy[1:]):
@@ -535,7 +591,15 @@ def _plot_band_panel(ax: Any, *, pixel_result: dict[str, Any], band_result: dict
     if emulator.get("available"):
         emu_x = [point["aot"] for point in emulator["points"]]
         emu_y = [point["corrected_boa"] for point in emulator["points"]]
-        ax.plot(emu_x, emu_y, color="#ff7f0e", marker="s", linewidth=1.8, linestyle="--", label="Emulator")
+        ax.plot(
+            emu_x,
+            emu_y,
+            color="#ff7f0e",
+            marker="s",
+            linewidth=1.8,
+            linestyle="--",
+            label="Emulator",
+        )
 
     prior_styles = [
         ("surface_prior_input", band_result.get("surface_prior_input"), "#2ca02c", "Surface prior"),
@@ -548,7 +612,9 @@ def _plot_band_panel(ax: Any, *, pixel_result: dict[str, Any], band_result: dict
 
     solved_aot = pixel_result["reference_run_state"]["aot"]
     if solved_aot is not None and np.isfinite(solved_aot):
-        ax.axvline(float(solved_aot), color="#4d4d4d", linewidth=1.4, linestyle="-.", label="Solved AOT")
+        ax.axvline(
+            float(solved_aot), color="#4d4d4d", linewidth=1.4, linestyle="-.", label="Solved AOT"
+        )
 
     ax.axvline(0.001, color="#9a9a9a", linewidth=1.0, linestyle="--", alpha=0.9, label="AOT floor")
     ax.set_xscale("log")
@@ -679,7 +745,9 @@ def _plot_overview_figure(path: Path, *, result: dict[str, Any]) -> None:
                     font=font,
                     small_font=small_font,
                 )
-                draw.text((left + 8, top + 6), pixel_result["label"], fill="#111111", font=small_font)
+                draw.text(
+                    (left + 8, top + 6), pixel_result["label"], fill="#111111", font=small_font
+                )
         image.save(path)
         return
 
@@ -695,7 +763,9 @@ def _plot_overview_figure(path: Path, *, result: dict[str, Any]) -> None:
         for col in range(max_bands):
             ax = axes[row][col]
             if col < len(pixel_result["bands"]):
-                _plot_band_panel(ax, pixel_result=pixel_result, band_result=pixel_result["bands"][col])
+                _plot_band_panel(
+                    ax, pixel_result=pixel_result, band_result=pixel_result["bands"][col]
+                )
                 ax.text(
                     0.02,
                     0.98,
@@ -726,10 +796,12 @@ def main() -> None:
 
     LOGGER.info("Preprocessing observation from %s", args.input)
     obs = plan.preprocessor(plan.input_path, plan.runtime_aoi)
-    aerosol_resolution = _aerosol_resolution(plan.config)
+    aerosol_resolution = aerosol_resolution(plan.config)
 
     LOGGER.info("Fetching atmospheric prior")
-    atmo_prior = plan.atmo_provider(obs.bounds, obs.crs, obs.metadata["observation_time"], aerosol_resolution)
+    atmo_prior = plan.atmo_provider(
+        obs.bounds, obs.crs, obs.metadata["observation_time"], aerosol_resolution
+    )
     run_atmo = _reconstruct_run_atmosphere(args.reference_output_dir, atmo_prior)
     surface_prior = _surface_prior_from_reference(args.reference_output_dir / "surface_prior.nc")
     auxiliary = xr.open_dataset(args.reference_output_dir / "auxiliary.nc")
@@ -739,7 +811,7 @@ def main() -> None:
     lut_config.rt_model.backend = "lut"
     lut_rt = build_rt_model(lut_config, auth=plan.auth, sensor_config=obs.sensor_config)
 
-    solver_inputs = _call_grid_assembler(
+    solver_inputs = call_grid_assembler(
         plan.grid_assembler,
         obs,
         run_atmo,
@@ -773,7 +845,9 @@ def main() -> None:
     prior_comparison_path = args.surface_prior_comparison
     if prior_comparison_path is None:
         prior_comparison_path = _auto_surface_prior_comparison(args.reference_output_dir)
-    prior_comparison = xr.open_dataset(prior_comparison_path) if prior_comparison_path is not None else None
+    prior_comparison = (
+        xr.open_dataset(prior_comparison_path) if prior_comparison_path is not None else None
+    )
 
     result: dict[str, Any] = {
         "config_path": str(args.config.resolve()),
@@ -781,9 +855,13 @@ def main() -> None:
         "reference_output_dir": str(args.reference_output_dir.resolve()),
         "aot_values": [float(value) for value in aot_values],
         "elevation_source": args.elevation_source,
-        "surface_prior_comparison": str(prior_comparison_path.resolve()) if prior_comparison_path is not None else None,
+        "surface_prior_comparison": str(prior_comparison_path.resolve())
+        if prior_comparison_path is not None
+        else None,
         "emulator": {
-            "requested_dir": str(args.emulator_dir.resolve()) if args.emulator_dir is not None else None,
+            "requested_dir": str(args.emulator_dir.resolve())
+            if args.emulator_dir is not None
+            else None,
             "available": emulator_backend is not None,
             "error": emulator_error,
         },
@@ -828,8 +906,12 @@ def main() -> None:
                 "dy": float(snapped_y - req_y),
             },
             "reference_run_state": {
-                "aot": float(auxiliary["aot"].sel(x=snapped_x, y=snapped_y, method="nearest").values),
-                "tcwv": float(auxiliary["tcwv"].sel(x=snapped_x, y=snapped_y, method="nearest").values),
+                "aot": float(
+                    auxiliary["aot"].sel(x=snapped_x, y=snapped_y, method="nearest").values
+                ),
+                "tcwv": float(
+                    auxiliary["tcwv"].sel(x=snapped_x, y=snapped_y, method="nearest").values
+                ),
                 "elevation_km": float(pixel_atmo.elevation.values[0, 0]),
             },
             "bands": [],
@@ -837,13 +919,15 @@ def main() -> None:
 
         for band_name in selected_bands:
             band_index, band = band_lookup[band_name]
-            toa_band = _select_band_slice(solver_inputs.toa, band_name=band_name, band_index=band_index)
-            surface_band = _select_band_slice(
+            toa_band = select_band_slice(
+                solver_inputs.toa, band_name=band_name, band_index=band_index
+            )
+            surface_band = select_band_slice(
                 solver_inputs.surface_prior.boa,
                 band_name=band_name,
                 band_index=band_index,
             )
-            surface_unc_band = _select_band_slice(
+            surface_unc_band = select_band_slice(
                 solver_inputs.surface_prior.boa_unc,
                 band_name=band_name,
                 band_index=band_index,
@@ -852,7 +936,9 @@ def main() -> None:
                 continue
 
             obs_toa = _pixelize(toa_band, x=snapped_x, y=snapped_y)
-            surface_prior_input = float(_pixelize(surface_band, x=snapped_x, y=snapped_y).values[0, 0])
+            surface_prior_input = float(
+                _pixelize(surface_band, x=snapped_x, y=snapped_y).values[0, 0]
+            )
             surface_prior_unc = (
                 float(_pixelize(surface_unc_band, x=snapped_x, y=snapped_y).values[0, 0])
                 if surface_unc_band is not None
