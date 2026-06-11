@@ -121,9 +121,9 @@ def test_subset_ozone_atm_cm_selects_correct_du_node():
     ozone_axis = np.array([200.0, 250.0, 300.0, 350.0], dtype=np.float32)
     wavelength = np.linspace(400.0, 700.0, 5, dtype=np.float32)
     # Encode the ozone node index in the data so the selection is observable.
-    data = np.broadcast_to(
-        ozone_axis[:, None], (ozone_axis.size, wavelength.size)
-    ).astype(np.float32)
+    data = np.broadcast_to(ozone_axis[:, None], (ozone_axis.size, wavelength.size)).astype(
+        np.float32
+    )
     lut = xr.Dataset(
         {"TOA_rho1": (("ozone", "wavelength"), data)},
         coords={"ozone": ozone_axis, "wavelength": wavelength},
