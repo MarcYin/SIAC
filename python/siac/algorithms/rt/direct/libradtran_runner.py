@@ -35,17 +35,22 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import xarray as xr
 
-from siac.algorithms.rt._run_cache import resolve_run_cache_dir
+from siac.algorithms.rt._run_cache import (
+    load_cache_entry,
+    resolve_run_cache_dir,
+    store_cache_entry,
+)
 from siac.algorithms.rt.direct.libradtran_build import LibRadtranPaths, ensure_libradtran
 from siac.algorithms.rt.lut.backend import ZarrLUTBackend
-from siac.runtime import AtmosphericState
+from siac.algorithms.rt.lut.constants import TCO3_ATMCM_TO_DU, TCWV_CM_TO_LUT_MM
+from siac.runtime import AtmosphericState, GeometryAngles
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from siac.config.algorithms import LibRadtranAlgorithmConfig
     from siac.domain.sensors import SensorBand, SensorConfig
-    from siac.runtime import GeometryAngles, RTCoefficients
+    from siac.runtime import RTCoefficients
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +207,8 @@ def build_uvspec_deck(
         "aerosol_default",
         f"aerosol_species_file {aerosol_species}",
         f"aerosol_set_tau_at_wvl 550 {aot550:.6f}",
-        f"mol_modify H2O {tcwv_cm * 10.0:.6f} MM",
-        f"mol_modify O3 {tco3_atmcm * 1000.0:.6f} DU",
+        f"mol_modify H2O {tcwv_cm * TCWV_CM_TO_LUT_MM:.6f} MM",
+        f"mol_modify O3 {tco3_atmcm * TCO3_ATMCM_TO_DU:.6f} DU",
         f"sza {sza_deg:.4f}",
         "phi0 0",
         f"phi {raa_deg:.4f}",
@@ -371,12 +376,11 @@ class LibRadtranRunner:
         # A hit skips the uvspec subprocess entirely, so re-running a scene - or
         # reusing nodes across the retrieval/diagnostics/correction builds - costs
         # no radiative-transfer time. ``None`` disables it.
-        self._run_cache_dir: Path | None = None
-        if bool(getattr(libradtran_config, "run_cache_enabled", True)):
-            self._run_cache_dir = resolve_run_cache_dir(
-                getattr(libradtran_config, "run_cache_dir", None),
-                subpath="libradtran/uvspec_run_cache",
-            )
+        self._run_cache_dir: Path | None = resolve_run_cache_dir(
+            getattr(libradtran_config, "run_cache_dir", None),
+            subpath="libradtran/uvspec_run_cache",
+            enabled=bool(getattr(libradtran_config, "run_cache_enabled", True)),
+        )
         self._cache_stats_lock = threading.Lock()
         self._run_cache_hits = 0
         self._run_cache_misses = 0
@@ -466,9 +470,7 @@ class LibRadtranRunner:
         geometry: GeometryAngles,
         atmo_state: AtmosphericState,
         band: SensorBand,
-        output_variables: tuple[str, ...] | None = None,
     ) -> RTCoefficients:
-        _ = output_variables  # coefficients are derived for xap/xbp/xcp uniformly
         self._warn_band_straddle(band)
         backend = self._scene_backend_for(geometry, atmo_state)
         return backend.compute_coefficients(geometry, atmo_state, band)
@@ -481,7 +483,6 @@ class LibRadtranRunner:
         aot_axis: np.ndarray,
         tcwv_axis: np.ndarray,
         bands: list[SensorBand],
-        output_variables: tuple[str, ...] | None = None,
     ) -> _LibRadtranJointGridSearchLUT:
         """Build one scene LUT spanning the grid-search range, served by interp.
 
@@ -493,33 +494,20 @@ class LibRadtranRunner:
         are exact at the nodes and within-range elsewhere - then serve every
         candidate by interpolation. Mirrors the 6S joint-LUT amortisation.
         """
-        _ = output_variables  # xap/xbp/xcp are derived uniformly
-        if bands:
-            for band in bands:
-                self._warn_band_straddle(band)
-        aot_nodes = _subsample_axis(
-            np.asarray(aot_axis, dtype=np.float64), _JOINT_LUT_MAX_AOT_NODES
-        )
-        tcwv_nodes = _subsample_axis(
-            np.asarray(tcwv_axis, dtype=np.float64), _JOINT_LUT_MAX_TCWV_NODES
-        )
+        for band in bands:
+            self._warn_band_straddle(band)
+        aot_nodes = _subsample_axis(aot_axis, _JOINT_LUT_MAX_AOT_NODES)
+        tcwv_nodes = _subsample_axis(tcwv_axis, _JOINT_LUT_MAX_TCWV_NODES)
         with self._build_lock:
-            dataset = self._build_scene_lut(
+            # Cache as the scene backend so a same-scene compute_coefficients call
+            # reuses it (the joint LUT spans the full search range, so prior-range
+            # values fall inside it) rather than launching another build.
+            backend = self._build_and_cache_backend(
                 geometry,
                 atmo_state,
                 aot_axis_override=aot_nodes,
                 tcwv_axis_override=tcwv_nodes,
             )
-            backend = _InMemorySpectralLUTBackend(
-                dataset,
-                interpolation_method=str(self._config.interpolation_method),
-                rt_setup=self._rt_setup,
-            )
-            # Cache as the scene backend so a same-scene compute_coefficients call
-            # reuses it (the joint LUT spans the full search range, so prior-range
-            # values fall inside it) rather than launching another build.
-            self._scene_backend = backend
-            self._scene_key = self._scene_signature(geometry, atmo_state)
         return _LibRadtranJointGridSearchLUT(
             backend=backend,
             geometry=geometry,
@@ -542,15 +530,36 @@ class LibRadtranRunner:
             # second redundant (and memory-doubling) uvspec build.
             if self._scene_backend is not None and key == self._scene_key:
                 return self._scene_backend
-            dataset = self._build_scene_lut(geometry, atmo_state)
-            backend = _InMemorySpectralLUTBackend(
-                dataset,
-                interpolation_method=str(self._config.interpolation_method),
-                rt_setup=self._rt_setup,
-            )
-            self._scene_backend = backend
-            self._scene_key = key
-            return backend
+            return self._build_and_cache_backend(geometry, atmo_state)
+
+    def _build_and_cache_backend(
+        self,
+        geometry: GeometryAngles,
+        atmo_state: AtmosphericState,
+        *,
+        aot_axis_override: np.ndarray | None = None,
+        tcwv_axis_override: np.ndarray | None = None,
+    ) -> _InMemorySpectralLUTBackend:
+        """Build the scene LUT + backend and publish it as the cached scene.
+
+        Callers must hold ``_build_lock`` (this is the single site that
+        constructs the in-memory backend and assigns the scene-cache slot, so
+        the two cannot drift apart).
+        """
+        dataset = self._build_scene_lut(
+            geometry,
+            atmo_state,
+            aot_axis_override=aot_axis_override,
+            tcwv_axis_override=tcwv_axis_override,
+        )
+        backend = _InMemorySpectralLUTBackend(
+            dataset,
+            interpolation_method=str(self._config.interpolation_method),
+            rt_setup=self._rt_setup,
+        )
+        self._scene_backend = backend
+        self._scene_key = self._scene_signature(geometry, atmo_state)
+        return backend
 
     def _scene_signature(
         self,
@@ -587,7 +596,7 @@ class LibRadtranRunner:
         sza_deg = _scene_mean_deg(geometry.sza)
         vza_deg = _scene_mean_deg(geometry.vza)
         raa_deg = _fold_raa_deg(_scene_mean_deg(geometry.raa))
-        ozone_du = _scene_mean(atmo_state.tco3) * 1000.0
+        ozone_du = _scene_mean(atmo_state.tco3) * TCO3_ATMCM_TO_DU
         altitude_km = max(0.0, _scene_mean(atmo_state.elevation))
         tco3_atmcm = _scene_mean(atmo_state.tco3)
 
@@ -742,7 +751,7 @@ class LibRadtranRunner:
             "ozone": np.array([ozone_du], dtype=np.float32),
             "altitude": np.array([altitude_km], dtype=np.float32),
             "aot": aot_axis.astype(np.float32),
-            "tcwv": (tcwv_axis * 10.0).astype(np.float32),
+            "tcwv": (tcwv_axis * TCWV_CM_TO_LUT_MM).astype(np.float32),
             "wavelength": wl_grid.astype(np.float32),
         }
         # No ``solar_irradiance`` variable: the remote libRadtran LUT does not
@@ -923,40 +932,33 @@ class LibRadtranRunner:
     def _load_cached_run(
         cache_file: Path,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-        if not cache_file.exists():
-            return None
-        try:
-            with np.load(cache_file) as data:
+        def _read(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            with np.load(path) as data:
                 return (
                     np.asarray(data["wl"], dtype=np.float64),
                     np.asarray(data["eg"], dtype=np.float64),
                     np.asarray(data["toa"], dtype=np.float64),
                 )
-        except Exception:
-            # A truncated/corrupt entry (crash mid-write, disk issue) is treated
-            # as a miss and recomputed rather than failing the run.
-            logger.debug("Ignoring unreadable uvspec cache entry %s", cache_file, exc_info=True)
-            return None
 
+        cached: tuple[np.ndarray, np.ndarray, np.ndarray] | None = load_cache_entry(
+            cache_file, _read
+        )
+        return cached
+
+    @staticmethod
     def _store_cached_run(
-        self,
         cache_file: Path,
         result: tuple[np.ndarray, np.ndarray, np.ndarray],
     ) -> None:
         wl, eg, toa = result
-        try:
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            # Unique temp file + atomic rename: a crash or concurrent writer must
-            # never leave a half-written entry that reads back as valid. Passing a
-            # file handle to np.savez avoids its ".npz" auto-suffix on the temp.
-            tmp = cache_file.with_name(
-                f".{cache_file.stem}.{os.getpid()}.{threading.get_ident()}.npz.tmp"
-            )
+
+        def _write(tmp: Path) -> None:
+            # Passing a file handle to np.savez avoids its ".npz" auto-suffix
+            # on the temp file.
             with tmp.open("wb") as handle:
                 np.savez(handle, wl=wl, eg=eg, toa=toa)
-            tmp.replace(cache_file)
-        except Exception:
-            logger.debug("Failed to write uvspec cache entry %s", cache_file, exc_info=True)
+
+        store_cache_entry(cache_file, _write)
 
     def _record_cache(self, *, hit: bool) -> None:
         with self._cache_stats_lock:

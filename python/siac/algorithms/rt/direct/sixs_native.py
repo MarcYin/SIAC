@@ -11,7 +11,6 @@ import os
 import shutil
 import sys
 import tempfile
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -21,7 +20,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
-from siac.algorithms.rt._run_cache import resolve_run_cache_dir
+from siac.algorithms.rt._run_cache import (
+    load_cache_entry,
+    resolve_run_cache_dir,
+    store_cache_entry,
+)
 from siac.algorithms.rt.direct.sixs_build import ensure_native_sixs_module
 from siac.geo.resample import resample_field_to_template, shares_template_grid
 from siac.runtime.models import copy_spatial_metadata_like
@@ -1447,15 +1450,11 @@ class SixSNativeRunner:
         # so a re-run of the same scene reuses the small grid coefficients
         # instead of recomputing. Only the bounded grid batch is cached; the
         # cheap per-pixel interpolation is not. ``None`` disables it.
-        self._run_cache_dir: Path | None = None
-        if bool(getattr(sixs_config, "run_cache_enabled", True)):
-            self._run_cache_dir = resolve_run_cache_dir(
-                getattr(sixs_config, "run_cache_dir", None),
-                subpath="rt6s/run_cache",
-            )
-        self._native_cache_lock = threading.Lock()
-        self._native_cache_hits = 0
-        self._native_cache_misses = 0
+        self._run_cache_dir: Path | None = resolve_run_cache_dir(
+            getattr(sixs_config, "run_cache_dir", None),
+            subpath="rt6s/run_cache",
+            enabled=bool(getattr(sixs_config, "run_cache_enabled", True)),
+        )
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
         self._observation_time = observation_time
@@ -2113,13 +2112,9 @@ class SixSNativeRunner:
         if key is not None:
             cached = self._load_native_grid(key)
             if cached is not None:
-                with self._native_cache_lock:
-                    self._native_cache_hits += 1
                 return cached
         result = self._run_native_batch(**native_kwargs)
         if key is not None:
-            with self._native_cache_lock:
-                self._native_cache_misses += 1
             self._store_native_grid(key, result)
         return result
 
@@ -2151,10 +2146,8 @@ class SixSNativeRunner:
     def _load_native_grid(self, key: str) -> _NativeBatchResult | None:
         if self._run_cache_dir is None:
             return None
-        path = self._run_cache_dir / f"{key}.npz"
-        if not path.exists():
-            return None
-        try:
+
+        def _read(path: Path) -> _NativeBatchResult:
             with np.load(path) as data:
                 status = np.asarray(data["__status__"])
                 outputs = {
@@ -2163,26 +2156,21 @@ class SixSNativeRunner:
                     if str(name).startswith("out_")
                 }
             return _NativeBatchResult(outputs=outputs, status=status)
-        except Exception:
-            logger.debug("Ignoring unreadable 6S grid-batch cache %s", path, exc_info=True)
-            return None
+
+        return load_cache_entry(self._run_cache_dir / f"{key}.npz", _read)
 
     def _store_native_grid(self, key: str, result: _NativeBatchResult) -> None:
         if self._run_cache_dir is None:
             return
-        path = self._run_cache_dir / f"{key}.npz"
-        try:
-            self._run_cache_dir.mkdir(parents=True, exist_ok=True)
-            payload = {f"out_{name}": np.asarray(arr) for name, arr in result.outputs.items()}
-            payload["__status__"] = np.asarray(result.status)
-            # Unique temp + atomic rename so a crash/concurrent writer never
-            # leaves a half-written entry that reads back as valid.
-            tmp = path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}.npz.tmp")
+        payload = {f"out_{name}": np.asarray(arr) for name, arr in result.outputs.items()}
+        payload["__status__"] = np.asarray(result.status)
+
+        def _write(tmp: Path) -> None:
+            # File handle avoids np.savez's ".npz" auto-suffix on the temp.
             with tmp.open("wb") as handle:
                 np.savez(handle, **payload)
-            tmp.replace(path)
-        except Exception:
-            logger.debug("Failed to write 6S grid-batch cache %s", path, exc_info=True)
+
+        store_cache_entry(self._run_cache_dir / f"{key}.npz", _write)
 
     def _ensure_openmp_session(self) -> _SixSExtensionModule:
         if self._openmp_session is None:

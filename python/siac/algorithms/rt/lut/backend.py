@@ -14,7 +14,11 @@ import numpy as np
 import xarray as xr
 
 from siac.adapters.rsrf import coerce_band_rsrf
-from siac.algorithms.rt._run_cache import resolve_run_cache_dir
+from siac.algorithms.rt._run_cache import (
+    load_cache_entry,
+    resolve_run_cache_dir,
+    store_cache_entry,
+)
 from siac.algorithms.rt.lut._spectral_math import (
     build_point_interpolation_coords,
     build_spectral_integration_weights,
@@ -23,6 +27,7 @@ from siac.algorithms.rt.lut._spectral_math import (
     finite_range,
     weighted_spectral_mean,
 )
+from siac.algorithms.rt.lut.constants import TCO3_ATMCM_TO_DU
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 from siac.algorithms.rt.lut.store import as_local_path, build_lut_store
 from siac.domain.spectral import RelativeSpectralResponse
@@ -113,9 +118,9 @@ class ZarrLUTBackend:
         # otherwise re-fetched over HTTP in every fresh process; persisting the
         # small grid-snapped scene subset lets a re-run of the same scene load it
         # from local disk with no network. ``None`` disables it.
-        self._scene_cache_dir: Path | None = None
-        if scene_cache_enabled:
-            self._scene_cache_dir = resolve_run_cache_dir(scene_cache_dir, subpath="lut_subsets")
+        self._scene_cache_dir: Path | None = resolve_run_cache_dir(
+            scene_cache_dir, subpath="lut_subsets", enabled=scene_cache_enabled
+        )
 
         # Lazy load the LUT
         self._lut: xr.Dataset | None = None
@@ -1025,48 +1030,55 @@ class ZarrLUTBackend:
 
             # Persistent disk cache: a prior run materialised this scene subset,
             # so load it from local disk instead of re-fetching chunks over HTTP.
-            disk_subset = self._load_scene_subset_from_disk(scene_key)
-            if disk_subset is not None:
-                with self._cache_lock:
-                    self._spectral_scene_key = scene_key
-                    self._spectral_scene_subset = disk_subset
-                    self._spectral_band_grid_cache.clear()
-                    self._scene_subset_logged = False
-                return scene_key, disk_subset
+            subset = self._load_scene_subset_from_disk(scene_key)
+            loaded_from_disk = subset is not None
 
-            _t0 = time.perf_counter()
-            subset = self._subset_spectral_lut_for_scene(
-                self.lut,
-                sza=sza,
-                vza=vza,
-                raa=raa,
-                tco3=tco3,
-                elevation=elevation,
-            )
-            logger.info(
-                "_subset_spectral_lut_for_scene (lazy graph) %.3f s", time.perf_counter() - _t0
-            )
+            if subset is None:
+                _t0 = time.perf_counter()
+                subset = self._subset_spectral_lut_for_scene(
+                    self.lut,
+                    sza=sza,
+                    vza=vza,
+                    raa=raa,
+                    tco3=tco3,
+                    elevation=elevation,
+                )
+                logger.info(
+                    "_subset_spectral_lut_for_scene (lazy graph) %.3f s", time.perf_counter() - _t0
+                )
 
-            # Eagerly materialise the scene subset into memory.  Without this,
-            # downstream band-grid operations (.integrate, .values) each trigger
-            # independent HTTP range-request round-trips to the remote Zarr store.
-            # Using scheduler="threads" parallelises chunk fetches over HTTP,
-            # cutting wall-clock time from ~33 s (sequential) to a few seconds.
-            _t0 = time.perf_counter()
-            if hasattr(subset, "compute"):
-                subset = subset.compute(scheduler="threads", num_workers=8)
-            logger.info("subset.compute() (materialise) %.3f s", time.perf_counter() - _t0)
-            self._store_scene_subset_to_disk(scene_key, subset)
+                # Eagerly materialise the scene subset into memory.  Without this,
+                # downstream band-grid operations (.integrate, .values) each trigger
+                # independent HTTP range-request round-trips to the remote Zarr store.
+                # Using scheduler="threads" parallelises chunk fetches over HTTP,
+                # cutting wall-clock time from ~33 s (sequential) to a few seconds.
+                _t0 = time.perf_counter()
+                if hasattr(subset, "compute"):
+                    subset = subset.compute(scheduler="threads", num_workers=8)
+                logger.info("subset.compute() (materialise) %.3f s", time.perf_counter() - _t0)
 
+            # Single publication site (we hold the build lock, so no other
+            # thread can be populating concurrently).
             with self._cache_lock:
-                if self._spectral_scene_key != scene_key:
-                    self._spectral_scene_key = scene_key
-                    self._spectral_scene_subset = subset
-                    self._spectral_band_grid_cache.clear()
-                    self._scene_subset_logged = False
-                if self._spectral_scene_subset is None:
-                    self._spectral_scene_subset = subset
-                return scene_key, self._spectral_scene_subset
+                self._spectral_scene_key = scene_key
+                self._spectral_scene_subset = subset
+                self._spectral_band_grid_cache.clear()
+                self._scene_subset_logged = False
+
+        # Persist OUTSIDE the build lock: waiters only need the in-memory copy,
+        # so the netCDF write must not extend their blockage (writes are
+        # atomic + best-effort, see store_cache_entry).
+        if not loaded_from_disk:
+            self._store_scene_subset_to_disk(scene_key, subset)
+        return scene_key, subset
+
+    #: Disk-format version of the scene-subset cache. Bump whenever
+    #: ``_subset_spectral_lut_for_scene`` semantics change (axis selection,
+    #: averaging, unit handling): the key carries no semantic inputs beyond the
+    #: scene coordinates, so without a bump old caches would silently serve
+    #: subsets built by the old logic. v2: ozone range converted atm-cm -> DU
+    #: before slicing (pre-v2 entries were pinned to the 200 DU edge node).
+    _SCENE_SUBSET_CACHE_VERSION = "v2"
 
     def _scene_subset_cache_path(self, scene_key: tuple[float, ...]) -> Path | None:
         """On-disk path for this LUT + grid-snapped scene subset (or None)."""
@@ -1074,40 +1086,33 @@ class ZarrLUTBackend:
             return None
         stem = Path(self.lut_path).name or "lut"
         # Key on LUT identity + the grid-snapped scene key, so different LUTs or
-        # scenes never collide and a re-run of the same scene hits. The version
-        # token invalidates entries written by older subset logic (v2: ozone
-        # range now converted atm-cm -> DU before slicing; pre-v2 entries were
-        # silently pinned to the 200 DU edge node and must not be served).
-        raw = "v2|" + self.lut_path + "|" + ",".join(f"{v:.6g}" for v in scene_key)
+        # scenes never collide and a re-run of the same scene hits.
+        raw = (
+            self._SCENE_SUBSET_CACHE_VERSION
+            + "|"
+            + self.lut_path
+            + "|"
+            + ",".join(f"{v:.6g}" for v in scene_key)
+        )
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
         return self._scene_cache_dir / f"{stem}.{digest}.subset.nc"
 
     def _load_scene_subset_from_disk(self, scene_key: tuple[float, ...]) -> xr.Dataset | None:
         path = self._scene_subset_cache_path(scene_key)
-        if path is None or not path.exists():
+        if path is None:
             return None
-        try:
-            subset = xr.open_dataset(path).load()
-            logger.info("LUT scene subset loaded from disk cache %s", path)
+
+        def _read(entry: Path) -> xr.Dataset:
+            subset = xr.open_dataset(entry).load()
+            logger.info("LUT scene subset loaded from disk cache %s", entry)
             return subset
-        except Exception:
-            # A truncated/corrupt entry is treated as a miss and rebuilt.
-            logger.debug("Ignoring unreadable LUT scene-subset cache %s", path, exc_info=True)
-            return None
+
+        return load_cache_entry(path, _read)
 
     def _store_scene_subset_to_disk(self, scene_key: tuple[float, ...], subset: xr.Dataset) -> None:
         path = self._scene_subset_cache_path(scene_key)
-        if path is None:
-            return
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Unique temp + atomic rename so a crash/concurrent writer never
-            # leaves a half-written entry that reads back as valid.
-            tmp = path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}.nc.tmp")
-            subset.to_netcdf(tmp)
-            tmp.replace(path)
-        except Exception:
-            logger.debug("Failed to write LUT scene-subset cache %s", path, exc_info=True)
+        if path is not None:
+            store_cache_entry(path, subset.to_netcdf)
 
     def _get_or_build_spectral_band_grids(
         self,
@@ -1247,7 +1252,7 @@ class ZarrLUTBackend:
         # empty range, and the nearest-value fallback then silently pinned every
         # scene to the 200 DU edge node (visibly wrong Chappuis-band absorption,
         # AOT biased low). Altitude is km on both sides.
-        ozone_du = np.asarray(tco3, dtype=np.float64) * 1000.0
+        ozone_du = np.asarray(tco3, dtype=np.float64) * TCO3_ATMCM_TO_DU
         for dim, scene_values in {"ozone": ozone_du, "altitude": elevation}.items():
             if dim not in out.coords:
                 continue

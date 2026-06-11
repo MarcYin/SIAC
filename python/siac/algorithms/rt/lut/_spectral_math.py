@@ -8,6 +8,7 @@ import numpy as np
 import xarray as xr
 
 from siac.adapters.rsrf import band_convolution_weights
+from siac.algorithms.rt.lut.constants import TCWV_CM_TO_LUT_MM
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 
 if TYPE_CHECKING:
@@ -15,12 +16,6 @@ if TYPE_CHECKING:
 
     from siac.domain import SensorBand
     from siac.domain.spectral import RelativeSpectralResponse
-
-
-#: SIAC atmospheric state carries tcwv in cm of precipitable water, while the
-#: spectral LUT schema (the libRadtran ``*_lut_1nm`` zarr and the in-memory
-#: libRadtran scene LUT that mirrors it) stores its ``tcwv`` axis in mm.
-_TCWV_CM_TO_LUT_MM = 10.0
 
 
 def build_point_interpolation_coords(
@@ -41,7 +36,7 @@ def build_point_interpolation_coords(
     coords = {
         "aot": xr.DataArray(require_finite_values(aot, name="aot"), dims=["point"]),
         "tcwv": xr.DataArray(
-            require_finite_values(tcwv, name="tcwv") * _TCWV_CM_TO_LUT_MM,
+            require_finite_values(tcwv, name="tcwv") * TCWV_CM_TO_LUT_MM,
             dims=["point"],
         ),
     }

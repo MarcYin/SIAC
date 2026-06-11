@@ -1973,7 +1973,6 @@ def test_native_grid_batch_cache_skips_recompute(
     r1 = runner._run_native_batch_cached(kwargs)
     r2 = runner._run_native_batch_cached(kwargs)
     assert calls["n"] == 1  # second call served from disk
-    assert (runner._native_cache_hits, runner._native_cache_misses) == (1, 1)
     np.testing.assert_array_equal(r1.outputs["xap"], r2.outputs["xap"])
     np.testing.assert_array_equal(r1.status, r2.status)
 
@@ -1988,7 +1987,6 @@ def test_native_grid_batch_cache_skips_recompute(
     monkeypatch.setattr(runner2, "_run_native_batch", _must_not_run)
     r3 = runner2._run_native_batch_cached(kwargs)
     np.testing.assert_array_equal(r1.outputs["xbp"], r3.outputs["xbp"])
-    assert (runner2._native_cache_hits, runner2._native_cache_misses) == (1, 0)
 
 
 def test_native_grid_batch_cache_disabled_recomputes(
