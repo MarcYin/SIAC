@@ -13,15 +13,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from siac.algorithms.rt.direct._common import coerce_rt_coefficients
 from siac.algorithms.rt.direct.libradtran_runner import LibRadtranRunner
 from siac.rt_setup import resolve_backend_rt_setup
-from siac.runtime import RTCoefficients
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from siac.domain.sensors import SensorBand, SensorConfig
-    from siac.runtime import AtmosphericState, GeometryAngles
+    from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 
 logger = logging.getLogger(__name__)
 
@@ -120,25 +120,4 @@ class LibRadtranBackend:
 
     @staticmethod
     def _coerce_result(outputs: Any) -> RTCoefficients:
-        if isinstance(outputs, RTCoefficients):
-            return outputs
-        if not isinstance(outputs, dict):
-            raise TypeError(
-                "LibRadtran runner must return RTCoefficients or dict[str, xr.DataArray], "
-                f"got {type(outputs).__name__}"
-            )
-        missing = {"xap", "xbp", "xcp"} - set(outputs)
-        if missing:
-            raise KeyError(
-                "LibRadtran runner did not return required coefficients: "
-                + ", ".join(sorted(missing))
-            )
-        extras = {
-            name: value for name, value in outputs.items() if name not in {"xap", "xbp", "xcp"}
-        }
-        return RTCoefficients(
-            xap=outputs["xap"],
-            xbp=outputs["xbp"],
-            xcp=outputs["xcp"],
-            extras=extras,
-        )
+        return coerce_rt_coefficients(outputs, runner_name="LibRadtran")

@@ -12,7 +12,7 @@ from siac.algorithms.rt.lut.constants import TCWV_CM_TO_LUT_MM
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from siac.domain import SensorBand
     from siac.domain.spectral import RelativeSpectralResponse
@@ -227,21 +227,34 @@ def spectral_scene_cache_key(
     raa: np.ndarray,
     tco3: np.ndarray,
     elevation: np.ndarray,
+    snap_axes: Mapping[str, np.ndarray] | None = None,
 ) -> tuple[float, ...]:
-    """Build a stable cache key from the summarized scene state."""
-    sza_mean, vza_mean, raa_mean, tco3_bounds, elevation_bounds = summarize_spectral_scene(
-        sza=sza,
-        vza=vza,
-        raa=raa,
-        tco3=tco3,
-        elevation=elevation,
-    )
+    """Build a stable cache key from the summarized scene state.
+
+    ``snap_axes`` optionally maps ``sza``/``vza``/``raa`` to LUT coordinate
+    axes; when given, each (unrounded) angle mean is snapped to its nearest
+    axis node before rounding — mirroring the subset selection, so different
+    spatial resolutions of the same scene (preload grid vs the coarse M3
+    grid) produce the *same* key and share one download.
+    """
+    means = {
+        "sza": finite_mean(sza, fallback=0.0),
+        "vza": finite_mean(vza, fallback=0.0),
+        "raa": finite_mean(raa, fallback=0.0),
+    }
+    if snap_axes:
+        for dim, mean in means.items():
+            axis = np.asarray(snap_axes.get(dim, ()), dtype=np.float64).ravel()
+            if axis.size:
+                means[dim] = float(axis[np.argmin(np.abs(axis - mean))])
+    tco3_bounds = finite_range(np.asarray(tco3, dtype=np.float32), fallback=(0.0, 0.0))
+    elevation_bounds = finite_range(np.asarray(elevation, dtype=np.float32), fallback=(0.0, 0.0))
     return (
-        sza_mean,
-        vza_mean,
-        raa_mean,
-        tco3_bounds[0],
-        tco3_bounds[1],
-        elevation_bounds[0],
-        elevation_bounds[1],
+        round(means["sza"], 3),
+        round(means["vza"], 3),
+        round(means["raa"], 3),
+        round(tco3_bounds[0], 3),
+        round(tco3_bounds[1], 3),
+        round(elevation_bounds[0], 3),
+        round(elevation_bounds[1], 3),
     )

@@ -25,6 +25,8 @@ from siac.algorithms.rt.lut._spectral_math import (
     derive_standard_rt_coefficients,
     finite_mean,
     finite_range,
+    spectral_scene_cache_key,
+    summarize_spectral_scene,
     weighted_spectral_mean,
 )
 from siac.algorithms.rt.lut.constants import TCO3_ATMCM_TO_DU
@@ -843,7 +845,7 @@ class ZarrLUTBackend:
         if self._scene_subset_logged:
             return scene_key, lut_scene
 
-        sza_mean, vza_mean, raa_mean, tco3_bounds, elevation_bounds = self._spectral_scene_summary(
+        sza_mean, vza_mean, raa_mean, tco3_bounds, elevation_bounds = summarize_spectral_scene(
             sza=sza,
             vza=vza,
             raa=raa,
@@ -928,39 +930,24 @@ class ZarrLUTBackend:
     ) -> tuple[float, ...]:
         """Build a stable scene cache key snapped to the LUT grid.
 
-        Angle means are snapped to the nearest LUT coordinate so that
-        different spatial resolutions of the same scene (e.g. the
-        atmospheric grid used by preload vs. the coarse grid used by M3)
-        always produce the *same* key and share a single download.
+        Angle means are snapped to the nearest LUT coordinate (mirroring
+        ``_subset_spectral_lut_for_scene``) so that different spatial
+        resolutions of the same scene (e.g. the atmospheric grid used by
+        preload vs. the coarse grid used by M3) always produce the *same*
+        key and share a single download.
         """
-        sza_mean = self._finite_mean(sza, fallback=0.0)
-        vza_mean = self._finite_mean(vza, fallback=0.0)
-        raa_mean = self._finite_mean(raa, fallback=0.0)
-
-        # Snap to nearest LUT grid point (mirrors _subset_spectral_lut_for_scene)
-        coords = self._lut_coords
-        if "sza" in coords and coords["sza"].size:
-            sza_mean = float(coords["sza"][np.argmin(np.abs(coords["sza"] - sza_mean))])
-        if "vza" in coords and coords["vza"].size:
-            vza_mean = float(coords["vza"][np.argmin(np.abs(coords["vza"] - vza_mean))])
-        if "raa" in coords and coords["raa"].size:
-            raa_mean = float(coords["raa"][np.argmin(np.abs(coords["raa"] - raa_mean))])
-
-        tco3_arr = np.asarray(tco3, dtype=np.float32)
-        elevation_arr = np.asarray(elevation, dtype=np.float32)
-        tco3_bounds = self._finite_range(tco3_arr, fallback=(0.0, 0.0))
-        elevation_bounds = self._finite_range(elevation_arr, fallback=(0.0, 0.0))
-        return (
-            round(sza_mean, 3),
-            round(vza_mean, 3),
-            round(raa_mean, 3),
-            round(tco3_bounds[0], 3),
-            round(tco3_bounds[1], 3),
-            round(elevation_bounds[0], 3),
-            round(elevation_bounds[1], 3),
+        return cast(
+            "tuple[float, ...]",
+            spectral_scene_cache_key(
+                sza=sza,
+                vza=vza,
+                raa=raa,
+                tco3=tco3,
+                elevation=elevation,
+                snap_axes=self._lut_coords,
+            ),
         )
 
-    @classmethod
     def _spectral_scene_summary(
         cls,
         *,
