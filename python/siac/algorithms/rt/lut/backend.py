@@ -29,7 +29,7 @@ from siac.algorithms.rt.lut._spectral_math import (
     summarize_spectral_scene,
     weighted_spectral_mean,
 )
-from siac.algorithms.rt.lut.constants import TCO3_ATMCM_TO_DU
+from siac.algorithms.rt.lut.constants import normalize_compact_ozone, state_tco3_to_lut
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 from siac.algorithms.rt.lut.store import as_local_path, build_lut_store
 from siac.domain.spectral import RelativeSpectralResponse
@@ -530,18 +530,10 @@ class ZarrLUTBackend:
         SIAC carries ozone in atm-cm. Some LUTs index ozone in DU, so values are
         upscaled by 1000 when the LUT axis is clearly in the DU regime.
         """
-        ozone = np.asarray(tco3, dtype=np.float32)
         ozone_axis = np.asarray(self._lut_coords["ozone"], dtype=np.float32)
-        # Atmospheric ozone often arrives in atm-cm (~0.3), while LUTs may use DU (~300).
-        finite_ozone = ozone[np.isfinite(ozone)]
-        if (
-            ozone_axis.size
-            and finite_ozone.size
-            and np.nanmax(np.abs(ozone_axis)) > 20
-            and np.nanmax(np.abs(finite_ozone)) < 10
-        ):
-            return cast("np.ndarray", ozone * 1000.0)
-        return cast("np.ndarray", ozone)
+        return cast(
+            "np.ndarray", normalize_compact_ozone(np.asarray(tco3, dtype=np.float32), ozone_axis)
+        )
 
     def _sanitize_point_indexers(self, coords: dict[str, xr.DataArray]) -> dict[str, xr.DataArray]:
         """Clamp available point indexers to the finite domain of each LUT axis."""
@@ -1239,7 +1231,7 @@ class ZarrLUTBackend:
         # empty range, and the nearest-value fallback then silently pinned every
         # scene to the 200 DU edge node (visibly wrong Chappuis-band absorption,
         # AOT biased low). Altitude is km on both sides.
-        ozone_du = np.asarray(tco3, dtype=np.float64) * TCO3_ATMCM_TO_DU
+        ozone_du = state_tco3_to_lut(np.asarray(tco3, dtype=np.float64))
         for dim, scene_values in {"ozone": ozone_du, "altitude": elevation}.items():
             if dim not in out.coords:
                 continue

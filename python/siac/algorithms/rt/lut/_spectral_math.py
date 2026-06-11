@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from siac.adapters.rsrf import band_convolution_weights
-from siac.algorithms.rt.lut.constants import TCWV_CM_TO_LUT_MM
+from siac.algorithms.rt.lut.constants import state_tcwv_to_lut
 from siac.algorithms.rt.lut.rsrf_kernel import build_aligned_rsrf_kernel
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ def build_point_interpolation_coords(
     coords = {
         "aot": xr.DataArray(require_finite_values(aot, name="aot"), dims=["point"]),
         "tcwv": xr.DataArray(
-            require_finite_values(tcwv, name="tcwv") * TCWV_CM_TO_LUT_MM,
+            state_tcwv_to_lut(require_finite_values(tcwv, name="tcwv")),
             dims=["point"],
         ),
     }
