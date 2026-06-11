@@ -206,6 +206,10 @@ module = [
     "zarr.*",
     "cv2",
     "cv2.*",
+    # Optional provider dependency (lazy-imported in adapters/bestpixel.py);
+    # not installed in the CI environment.
+    "bestpixel",
+    "bestpixel.*",
 ]
 ignore_missing_imports = true
 
