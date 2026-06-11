@@ -35,14 +35,21 @@ from siac._rust_compat import (
     quadratic_refine_grid_search_qa,
     remap_to_coarse_grid,
 )
+from siac.algorithms.solver._grid_search import (
+    aggregate_block_pixel_counts,
+    aggregate_valid_counts,
+    build_candidate_coeff_provider,
+    evaluate_candidate_cost_cube,
+    fixed_axis_from_prior,
+    prepare_grid_search_observations,
+)
+from siac.algorithms.solver._qa import build_solver_qa_dataset
 from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig
 from siac.domain.protocols import (
     RTModelBackend,
-    rt_optional_capability,
     rt_supports_jacobian,
 )
 from siac.runtime import AtmosphericState, BRDFKernelWeights, GeometryAngles, SurfacePrior
-from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.domain import SensorBand
@@ -658,53 +665,6 @@ class MultiGridSolver:
             return cast("FixedAtmosphericParameter", value)
         raise ValueError("fixed_atmospheric_parameter must be one of 'none', 'aot', or 'tcwv'")
 
-    @staticmethod
-    def _fixed_axis_from_prior(
-        prior: np.ndarray,
-        bounds: tuple[float, float],
-    ) -> Float32Array:
-        finite = prior[np.isfinite(prior)]
-        if finite.size:
-            value = float(np.mean(finite))
-        else:
-            value = 0.5 * (float(bounds[0]) + float(bounds[1]))
-        return cast(
-            "Float32Array",
-            np.array([np.clip(value, float(bounds[0]), float(bounds[1]))], dtype=np.float32),
-        )
-
-    @classmethod
-    def _finite_fixed_prior_field(
-        cls,
-        prior: np.ndarray,
-        bounds: tuple[float, float],
-    ) -> Float32Array:
-        values = np.asarray(prior, dtype=np.float32)
-        if np.all(np.isfinite(values)):
-            return values.astype(np.float32, copy=True)
-
-        fixed_axis = cls._fixed_axis_from_prior(values, bounds)
-        filled = values.astype(np.float32, copy=True)
-        filled[~np.isfinite(filled)] = fixed_axis[0]
-        return cast("Float32Array", filled)
-
-    @staticmethod
-    def _bound_tolerance(bounds: tuple[float, float]) -> float:
-        span = max(float(bounds[1]) - float(bounds[0]), 0.0)
-        return max(1.0e-6, span * 1.0e-5)
-
-    def _boundary_hit_masks(
-        self,
-        values: np.ndarray,
-        bounds: tuple[float, float],
-        valid_mask: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        atol = self._bound_tolerance(bounds)
-        finite = np.isfinite(values)
-        lower = valid_mask & finite & np.isclose(values, float(bounds[0]), rtol=0.0, atol=atol)
-        upper = valid_mask & finite & np.isclose(values, float(bounds[1]), rtol=0.0, atol=atol)
-        return lower, upper
-
     def _resample_boolean_mask(
         self,
         mask: np.ndarray,
@@ -715,15 +675,6 @@ class MultiGridSolver:
             target_shape,
         )
         return cast("BoolArray", np.asarray(resampled.values, dtype=bool))
-
-    def _mask_to_data_array(
-        self,
-        mask: np.ndarray,
-        template: xr.DataArray,
-    ) -> xr.DataArray:
-        coords = {dim: template.coords[dim] for dim in template.dims if dim in template.coords}
-        out = xr.DataArray(np.asarray(mask, dtype=bool), dims=template.dims, coords=coords)
-        return copy_spatial_metadata_like(out, template)
 
     def _build_solver_qa_dataset(
         self,
@@ -740,100 +691,22 @@ class MultiGridSolver:
         water_mask: np.ndarray | None,
         fitting_cost: np.ndarray | None = None,
     ) -> xr.Dataset:
-        valid = np.asarray(valid_mask, dtype=bool)
-        invalid = (
-            np.zeros_like(valid, dtype=bool)
-            if invalid_mask is None
-            else np.asarray(invalid_mask, dtype=bool) & valid
+        """Assemble the per-pixel QA dataset (see :mod:`._qa`)."""
+        return build_solver_qa_dataset(
+            template=template,
+            valid_mask=valid_mask,
+            aot=aot,
+            tcwv=tcwv,
+            invalid_mask=invalid_mask,
+            zero_obs_mask=zero_obs_mask,
+            insufficient_support_mask=insufficient_support_mask,
+            no_observation_mask=no_observation_mask,
+            sharp_transition_mask=sharp_transition_mask,
+            water_mask=water_mask,
+            aot_bounds=self.config.aot_bounds,
+            tcwv_bounds=self.config.tcwv_bounds,
+            fitting_cost=fitting_cost,
         )
-        zero_obs = (
-            np.zeros_like(valid, dtype=bool)
-            if zero_obs_mask is None
-            else np.asarray(zero_obs_mask, dtype=bool)
-        )
-        insufficient_support = (
-            np.zeros_like(valid, dtype=bool)
-            if insufficient_support_mask is None
-            else np.asarray(insufficient_support_mask, dtype=bool)
-        )
-        no_observation = (
-            np.zeros_like(valid, dtype=bool)
-            if no_observation_mask is None
-            else np.asarray(no_observation_mask, dtype=bool)
-        )
-        sharp_transition = (
-            np.zeros_like(valid, dtype=bool)
-            if sharp_transition_mask is None
-            else np.asarray(sharp_transition_mask, dtype=bool)
-        )
-        water_excluded = (
-            np.zeros_like(valid, dtype=bool)
-            if water_mask is None
-            else np.asarray(water_mask, dtype=bool)
-        )
-        aot_lower, aot_upper = self._boundary_hit_masks(
-            np.asarray(aot, dtype=np.float32),
-            self.config.aot_bounds,
-            valid,
-        )
-        tcwv_lower, tcwv_upper = self._boundary_hit_masks(
-            np.asarray(tcwv, dtype=np.float32),
-            self.config.tcwv_bounds,
-            valid,
-        )
-        parameter_boundary = aot_lower | aot_upper | tcwv_lower | tcwv_upper
-        low_quality = (
-            invalid
-            | zero_obs
-            | insufficient_support
-            | no_observation
-            | parameter_boundary
-            | sharp_transition
-            | water_excluded
-        )
-
-        qa_vars: dict[str, xr.DataArray] = {
-            "invalid_retrieval": self._mask_to_data_array(invalid, template),
-            "zero_obs_support": self._mask_to_data_array(zero_obs, template),
-            "insufficient_observation_support": self._mask_to_data_array(
-                insufficient_support, template
-            ),
-            "no_observation": self._mask_to_data_array(no_observation, template),
-            "sharp_transition_excluded": self._mask_to_data_array(sharp_transition, template),
-            "water_mask_excluded": self._mask_to_data_array(water_excluded, template),
-            "aot_lower_boundary": self._mask_to_data_array(aot_lower, template),
-            "aot_upper_boundary": self._mask_to_data_array(aot_upper, template),
-            "tcwv_lower_boundary": self._mask_to_data_array(tcwv_lower, template),
-            "tcwv_upper_boundary": self._mask_to_data_array(tcwv_upper, template),
-            "parameter_boundary": self._mask_to_data_array(parameter_boundary, template),
-            "low_quality": self._mask_to_data_array(low_quality, template),
-        }
-        if fitting_cost is not None:
-            cost_arr = np.asarray(fitting_cost, dtype=np.float32)
-            if cost_arr.shape != template.shape:
-                from scipy.ndimage import zoom
-
-                cost_arr = zoom(
-                    cost_arr,
-                    (
-                        template.shape[0] / cost_arr.shape[0],
-                        template.shape[1] / cost_arr.shape[1],
-                    ),
-                    order=1,
-                ).astype(np.float32)
-                cost_arr = cost_arr[: template.shape[0], : template.shape[1]]
-            solver_supported = valid & ~insufficient_support & ~no_observation
-            cost_arr = np.where(
-                solver_supported & np.isfinite(cost_arr),
-                cost_arr,
-                np.nan,
-            ).astype(np.float32, copy=False)
-            qa_vars["fitting_cost"] = xr.DataArray(
-                cost_arr,
-                dims=template.dims,
-                coords=template.coords,
-            )
-        return xr.Dataset(qa_vars)
 
     @staticmethod
     def _summarize_solver_qa(qa: xr.Dataset) -> dict[str, float]:
@@ -913,6 +786,10 @@ class MultiGridSolver:
         block solution back to the full solver grid. RT coefficients are sampled
         on the same block grid. Uncertainty is taken from the fitted local
         Hessian on the active solve grid.
+
+        The observation stacking, candidate coefficient provider, and
+        cost-cube evaluation steps live in :mod:`._grid_search`; this method
+        orchestrates them and post-processes the refined solution.
         """
         shape = self._get_shape(mask)
         valid_mask = mask.values.astype(bool)
@@ -938,229 +815,57 @@ class MultiGridSolver:
                 self.config.aot_bounds[0], self.config.aot_bounds[1], n_aot, dtype=np.float32
             )
             if solve_aot
-            else self._fixed_axis_from_prior(aot_prior, self.config.aot_bounds)
+            else fixed_axis_from_prior(aot_prior, self.config.aot_bounds)
         )
         tcwv_axis = (
             np.linspace(
                 self.config.tcwv_bounds[0], self.config.tcwv_bounds[1], n_tcwv, dtype=np.float32
             )
             if solve_tcwv
-            else self._fixed_axis_from_prior(tcwv_prior, self.config.tcwv_bounds)
+            else fixed_axis_from_prior(tcwv_prior, self.config.tcwv_bounds)
         )
 
         n_bands = len(bands)
-        toa_values = toa.values.astype(np.float32)
-        if toa_values.ndim == 2:
-            toa_values = toa_values[np.newaxis, ...]
-        if toa_values.shape != (n_bands, *shape):
-            raise ValueError(
-                f"TOA shape {toa_values.shape} incompatible with {n_bands} bands and grid {shape}"
-            )
-        toa_values = np.ascontiguousarray(toa_values, dtype=np.float32)
-        observation_band_mask = np.isfinite(toa_values) & (toa_values > 0.0) & (toa_values < 1.0)
-        observation_support_mask = np.all(observation_band_mask, axis=0)
-        no_observation_mask = ~np.any(observation_band_mask, axis=0)
-
-        boa_prior = surface_prior.boa.values.astype(np.float32)
-        if boa_prior.ndim == 2:
-            boa_prior = np.broadcast_to(boa_prior, (n_bands, *shape))
-        if boa_prior.ndim != 3 or boa_prior.shape[-2:] != shape:
-            raise ValueError(
-                f"BOA prior shape {boa_prior.shape} incompatible with {n_bands} bands and grid {shape}"
-            )
-        if boa_prior.shape[0] < n_bands:
-            raise ValueError(f"BOA prior has {boa_prior.shape[0]} bands, needs at least {n_bands}")
-        if boa_prior.shape[0] > n_bands:
-            boa_prior = boa_prior[:n_bands]
-        boa_prior = np.ascontiguousarray(boa_prior, dtype=np.float32)
-
-        boa_unc = np.maximum(
-            surface_prior.boa_unc.values.astype(np.float32), cost_config.min_boa_unc
+        (
+            toa_values,
+            no_observation_mask,
+            boa_prior,
+            boa_unc,
+            support_mask,
+        ) = prepare_grid_search_observations(
+            toa=toa,
+            surface_prior=surface_prior,
+            n_bands=n_bands,
+            shape=shape,
+            min_boa_unc=cost_config.min_boa_unc,
+            aot_prior=aot_prior,
+            tcwv_prior=tcwv_prior,
+            aot_prior_unc=aot_prior_unc,
+            tcwv_prior_unc=tcwv_prior_unc,
         )
-        if boa_unc.ndim == 2:
-            boa_unc = np.broadcast_to(boa_unc, (n_bands, *shape))
-        if boa_unc.ndim != 3 or boa_unc.shape[-2:] != shape:
-            raise ValueError(
-                f"BOA uncertainty shape {boa_unc.shape} incompatible with {n_bands} bands and grid {shape}"
-            )
-        if boa_unc.shape[0] < n_bands:
-            raise ValueError(
-                f"BOA uncertainty has {boa_unc.shape[0]} bands, needs at least {n_bands}"
-            )
-        if boa_unc.shape[0] > n_bands:
-            boa_unc = boa_unc[:n_bands]
-        boa_unc = np.ascontiguousarray(boa_unc, dtype=np.float32)
-        prior_support_mask = (
-            np.all(np.isfinite(boa_prior), axis=0)
-            & np.all(np.isfinite(boa_unc), axis=0)
-            & np.isfinite(aot_prior)
-            & np.isfinite(tcwv_prior)
-            & np.isfinite(aot_prior_unc)
-            & np.isfinite(tcwv_prior_unc)
-        )
-        support_mask = observation_support_mask & prior_support_mask
         solve_valid_mask = valid_mask & support_mask
 
+        # RT coefficients are sampled on the block grid; the provider fills one
+        # shared coefficient stack per (aot, tcwv) candidate, served from a
+        # joint LUT when the backend offers one (see _grid_search for details).
         block_size = max(1, self.config.quadratic_block_size)
-        rt_sample_step = block_size
-        coeff_spatial_shape = (
-            shape
-            if rt_sample_step <= 1
-            else (
-                (shape[0] + rt_sample_step - 1) // rt_sample_step,
-                (shape[1] + rt_sample_step - 1) // rt_sample_step,
-            )
+        candidate_coeff_provider = build_candidate_coeff_provider(
+            rt_model=rt_model,
+            bands=bands,
+            geometry=geometry,
+            atmo_prior=atmo_prior,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            solve_aot=solve_aot,
+            solve_tcwv=solve_tcwv,
+            aot_bounds=self.config.aot_bounds,
+            tcwv_bounds=self.config.tcwv_bounds,
+            rt_sample_step=block_size,
+            shape=shape,
         )
 
-        xap_stack: Float32Array = np.empty((n_bands, *coeff_spatial_shape), dtype=np.float32)
-        xbp_stack: Float32Array = np.empty((n_bands, *coeff_spatial_shape), dtype=np.float32)
-        xcp_stack: Float32Array = np.empty((n_bands, *coeff_spatial_shape), dtype=np.float32)
-
-        coeff_geometry = geometry
-        coeff_atmo_template = atmo_prior
-        if rt_sample_step > 1:
-            coeff_geometry = self._subsample_geometry(geometry, rt_sample_step)
-            coeff_atmo_template = self._subsample_atmo_state(atmo_prior, rt_sample_step)
-
-        def _empty_float32_like(template: xr.DataArray) -> xr.DataArray:
-            return xr.DataArray(
-                np.empty(template.shape, dtype=np.float32),
-                dims=template.dims,
-                coords=template.coords,
-                attrs=template.attrs,
-                name=template.name,
-            )
-
-        candidate_aot = _empty_float32_like(coeff_atmo_template.aot)
-        candidate_tcwv = _empty_float32_like(coeff_atmo_template.tcwv)
-        candidate_aot_values = cast("Float32Array", candidate_aot.data)
-        candidate_tcwv_values = cast("Float32Array", candidate_tcwv.data)
-        if not solve_aot:
-            candidate_aot_values[...] = self._finite_fixed_prior_field(
-                coeff_atmo_template.aot.values,
-                self.config.aot_bounds,
-            )
-        if not solve_tcwv:
-            candidate_tcwv_values[...] = self._finite_fixed_prior_field(
-                coeff_atmo_template.tcwv.values,
-                self.config.tcwv_bounds,
-            )
-        candidate_atmo = AtmosphericState(
-            aot=candidate_aot,
-            tcwv=candidate_tcwv,
-            tco3=coeff_atmo_template.tco3,
-            aot_unc=coeff_atmo_template.aot_unc,
-            tcwv_unc=coeff_atmo_template.tcwv_unc,
-            tco3_unc=coeff_atmo_template.tco3_unc,
-            elevation=coeff_atmo_template.elevation,
-        )
-
-        def _assign_coeff_stack(
-            target: Float32Array,
-            band_index: int,
-            values: xr.DataArray,
-        ) -> None:
-            coeff_values = np.asarray(values.values, dtype=np.float32)
-            expected_shape = target[band_index].shape
-            if coeff_values.shape != expected_shape:
-                raise ValueError(
-                    f"RT coefficients for band {band_index} have shape {coeff_values.shape}, "
-                    f"expected {expected_shape}"
-                )
-            target[band_index] = coeff_values
-
-        # Try to build a single joint (aot × tcwv × geometry) LUT spanning the
-        # entire grid-search range. The block-grid-search invokes the coeff
-        # provider hundreds of times (N_aot × N_tcwv pairs); each call would
-        # otherwise run a fresh 6S batch per band. The joint LUT amortises
-        # those 6S calls across all candidates by precomputing one big LUT and
-        # serving each candidate by interpolation instead. Because the LUT
-        # nodes in the (aot, tcwv) axes coincide with the grid-search points,
-        # the lookups are exact at the candidate values and only the geometric
-        # dimensions are linearly interpolated — the same approximation the
-        # per-candidate scene-LUT path already makes.
-        #
-        # IMPORTANT: pass ``coeff_atmo_template`` (the prior, with deterministic
-        # per-pixel aot/tcwv values) — NOT ``candidate_atmo``, whose aot/tcwv
-        # arrays are allocated with ``np.empty`` and may contain uninitialised
-        # memory at this point (the values only get filled inside the provider
-        # closure once a real candidate is in hand). Feeding uninitialised
-        # values to the builder leaks NaNs into the LUT's ``valid_mask``
-        # check, producing a non-deterministic valid pixel set across runs.
-        # The aot/tcwv per-pixel arrays passed in here are only used to
-        # populate the LUT's case_arrays for completeness; the actual aot/tcwv
-        # axes the LUT spans come from the explicit ``aot_axis`` / ``tcwv_axis``
-        # arguments below.
-        #
-        # When the backend doesn't support this optimization (non-6S backend,
-        # or sixs.mode == "direct"), build_joint_grid_search_lut returns None
-        # and we fall through to the original per-candidate compute path.
-        joint_lut = None
-        joint_lut_builder = rt_optional_capability(rt_model, "build_joint_grid_search_lut")
-        if joint_lut_builder is not None:
-            try:
-                joint_lut = joint_lut_builder(
-                    geometry=coeff_geometry,
-                    atmo_state=coeff_atmo_template,
-                    aot_axis=aot_axis.astype(np.float64, copy=False),
-                    tcwv_axis=tcwv_axis.astype(np.float64, copy=False),
-                    bands=bands,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to build joint grid-search LUT; falling back to the "
-                    "per-candidate scene-LUT compute path."
-                )
-                joint_lut = None
-
-        if joint_lut is not None:
-            logger.info(
-                "Block-grid-search using joint LUT: %d aot × %d tcwv × %d bands "
-                "(LUT case_count=%d, scene pixels=%d).",
-                int(aot_axis.size),
-                int(tcwv_axis.size),
-                len(bands),
-                joint_lut.plan.lut_case_count,
-                joint_lut.plan.direct_case_count,
-            )
-
-            def _candidate_coeff_provider(
-                aot_val: float, tcwv_val: float
-            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-                if solve_aot:
-                    candidate_aot_values.fill(np.float32(aot_val))
-                if solve_tcwv:
-                    candidate_tcwv_values.fill(np.float32(tcwv_val))
-                band_outputs = joint_lut.evaluate(float(aot_val), float(tcwv_val))
-                for ib, outputs in enumerate(band_outputs):
-                    _assign_coeff_stack(xap_stack, ib, outputs["xap"])
-                    _assign_coeff_stack(xbp_stack, ib, outputs["xbp"])
-                    _assign_coeff_stack(xcp_stack, ib, outputs["xcp"])
-                return xap_stack, xbp_stack, xcp_stack
-        else:
-
-            def _candidate_coeff_provider(
-                aot_val: float, tcwv_val: float
-            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-                if solve_aot:
-                    candidate_aot_values.fill(np.float32(aot_val))
-                if solve_tcwv:
-                    candidate_tcwv_values.fill(np.float32(tcwv_val))
-
-                for ib, band in enumerate(bands):
-                    coeffs = rt_model.compute_coefficients(
-                        coeff_geometry,
-                        candidate_atmo,
-                        band,
-                        compute_jacobian=False,
-                    )
-                    _assign_coeff_stack(xap_stack, ib, coeffs.xap)
-                    _assign_coeff_stack(xbp_stack, ib, coeffs.xbp)
-                    _assign_coeff_stack(xcp_stack, ib, coeffs.xcp)
-                return xap_stack, xbp_stack, xcp_stack
-
-        block_valid_counts = self._aggregate_valid_counts(solve_valid_mask, block_size)
-        block_total_counts = self._aggregate_block_pixel_counts(shape, block_size)
+        block_valid_counts = aggregate_valid_counts(solve_valid_mask, block_size)
+        block_total_counts = aggregate_block_pixel_counts(shape, block_size)
         min_valid_fraction = min(
             max(float(self.config.quadratic_block_min_valid_fraction), 0.0),
             1.0,
@@ -1172,58 +877,28 @@ class MultiGridSolver:
             ),
         )
         block_support_mask = block_valid_counts >= block_required_counts
-        block_valid_mask = block_support_mask.copy()
 
-        if block_size > 1:
-            costs_raw, obs_counts_raw, block_valid_mask_raw = (
-                evaluate_block_grid_search_cost_cube_with_provider_qa(
-                    _candidate_coeff_provider,
-                    aot_axis.astype(np.float32, copy=False),
-                    tcwv_axis.astype(np.float32, copy=False),
-                    toa_values,
-                    boa_prior,
-                    boa_unc,
-                    band_weights,
-                    solve_valid_mask.astype(bool, copy=False),
-                    aot_prior,
-                    tcwv_prior,
-                    aot_prior_unc,
-                    tcwv_prior_unc,
-                    block_size,
-                    fixed_parameter,
-                )
-            )
-            block_valid_mask = np.asarray(block_valid_mask_raw, dtype=bool) & block_support_mask
-            refine_valid_mask = block_valid_mask.astype(bool, copy=False)
-        else:
-            costs_raw, obs_counts_raw = evaluate_grid_search_cost_cube_with_provider_qa(
-                _candidate_coeff_provider,
-                aot_axis.astype(np.float32, copy=False),
-                tcwv_axis.astype(np.float32, copy=False),
-                toa_values,
-                boa_prior,
-                boa_unc,
-                band_weights,
-                solve_valid_mask.astype(bool, copy=False),
-                aot_prior,
-                tcwv_prior,
-                aot_prior_unc,
-                tcwv_prior_unc,
-                fixed_parameter,
-            )
-            refine_valid_mask = solve_valid_mask.astype(bool, copy=False)
-        costs = np.asarray(costs_raw, dtype=np.float32)
-        obs_counts = np.asarray(obs_counts_raw, dtype=np.uint16)
-        if block_size > 1:
-            costs = np.where(block_valid_mask[np.newaxis, np.newaxis, :, :], costs, np.inf).astype(
-                np.float32,
-                copy=False,
-            )
-            obs_counts = np.where(
-                block_valid_mask[np.newaxis, np.newaxis, :, :],
-                obs_counts,
-                np.uint16(0),
-            ).astype(np.uint16, copy=False)
+        # The Rust kernels are passed from this module's namespace so that
+        # monkeypatching the ``multigrid`` attributes keeps intercepting them.
+        costs, obs_counts, block_valid_mask, refine_valid_mask = evaluate_candidate_cost_cube(
+            coeff_provider=candidate_coeff_provider,
+            aot_axis=aot_axis,
+            tcwv_axis=tcwv_axis,
+            toa_values=toa_values,
+            boa_prior=boa_prior,
+            boa_unc=boa_unc,
+            band_weights=band_weights,
+            solve_valid_mask=solve_valid_mask,
+            aot_prior=aot_prior,
+            tcwv_prior=tcwv_prior,
+            aot_prior_unc=aot_prior_unc,
+            tcwv_prior_unc=tcwv_prior_unc,
+            block_size=block_size,
+            fixed_parameter=fixed_parameter,
+            block_support_mask=block_support_mask,
+            block_cost_cube_fn=evaluate_block_grid_search_cost_cube_with_provider_qa,
+            pixel_cost_cube_fn=evaluate_grid_search_cost_cube_with_provider_qa,
+        )
 
         (
             aot_best,
@@ -1541,29 +1216,6 @@ class MultiGridSolver:
         return da[::step, ::step]
 
     @staticmethod
-    def _subsample_geometry(geometry: GeometryAngles, step: int) -> GeometryAngles:
-        """Return a subsampled copy of the geometry angles."""
-        return GeometryAngles(
-            sza=geometry.sza[::step, ::step],
-            saa=geometry.saa[::step, ::step],
-            vza=geometry.vza[::step, ::step],
-            vaa=geometry.vaa[::step, ::step],
-        )
-
-    @staticmethod
-    def _subsample_atmo_state(state: AtmosphericState, step: int) -> AtmosphericState:
-        """Return a subsampled copy of the atmospheric state."""
-        return AtmosphericState(
-            aot=state.aot[::step, ::step],
-            tcwv=state.tcwv[::step, ::step],
-            tco3=state.tco3[::step, ::step],
-            aot_unc=state.aot_unc[::step, ::step],
-            tcwv_unc=state.tcwv_unc[::step, ::step],
-            tco3_unc=state.tco3_unc[::step, ::step],
-            elevation=state.elevation[::step, ::step],
-        )
-
-    @staticmethod
     def _broadcast_to_full(
         coarse: np.ndarray,
         full_shape: tuple[int, int],
@@ -1575,32 +1227,6 @@ class MultiGridSolver:
             step,
             axis=1,
         )[: full_shape[0], : full_shape[1]]
-
-    @staticmethod
-    def _aggregate_valid_counts(mask: np.ndarray, step: int) -> np.ndarray:
-        """Count valid pixels contributing to each NxN block."""
-        source = np.asarray(mask, dtype=bool)
-        if step <= 1:
-            return source.astype(np.int32, copy=False)
-
-        by = (source.shape[0] + step - 1) // step
-        bx = (source.shape[1] + step - 1) // step
-        pad_y = by * step - source.shape[0]
-        pad_x = bx * step - source.shape[1]
-        padded = np.pad(source, ((0, pad_y), (0, pad_x)), mode="constant", constant_values=False)
-        return padded.reshape(by, step, bx, step).sum(axis=(1, 3), dtype=np.int32)
-
-    @staticmethod
-    def _aggregate_block_pixel_counts(shape: tuple[int, int], step: int) -> np.ndarray:
-        """Return the number of full-resolution pixels in each NxN block."""
-        if step <= 1:
-            return np.ones(shape, dtype=np.int32)
-
-        by = (shape[0] + step - 1) // step
-        bx = (shape[1] + step - 1) // step
-        rows = np.minimum(step, shape[0] - np.arange(by, dtype=np.int32) * step)
-        cols = np.minimum(step, shape[1] - np.arange(bx, dtype=np.int32) * step)
-        return (rows[:, np.newaxis] * cols[np.newaxis, :]).astype(np.int32, copy=False)
 
     @staticmethod
     def _smooth_grid_search_field(
