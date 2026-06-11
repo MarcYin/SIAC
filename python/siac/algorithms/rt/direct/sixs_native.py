@@ -1726,7 +1726,7 @@ class SixSNativeRunner:
             for band in bands:
                 native_kwargs = self._band_native_kwargs(prepared, band)
                 native_kwargs.update(plan.grid_case_arrays)
-                band_outputs.append(self._run_native_batch(**native_kwargs))
+                band_outputs.append(self._run_native_batch_cached(native_kwargs))
             return band_outputs
 
         worker_count = min(n_bands, self._worker_library_count())
@@ -1736,7 +1736,7 @@ class SixSNativeRunner:
             for band in bands:
                 native_kwargs = self._band_native_kwargs(prepared, band)
                 native_kwargs.update(plan.grid_case_arrays)
-                band_outputs.append(self._run_native_batch(**native_kwargs))
+                band_outputs.append(self._run_native_batch_cached(native_kwargs))
             return band_outputs
 
         # Each session uses a fraction of the available OpenMP threads so
@@ -1757,6 +1757,14 @@ class SixSNativeRunner:
 
         def _run_single_band(session: _SixSExtensionModule, band_index: int) -> _NativeBatchResult:
             kwargs = band_kwargs[band_index]
+            # Same persistent grid-batch cache as the sequential paths: the
+            # joint-LUT batch is the heaviest Fortran compute in a retrieval,
+            # so a re-run must reuse it rather than only the small scene grids.
+            key = self._native_grid_cache_key(kwargs)
+            if key is not None:
+                cached = self._load_native_grid(key)
+                if cached is not None:
+                    return cached
             result = session.run_batch(n_threads=per_worker_threads, **kwargs)
             failed = result.status != 0
             if np.any(failed):
@@ -1767,6 +1775,8 @@ class SixSNativeRunner:
                     int(np.count_nonzero(failed)),
                     band_index,
                 )
+            if key is not None:
+                self._store_native_grid(key, result)
             return result
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:

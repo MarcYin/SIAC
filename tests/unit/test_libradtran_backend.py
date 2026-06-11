@@ -31,6 +31,7 @@ from siac.algorithms.rt.direct.libradtran_runner import (
     LibRadtranRunner,
     _axis_from_scene,
     _InMemorySpectralLUTBackend,
+    _LibRadtranJointGridSearchLUT,
     build_uvspec_deck,
     parse_uvspec_table,
 )
@@ -254,6 +255,45 @@ def test_in_memory_spectral_backend_returns_finite_coefficients() -> None:
     assert np.all(coeffs.xap.values > 0.0)  # xap = 1 / T_total
     assert np.all(np.isfinite(coeffs.xbp.values))
     assert np.all(np.isfinite(coeffs.xcp.values))
+
+
+def test_joint_grid_search_lut_matches_per_pixel_evaluation() -> None:
+    """The O(1) single-point ``evaluate`` must equal the per-pixel path it replaced.
+
+    The joint LUT's in-memory backend collapses geometry/ozone/altitude to the
+    scene mean, so for a spatially-uniform (aot, tcwv) candidate every pixel
+    maps to the same lookup. ``evaluate`` therefore computes one point and
+    broadcasts — this pins both the broadcast shape and numerical equivalence
+    with a full per-pixel ``compute_coefficients`` call at the same candidate.
+    """
+    backend = _InMemorySpectralLUTBackend(_synthetic_spectral_lut())
+    geom, atmo = _scene()
+    band = _band()
+    joint = _LibRadtranJointGridSearchLUT(
+        backend=backend, geometry=geom, atmo_state=atmo, bands=[band], node_count=8
+    )
+    aot_val, tcwv_val = 0.2, 1.4  # tcwv in cm (SIAC state units)
+
+    outputs = joint.evaluate(aot_val, tcwv_val)
+    assert len(outputs) == 1
+    out = outputs[0]
+    for name in ("xap", "xbp", "xcp"):
+        assert out[name].shape == atmo.aot.shape  # broadcast to the scene grid
+        assert np.unique(out[name].values).size == 1  # spatially constant
+
+    uniform = AtmosphericState(
+        aot=xr.full_like(atmo.aot, aot_val),
+        tcwv=xr.full_like(atmo.tcwv, tcwv_val),
+        tco3=atmo.tco3,
+        aot_unc=atmo.aot_unc,
+        tcwv_unc=atmo.tcwv_unc,
+        tco3_unc=atmo.tco3_unc,
+        elevation=atmo.elevation,
+    )
+    direct = backend.compute_coefficients(geom, uniform, band)
+    np.testing.assert_allclose(out["xap"].values, direct.xap.values, rtol=1e-6)
+    np.testing.assert_allclose(out["xbp"].values, direct.xbp.values, rtol=1e-6)
+    np.testing.assert_allclose(out["xcp"].values, direct.xcp.values, rtol=1e-6)
 
 
 def test_in_memory_backend_does_not_use_disk_scene_subset_cache(

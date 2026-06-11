@@ -303,6 +303,16 @@ def _subsample_axis(axis: np.ndarray, max_nodes: int) -> np.ndarray:
     return cast("np.ndarray", axis[idx])
 
 
+def _scalar_cell(value: float) -> xr.DataArray:
+    """A 1x1 ``(y, x)`` field holding one value (single-point scene inputs)."""
+    return xr.DataArray(np.full((1, 1), float(value), dtype=np.float64), dims=("y", "x"))
+
+
+def _nanmean_value(values: xr.DataArray) -> float:
+    """Scene-mean of a field as a plain float (NaN when nothing is finite)."""
+    return float(np.nanmean(np.asarray(values.values, dtype=np.float64)))
+
+
 class _LibRadtranJointGridSearchLUT:
     """Joint (aot x tcwv) grid-search LUT backed by one in-memory spectral LUT.
 
@@ -324,27 +334,62 @@ class _LibRadtranJointGridSearchLUT:
         node_count: int,
     ) -> None:
         self._backend = backend
-        self._geometry = geometry
-        self._atmo = atmo_state
         self._bands = bands
         finite = int(np.count_nonzero(np.isfinite(np.asarray(atmo_state.aot.values))))
         self.plan = SimpleNamespace(lut_case_count=int(node_count), direct_case_count=finite)
+        # The in-memory scene LUT collapses geometry/ozone/altitude to the
+        # scene mean (singleton axes), so for a spatially-uniform (aot, tcwv)
+        # candidate EVERY pixel maps to the same LUT query. Evaluate once on a
+        # 1x1 scene at the scene means and broadcast the three scalars, instead
+        # of paying the full per-pixel interpolation pipeline for
+        # ~grid_pixels x bands x candidates identical points.
+        self._template_shape = tuple(np.asarray(atmo_state.aot.values).shape)
+        self._template_dims = tuple(atmo_state.aot.dims)
+        # saa=0 / vaa=mean(raa) reproduces the scene-mean relative azimuth the
+        # full-field path would compute (raa = |vaa - saa| % 2pi, and the mean
+        # of per-pixel raa already lies in [0, 2pi)).
+        self._point_geometry = GeometryAngles(
+            sza=_scalar_cell(_nanmean_value(geometry.sza)),
+            saa=_scalar_cell(0.0),
+            vza=_scalar_cell(_nanmean_value(geometry.vza)),
+            vaa=_scalar_cell(_nanmean_value(geometry.raa)),
+        )
+        zero = _scalar_cell(0.0)
+        self._point_state = {
+            "tco3": _scalar_cell(_nanmean_value(atmo_state.tco3)),
+            "elevation": _scalar_cell(_nanmean_value(atmo_state.elevation)),
+            "aot_unc": zero,
+            "tcwv_unc": zero,
+            "tco3_unc": zero,
+        }
 
     def evaluate(self, aot_val: float, tcwv_val: float) -> list[dict[str, xr.DataArray]]:
         """Per-band xap/xbp/xcp for one (aot, tcwv) candidate via interpolation."""
         atmo = AtmosphericState(
-            aot=xr.full_like(self._atmo.aot, float(aot_val)),
-            tcwv=xr.full_like(self._atmo.tcwv, float(tcwv_val)),
-            tco3=self._atmo.tco3,
-            aot_unc=self._atmo.aot_unc,
-            tcwv_unc=self._atmo.tcwv_unc,
-            tco3_unc=self._atmo.tco3_unc,
-            elevation=self._atmo.elevation,
+            aot=_scalar_cell(float(aot_val)),
+            tcwv=_scalar_cell(float(tcwv_val)),
+            **self._point_state,
         )
         outputs: list[dict[str, xr.DataArray]] = []
         for band in self._bands:
-            coeffs = self._backend.compute_coefficients(self._geometry, atmo, band)
-            outputs.append({"xap": coeffs.xap, "xbp": coeffs.xbp, "xcp": coeffs.xcp})
+            coeffs = self._backend.compute_coefficients(self._point_geometry, atmo, band)
+            outputs.append(
+                {
+                    name: xr.DataArray(
+                        np.full(
+                            self._template_shape,
+                            float(np.asarray(values.values).reshape(-1)[0]),
+                            dtype=np.float32,
+                        ),
+                        dims=self._template_dims,
+                    )
+                    for name, values in (
+                        ("xap", coeffs.xap),
+                        ("xbp", coeffs.xbp),
+                        ("xcp", coeffs.xcp),
+                    )
+                }
+            )
         return outputs
 
 

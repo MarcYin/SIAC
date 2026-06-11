@@ -1515,6 +1515,10 @@ def test_preload_joint_grid_search_lut_serves_subsequent_build(
             joint_grid_search_lut_max_nodes_per_axis=2,
             joint_grid_search_lut_max_cases=4096,
             parallel_backend="openmp",  # exercise the mockable batch path
+            # This test pins the in-memory PRELOAD-slot semantics (consumed by
+            # the next build); the persistent grid-batch run cache would also
+            # serve the repeat batches and mask the recompute it asserts.
+            run_cache_enabled=False,
         )
     )
     runner = backend._runner
