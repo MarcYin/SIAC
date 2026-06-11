@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 import xarray as xr
 
 from siac.adapters.data.water_mask import DEFAULT_WATER_MASK_VRT_URL
+from siac.domain.protocols import rt_optional_capability
 from siac.errors import ValidationError as SIACValidationError
 from siac.observability import (
     ExecutionObserver,
@@ -175,8 +176,8 @@ def _maybe_submit_lut_preload(
     preload_geometry = _geometry_for_atmo_grid(obs.geometry, atmo)
     observer = resolve_execution_observer(observer_id)
 
-    joint_preload_fn = getattr(rt_model, "preload_joint_grid_search_lut", None)
-    if callable(joint_preload_fn) and solver_config is not None:
+    joint_preload_fn = rt_optional_capability(rt_model, "preload_joint_grid_search_lut")
+    if joint_preload_fn is not None and solver_config is not None:
         # Local import to avoid an algorithms ↔ workflows cycle.
         from siac.algorithms.solver.multigrid import derive_grid_search_axes
 
@@ -214,8 +215,8 @@ def _maybe_submit_lut_preload(
                 observer_id=observer_id,
             )
 
-    preload_fn = getattr(rt_model, "preload_scene_subset", None)
-    if not callable(preload_fn):
+    preload_fn = rt_optional_capability(rt_model, "preload_scene_subset")
+    if preload_fn is None:
         return None
 
     logger.info(
@@ -353,8 +354,8 @@ def _open_correction_output_stream(
 
 
 def _set_rt_observation_time(rt_model: Any, observation_time: datetime) -> None:
-    setter = getattr(rt_model, "set_observation_time", None)
-    if callable(setter):
+    setter = rt_optional_capability(rt_model, "set_observation_time")
+    if setter is not None:
         setter(observation_time)
 
 

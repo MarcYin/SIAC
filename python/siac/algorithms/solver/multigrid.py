@@ -36,7 +36,11 @@ from siac._rust_compat import (
     remap_to_coarse_grid,
 )
 from siac.algorithms.solver.cost import CostFunction, CostFunctionConfig
-from siac.domain.protocols import RTModelBackend
+from siac.domain.protocols import (
+    RTModelBackend,
+    rt_optional_capability,
+    rt_supports_jacobian,
+)
 from siac.runtime import AtmosphericState, BRDFKernelWeights, GeometryAngles, SurfacePrior
 from siac.runtime.models import copy_spatial_metadata_like
 
@@ -644,13 +648,7 @@ class MultiGridSolver:
     @staticmethod
     def _rt_model_supports_jacobian(rt_model: RTModelBackend) -> bool:
         """Return whether backend can provide per-pixel RT Jacobians."""
-        fn = getattr(rt_model, "supports_jacobian", None)
-        if callable(fn):
-            try:
-                return bool(fn())
-            except Exception:
-                return False
-        return False
+        return rt_supports_jacobian(rt_model)
 
     def _fixed_parameter(self) -> FixedAtmosphericParameter:
         value = str(self.config.fixed_atmospheric_parameter).strip().lower()
@@ -1098,8 +1096,8 @@ class MultiGridSolver:
         # or sixs.mode == "direct"), build_joint_grid_search_lut returns None
         # and we fall through to the original per-candidate compute path.
         joint_lut = None
-        joint_lut_builder = getattr(rt_model, "build_joint_grid_search_lut", None)
-        if callable(joint_lut_builder):
+        joint_lut_builder = rt_optional_capability(rt_model, "build_joint_grid_search_lut")
+        if joint_lut_builder is not None:
             try:
                 joint_lut = joint_lut_builder(
                     geometry=coeff_geometry,

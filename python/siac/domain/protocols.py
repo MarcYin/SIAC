@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from datetime import datetime
     from pathlib import Path
 
@@ -123,7 +123,25 @@ class MonthlyCompositeProvider(Protocol):
 # not property semantics — see REVIEW.md §2.3
 @runtime_checkable
 class RTModelBackend(Protocol):
-    """Protocol for RT backends."""
+    """Protocol for RT backends.
+
+    This is the REQUIRED contract every backend implements. Backends may
+    additionally provide the optional capabilities below, discovered via the
+    ``rt_*`` accessor functions in this module (a Protocol cannot express
+    optional methods, and scattering ``getattr`` probes across the solver and
+    pipeline hid which hooks exist):
+
+    - ``compute_coefficients_multi(geometry, atmo_state, bands, ...)`` —
+      batch per-band evaluation that amortises shared scene work.
+    - ``build_joint_grid_search_lut(geometry=..., atmo_state=..., aot_axis=...,
+      tcwv_axis=..., bands=...)`` — one LUT spanning the solver's block-grid
+      search range, served per candidate by interpolation (6S, libRadtran).
+    - ``preload_joint_grid_search_lut(...)`` — background warm-up of the above.
+    - ``preload_scene_subset(geometry, atmo_state, bands)`` — background
+      materialisation of the remote-LUT scene subset.
+    - ``set_observation_time(datetime | None)`` — observation-time hint for
+      backends whose physics depend on it.
+    """
 
     def compute_coefficients(
         self,
@@ -139,6 +157,28 @@ class RTModelBackend(Protocol):
     def backend_name(self) -> str: ...
 
     def is_available_for_sensor(self, sensor_id: str, satellite_id: str) -> bool: ...
+
+
+def rt_optional_capability(rt_model: object, name: str) -> Callable[..., Any] | None:
+    """Return the named optional RT-backend hook, or None when not provided.
+
+    The single discovery point for the optional capabilities documented on
+    :class:`RTModelBackend` — call sites use this instead of ad-hoc
+    ``getattr`` so the set of recognised hooks stays auditable here.
+    """
+    fn = getattr(rt_model, name, None)
+    return fn if callable(fn) else None
+
+
+def rt_supports_jacobian(rt_model: object) -> bool:
+    """Whether the backend can provide per-pixel RT Jacobians (False on error)."""
+    fn = rt_optional_capability(rt_model, "supports_jacobian")
+    if fn is None:
+        return False
+    try:
+        return bool(fn())
+    except Exception:
+        return False
 
 
 @runtime_checkable
