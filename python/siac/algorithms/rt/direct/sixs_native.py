@@ -2,16 +2,9 @@
 
 from __future__ import annotations
 
-import ctypes
 import hashlib
-import importlib.machinery
-import importlib.util
 import logging
 import os
-import shutil
-import sys
-import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,14 +18,24 @@ from siac.algorithms.rt._run_cache import (
     resolve_run_cache_dir,
     store_cache_entry,
 )
+from siac.algorithms.rt.direct._sixs_scene_lut import (
+    _CASE_ARRAY_NAMES,
+    _build_joint_grid_search_lut_plan,
+    _build_scene_lut_plan,
+    _interpolate_scene_lut_outputs,
+    _SceneLUTPlan,
+    _should_use_scene_lut,
+)
+from siac.algorithms.rt.direct._sixs_session import (
+    _default_native_threads,
+    _empty_output_bundle,
+    _NativeBatchResult,
+    _SixSExtensionModule,
+)
 from siac.algorithms.rt.direct.sixs_build import ensure_native_sixs_module
 from siac.geo.resample import resample_field_to_template, shares_template_grid
 from siac.runtime.models import copy_spatial_metadata_like
-from siac.sixs_outputs import (
-    SIXS_BASE_OUTPUTS,
-    SIXS_NATIVE_OUTPUT_NAMES,
-    SIXS_OUTPUT_VARIABLE_CHOICES,
-)
+from siac.sixs_outputs import SIXS_BASE_OUTPUTS, SIXS_OUTPUT_VARIABLE_CHOICES
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -107,93 +110,6 @@ _BRDF_MODEL_CODES: dict[str, int] = {
     "modis": 10,
     "ross_li_maignan": 11,
 }
-_MODULE_CACHE: dict[tuple[Path, int, int], Any] = {}
-_OPENMP_RUNTIME_PRELOADED = False
-
-
-def _preload_openmp_runtime() -> None:
-    """Load OpenMP symbols globally for native 6S extensions built on macOS."""
-    global _OPENMP_RUNTIME_PRELOADED
-    if _OPENMP_RUNTIME_PRELOADED:
-        return
-
-    candidates: list[Path] = []
-    env_path = os.getenv("SIAC_SIXS_OPENMP_RUNTIME")
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-
-    lib_dir = Path(sys.prefix) / "lib"
-    for name in (
-        "libgomp.dylib",
-        "libgomp.1.dylib",
-        "libgomp.so.1",
-        "libgomp.so",
-        "libomp.dylib",
-        "libomp.so",
-    ):
-        candidates.append(lib_dir / name)
-
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        try:
-            ctypes.CDLL(os.fspath(candidate), mode=ctypes.RTLD_GLOBAL)
-        except OSError as exc:
-            logger.debug("Failed to preload OpenMP runtime %s: %s", candidate, exc)
-            continue
-        _OPENMP_RUNTIME_PRELOADED = True
-        return
-
-
-_CASE_ARRAY_NAMES: tuple[str, ...] = (
-    "sza_deg",
-    "saa_deg",
-    "vza_deg",
-    "vaa_deg",
-    "aot550",
-    "tcwv_cm",
-    "tco3_atmcm",
-    "elevation_km",
-)
-
-
-def _module_isolation_root() -> Path:
-    root = Path.home().expanduser() / ".cache" / "siac" / "rt6s" / "module_copies"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _preferred_module_isolation_root(source: Path) -> Path:
-    parent = source.expanduser().resolve().parent
-    if os.access(parent, os.W_OK | os.X_OK):
-        return parent
-    return _module_isolation_root()
-
-
-def _copy_isolated_module(source: Path, destination: Path) -> None:
-    try:
-        os.link(source, destination)
-        return
-    except OSError:
-        pass
-    last_error: PermissionError | None = None
-    for attempt in range(3):
-        try:
-            shutil.copyfile(source, destination)
-            shutil.copystat(source, destination)
-            return
-        except PermissionError as exc:
-            last_error = exc
-            if attempt == 2:
-                break
-            time.sleep(0.05 * (attempt + 1))
-    if last_error is not None:
-        raise last_error
-
-
-def _default_native_threads() -> int:
-    cpu_total = os.cpu_count() or 1
-    return max(1, cpu_total)
 
 
 def _resample_geometry_to_template(
@@ -784,10 +700,6 @@ def _encode_aerosol_model_path(path: Path | None) -> str:
     return os.fspath(path)
 
 
-def _empty_output_bundle(length: int) -> dict[str, np.ndarray]:
-    return {name: np.empty(length, dtype=np.float64) for name in _ALL_OUTPUTS}
-
-
 def _as_float64(array: np.ndarray | xr.DataArray) -> np.ndarray:
     values = np.asarray(array, dtype=np.float64)
     return np.ascontiguousarray(values.reshape(-1), dtype=np.float64)
@@ -819,190 +731,6 @@ def _slice_case_kwargs(kwargs: dict[str, Any], start: int, stop: int) -> dict[st
     return sliced
 
 
-def _build_scene_lut_axis(values: np.ndarray, target_size: int) -> np.ndarray:
-    finite = np.asarray(values[np.isfinite(values)], dtype=np.float64)
-    if finite.size == 0:
-        return np.zeros(1, dtype=np.float64)
-    unique = np.unique(finite)
-    if unique.size <= max(1, target_size):
-        return np.ascontiguousarray(unique, dtype=np.float64)
-    if target_size <= 1:
-        return np.ascontiguousarray(unique[:1], dtype=np.float64)
-    quantiles = np.linspace(0.0, 1.0, target_size, dtype=np.float64)
-    axis = np.quantile(finite, quantiles, method="linear")
-    axis[0] = float(finite.min())
-    axis[-1] = float(finite.max())
-    axis = np.unique(np.asarray(axis, dtype=np.float64))
-    if axis.size == 1 and unique.size > 1:
-        axis = np.array([unique[0], unique[-1]], dtype=np.float64)
-    return np.ascontiguousarray(axis, dtype=np.float64)
-
-
-def _scene_lut_case_count(axes: dict[str, np.ndarray]) -> int:
-    count = 1
-    for axis in axes.values():
-        count *= max(1, int(axis.size))
-    return count
-
-
-def _build_scene_lut_plan(
-    case_arrays: dict[str, np.ndarray],
-    *,
-    max_nodes_per_axis: int,
-    max_cases: int,
-) -> _SceneLUTPlan:
-    axes = {
-        name: _build_scene_lut_axis(
-            np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis
-        )
-        for name in _CASE_ARRAY_NAMES
-    }
-    while _scene_lut_case_count(axes) > max_cases:
-        reducible = [name for name, axis in axes.items() if axis.size > 1]
-        if not reducible:
-            break
-        name = max(reducible, key=lambda item: axes[item].size)
-        axes[name] = _build_scene_lut_axis(
-            np.asarray(case_arrays[name], dtype=np.float64), axes[name].size - 1
-        )
-
-    mesh = np.meshgrid(*(axes[name] for name in _CASE_ARRAY_NAMES), indexing="ij")
-    grid_case_arrays = {
-        name: np.ascontiguousarray(mesh[idx].reshape(-1), dtype=np.float64)
-        for idx, name in enumerate(_CASE_ARRAY_NAMES)
-    }
-    return _SceneLUTPlan(
-        axes=axes,
-        grid_case_arrays=grid_case_arrays,
-        direct_case_count=int(np.asarray(case_arrays[_CASE_ARRAY_NAMES[0]]).size),
-        lut_case_count=int(grid_case_arrays[_CASE_ARRAY_NAMES[0]].size),
-    )
-
-
-def _interpolate_scene_lut_outputs(
-    plan: _SceneLUTPlan,
-    native_outputs: _NativeBatchResult,
-    case_arrays: dict[str, np.ndarray],
-    selected_names: tuple[str, ...],
-) -> dict[str, np.ndarray]:
-    from scipy.interpolate import RegularGridInterpolator
-
-    axes_order = _CASE_ARRAY_NAMES
-    varying = [name for name in axes_order if plan.axes[name].size > 1]
-    n_cases = int(np.asarray(case_arrays[axes_order[0]]).size)
-    result: dict[str, np.ndarray] = {}
-    full_shape = tuple(int(plan.axes[name].size) for name in axes_order)
-    if not varying:
-        for name in selected_names:
-            value = float(np.asarray(native_outputs.outputs[name], dtype=np.float64).reshape(-1)[0])
-            result[name] = np.full(n_cases, value, dtype=np.float64)
-        return result
-
-    sample_points = np.column_stack(
-        [np.asarray(case_arrays[name], dtype=np.float64) for name in varying]
-    )
-    for name in selected_names:
-        values = np.asarray(native_outputs.outputs[name], dtype=np.float64).reshape(full_shape)
-        reduced = values
-        for axis_index in reversed(range(len(axes_order))):
-            if plan.axes[axes_order[axis_index]].size == 1:
-                reduced = np.take(reduced, 0, axis=axis_index)
-        interpolator = RegularGridInterpolator(
-            tuple(plan.axes[axis_name] for axis_name in varying),
-            reduced,
-            method="linear",
-            bounds_error=False,
-            fill_value=np.nan,
-        )
-        result[name] = np.ascontiguousarray(interpolator(sample_points), dtype=np.float64)
-    return result
-
-
-def _should_use_scene_lut(
-    *,
-    mode: str,
-    direct_case_count: int,
-    lut_case_count: int,
-    min_pixels: int,
-    required_speedup: float,
-) -> bool:
-    if mode == "direct":
-        return False
-    if mode == "scene_lut":
-        return True
-    if direct_case_count < min_pixels or lut_case_count <= 0 or lut_case_count >= direct_case_count:
-        return False
-    return (float(direct_case_count) / float(lut_case_count)) >= required_speedup
-
-
-def _build_joint_grid_search_lut_plan(
-    case_arrays: dict[str, np.ndarray],
-    *,
-    aot_axis: np.ndarray,
-    tcwv_axis: np.ndarray,
-    max_nodes_per_axis: int,
-    max_cases: int,
-) -> _SceneLUTPlan:
-    """Build a scene-LUT plan with explicit aot/tcwv axes for joint grid-search reuse.
-
-    Unlike :func:`_build_scene_lut_plan`, this builder takes the aot550 and
-    tcwv_cm axes as inputs (rather than deriving them from per-pixel
-    candidate values). The remaining six geometric/atmospheric axes are
-    derived from the per-pixel ``case_arrays`` as usual. The trimming step
-    that reduces total case count to fit ``max_cases`` only shrinks the
-    geometric axes — the explicit aot/tcwv axes are preserved because their
-    nodes must coincide with the grid-search candidate values for the
-    block-grid-search reuse to be numerically exact at the grid points.
-    """
-    aot_axis_arr = np.ascontiguousarray(np.unique(np.asarray(aot_axis, dtype=np.float64)))
-    tcwv_axis_arr = np.ascontiguousarray(np.unique(np.asarray(tcwv_axis, dtype=np.float64)))
-    if aot_axis_arr.size == 0:
-        aot_axis_arr = np.zeros(1, dtype=np.float64)
-    if tcwv_axis_arr.size == 0:
-        tcwv_axis_arr = np.zeros(1, dtype=np.float64)
-    fixed_axes = {"aot550", "tcwv_cm"}
-    axes: dict[str, np.ndarray] = {}
-    for name in _CASE_ARRAY_NAMES:
-        if name == "aot550":
-            axes[name] = aot_axis_arr
-        elif name == "tcwv_cm":
-            axes[name] = tcwv_axis_arr
-        else:
-            axes[name] = _build_scene_lut_axis(
-                np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis
-            )
-
-    # Shrink only the geometric axes to fit the case budget.
-    while _scene_lut_case_count(axes) > max_cases:
-        reducible = [
-            name for name in _CASE_ARRAY_NAMES if name not in fixed_axes and axes[name].size > 1
-        ]
-        if not reducible:
-            break
-        name = max(reducible, key=lambda item: axes[item].size)
-        axes[name] = _build_scene_lut_axis(
-            np.asarray(case_arrays[name], dtype=np.float64), axes[name].size - 1
-        )
-
-    mesh = np.meshgrid(*(axes[name] for name in _CASE_ARRAY_NAMES), indexing="ij")
-    grid_case_arrays = {
-        name: np.ascontiguousarray(mesh[idx].reshape(-1), dtype=np.float64)
-        for idx, name in enumerate(_CASE_ARRAY_NAMES)
-    }
-    return _SceneLUTPlan(
-        axes=axes,
-        grid_case_arrays=grid_case_arrays,
-        direct_case_count=int(np.asarray(case_arrays[_CASE_ARRAY_NAMES[0]]).size),
-        lut_case_count=int(grid_case_arrays[_CASE_ARRAY_NAMES[0]].size),
-    )
-
-
-@dataclass(frozen=True)
-class _NativeBatchResult:
-    outputs: dict[str, np.ndarray]
-    status: np.ndarray
-
-
 @dataclass(frozen=True)
 class _PreparedSceneInputs:
     template: xr.DataArray
@@ -1010,14 +738,6 @@ class _PreparedSceneInputs:
     flat_valid_mask: np.ndarray
     common_kwargs: dict[str, Any]
     case_arrays: dict[str, np.ndarray]
-
-
-@dataclass(frozen=True)
-class _SceneLUTPlan:
-    axes: dict[str, np.ndarray]
-    grid_case_arrays: dict[str, np.ndarray]
-    direct_case_count: int
-    lut_case_count: int
 
 
 @dataclass(frozen=True)
@@ -1197,227 +917,6 @@ class _ScalarInterpolator:
         # with ``scipy.interpolate.RegularGridInterpolator.__call__``,
         # which the JointGridSearchLUT calls polymorphically.
         return self._value
-
-
-def _load_extension_module(module_path: Path) -> Any:
-    resolved_path = Path(module_path).resolve()
-    stat = resolved_path.stat()
-    cache_key = (resolved_path, stat.st_mtime_ns, stat.st_size)
-    cached = _MODULE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    for stale_key in [key for key in _MODULE_CACHE if key[0] == resolved_path and key != cache_key]:
-        _MODULE_CACHE.pop(stale_key, None)
-
-    module_name = resolved_path.name.split(".", 1)[0]
-    _preload_openmp_runtime()
-
-    loader = importlib.machinery.ExtensionFileLoader(
-        module_name,
-        os.fspath(resolved_path),
-    )
-    spec = importlib.util.spec_from_file_location(
-        module_name,
-        os.fspath(resolved_path),
-        loader=loader,
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not create an import spec for native 6S module: {resolved_path}")
-
-    sys.modules.pop(module_name, None)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    _MODULE_CACHE[cache_key] = module
-    return module
-
-
-class _SixSExtensionModule:
-    """Thin loader around the compiled F2PY extension."""
-
-    def __init__(self, module_path: Path, *, isolate: bool = False) -> None:
-        self.path = Path(module_path)
-        self._temp_dir: Path | None = None
-        load_path = self.path
-        if isolate:
-            self._temp_dir = Path(
-                tempfile.mkdtemp(
-                    prefix="siac_rt6s_module_",
-                    dir=os.fspath(_preferred_module_isolation_root(self.path)),
-                )
-            )
-            load_path = self._temp_dir / self.path.name
-            _copy_isolated_module(self.path, load_path)
-        self._module = _load_extension_module(load_path)
-        self._run_batch = self._module.sixs_f2py_run_batch
-
-    def close(self) -> None:
-        if self._temp_dir is not None:
-            shutil.rmtree(self._temp_dir, ignore_errors=True)
-            self._temp_dir = None
-
-    def __del__(self) -> None:
-        self.close()
-
-    def run_batch(
-        self,
-        *,
-        n_threads: int,
-        month: int,
-        day: int,
-        atmospheric_mode: int,
-        atmospheric_columns_mode: int,
-        radiosonde_altitude_km: np.ndarray,
-        radiosonde_pressure_mb: np.ndarray,
-        radiosonde_temperature_k: np.ndarray,
-        radiosonde_water_g_m3: np.ndarray,
-        radiosonde_ozone_g_m3: np.ndarray,
-        aerosol_mode: int,
-        aerosol_mixture: np.ndarray,
-        aerosol_distribution_rmin: float,
-        aerosol_distribution_rmax: float,
-        aerosol_distribution_component_count: int,
-        aerosol_distribution_x1: np.ndarray,
-        aerosol_distribution_x2: np.ndarray,
-        aerosol_distribution_x3: np.ndarray,
-        aerosol_distribution_cij: np.ndarray,
-        aerosol_distribution_rn: np.ndarray,
-        aerosol_distribution_ri: np.ndarray,
-        aerosol_sun_count: int,
-        aerosol_sun_radius: np.ndarray,
-        aerosol_sun_dvlogr: np.ndarray,
-        aerosol_layer_count: int,
-        aerosol_layer_height: np.ndarray,
-        aerosol_layer_aot: np.ndarray,
-        aerosol_layer_type: np.ndarray,
-        reference_reflectance: float,
-        spectral_wlinf: float,
-        spectral_wlsup: float,
-        spectral_response: np.ndarray,
-        aerosol_model_path: str,
-        surface_inhomo: int,
-        surface_idirec: int,
-        surface_target_mode: int,
-        surface_target_constant: float,
-        surface_target_spectrum: np.ndarray,
-        surface_env_mode: int,
-        surface_env_constant: float,
-        surface_env_spectrum: np.ndarray,
-        surface_radius_km: float,
-        surface_brdf_model: int,
-        surface_brdf_params: np.ndarray,
-        surface_brdf_options: np.ndarray,
-        surface_brdf_struct: np.ndarray,
-        surface_brdf_optics: np.ndarray,
-        surface_brdf_table_solar: np.ndarray,
-        surface_brdf_table_view: np.ndarray,
-        surface_brdf_spherical_albedo: float,
-        surface_brdf_directional_reflectance: float,
-        atmospheric_correction_mode: int,
-        atmospheric_correction_value: float,
-        sza_deg: np.ndarray,
-        saa_deg: np.ndarray,
-        vza_deg: np.ndarray,
-        vaa_deg: np.ndarray,
-        aot550: np.ndarray,
-        tcwv_cm: np.ndarray,
-        tco3_atmcm: np.ndarray,
-        elevation_km: np.ndarray,
-    ) -> _NativeBatchResult:
-        n_cases = int(sza_deg.size)
-        if n_cases == 0:
-            return _NativeBatchResult(
-                outputs=_empty_output_bundle(0), status=np.zeros(0, dtype=np.int32)
-            )
-
-        native_output_matrix = np.empty(
-            (len(SIXS_NATIVE_OUTPUT_NAMES), n_cases),
-            dtype=np.float64,
-            order="F",
-        )
-        status = np.zeros(n_cases, dtype=np.int32)
-
-        self._run_batch(
-            int(month),
-            int(day),
-            int(atmospheric_mode),
-            int(atmospheric_columns_mode),
-            np.asarray(radiosonde_altitude_km, dtype=np.float64),
-            np.asarray(radiosonde_pressure_mb, dtype=np.float64),
-            np.asarray(radiosonde_temperature_k, dtype=np.float64),
-            np.asarray(radiosonde_water_g_m3, dtype=np.float64),
-            np.asarray(radiosonde_ozone_g_m3, dtype=np.float64),
-            int(aerosol_mode),
-            np.asarray(aerosol_mixture, dtype=np.float64),
-            float(aerosol_distribution_rmin),
-            float(aerosol_distribution_rmax),
-            int(aerosol_distribution_component_count),
-            np.asarray(aerosol_distribution_x1, dtype=np.float64),
-            np.asarray(aerosol_distribution_x2, dtype=np.float64),
-            np.asarray(aerosol_distribution_x3, dtype=np.float64),
-            np.asarray(aerosol_distribution_cij, dtype=np.float64),
-            np.asarray(aerosol_distribution_rn, dtype=np.float64),
-            np.asarray(aerosol_distribution_ri, dtype=np.float64),
-            int(aerosol_sun_count),
-            np.asarray(aerosol_sun_radius, dtype=np.float64),
-            np.asarray(aerosol_sun_dvlogr, dtype=np.float64),
-            int(aerosol_layer_count),
-            np.asarray(aerosol_layer_height, dtype=np.float64),
-            np.asarray(aerosol_layer_aot, dtype=np.float64),
-            np.asarray(aerosol_layer_type, dtype=np.int32),
-            float(reference_reflectance),
-            float(spectral_wlinf),
-            float(spectral_wlsup),
-            np.asarray(spectral_response, dtype=np.float64),
-            str(aerosol_model_path),
-            int(surface_inhomo),
-            int(surface_idirec),
-            int(surface_target_mode),
-            float(surface_target_constant),
-            np.asarray(surface_target_spectrum, dtype=np.float64),
-            int(surface_env_mode),
-            float(surface_env_constant),
-            np.asarray(surface_env_spectrum, dtype=np.float64),
-            float(surface_radius_km),
-            int(surface_brdf_model),
-            np.asarray(surface_brdf_params, dtype=np.float64),
-            np.asarray(surface_brdf_options, dtype=np.int32),
-            np.asarray(surface_brdf_struct, dtype=np.float64),
-            np.asarray(surface_brdf_optics, dtype=np.float64),
-            np.asarray(surface_brdf_table_solar, dtype=np.float64),
-            np.asarray(surface_brdf_table_view, dtype=np.float64),
-            float(surface_brdf_spherical_albedo),
-            float(surface_brdf_directional_reflectance),
-            int(atmospheric_correction_mode),
-            float(atmospheric_correction_value),
-            np.asarray(sza_deg, dtype=np.float64),
-            np.asarray(saa_deg, dtype=np.float64),
-            np.asarray(vza_deg, dtype=np.float64),
-            np.asarray(vaa_deg, dtype=np.float64),
-            np.asarray(aot550, dtype=np.float64),
-            np.asarray(tcwv_cm, dtype=np.float64),
-            np.asarray(tco3_atmcm, dtype=np.float64),
-            np.asarray(elevation_km, dtype=np.float64),
-            int(max(1, n_threads)),
-            native_output_matrix,
-            status,
-            n_cases=int(n_cases),
-        )
-        outputs = _empty_output_bundle(n_cases)
-        for row_index, name in enumerate(SIXS_NATIVE_OUTPUT_NAMES):
-            outputs[name] = np.ascontiguousarray(
-                native_output_matrix[row_index, :], dtype=np.float64
-            )
-        outputs["xbp"] = np.ascontiguousarray(outputs["xb"], dtype=np.float64)
-        outputs["xcp"] = np.ascontiguousarray(outputs["xc"], dtype=np.float64)
-        return _NativeBatchResult(
-            outputs={
-                name: np.ascontiguousarray(values, dtype=np.float64)
-                for name, values in outputs.items()
-            },
-            status=np.ascontiguousarray(status, dtype=np.int32),
-        )
 
 
 class SixSNativeRunner:
