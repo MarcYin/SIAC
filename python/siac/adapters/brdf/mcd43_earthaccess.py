@@ -5,12 +5,52 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import xarray as xr
 from rasterio.enums import Resampling
 
+from siac.adapters.brdf._mcd43_kernels import (
+    _DATA_READ_ERRORS,
+    _RequestedBand,
+    _RequestedBandSpec,
+    allocate_spatial_payload_arrays,
+    allocate_temporal_payload_arrays,
+    fill_parameter_defaults,
+    native_array_like,
+    pack_payload_stack,
+    stack_parameter_cube,
+    target_array_like,
+    temporal_weights_from_arrays,
+    unpack_payload_stack,
+    weights_from_layers,
+)
+from siac.adapters.brdf._mcd43_kernels import (
+    _PAYLOAD_FIELDS as _PAYLOAD_FIELDS,
+)
+from siac.adapters.brdf._mcd43_kernels import (
+    _TRANSIENT_DATA_READ_ERRORS as _TRANSIENT_DATA_READ_ERRORS,
+)
+from siac.adapters.brdf._mcd43_kernels import (
+    _HDF4Error as _HDF4Error,
+)
+from siac.adapters.brdf._mcd43_kernels import (
+    _HDF5Error as _HDF5Error,
+)
+from siac.adapters.brdf._mcd43_kernels import (
+    _RequestedBandCoord as _RequestedBandCoord,
+)
+from siac.adapters.brdf._mcd43_qa import (
+    _BEST_QA_REFLECTANCE_UNCERTAINTY as _BEST_QA_REFLECTANCE_UNCERTAINTY,
+)
+from siac.adapters.brdf._mcd43_qa import (
+    _QA_UNCERTAINTY_POWER as _QA_UNCERTAINTY_POWER,
+)
+from siac.adapters.brdf._mcd43_qa import (
+    qa_to_uncertainty,
+    qa_values_to_uncertainty,
+)
 from siac.adapters.brdf._product_specs import (
     MCD19_PRODUCT_BANDS,
     MCD43_PRODUCT_BANDS,
@@ -55,58 +95,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# HDF4/HDF5 libraries raise their own exception types on I/O failures.
-# Import them defensively so they can be included in except clauses.
-_HDF4Error: type[BaseException]
-try:
-    from pyhdf.error import HDF4Error as _HDF4Error  # type: ignore[import-untyped,no-redef]
-except ImportError:  # pragma: no cover
-    _HDF4Error = OSError
-_HDF5Error: type[BaseException]
-try:
-    from h5py import HDF5ExtError as _HDF5Error  # type: ignore[no-redef]
-except (ImportError, AttributeError):  # pragma: no cover
-    _HDF5Error = OSError
-
-# Combined tuple used in except clauses throughout this module.
-#
-# REVIEW.md §2.1, §3.3 mcd43_earthaccess.py:62-69:
-# This tuple is intentionally wide because it covers two distinct concerns:
-#   (a) genuine I/O failures from HDF4/HDF5 reading (``OSError`` and the
-#       library-specific ``_HDF4Error``/``_HDF5Error`` types), and
-#   (b) downstream parsing/scaling failures (``KeyError`` for missing
-#       dataset names, ``ValueError`` for bad scale-factor metadata,
-#       ``RuntimeError`` for GDAL warp/translate failures, ``TypeError``
-#       for shape mismatches in ``apply_scale_and_mask``).
-#
-# Each consumer of this tuple must call ``logger.warning(..., exc_info=True)``
-# so that a typo in a dataset name doesn't silently downgrade to "use
-# defaults". Use ``_TRANSIENT_DATA_READ_ERRORS`` instead for blocks where
-# only category (a) is expected — that lets programming bugs in category (b)
-# propagate.
-_TRANSIENT_DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
-    OSError,
-    _HDF4Error,
-    _HDF5Error,
-)
-_DATA_READ_ERRORS: tuple[type[BaseException], ...] = (
-    OSError,
-    KeyError,
-    ValueError,
-    TypeError,
-    RuntimeError,
-    _HDF4Error,
-    _HDF5Error,
-)
-
-_BEST_QA_REFLECTANCE_UNCERTAINTY = 0.015
-_QA_UNCERTAINTY_POWER = 1.6
 _ORIGINAL_HDF4_READER = read_hdf4_dataset
 _ORIGINAL_HDF5_READER = read_hdf5_dataset
-_RequestedBand: TypeAlias = SensorBand
-_RequestedBandCoord: TypeAlias = str
-_RequestedBandSpec: TypeAlias = tuple[_RequestedBandCoord, ProductBandDefinition]
-_PAYLOAD_FIELDS = ("f0", "f1", "f2", "unc")
 _FLOAT32_NBYTES = np.dtype(np.float32).itemsize
 _MAX_ONE_SHOT_TEMPORAL_VRT_OUTPUT_BYTES = 1024**3
 
@@ -1047,23 +1037,10 @@ class _EarthAccessBRDFProvider:
                 filtered.append(granule)
         return filtered
 
-    @staticmethod
-    def _qa_to_uncertainty(qa: xr.DataArray) -> xr.DataArray:
-        qa_values = _EarthAccessBRDFProvider._qa_values_to_uncertainty(qa.values)
-        return xr.DataArray(qa_values, dims=qa.dims, coords=qa.coords)
-
-    @staticmethod
-    def _qa_values_to_uncertainty(qa_values: np.ndarray) -> np.ndarray:
-        qa_values = np.asarray(qa_values, dtype=np.float32)
-        unc = np.full(qa_values.shape, np.nan, dtype=np.float32)
-        valid = np.isfinite(qa_values) & (qa_values >= 0.0)
-        unc = np.where(
-            valid,
-            _BEST_QA_REFLECTANCE_UNCERTAINTY * np.power(qa_values + 1.0, _QA_UNCERTAINTY_POWER),
-            unc,
-        )
-        unc_array: np.ndarray = np.asarray(unc, dtype=np.float32)
-        return unc_array
+    # QA-to-uncertainty decoding lives in ``_mcd43_qa``; bound here so the
+    # method seams keep resolving on the provider classes.
+    _qa_to_uncertainty = staticmethod(qa_to_uncertainty)
+    _qa_values_to_uncertainty = staticmethod(qa_values_to_uncertainty)
 
     def _empty_spatial_array(
         self,
@@ -1176,80 +1153,11 @@ class _EarthAccessBRDFProvider:
             reflectance_unc=_nan_like(base.reflectance_unc),
         )
 
-    @staticmethod
-    def _allocate_temporal_payload_arrays(
-        time_axis: np.ndarray,
-        requested: Sequence[_RequestedBandSpec],
-        *,
-        y_size: int,
-        x_size: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        params_values: np.ndarray = np.full(
-            (len(time_axis), len(requested), 3, y_size, x_size),
-            np.nan,
-            dtype=np.float32,
-        )
-        unc_values: np.ndarray = np.full(
-            (len(time_axis), len(requested), y_size, x_size),
-            np.nan,
-            dtype=np.float32,
-        )
-        return params_values, unc_values
-
-    @staticmethod
-    def _allocate_spatial_payload_arrays(
-        requested: Sequence[_RequestedBandSpec],
-        target_template: xr.DataArray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        y_size = int(target_template.sizes["y"])
-        x_size = int(target_template.sizes["x"])
-        params_values: np.ndarray = np.full(
-            (len(requested), 3, y_size, x_size),
-            np.nan,
-            dtype=np.float32,
-        )
-        unc_values: np.ndarray = np.full(
-            (len(requested), y_size, x_size),
-            np.nan,
-            dtype=np.float32,
-        )
-        return params_values, unc_values
-
-    @classmethod
-    def _temporal_weights_from_arrays(
-        cls,
-        params_values: np.ndarray,
-        unc_values: np.ndarray,
-        *,
-        requested: Sequence[_RequestedBandSpec],
-        time_axis: np.ndarray,
-        target_template: xr.DataArray,
-    ) -> BRDFKernelWeights:
-        coords = {
-            "time": xr.IndexVariable("time", time_axis),
-            "band": xr.IndexVariable("band", [band_coord for band_coord, _band in requested]),
-            "y": target_template.coords["y"],
-            "x": target_template.coords["x"],
-        }
-
-        def _wrap(values: np.ndarray) -> xr.DataArray:
-            return cls._target_array_like(
-                target_template,
-                values,
-                dims=("time", "band", "y", "x"),
-                coords=coords,
-            )
-
-        scaled_unc = unc_values * np.float32(1.1)
-        return BRDFKernelWeights(
-            f0=_wrap(params_values[:, :, 0, :, :]),
-            f1=_wrap(params_values[:, :, 1, :, :]),
-            f2=_wrap(params_values[:, :, 2, :, :]),
-            f0_unc=_wrap(unc_values),
-            f1_unc=_wrap(scaled_unc),
-            f2_unc=_wrap(scaled_unc),
-            reflectance_unc=_wrap(unc_values),
-        )
+    # Payload-array allocation and kernel-weight assembly live in
+    # ``_mcd43_kernels``; bound here so the method seams keep resolving.
+    _allocate_temporal_payload_arrays = staticmethod(allocate_temporal_payload_arrays)
+    _allocate_spatial_payload_arrays = staticmethod(allocate_spatial_payload_arrays)
+    _temporal_weights_from_arrays = staticmethod(temporal_weights_from_arrays)
 
     def _load_temporal_payload_vrt(
         self,
@@ -1545,143 +1453,15 @@ class _EarthAccessBRDFProvider:
         del paths, requested, bounds, crs, target_resolution, target_template
         return None
 
-    @staticmethod
-    def _native_array_like(
-        reference: xr.DataArray,
-        values: np.ndarray,
-        *,
-        dims: tuple[str, ...],
-        coords: dict[str, object],
-    ) -> xr.DataArray:
-        out = xr.DataArray(np.asarray(values, dtype=np.float32), dims=dims, coords=coords)
-        out = out.rio.set_spatial_dims(x_dim="x", y_dim="y")
-        reference_crs = reference.rio.crs
-        if reference_crs is not None:
-            out = out.rio.write_crs(reference_crs)
-        try:
-            return out.rio.write_transform(reference.rio.transform(recalc=True))
-        except _DATA_READ_ERRORS:
-            return out
-
-    @classmethod
-    def _target_array_like(
-        cls,
-        target_template: xr.DataArray,
-        values: np.ndarray,
-        *,
-        dims: tuple[str, ...],
-        coords: dict[str, object],
-    ) -> xr.DataArray:
-        out = xr.DataArray(np.asarray(values, dtype=np.float32), dims=dims, coords=coords)
-        out = out.rio.set_spatial_dims(x_dim="x", y_dim="y")
-        out = out.rio.write_crs(target_template.rio.crs)
-        return out.rio.write_transform(target_template.rio.transform(recalc=True))
-
-    @classmethod
-    def _pack_payload_stack(
-        cls,
-        params: xr.DataArray,
-        unc: xr.DataArray,
-    ) -> xr.DataArray:
-        params = params.transpose("band", "parameter", "y", "x")
-        unc = unc.transpose("band", "y", "x")
-        band_coords = np.asarray(params.coords["band"].values, dtype=object)
-        payload_values = np.concatenate(
-            [
-                np.asarray(params.values, dtype=np.float32),
-                np.asarray(unc.values, dtype=np.float32)[:, np.newaxis, :, :],
-            ],
-            axis=1,
-        )
-        layer_count = band_coords.size * len(_PAYLOAD_FIELDS)
-        layer_values = payload_values.reshape(layer_count, *payload_values.shape[-2:])
-        return cls._native_array_like(
-            params,
-            layer_values,
-            dims=("layer", "y", "x"),
-            coords={
-                "layer": xr.IndexVariable("layer", np.arange(layer_count, dtype=np.int32)),
-                "y": params.coords["y"],
-                "x": params.coords["x"],
-            },
-        )
-
-    @classmethod
-    def _unpack_payload_stack(
-        cls,
-        payload: xr.DataArray,
-        *,
-        requested: Sequence[_RequestedBandSpec],
-    ) -> tuple[xr.DataArray, xr.DataArray]:
-        payload = payload.transpose("layer", "y", "x")
-        band_coords = [band_coord for band_coord, _band in requested]
-        expected_layers = len(band_coords) * len(_PAYLOAD_FIELDS)
-        if payload.sizes["layer"] != expected_layers:
-            raise ValueError(
-                f"Expected {expected_layers} payload layers for {len(band_coords)} band(s), "
-                f"got {payload.sizes['layer']}"
-            )
-        values = np.asarray(payload.values, dtype=np.float32).reshape(
-            len(band_coords),
-            len(_PAYLOAD_FIELDS),
-            payload.sizes["y"],
-            payload.sizes["x"],
-        )
-        coords = {
-            "band": xr.IndexVariable("band", band_coords),
-            "y": payload.coords["y"],
-            "x": payload.coords["x"],
-        }
-        params = cls._native_array_like(
-            payload,
-            values[:, :3, :, :],
-            dims=("band", "parameter", "y", "x"),
-            coords={
-                **coords,
-                "parameter": xr.IndexVariable("parameter", ["f0", "f1", "f2"]),
-            },
-        )
-        unc = cls._native_array_like(
-            payload,
-            values[:, 3, :, :],
-            dims=("band", "y", "x"),
-            coords=coords,
-        )
-        return params, unc
-
-    @staticmethod
-    def _stack_parameter_cube(
-        params: tuple[xr.DataArray, xr.DataArray, xr.DataArray],
-    ) -> xr.DataArray:
-        return xr.concat(
-            list(params),
-            dim=xr.IndexVariable("parameter", ["f0", "f1", "f2"]),
-        )
-
-    @staticmethod
-    def _fill_parameter_defaults(params: xr.DataArray) -> xr.DataArray:
-        defaults = xr.DataArray(
-            np.array([0.20, 0.05, 0.02], dtype=np.float32),
-            dims=["parameter"],
-            coords={"parameter": ["f0", "f1", "f2"]},
-        )
-        return params.fillna(defaults)
-
-    @staticmethod
-    def _weights_from_layers(
-        params: xr.DataArray,
-        unc: xr.DataArray,
-    ) -> BRDFKernelWeights:
-        unc = unc.transpose("band", "y", "x")
-        return BRDFKernelWeights(
-            f0=params.sel(parameter="f0", drop=True).transpose("band", "y", "x"),
-            f1=params.sel(parameter="f1", drop=True).transpose("band", "y", "x"),
-            f2=params.sel(parameter="f2", drop=True).transpose("band", "y", "x"),
-            f0_unc=unc,
-            f1_unc=(unc * np.float32(1.1)).transpose("band", "y", "x"),
-            f2_unc=(unc * np.float32(1.1)).transpose("band", "y", "x"),
-            reflectance_unc=unc,
-        )
+    # Payload pack/unpack and kernel-weight assembly live in
+    # ``_mcd43_kernels``; bound here so the method seams keep resolving.
+    _native_array_like = staticmethod(native_array_like)
+    _target_array_like = staticmethod(target_array_like)
+    _pack_payload_stack = staticmethod(pack_payload_stack)
+    _unpack_payload_stack = staticmethod(unpack_payload_stack)
+    _stack_parameter_cube = staticmethod(stack_parameter_cube)
+    _fill_parameter_defaults = staticmethod(fill_parameter_defaults)
+    _weights_from_layers = staticmethod(weights_from_layers)
 
     def _default_weights(
         self,
