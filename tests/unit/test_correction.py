@@ -152,6 +152,26 @@ class TestAtmosphericCorrector:
         assert np.isfinite(result.boa["B04"].values[0, 0])
         assert bool(result.cloud_mask.values[0, 0])
 
+    def test_correct_skips_fully_invalid_band_from_scene_mask(
+        self, sample_inputs, mock_rt_model
+    ):
+        """A band with no valid pixel anywhere (e.g. the Sentinel-2 cirrus band
+        B10, which has no surface product and corrects to NaN everywhere) carries
+        no per-pixel validity signal and must not flag the whole scene invalid."""
+        toa, geometry, atmo_state = sample_inputs
+        toa["B02"].values[:] = np.nan  # entirely invalid, like the cirrus band
+
+        corrector = AtmosphericCorrector(mock_rt_model, SENTINEL2A_CONFIG)
+        result = corrector.correct(toa, geometry, atmo_state)
+
+        # The fully-invalid band is NaN in its own output, its valid siblings are
+        # preserved, and the scene is NOT marked entirely invalid because of it.
+        assert np.all(np.isnan(result.boa["B02"].values))
+        assert np.isfinite(result.boa["B03"].values).all()
+        assert np.isfinite(result.boa["B04"].values).all()
+        assert not bool(result.cloud_mask.values.all())
+        assert float(result.cloud_mask.values.mean()) < 0.5
+
     def test_result_has_aot_tcwv(self, sample_inputs, mock_rt_model):
         """Result should include AOT and TCWV."""
         toa, geometry, atmo_state = sample_inputs

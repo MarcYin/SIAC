@@ -189,9 +189,16 @@ class AtmosphericCorrector:
             compute_time_by_band[band_name] = compute_s
             write_time_by_band[band_name] = write_s
             boa_vars[band_name] = masked_boa
-            invalid_boa_mask = (
-                band_invalid if invalid_boa_mask is None else (invalid_boa_mask | band_invalid)
-            )
+            # A band with no valid pixel anywhere carries no per-pixel validity
+            # signal and must not flag the whole scene. The Sentinel-2 cirrus band
+            # B10 has no surface-reflectance product (ESA L2A omits it) and
+            # corrects to NaN everywhere; OR-ing it in marked every pixel invalid
+            # even where all science bands were fine. Skip such bands here — the
+            # band's own NaN is still written to its per-band BOA output.
+            if bool((~band_invalid).any()):
+                invalid_boa_mask = (
+                    band_invalid if invalid_boa_mask is None else (invalid_boa_mask | band_invalid)
+                )
 
             logger.info(
                 "M6 band %s timings: compute=%.3fs write=%.3fs total=%.3fs",
