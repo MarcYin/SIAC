@@ -368,6 +368,7 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
             target_bands=target_bands,
             spectral_library=spectral_library,
             spectral_k_neighbors=spectral_k_neighbors,
+            grid_resolution_m=resolution,
         )
 
     return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
@@ -411,6 +412,7 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
             target_bands=target_bands,
             spectral_library=spectral_library,
             spectral_k_neighbors=spectral_k_neighbors,
+            grid_resolution_m=resolution,
         )
 
     return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
@@ -505,6 +507,7 @@ def _build_monthly_surface_prior(
                 target_bands=monthly_runtime.visible_bands,
                 spectral_library=monthly_runtime.spectral_library,
                 spectral_k_neighbors=monthly_runtime.spectral_k_neighbors,
+                grid_resolution_m=resolution,
             )
 
     return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=True)

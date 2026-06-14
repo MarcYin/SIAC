@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
+import pytest
 import xarray as xr
 
 from siac.algorithms.surface import kernel_model as km
 from siac.algorithms.surface.kernel_model import KernelModelDeriver, PSFConvolver
 from siac.domain import SensorBand
 from siac.runtime import BRDFKernelWeights, GeometryAngles
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def _geometry(shape: tuple[int, int]) -> GeometryAngles:
@@ -212,3 +208,41 @@ def test_apply_psf_and_convolver_support_2d_inputs() -> None:
     assert isinstance(convolved, np.ndarray)
     assert convolved.shape == (2, 2)
     assert np.isfinite(convolved[1, 1])
+
+
+def test_scale_psf_sigmas_preserves_physical_footprint() -> None:
+    """PSF sigma (pixels @ target_resolution_m) rescales to the grid resolution."""
+    deriver = KernelModelDeriver(psf_sigma_x=29.75, psf_sigma_y=39.0, target_resolution_m=10.0)
+
+    # Coarser grid (120 m) -> fewer pixels for the same physical blur.
+    sx, sy = deriver._scale_psf_sigmas(29.75, 39.0, 120.0)
+    assert sx == pytest.approx(29.75 * 10.0 / 120.0)
+    assert sy == pytest.approx(39.0 * 10.0 / 120.0)
+
+    # Calibration resolution -> identity (scale == 1).
+    assert deriver._scale_psf_sigmas(29.75, 39.0, 10.0) == pytest.approx((29.75, 39.0))
+
+
+def test_scale_psf_sigmas_passthrough_on_missing_or_invalid_resolution() -> None:
+    deriver = KernelModelDeriver(psf_sigma_x=2.0, psf_sigma_y=3.0, target_resolution_m=10.0)
+    for bad in (None, 0.0, -5.0, float("nan"), float("inf")):
+        assert deriver._scale_psf_sigmas(2.0, 3.0, bad) == (2.0, 3.0)
+
+
+def test_compute_surface_prior_applies_grid_scaled_sigma(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``grid_resolution_m`` must reach ``_apply_psf`` as a rescaled sigma."""
+    deriver = KernelModelDeriver(psf_sigma_x=29.75, psf_sigma_y=39.0, target_resolution_m=10.0)
+    captured: list[tuple[float, float]] = []
+
+    def fake_apply(data: xr.DataArray, sigma_x: float, sigma_y: float) -> xr.DataArray:
+        captured.append((sigma_x, sigma_y))
+        return data
+
+    monkeypatch.setattr(deriver, "_apply_psf", fake_apply)
+
+    deriver.compute_surface_prior(_weights(), _geometry((2, 2)), grid_resolution_m=120.0)
+
+    assert captured, "PSF was not applied"
+    sx, sy = captured[0]
+    assert sx == pytest.approx(29.75 * 10.0 / 120.0)
+    assert sy == pytest.approx(39.0 * 10.0 / 120.0)

@@ -58,6 +58,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
         target_bands: Sequence[SensorBand] | None = None,
         spectral_library: SpectralMappingConfig | None = None,
         spectral_k_neighbors: int = 5,
+        grid_resolution_m: float | None = None,
         **kwargs: Any,
     ) -> SurfacePrior:
         obs_time = self._pop_obs_time(kwargs)
@@ -66,6 +67,7 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
                 "Whittaker BRDF derivation requires BRDF weights with a 'time' dimension"
             )
         sigma_x, sigma_y = self._resolve_psf_sigmas(psf_params)
+        sigma_x, sigma_y = self._scale_psf_sigmas(sigma_x, sigma_y, grid_resolution_m)
 
         ref = brdf_weights.f0.isel(time=0, drop=True)
         k_vol, k_geo = self._kernels.compute(geometry.vza, geometry.sza, geometry.raa)

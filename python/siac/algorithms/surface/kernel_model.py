@@ -68,6 +68,15 @@ class KernelModelDeriver:
             self.psf_sigma_x = sigma
             self.psf_sigma_y = psf_sigma_y if psf_sigma_y is not None else sigma
         self.apply_psf = apply_psf
+        # ``psf_sigma_x/y`` count pixels *at ``target_resolution_m``* — the
+        # resolution the PSF was calibrated against (10 m for S2). The surface
+        # prior, however, is built on the aerosol-retrieval grid, which is
+        # usually coarser (default 120 m). ``_scale_psf_sigmas`` converts the
+        # pixel sigma to the actual grid so the *physical* PSF footprint stays
+        # constant; without it a 29.75 px blur at 120 m would span ~3.6 km
+        # (~12x too much) and smear neighbouring dark targets into the prior.
+        self.source_resolution_m = source_resolution_m
+        self.target_resolution_m = target_resolution_m
         self._kernels = BRDFKernels(hb=2.0, br=1.0)
 
     def compute_surface_prior(
@@ -80,6 +89,7 @@ class KernelModelDeriver:
         target_bands: Sequence[SensorBand] | None = None,
         spectral_library: SpectralMappingConfig | None = None,
         spectral_k_neighbors: int = 5,
+        grid_resolution_m: float | None = None,
     ) -> SurfacePrior:
         """
         Compute surface reflectance prior from BRDF parameters.
@@ -88,6 +98,11 @@ class KernelModelDeriver:
             brdf_weights: BRDF kernel coefficients (f0, f1, f2)
             geometry: Observation geometry (sza, vza, raa)
             psf_params: Optional (sigma_x, sigma_y) override for PSF
+            grid_resolution_m: Pixel size (metres) of the grid the prior is
+                computed on. Used to rescale the PSF sigma — calibrated in
+                pixels at ``target_resolution_m`` — so the physical PSF
+                footprint is preserved. ``None`` leaves the sigma unscaled
+                (legacy single-resolution behaviour).
 
         Returns:
             SurfacePrior with BOA reflectance, uncertainty, and mask
@@ -96,6 +111,7 @@ class KernelModelDeriver:
             sigma_x, sigma_y = psf_params
         else:
             sigma_x, sigma_y = self.psf_sigma_x, self.psf_sigma_y
+        sigma_x, sigma_y = self._scale_psf_sigmas(sigma_x, sigma_y, grid_resolution_m)
 
         # Compute kernel values at observation geometry
         k_vol, k_geo = self._kernels.compute(geometry.vza, geometry.sza, geometry.raa)
@@ -250,6 +266,29 @@ class KernelModelDeriver:
         Propagates BRDF parameter uncertainties through the kernel model.
         """
         return brdf_weights.compute_reflectance_uncertainty(k_vol, k_geo)
+
+    def _scale_psf_sigmas(
+        self,
+        sigma_x: float,
+        sigma_y: float,
+        grid_resolution_m: float | None,
+    ) -> tuple[float, float]:
+        """Rescale pixel sigmas from ``target_resolution_m`` to the grid resolution.
+
+        ``psf_sigma_x/y`` count pixels at ``self.target_resolution_m``. On a grid
+        whose pixels are ``grid_resolution_m`` metres, the same physical blur
+        spans ``sigma * target_resolution_m / grid_resolution_m`` pixels. When no
+        grid resolution is supplied (or it is non-positive / non-finite) the
+        sigmas pass through unchanged, preserving legacy behaviour.
+        """
+        if (
+            grid_resolution_m is None
+            or not np.isfinite(grid_resolution_m)
+            or grid_resolution_m <= 0.0
+        ):
+            return sigma_x, sigma_y
+        scale = self.target_resolution_m / grid_resolution_m
+        return sigma_x * scale, sigma_y * scale
 
     def _apply_psf(
         self,
