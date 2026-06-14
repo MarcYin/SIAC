@@ -525,6 +525,27 @@ class SpectralMapper:
                 if schema_index is not None
             )
 
+    def _nearest_supported_source_per_target(self) -> npt.NDArray[np.intp]:
+        """Column (into the supported-source uncertainty) of the spectrally
+        nearest source band for each target band.
+
+        Lets each target band inherit the uncertainty of the source band it
+        chiefly derives from (e.g. S2 B02/B04 from the MODIS visible bands)
+        instead of an average over all source bands, which dilutes the tight
+        visible uncertainty with bright NIR/SWIR source bands.
+        """
+        supported_wl = np.array(
+            [self.source_bands[i].center_wavelength for i in self._supported_source_input_indices],
+            dtype=np.float64,
+        )
+        return np.array(
+            [
+                int(np.argmin(np.abs(supported_wl - band.center_wavelength)))
+                for band in self.target_bands
+            ],
+            dtype=np.intp,
+        )
+
     def map(
         self,
         source_reflectance: xr.DataArray,
@@ -642,26 +663,34 @@ class SpectralMapper:
 
             unc_started = perf_counter()
             per_pixel_fit = fit_rmse[dedup_indices].astype(np.float64)
-            input_unc: npt.NDArray[np.float64] = np.zeros(valid_count, dtype=np.float64)
+            n_target = target_flat.shape[1]
+            # Per-target-band BRDF input uncertainty: each target band inherits the
+            # uncertainty of the spectrally-nearest *supported* source band, rather
+            # than the mean across all source bands. The mean let bright NIR/SWIR
+            # source uncertainty dilute the tight visible uncertainty the
+            # dark-target aerosol solve depends on — a dark visible target (B02)
+            # was assigned ~0.013 instead of the source visible ~0.003, which kept
+            # the surface prior too loose and let AOT collapse onto the CAMS prior.
+            # target_flat has exactly one column per target band (n_target ==
+            # len(self.target_bands)), so each target column maps to the nearest
+            # source band.
+            input_unc: npt.NDArray[np.float64] = np.zeros((valid_count, n_target), dtype=np.float64)
             if unc_flat is not None and self._supported_source_input_indices:
-                supported_unc = np.asarray(
-                    unc_flat[valid_indices][:, self._supported_source_input_indices],
-                    dtype=np.float64,
+                supported_unc = np.nan_to_num(
+                    np.asarray(
+                        unc_flat[valid_indices][:, self._supported_source_input_indices],
+                        dtype=np.float64,
+                    ),
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
                 )
-                with np.errstate(invalid="ignore"):
-                    input_unc = np.sqrt(
-                        np.nanmean(np.square(supported_unc), axis=1, dtype=np.float64)
-                    )
-                input_unc = np.nan_to_num(input_unc, nan=0.0, posinf=0.0, neginf=0.0)
-            unc_per_pixel = np.sqrt(_UNCERTAINTY_FLOOR**2 + per_pixel_fit**2 + input_unc**2).astype(
-                np.float32
-            )
+                input_unc = supported_unc[:, self._nearest_supported_source_per_target()]
+            unc_per_band = np.sqrt(
+                _UNCERTAINTY_FLOOR**2 + per_pixel_fit[:, np.newaxis] ** 2 + input_unc**2
+            ).astype(np.float32)
             mapped_mask = np.isfinite(target_flat[valid_indices])
-            target_unc_flat[valid_indices] = np.where(
-                mapped_mask,
-                unc_per_pixel[:, np.newaxis],
-                np.nan,
-            )
+            target_unc_flat[valid_indices] = np.where(mapped_mask, unc_per_band, np.nan)
             logger.info(
                 "Spectral mapping uncertainty complete: %d pixels elapsed=%.2fs",
                 int(valid_indices.size),
