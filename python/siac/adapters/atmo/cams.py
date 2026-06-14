@@ -697,15 +697,20 @@ class CAMSProvider:
 
     @staticmethod
     def _netcdf_patterns(date_str: str, iso_date: str) -> list[str]:
+        # Keep in sync with _remote_candidate_urls: a local mirror directory
+        # must accept the same file names as the remote candidates, including
+        # the bare ISO-date naming used by the JASMIN CAMS mirror.
         return [
             f"cams_nrt_{date_str}*.nc",
             f"cams_{date_str}*.nc",
             f"*{date_str}*.nc",
             f"CAMS_{iso_date}*.nc",
+            f"{iso_date}*.nc",
             f"cams_nrt_{date_str}*.nc4",
             f"cams_{date_str}*.nc4",
             f"*{date_str}*.nc4",
             f"CAMS_{iso_date}*.nc4",
+            f"{iso_date}*.nc4",
         ]
 
     @staticmethod
