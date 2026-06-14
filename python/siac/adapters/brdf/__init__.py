@@ -9,3 +9,6 @@ from siac.adapters.brdf.mcd43_earthaccess import (
 from siac.adapters.brdf.mcd43_earthaccess import (
     VNP43EarthAccessProvider as VNP43EarthAccessProvider,
 )
+from siac.adapters.brdf.mcd43_gee import (
+    MCD43GEEProvider as MCD43GEEProvider,
+)

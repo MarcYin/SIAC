@@ -41,6 +41,7 @@ class AtmoProviderKind(SIACEnum):
 
 class BRDFProviderKind(SIACEnum):
     MCD43 = "mcd43"
+    MCD43_GEE = "mcd43_gee"
     VNP43 = "vnp43"
     MCD19 = "mcd19"
 

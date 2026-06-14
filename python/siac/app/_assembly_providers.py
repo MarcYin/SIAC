@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -16,7 +17,6 @@ from siac.app.registry import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from siac.adapters.auth import CredentialManager
     from siac.algorithms.surface.brdf_monthly_composite import MonthlyCompositeCollection
@@ -121,6 +121,20 @@ def _build_mcd43_provider(config: Any, auth: CredentialManager | None = None) ->
         source=earthaccess_source_from_auth(auth),
         reproject_cache_dir=_resolve_reproject_cache_dir(config),
     )
+
+
+@BRDF_PROVIDER_REGISTRY.register("mcd43_gee")
+def _build_mcd43_gee_provider(config: Any, auth: CredentialManager | None = None) -> Any:
+    from siac.adapters.brdf.mcd43_gee import MCD43GEEProvider
+
+    del auth  # GEE auth is handled by edown via ~/.config/earthengine, not SIAC.
+    brdf = config.providers.brdf
+    cache_dir = brdf.cache_dir or (Path.home() / ".cache" / "siac" / "mcd43_gee")
+    kwargs: dict[str, Any] = {"cache_dir": cache_dir}
+    # Optional override of the edown executable via providers.brdf.data_path.
+    if brdf.data_path is not None:
+        kwargs["edown_executable"] = str(brdf.data_path)
+    return MCD43GEEProvider(**kwargs)
 
 
 @BRDF_PROVIDER_REGISTRY.register("vnp43")
