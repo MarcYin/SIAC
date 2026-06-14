@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Systematic surface-prior uncertainty floor for the Route-B monthly database.
+# The kNN neighbour spread captures only local sampling variability and omits the
+# systematic MODIS->S2 mapping error, BRDF absolute uncertainty, and scene-vs-
+# composite temporal mismatch. Left raw (~0.003-0.005) the solver over-trusts the
+# prior and AOT overshoots (broad AERONET sweep: 40% within EE, +0.09 bias). The
+# spread is combined in quadrature with this floor so the total lands near the
+# kernel/whittaker ~0.007 sweet spot.
+_MONTHLY_UNCERTAINTY_FLOOR = 0.006
+
 
 @dataclass(frozen=True)
 class _MonthlyPredictionDiagnostics:
@@ -171,7 +180,12 @@ class MonthlyCompositeDatabase:
         def _output_arrays() -> _MonthlyPredictionDiagnostics:
             coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
             predicted_da = xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords)
-            uncertainty_da = xr.DataArray(uncertainty, dims=["band", "y", "x"], coords=coords)
+            # Combine the neighbour spread with the systematic floor in quadrature;
+            # NaN (no-prediction) pixels stay NaN. See _MONTHLY_UNCERTAINTY_FLOOR.
+            floored_uncertainty = np.sqrt(
+                np.asarray(uncertainty, dtype=np.float32) ** 2 + _MONTHLY_UNCERTAINTY_FLOOR**2
+            ).astype(np.float32)
+            uncertainty_da = xr.DataArray(floored_uncertainty, dims=["band", "y", "x"], coords=coords)
             quality_da = xr.DataArray(
                 quality, dims=["y", "x"], coords={"y": y_coords, "x": x_coords}
             )

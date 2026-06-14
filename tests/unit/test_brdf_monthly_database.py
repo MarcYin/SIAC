@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from siac.algorithms.surface.brdf_monthly_composite import MonthlyBestPixelComposite
@@ -259,3 +260,30 @@ def test_predict_visible_with_diagnostics_reports_query_feature_distance() -> No
     assert prediction.knn_feature_distance.shape == (2, 1)
     assert float(prediction.knn_feature_distance.values[0, 0]) == 0.0
     assert float(prediction.knn_feature_distance.values[1, 0]) > 0.0
+
+
+def test_predict_visible_uncertainty_respects_systematic_floor() -> None:
+    from siac.algorithms.surface.brdf_monthly_database import _MONTHLY_UNCERTAINTY_FLOOR
+
+    composites = [_make_composite(i) for i in range(15)]
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+    )
+    corrected = xr.Dataset(
+        {
+            "B08": xr.DataArray(np.array([[0.47], [0.80]], dtype=np.float32), dims=["y", "x"]),
+            "B11": xr.DataArray(np.array([[0.37], [0.70]], dtype=np.float32), dims=["y", "x"]),
+            "B12": xr.DataArray(np.array([[0.27], [0.60]], dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+
+    prediction = database.predict_visible_with_diagnostics(corrected, k_neighbors=1)
+    unc = prediction.uncertainty.values
+    finite = np.isfinite(unc)
+    assert finite.any()
+    # The systematic floor is combined in quadrature, so every predicted pixel's
+    # uncertainty is at least the floor (k=1 -> zero spread -> exactly the floor).
+    assert np.all(unc[finite] >= _MONTHLY_UNCERTAINTY_FLOOR - 1e-6)
+    assert float(unc[0, 0, 0]) == pytest.approx(_MONTHLY_UNCERTAINTY_FLOOR, abs=1e-5)
