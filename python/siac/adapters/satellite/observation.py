@@ -95,6 +95,28 @@ def observation_bundle_from_raw(
     )
 
 
+def _toa_grid_crs_bounds(
+    toa: xr.Dataset, *, fallback: AOI
+) -> tuple[str, tuple[float, float, float, float]]:
+    """Return the actual grid CRS/bounds of the (clipped) TOA.
+
+    Clipping keeps the TOA in its native (often projected/UTM) grid, so the
+    observation's ``crs``/``bounds`` must come from the TOA itself — not from
+    the AOI, which may be geographic. Using the AOI CRS here leaves
+    downstream meter-based grid math (e.g. the aerosol solver resolution)
+    dividing a degree-extent by metres and collapsing to a 1x1 grid.
+    """
+    first = toa[list(toa.data_vars)[0]]
+    rio = getattr(first, "rio", None)
+    if rio is not None and rio.crs is not None:
+        try:
+            west, south, east, north = (float(b) for b in rio.bounds())
+            return str(rio.crs), (west, south, east, north)
+        except Exception:
+            pass
+    return str(fallback.crs), fallback.get_bounds()
+
+
 def raw_output_to_observation_bundle(
     raw: dict[str, Any],
     *,
@@ -107,11 +129,12 @@ def raw_output_to_observation_bundle(
     resolved_aoi = aoi or _resolve_default_aoi(toa, default_aoi_resolver)
     if aoi is not None:
         raw = clip_raw_preprocessor_output(raw, aoi=resolved_aoi)
+    grid_crs, grid_bounds = _toa_grid_crs_bounds(raw["toa"], fallback=resolved_aoi)
     return observation_bundle_from_raw(
         raw,
         sensor_config=sensor_config,
-        crs=str(resolved_aoi.crs),
-        bounds=resolved_aoi.get_bounds(),
+        crs=grid_crs,
+        bounds=grid_bounds,
     )
 
 
