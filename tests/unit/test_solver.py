@@ -1126,8 +1126,12 @@ class TestMultiGridSolver:
         from siac.runtime import BRDFKernelWeights, GeometryAngles, RTCoefficients, SurfacePrior
 
         shape = (2, 3)
+        # Lower bound above the prior (0.3) so the supported solution is driven
+        # to the AOT floor: the log-spaced grid otherwise resolves the prior.
         solver = MultiGridSolver(
-            MultiGridConfig(grid_search_aot_points=5, grid_search_tcwv_points=3)
+            MultiGridConfig(
+                grid_search_aot_points=5, grid_search_tcwv_points=3, aot_bounds=(0.4, 2.5)
+            )
         )
 
         toa = xr.DataArray(
@@ -1731,9 +1735,10 @@ class TestMultiGridSolver:
             cost_config=CostFunctionConfig(aot_gamma=0.0, tcwv_gamma=0.0),
         )
 
-        aot_axis = np.linspace(
-            solver.config.aot_bounds[0],
-            solver.config.aot_bounds[1],
+        # Solver now log-spaces the AOT grid (see multigrid._log_aot_axis).
+        aot_axis = np.geomspace(
+            max(float(solver.config.aot_bounds[0]), 1e-4),
+            float(solver.config.aot_bounds[1]),
             solver.config.grid_search_aot_points,
             dtype=np.float32,
         )

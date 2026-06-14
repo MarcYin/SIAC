@@ -65,6 +65,19 @@ FixedAtmosphericParameter: TypeAlias = Literal["none", "aot", "tcwv"]
 StageInitialState: TypeAlias = Literal["prior", "previous"]
 
 
+def _log_aot_axis(lo: float, hi: float, n: int) -> np.ndarray:
+    """Log-spaced AOT grid-search axis.
+
+    A linear axis over [0.001, 2.5] put its second node at 0.25, leaving the
+    entire typical AOT range (~0.01-0.2) unsampled; the grid search then picked
+    the 0.001 lower bound and the quadratic refine pinned retrievals at the
+    floor. Log spacing places nodes near 0.025/0.056/0.125 so low-AOT scenes
+    are resolvable. The lower bound is clamped above zero for geomspace.
+    """
+    lo_safe = max(float(lo), 1e-4)
+    return np.geomspace(lo_safe, float(hi), int(n), dtype=np.float32)
+
+
 def derive_grid_search_axes(
     config: MultiGridConfig,
 ) -> tuple[np.ndarray, np.ndarray] | None:
@@ -90,7 +103,7 @@ def derive_grid_search_axes(
 
     n_aot = max(3, int(config.grid_search_aot_points))
     n_tcwv = max(3, int(config.grid_search_tcwv_points))
-    aot_axis = np.linspace(config.aot_bounds[0], config.aot_bounds[1], n_aot, dtype=np.float32)
+    aot_axis = _log_aot_axis(config.aot_bounds[0], config.aot_bounds[1], n_aot)
     tcwv_axis = np.linspace(config.tcwv_bounds[0], config.tcwv_bounds[1], n_tcwv, dtype=np.float32)
     return aot_axis, tcwv_axis
 
@@ -811,9 +824,7 @@ class MultiGridSolver:
         n_aot = max(3, int(self.config.grid_search_aot_points)) if solve_aot else 1
         n_tcwv = max(3, int(self.config.grid_search_tcwv_points)) if solve_tcwv else 1
         aot_axis = (
-            np.linspace(
-                self.config.aot_bounds[0], self.config.aot_bounds[1], n_aot, dtype=np.float32
-            )
+            _log_aot_axis(self.config.aot_bounds[0], self.config.aot_bounds[1], n_aot)
             if solve_aot
             else fixed_axis_from_prior(aot_prior, self.config.aot_bounds)
         )
