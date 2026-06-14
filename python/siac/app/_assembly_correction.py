@@ -80,6 +80,7 @@ def resolve_corrector(config: Any) -> CorrectorFn:
             aot=atmo.aot,
             tcwv=atmo.tcwv,
             cloud_mask=corrected.cloud_mask,
+            cloud_mask_m1=corrected.cloud_mask_m1,
             surface_prior=corrected.surface_prior,
             surface_prior_unc=corrected.surface_prior_unc,
             solver_qa=corrected.solver_qa if corrected.solver_qa is not None else solved.qa,

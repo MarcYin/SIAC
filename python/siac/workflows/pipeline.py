@@ -462,6 +462,9 @@ def _run_tail(
             aot=solved.aot,
             tcwv=solved.tcwv,
             cloud_mask=solver_inputs.cloud_mask,
+            # No correction ran, so there is no invalid-BOA mask to OR in: the
+            # raw M1 cloud is the cloud mask.
+            cloud_mask_m1=solver_inputs.cloud_mask,
             surface_prior=_banded_dataarray_to_dataset(
                 solver_inputs.surface_prior.boa,
                 default_name="surface_prior",
@@ -523,6 +526,7 @@ def _run_tail(
             aot=corrected.aot,
             tcwv=corrected.tcwv,
             cloud_mask=corrected.cloud_mask,
+            cloud_mask_m1=corrected.cloud_mask_m1,
             surface_prior=_banded_dataarray_to_dataset(
                 solver_inputs.surface_prior.boa,
                 default_name="surface_prior",

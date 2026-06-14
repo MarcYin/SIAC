@@ -232,10 +232,10 @@ class AtmosphericCorrector:
 
         # cloud_mask contract: True = cloudy/invalid, preserved from M1
         if cloud_mask is not None:
-            final_cloud_mask = resample_mask_to_template(
-                cloud_mask, invalid_boa_mask
-            ) | invalid_boa_mask.astype(bool)
+            cloud_mask_m1 = resample_mask_to_template(cloud_mask, invalid_boa_mask)
+            final_cloud_mask = cloud_mask_m1 | invalid_boa_mask.astype(bool)
         else:
+            cloud_mask_m1 = xr.zeros_like(invalid_boa_mask, dtype=bool)
             final_cloud_mask = invalid_boa_mask.astype(bool)
         elapsed = time.monotonic() - t0
         return CorrectionResult(
@@ -244,5 +244,6 @@ class AtmosphericCorrector:
             aot=atmo_state.aot,
             tcwv=atmo_state.tcwv,
             cloud_mask=final_cloud_mask,
+            cloud_mask_m1=cloud_mask_m1.astype(bool),
             diagnostics=CorrectionDiagnostics(processing_time_s=elapsed),
         )

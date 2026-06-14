@@ -508,6 +508,12 @@ class CorrectionResult:
     aot: xr.DataArray
     tcwv: xr.DataArray
     cloud_mask: xr.DataArray
+    #: Raw input cloud mask from M1 (OmniCloudMask), before the correction
+    #: stage ORs in per-band invalid-BOA pixels. ``cloud_mask`` is the union
+    #: (True = cloudy OR invalid-BOA) for output masking; this field isolates
+    #: actual cloud so downstream consumers can distinguish "cloudy" from
+    #: "correction flagged the pixel unreliable".
+    cloud_mask_m1: xr.DataArray | None = None
     surface_prior: xr.Dataset | None = None
     surface_prior_unc: xr.Dataset | None = None
     solver_qa: xr.Dataset | None = None
