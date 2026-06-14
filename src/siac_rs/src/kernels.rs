@@ -6,7 +6,7 @@
 use ndarray::{Array2, Zip};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 /// Ross-Thick Li-Sparse kernel calculator
 ///
@@ -111,8 +111,10 @@ impl RossThickLiSparse {
             return 0.0;
         }
 
-        // Main Ross-Thick formula
-        ((FRAC_PI_2 - phase) * cos_phase + phase.sin()) / denom - FRAC_PI_2
+        // Main Ross-Thick formula (Lucht 2000 / Wanner 1995), normalized to 0
+        // at nadir via the -π/4 constant. A previous -π/2 left a constant -π/4
+        // offset that darkened every BRDF-derived reflectance by ~0.785*f_vol.
+        ((FRAC_PI_2 - phase) * cos_phase + phase.sin()) / denom - FRAC_PI_4
     }
 
     /// Li-Sparse geometric scattering kernel
@@ -170,17 +172,15 @@ impl RossThickLiSparse {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use std::f64::consts::FRAC_PI_4;
 
     #[test]
     fn test_nadir_nadir_known_answer() {
-        // At vza=sza=0 (sun and sensor both at nadir), the BRDF kernels have
-        // closed-form analytical values independent of raa:
-        //   Ross-Thick = -π/4   (from the standard MCD43 formulation)
-        //   Li-Sparse  =  0     (all prime angles collapse to 0)
+        // At vza=sza=0 (sun and sensor both at nadir), the standard MCD43
+        // RossThick/LiSparse kernels are normalized to 0 (the BRDF there is the
+        // pure isotropic term f_iso). raa is irrelevant at nadir.
         let kernel = RossThickLiSparse::new(2.0, 1.0);
         let (ross, li) = kernel.compute_single(0.0, 0.0, 0.0);
-        assert_relative_eq!(ross, -FRAC_PI_4, epsilon = 1e-10);
+        assert_relative_eq!(ross, 0.0, epsilon = 1e-10);
         assert_relative_eq!(li, 0.0, epsilon = 1e-10);
     }
 
