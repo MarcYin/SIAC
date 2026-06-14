@@ -428,6 +428,7 @@ def _run_tail(
             water_mask_buffer_pixels=water_mask_buffer_pixels,
             solver_band_names=solver_band_names,
             reproject_cache_dir=reproject_cache_dir,
+            dem_path=getattr(paths_config, "dem", None),
         )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)

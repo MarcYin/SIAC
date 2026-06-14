@@ -775,6 +775,7 @@ def assemble_grids(
     water_mask_buffer_pixels: int = 0,
     solver_band_names: tuple[str, ...] | None = None,
     reproject_cache_dir: str | Path | None = None,
+    dem_path: str | Path | None = None,
 ) -> SolverInputBundle:
     """Resample and align all upstream outputs to solver grids.
 
@@ -947,6 +948,23 @@ def assemble_grids(
         cloud_mask = cloud_future.result()
         atmo_resampled = atmo_future.result()
         surface_resampled = surface_future.result()
+
+    # Populate terrain elevation per solver-grid pixel from the DEM (the CAMS
+    # prior carries none, so the RT elevation correction would otherwise be a
+    # no-op — under-attributing AOD over high terrain). Reading at the solver
+    # grid (vs the coarse CAMS cell) avoids the regional over-estimate in
+    # valleys. A falsy / sea-level ``dem_path`` (see siac.geo.dem) leaves the
+    # resampled (sea-level) elevation in place, reproducing the legacy no-op.
+    from siac.geo.dem import read_elevation_km, use_sea_level_elevation
+
+    dem_arg = None if dem_path is None else str(dem_path)
+    if not use_sea_level_elevation(dem_arg):
+        from dataclasses import replace
+
+        atmo_resampled = replace(
+            atmo_resampled,
+            elevation=read_elevation_km(target_template, dem_arg),
+        )
 
     if toa_arrays:
         toa_da = xr.concat(toa_arrays, dim="band")

@@ -85,6 +85,7 @@ def call_grid_assembler(
     water_mask_buffer_pixels: int = 0,
     solver_band_names: tuple[str, ...] | None = None,
     reproject_cache_dir: str | Path | None = None,
+    dem_path: str | Path | None = None,
 ) -> SolverInputBundle:
     """Call the grid assembler with the current standardized interface."""
     return grid_assembler(
@@ -99,4 +100,5 @@ def call_grid_assembler(
         water_mask_buffer_pixels=water_mask_buffer_pixels,
         solver_band_names=solver_band_names,
         reproject_cache_dir=reproject_cache_dir,
+        dem_path=dem_path,
     )
