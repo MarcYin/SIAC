@@ -97,7 +97,10 @@ dask = [
 # (providers.monthly_composites.kind = "bestpixel"). Imported lazily by
 # siac.adapters.bestpixel, so it is never required for the core install.
 bestpixel = [
-    "bestpixel>=0.1.1",
+    # >=0.2.1: per-scene source CRS so monthly composites keep both zones for
+    # AOIs straddling a 6° UTM/MGRS seam (earlier versions returned n_src=0 and
+    # dropped the neighbouring zone's tiles from the surface-prior composite).
+    "bestpixel>=0.2.1",
 ]
 all = [
     "siac[dev,docs,dask,bestpixel]",
