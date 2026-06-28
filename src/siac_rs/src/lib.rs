@@ -13,6 +13,7 @@ mod kernels;
 mod optimization;
 mod optimization_grid;
 mod psf;
+mod surface_driven;
 mod whittaker;
 
 /// SIAC Rust extension module
@@ -62,6 +63,12 @@ fn _rust(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(whittaker::whittaker_smooth_cube, m)?)?;
+
+    // Surface-driven aerosol solver
+    m.add_function(wrap_pyfunction!(
+        surface_driven::surface_driven_pool_argmin,
+        m
+    )?)?;
 
     Ok(())
 }

@@ -130,5 +130,9 @@ def remap_to_coarse_grid(*args: Any, **kwargs: Any) -> Any:
     return _require_native("remap_to_coarse_grid")(*args, **kwargs)
 
 
+def surface_driven_pool_argmin(*args: Any, **kwargs: Any) -> Any:
+    return _require_native("surface_driven_pool_argmin")(*args, **kwargs)
+
+
 def whittaker_smooth_cube(*args: Any, **kwargs: Any) -> Any:
     return _require_native("whittaker_smooth_cube")(*args, **kwargs)

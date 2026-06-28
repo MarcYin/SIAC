@@ -33,6 +33,7 @@ from siac.config.types import (
     SixSParallelBackend,
     SixSSurfaceMode,
     SixSSurfaceReflectanceKind,
+    SolverMethod,
     SolverStageInitialState,
     SurfacePriorMethod,
     _coerce_float_matrix,
@@ -822,6 +823,24 @@ class SharpTransitionFilterConfig(SIACBaseModel):
 
 
 class SolverAlgorithmConfig(SIACBaseModel):
+    #: Solver method. ``multigrid`` (default) is the Bayesian multi-grid
+    #: inversion; ``surface_driven`` sweeps a fixed AOT axis at the prior TCWV
+    #: and picks the per-pixel arg-min of the surface-prior mismatch (Rust
+    #: kernel). The surface-driven method ignores the multi-grid / L-BFGS-B
+    #: fields below and uses ``grid_search_aot_points`` + ``aot_bounds`` to
+    #: build its AOT axis and ``surface_driven_*`` for pooling/backstop.
+    method: SolverMethod = SolverMethod.MULTIGRID
+    #: (surface_driven) half-width of the spatial cost-pooling window, in metres.
+    #: ~600 m → a ~1.2 km median window, the robustness scale validated in the
+    #: surface-driven harness. Converted to solver pixels via aerosol_resolution.
+    surface_driven_pool_radius_m: float = Field(default=600.0, ge=0.0)
+    #: (surface_driven) minimum finite cost samples required in a pooling window
+    #: for a node to be considered (else that node is skipped for the pixel).
+    surface_driven_pool_min_count: int = Field(default=1, ge=1)
+    #: (surface_driven) when True, widen/tighten the prior (CAMS) backstop by
+    #: AOT regime (loose when clean and at the high-AOD tail, tight in the
+    #: moderate band where the surface signal is shallow); else flat 50 %.
+    surface_driven_backstop_calibrated: bool = True
     aot_gamma: float = Field(default=10.0, ge=0.0)
     tcwv_gamma: float = Field(default=5.0, ge=0.0)
     alpha: float = -1.6

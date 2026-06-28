@@ -43,3 +43,4 @@ MONTHLY_COMPOSITE_PROVIDER_REGISTRY: NamedRegistry[object] = NamedRegistry(
 )
 S2_BACKEND_REGISTRY: NamedRegistry[object] = NamedRegistry("S2 backend")
 SURFACE_PRIOR_METHOD_REGISTRY: NamedRegistry[object] = NamedRegistry("surface prior method")
+SOLVER_METHOD_REGISTRY: NamedRegistry[object] = NamedRegistry("solver method")

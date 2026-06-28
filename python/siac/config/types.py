@@ -65,6 +65,19 @@ class SurfacePriorMethod(SIACEnum):
     MONTHLY_DATABASE = "monthly_database"
 
 
+class SolverMethod(SIACEnum):
+    """Atmospheric solver method.
+
+    ``multigrid`` is the Bayesian multi-grid L-BFGS-B inversion (default).
+    ``surface_driven`` sweeps a fixed AOT axis at the prior TCWV, scoring the
+    surface-prior mismatch per node and picking the arg-min (cheap, robust;
+    delegates the per-pixel cost cube to the Rust kernel).
+    """
+
+    MULTIGRID = "multigrid"
+    SURFACE_DRIVEN = "surface_driven"
+
+
 class MonthlyDatabaseResolutionPolicy(SIACEnum):
     PROVIDER_OR_COARSER = "provider_or_coarser"
     AEROSOL = "aerosol"

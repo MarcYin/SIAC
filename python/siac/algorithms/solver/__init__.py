@@ -47,3 +47,6 @@ from siac.algorithms.solver.multigrid import (
 from siac.algorithms.solver.multigrid import (
     solve_atmospheric_parameters as solve_atmospheric_parameters,
 )
+from siac.algorithms.solver.surface_driven import (
+    SurfaceDrivenSolver as SurfaceDrivenSolver,
+)
