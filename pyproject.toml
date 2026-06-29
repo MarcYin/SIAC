@@ -100,7 +100,10 @@ bestpixel = [
     # >=0.2.1: per-scene source CRS so monthly composites keep both zones for
     # AOIs straddling a 6° UTM/MGRS seam (earlier versions returned n_src=0 and
     # dropped the neighbouring zone's tiles from the surface-prior composite).
-    "bestpixel>=0.2.1",
+    # >=0.2.2: build_monthly_composites uses calendar-correct month-end dates
+    # (no YYYY-MM-31 400s) and gains an optional MAIAC-AOD day gate
+    # (aod_by_day/aod_max/reject_unknown).
+    "bestpixel>=0.2.2",
 ]
 all = [
     "siac[dev,docs,dask,bestpixel]",
