@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from siac.adapters.atmo import cams as cams_mod
 from siac.adapters.atmo.cams import CAMSProvider
 from siac.adapters.auth import CDSES3Credentials, CredentialManager
 
@@ -24,6 +25,54 @@ def _dataset(var_names: tuple[str, ...]) -> xr.Dataset:
             for name in var_names
         }
     )
+
+
+def test_calibrated_aot_uncertainty_is_tight_at_low_aod_and_saturates() -> None:
+    aot = xr.DataArray(
+        np.array(
+            [[-0.1, 0.0, cams_mod._CAMS_AOT_UNC_HALF, 1.5]],
+            dtype=np.float32,
+        ),
+        dims=["y", "x"],
+    )
+
+    unc = cams_mod._calibrated_aot_uncertainty(aot)
+    values = unc.values[0]
+
+    assert unc.dims == aot.dims
+    assert unc.dtype == np.float32
+    assert values[0] == pytest.approx(cams_mod._CAMS_AOT_UNC_FLOOR)
+    assert values[1] == pytest.approx(cams_mod._CAMS_AOT_UNC_FLOOR)
+    assert values[2] == pytest.approx(
+        np.sqrt(cams_mod._CAMS_AOT_UNC_FLOOR**2 + 0.5 * cams_mod._CAMS_AOT_UNC_PLATEAU**2),
+        rel=1e-6,
+    )
+    assert cams_mod._CAMS_AOT_UNC_FLOOR < values[2] < values[3]
+    assert values[3] < np.sqrt(cams_mod._CAMS_AOT_UNC_FLOOR**2 + cams_mod._CAMS_AOT_UNC_PLATEAU**2)
+
+
+def test_calibrate_cams_aot_center_is_gated_default_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aot = xr.DataArray(
+        np.array([[0.0, 0.3, 1.2]], dtype=np.float32),
+        dims=["y", "x"],
+    )
+
+    monkeypatch.setattr(cams_mod, "_APPLY_AOT_CENTER_CALIBRATION", False)
+    assert cams_mod._calibrate_cams_aot_center(aot) is aot
+
+    monkeypatch.setattr(cams_mod, "_APPLY_AOT_CENTER_CALIBRATION", True)
+    corrected = cams_mod._calibrate_cams_aot_center(aot)
+    powered = np.maximum(aot.values, 0.0) ** 2
+    expected = aot.values + cams_mod._CAMS_CENTER_GAIN * powered / (
+        powered + cams_mod._CAMS_CENTER_K**2
+    )
+
+    assert corrected.dtype == np.float32
+    np.testing.assert_allclose(corrected.values, expected.astype(np.float32), rtol=1e-6)
+    assert corrected.values[0, 0] == pytest.approx(0.0)
+    assert corrected.values[0, 2] > aot.values[0, 2]
 
 
 def test_load_cams_data_handles_explicit_missing_sources_and_local_dir_creation(

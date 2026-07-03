@@ -21,13 +21,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Systematic surface-prior uncertainty floor for the Route-B monthly database.
-# The kNN neighbour spread captures only local sampling variability and omits the
-# systematic MODIS->S2 mapping error, BRDF absolute uncertainty, and scene-vs-
-# composite temporal mismatch. Left raw (~0.003-0.005) the solver over-trusts the
-# prior and AOT overshoots (broad AERONET sweep: 40% within EE, +0.09 bias). The
-# spread is combined in quadrature with this floor so the total lands near the
-# kernel/whittaker ~0.007 sweet spot.
+# Residual systematic surface-prior uncertainty floor for the Route-B monthly
+# database. The prediction uncertainty combines three independent terms in
+# quadrature (see ``_output_arrays``): the kNN neighbour spread (local sampling
+# variability), the per-neighbour reflectance uncertainty ``quality`` (BRDF
+# absolute + spectral-mapping error -- the dominant term ``kernel_model``
+# propagates), and this floor for the residual scene-vs-composite temporal
+# mismatch the other two omit. Folding ``quality`` is what stops the solver
+# over-trusting the prior: the neighbour spread alone (~0.003-0.005) omits the
+# reflectance uncertainty kernel_model carries (~0.012-0.027), so the monthly
+# prior read far tighter than kernel's and AOT overshot badly at high aerosol
+# (Chachoengsao AOT 1.09 vs AERONET 0.63; MISR-JPL 0.065 vs 0.045). With
+# ``quality`` folded both land within EE (0.53 and 0.048) -- matching the
+# kernel/whittaker behaviour by construction rather than via a tuned constant.
 _MONTHLY_UNCERTAINTY_FLOOR = 0.006
 
 
@@ -180,12 +186,26 @@ class MonthlyCompositeDatabase:
         def _output_arrays() -> _MonthlyPredictionDiagnostics:
             coords = {"band": list(self.visible_band_names), "y": y_coords, "x": x_coords}
             predicted_da = xr.DataArray(predicted, dims=["band", "y", "x"], coords=coords)
-            # Combine the neighbour spread with the systematic floor in quadrature;
-            # NaN (no-prediction) pixels stay NaN. See _MONTHLY_UNCERTAINTY_FLOOR.
+            # Combine three independent contributions in quadrature: the kNN
+            # neighbour spread (local sampling variability), the per-neighbour
+            # reflectance uncertainty ``quality`` (BRDF absolute + spectral-mapping
+            # error -- the dominant term kernel_model propagates, which the spread
+            # alone omits and whose omission made the solver over-trust the prior
+            # and over-retrieve AOT), broadcast across the visible bands, and the
+            # systematic floor. NaN (no-prediction) pixels stay NaN; a NaN quality
+            # contributes zero so it never wipes an otherwise-valid spread.
+            # See _MONTHLY_UNCERTAINTY_FLOOR.
+            neighbour_quality = np.nan_to_num(np.asarray(quality, dtype=np.float32), nan=0.0)[
+                np.newaxis, :, :
+            ]
             floored_uncertainty = np.sqrt(
-                np.asarray(uncertainty, dtype=np.float32) ** 2 + _MONTHLY_UNCERTAINTY_FLOOR**2
+                np.asarray(uncertainty, dtype=np.float32) ** 2
+                + neighbour_quality**2
+                + _MONTHLY_UNCERTAINTY_FLOOR**2
             ).astype(np.float32)
-            uncertainty_da = xr.DataArray(floored_uncertainty, dims=["band", "y", "x"], coords=coords)
+            uncertainty_da = xr.DataArray(
+                floored_uncertainty, dims=["band", "y", "x"], coords=coords
+            )
             quality_da = xr.DataArray(
                 quality, dims=["y", "x"], coords={"y": y_coords, "x": x_coords}
             )

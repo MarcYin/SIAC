@@ -29,6 +29,109 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 FloatArray = np.ndarray[Any, np.dtype[np.floating[Any]]]
 
+# --- Dark-target surface-prior uncertainty inflation -----------------------
+# Dark surfaces (dense forest, water-adjacent land) drive aerosol *over*-
+# retrieval: a near-black blue prior forces the solver to attribute the observed
+# blue TOA to aerosol, since increasing AOT is the only way to darken the modelled
+# BOA enough to match the prior. The BRDF/MODIS prior is least reliable and the
+# blue-band inversion most ill-conditioned exactly where the surface is darkest,
+# so the prior should be trusted *less* there. We add a brightness-dependent floor
+# to the per-band reflectance uncertainty:
+#
+#     sigma_eff = sqrt(sigma**2 + (gain * max(0, threshold - boa))**2)
+#
+# applied per band per pixel keyed on that band's own darkness. Bright pixels
+# (boa >= threshold) are untouched; the effect concentrates on the blue band,
+# which is both the darkest and the most AOT-sensitive.
+#
+# Default OFF (opt-in). A 66-site AERONET A/B lowers mean absolute error
+# (0.084 -> 0.078) and fixes the worst dark over-retrievers (NEON_Bartlett
+# 1.38 -> 1.15 flips within EE; Santarem and Chachoengsao pulled toward truth),
+# but is within-EE-count-neutral (51/66 -> 50/66): keyed on brightness alone it
+# cannot separate "dark AND over-retrieving" from "dark but already correct", so
+# it over-corrects a few borderline dark scenes (ATTO-Campina 0.24 -> 0.11, into
+# under). A discrepancy-keyed variant -- inflate only where the surface implies
+# far more aerosol than the CAMS prior -- would target the failure cleanly; until
+# that exists this stays a toggle, not a default. Threshold/gain are insensitive
+# in [0.04, 0.06] / [0.6, 1.2]; the dark-pixel population dominates.
+_APPLY_DARK_TARGET_UNC = False
+_DARK_TARGET_REFLECTANCE_THRESHOLD = 0.06
+_DARK_TARGET_UNC_GAIN = 0.6
+
+
+def inflate_dark_target_uncertainty(boa: xr.DataArray, boa_unc: xr.DataArray) -> xr.DataArray:
+    """Inflate surface-prior uncertainty for dark (low-reflectance) pixels.
+
+    Returns ``boa_unc`` unchanged when the toggle is off. See the module note for
+    the rationale and model. ``boa`` and ``boa_unc`` must share dims/shape.
+    """
+    if not _APPLY_DARK_TARGET_UNC:
+        return boa_unc
+    boa_v = np.asarray(boa.values, dtype=np.float32)
+    unc_v = np.asarray(boa_unc.values, dtype=np.float32)
+    deficit = np.maximum(np.float32(0.0), np.float32(_DARK_TARGET_REFLECTANCE_THRESHOLD) - boa_v)
+    inflated = np.sqrt(unc_v**2 + (np.float32(_DARK_TARGET_UNC_GAIN) * deficit) ** 2)
+    return boa_unc.copy(data=inflated.astype(unc_v.dtype))
+
+
+# --- Visible surface-prior de-bias ----------------------------------------
+# The MODIS-BRDF kernel prior is systematically darker than the real surface in
+# the visible solver bands. Measured against the S2 BOA corrected at the known
+# AERONET AOD (the true surface in the solver's own RT frame) over 66 sites:
+# prior(B02) = -0.0133 + 0.928*ref, prior(B04) = -0.0076 + 0.950*ref, with the
+# B02/B04 biases 0.91-correlated -- one common MODIS->S2 offset, not band noise.
+# A dark prior makes the solver raise AOT to darken the modelled BOA down to it,
+# i.e. it contributes to the over-retrieval that dominates the failure tail. We
+# invert the per-band affine fit, corrected = (boa + a)/b.
+#
+# Default OFF -- a rigorous negative result. The de-bias correctly removes the
+# *reflectance* offset (prior MAE 0.025 -> 0.018) and, at strength 0.3, nulls the
+# *population* AOT bias (+0.022 -> -0.005). But it does NOT improve per-site
+# retrieval: a 66-site A/B is net -2 within-EE at every strength, because the
+# prior error is a small correctable bias (~0.021) sitting on LARGER irreducible
+# per-site scatter (std ~0.028). A uniform correction nulls the mean but cannot
+# touch the scatter, so it just relocates errors (fixes low-AOD over-retrievers,
+# breaks others). SWIR cannot supply better per-site surface info (R^2 <= 0.24),
+# so no global prior correction helps -- the MODIS-BRDF prior is at the achievable
+# quality ceiling for the available information. Kept as an opt-in toggle.
+_APPLY_PRIOR_DEBIAS = False
+# band -> (a, b) such that the full de-bias is corrected = (boa + a) / b
+_PRIOR_DEBIAS: dict[str, tuple[float, float]] = {
+    "B02": (0.0133, 0.928),
+    "B04": (0.0076, 0.950),
+}
+# Fraction of the affine de-bias to apply. The full correction (1.0) removes the
+# reflectance bias but over-corrects the retrieved AOT, because the
+# reflectance->AOT sensitivity is large at high AOD (flat cost cube): a uniform
+# brightening drops high-AOD retrievals far more than low-AOD ones. A 66-site A/B
+# at strength 1.0 flipped the population AOT bias +0.022 -> -0.051 (over -> under);
+# strength 0.3 nulls it (-0.005). 0.3 is retained as the bias-nulling value should
+# the toggle ever be enabled, though it does not improve within-EE (see above).
+_PRIOR_DEBIAS_STRENGTH = 0.3
+
+
+def debias_visible_prior(boa: xr.DataArray) -> xr.DataArray:
+    """Affine de-bias of the visible surface prior (see module note).
+
+    Returns ``boa`` unchanged when the toggle is off or it has no band dim.
+    Bands without a calibration entry pass through (a=0, b=1).
+    """
+    if not _APPLY_PRIOR_DEBIAS or "band" not in getattr(boa, "dims", ()):
+        return boa
+    bands = [str(x) for x in boa.coords["band"].values]
+    a = xr.DataArray(
+        [_PRIOR_DEBIAS.get(b, (0.0, 1.0))[0] for b in bands],
+        dims=["band"],
+        coords={"band": boa.coords["band"]},
+    )
+    b = xr.DataArray(
+        [_PRIOR_DEBIAS.get(bd, (0.0, 1.0))[1] for bd in bands],
+        dims=["band"],
+        coords={"band": boa.coords["band"]},
+    )
+    corrected = (boa + a) / b
+    return boa + np.float32(_PRIOR_DEBIAS_STRENGTH) * (corrected - boa)
+
 
 class KernelModelDeriver:
     """
@@ -157,6 +260,11 @@ class KernelModelDeriver:
         if self.apply_psf and sigma_x > 0 and sigma_y > 0:
             boa = self._apply_psf(boa, sigma_x, sigma_y)
             boa_unc = self._apply_psf(boa_unc, sigma_x, sigma_y)
+
+        # De-bias the visible prior (MODIS->S2 dark offset) before downstream use.
+        boa = debias_visible_prior(boa)
+        # Loosen the prior over dark targets to curb aerosol over-retrieval.
+        boa_unc = inflate_dark_target_uncertainty(boa, boa_unc)
 
         # Create validity mask. The kernel-model prior is built from BRDF
         # kernels and should produce non-negative reflectance; any negative

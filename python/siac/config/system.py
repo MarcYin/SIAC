@@ -61,6 +61,12 @@ class RuntimeConfig(SIACBaseModel):
     n_jobs: int = -1
     chunk_size: int = Field(default=2048, gt=0)
     execution: ExecutionRuntimeConfig = Field(default_factory=ExecutionRuntimeConfig)
+    #: Thread count for the M4 grid-assembly resampling pool. The default of 1
+    #: keeps runs bit-reproducible: concurrent GDAL warps in that pool produce
+    #: non-deterministic resampled grids (proven 2026-07-02 — identical runs
+    #: retrieved different AOD at flat-cost sites). Values > 1 restore the old
+    #: parallel resampling at the cost of run-to-run reproducibility.
+    grid_resample_workers: int = Field(default=1, ge=1)
 
 
 class OutputDefaultsConfig(SIACBaseModel):

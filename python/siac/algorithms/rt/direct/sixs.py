@@ -38,6 +38,7 @@ class SixSBackend:
         self._config = sixs_config
         self._sensor_config = sensor_config
         self._rt_setup = resolve_backend_rt_setup("sixs", rt_setup)
+        self._observation_time: datetime | None = None
         self._runner = runner or SixSNativeRunner(
             sixs_config=sixs_config,
             sensor_config=sensor_config,
@@ -56,6 +57,10 @@ class SixSBackend:
     def rt_setup(self) -> Any | None:
         return self._rt_setup
 
+    @property
+    def observation_time(self) -> datetime | None:
+        return self._observation_time
+
     def supports_jacobian(self) -> bool:
         return False
 
@@ -64,7 +69,19 @@ class SixSBackend:
         return True
 
     def set_observation_time(self, observation_time: datetime | None) -> None:
+        self._observation_time = observation_time
         self._runner.set_observation_time(observation_time)
+
+    def with_rt_setup(self, rt_setup: Any) -> SixSBackend:
+        """Return a fresh backend sharing config/sensor but using ``rt_setup``."""
+
+        clone = type(self)(
+            sixs_config=self._config,
+            sensor_config=self._sensor_config,
+            rt_setup=rt_setup,
+        )
+        clone.set_observation_time(self._observation_time)
+        return clone
 
     def compute_coefficients(
         self,

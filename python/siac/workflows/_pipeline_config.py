@@ -168,6 +168,18 @@ def _requested_solver_band_names(config: Any) -> tuple[str, ...] | None:
     if solver_config is None:
         return None
 
+    # Surface-driven-scoped solve-band override (additive; multigrid unaffected).
+    # When the surface-driven solver is selected and configured with an explicit
+    # band set (e.g. the validated ["B01","B02","B04"]), request those bands so M4
+    # assembles them and the surface prior is aligned to them.
+    method = str(getattr(solver_config, "method", "") or "")
+    if method == "surface_driven":
+        override = getattr(solver_config, "surface_driven_solve_bands", None)
+        if override:
+            names = tuple(str(name).strip() for name in override if str(name).strip())
+            if names:
+                return names
+
     stages = tuple(getattr(solver_config, "stages", ()) or ())
     if not stages:
         return None

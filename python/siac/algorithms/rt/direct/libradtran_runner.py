@@ -782,6 +782,7 @@ class LibRadtranRunner:
                 wavelength_max_nm=seg_hi,
                 mol_abs_param=seg_model,
                 number_of_streams=int(cfg.number_of_streams),
+                aerosol_species=str(getattr(cfg, "aerosol_species", "continental_average")),
             )
             wl, eg, toa = self._run_uvspec(paths, deck)
             target = wl_grid[seg_masks[seg_idx]]

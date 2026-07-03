@@ -466,6 +466,41 @@ def test_run_tail_attaches_aot_scatter_diagnostics(
     )
 
 
+def test_run_tail_attaches_solver_quality_metadata(
+    mock_observation_bundle,
+    mock_atmospheric_state,
+    mock_surface_prior,
+    mock_solver_input_bundle,
+    mock_solver_fn,
+    mock_corrector_fn,
+    mock_rt_model,
+) -> None:
+    result = pipeline._run_tail(
+        mock_observation_bundle,
+        mock_atmospheric_state,
+        mock_surface_prior,
+        SimpleNamespace(
+            algorithms=SimpleNamespace(solver=SimpleNamespace(aerosol_resolution=1000.0))
+        ),
+        grid_assembler=lambda *_args, **_kwargs: mock_solver_input_bundle,
+        solver=mock_solver_fn,
+        corrector=mock_corrector_fn,
+        rt_model=mock_rt_model,
+    )
+
+    solver = result.metadata["solver"]
+    assert solver["cost_final"] == pytest.approx(0.001)
+    assert solver["n_iterations"] == 5
+    assert solver["converged"] is True
+    assert solver["solve_band_count"] == len(mock_solver_input_bundle.bands)
+    assert solver["cost_final_per_band"] == pytest.approx(
+        0.001 / len(mock_solver_input_bundle.bands)
+    )
+    assert solver["aot_finite_fraction"] == pytest.approx(1.0)
+    assert solver["aot_median"] == pytest.approx(0.15)
+    assert solver["aot_unc_median"] == pytest.approx(0.05)
+
+
 def test_aot_scatter_diagnostics_fill_nan_atmo_for_lut_call(
     mock_solver_input_bundle,
     mock_solved_atmosphere,

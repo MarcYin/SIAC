@@ -422,6 +422,13 @@ class SurfacePrior:
     kernels: BRDFKernelWeights | None
     mask: xr.DataArray
     monthly_composites: tuple[Any, ...] = field(default_factory=tuple)
+    #: Optional native solver grid carried by grid-aware priors (e.g. the
+    #: bestpixel surface-driven prior built on the composite's own grid). When
+    #: set, M4 grid assembly adopts it as the solver ``target_template`` so the
+    #: prior is never resampled and TOA is reprojected once onto it (avoiding the
+    #: sub-pixel composite-vs-observation-bounds resampling smear). ``None``
+    #: (default) keeps the legacy behaviour: M4 builds the grid from obs bounds.
+    solver_grid: xr.DataArray | None = None
 
 
 @dataclass(frozen=True)

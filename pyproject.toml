@@ -103,7 +103,9 @@ bestpixel = [
     # >=0.2.2: build_monthly_composites uses calendar-correct month-end dates
     # (no YYYY-MM-31 400s) and gains an optional MAIAC-AOD day gate
     # (aod_by_day/aod_max/reject_unknown).
-    "bestpixel>=0.2.2",
+    # >=0.3.0: emit_uncertainty -> per-band boa_unc, required by the
+    # "bestpixel" surface-prior method (algorithms.surface_prior.method).
+    "bestpixel>=0.3.0",
 ]
 all = [
     "siac[dev,docs,dask,bestpixel]",
@@ -123,7 +125,12 @@ manifest-path = "src/siac_rs/Cargo.toml"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "siac._rust"
-include = [{ path = "siac/adapters/output.py", format = ["sdist", "wheel"] }]
+include = [
+    { path = "siac/adapters/output.py", format = ["sdist", "wheel"] },
+    { path = "siac/data/aero_species/aerosolClimatology.nc", format = ["sdist", "wheel"] },
+    { path = "siac/data/aero_species/aerosol_type_lut.csv", format = ["sdist", "wheel"] },
+    { path = "siac/data/cci_mie_table.json", format = ["sdist", "wheel"] },
+]
 
 # ============================================================================
 # pytest configuration

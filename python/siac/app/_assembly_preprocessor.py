@@ -30,6 +30,19 @@ def _ordered_unique_band_names(names: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name for name in names if name))
 
 
+def _bestpixel_predict_visible_anchor_band_names(config: Any, sensor_config: SensorConfig) -> list[str]:
+    surface_prior = getattr(getattr(config, "algorithms", None), "surface_prior", None)
+    if surface_prior is None:
+        return []
+    if str(getattr(surface_prior, "method", "")) != "bestpixel":
+        return []
+    if not bool(getattr(surface_prior, "bestpixel_predict_visible", False)):
+        return []
+    available = {band.name for band in getattr(sensor_config, "bands", ())}
+    preferred = ("B8A", "B11", "B12")
+    return [name for name in preferred if name in available]
+
+
 def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[str, ...] | None:
     """Select bands to eagerly load at native resolution during preprocessing."""
     if not hasattr(sensor_config, "select_nearest_band") or not hasattr(sensor_config, "bands"):
@@ -57,6 +70,7 @@ def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[s
                 continue
             names.extend(band.name for band in sensor_config.select_bands_in_range(wl_min, wl_max))
 
+    names.extend(_bestpixel_predict_visible_anchor_band_names(config, sensor_config))
     resolved = _ordered_unique_band_names(names)
     return resolved or None
 

@@ -322,6 +322,32 @@ def test_backend_propagates_observation_time_to_runner() -> None:
     assert "tgasm" in coeffs.extras
 
 
+def test_backend_with_rt_setup_clones_observation_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRunner:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            self.observation_time: datetime | None = None
+
+        def set_observation_time(self, observation_time: datetime | None) -> None:
+            self.observation_time = observation_time
+
+    monkeypatch.setattr("siac.algorithms.rt.direct.sixs.SixSNativeRunner", _FakeRunner)
+
+    backend = SixSBackend(
+        sixs_config=SixSAlgorithmConfig(),
+        rt_setup=RTSetupConfig(aerosol={"profile": "continental"}),
+    )
+    obs_time = datetime(2025, 7, 12, 10, 30)
+    backend.set_observation_time(obs_time)
+
+    clone = backend.with_rt_setup(RTSetupConfig(aerosol={"profile": "maritime"}))
+
+    assert clone is not backend
+    assert clone.observation_time == obs_time
+    assert clone.rt_setup.aerosol is not None
+    assert clone.rt_setup.aerosol.profile == "maritime"
+
+
 def test_backend_merges_partial_rt_setup_with_native_defaults() -> None:
     class _FakeRunner:
         def set_observation_time(self, observation_time: datetime | None) -> None:
@@ -933,6 +959,60 @@ def test_joint_grid_search_lut_plan_preserves_aot_tcwv_axes() -> None:
     np.testing.assert_array_equal(plan.axes["tcwv_cm"], tcwv_axis)
     assert plan.lut_case_count <= 2048
     assert plan.direct_case_count == 64
+
+
+def test_scene_lut_axis_collapses_below_tolerance_but_keeps_varying() -> None:
+    """An axis whose spread is below the physical tolerance collapses to one
+    (mean) node even with thousands of distinct float values; an axis that
+    exceeds the tolerance keeps its full node budget."""
+    from siac.algorithms.rt.direct._sixs_scene_lut import _build_scene_lut_axis
+
+    near_constant = np.linspace(25.0, 25.1, 500, dtype=np.float64)  # 0.1 deg < 0.5
+    collapsed = _build_scene_lut_axis(near_constant, target_size=4, tolerance=0.5)
+    assert collapsed.size == 1
+    assert abs(float(collapsed[0]) - float(near_constant.mean())) < 1e-9
+
+    varying = np.linspace(20.0, 40.0, 500, dtype=np.float64)  # 20 deg >> 0.5
+    kept = _build_scene_lut_axis(varying, target_size=4, tolerance=0.5)
+    assert kept.size == 4
+
+    # tolerance=0 (the default) preserves the legacy behaviour: no collapse.
+    legacy = _build_scene_lut_axis(near_constant, target_size=4)
+    assert legacy.size == 4
+
+
+def test_joint_grid_search_lut_plan_collapses_near_constant_geometry() -> None:
+    """Small-AOI geometry (angles spanning <0.5 deg, near-constant ozone/elevation)
+    must collapse every geometric axis to one node, so the joint 6S LUT builds
+    only the aot×tcwv grid (~121 cases) instead of cross-producting thousands of
+    per-pixel float values into ~500K real 6S evaluations."""
+    n = 4096
+    ramp = np.linspace(0.0, 1.0, n, dtype=np.float64)
+    case_arrays = {
+        "sza_deg": 25.0 + 0.05 * ramp,  # all geometric spreads < per-axis tolerance
+        "saa_deg": 110.0 + 0.05 * ramp,
+        "vza_deg": 4.0 + 0.05 * ramp,
+        "vaa_deg": 95.0 + 0.05 * ramp,
+        "aot550": np.full(n, 0.15, dtype=np.float64),
+        "tcwv_cm": np.full(n, 2.0, dtype=np.float64),
+        "tco3_atmcm": 0.30 + 0.001 * ramp,
+        "elevation_km": 0.20 + 0.01 * ramp,
+    }
+    aot_axis = np.linspace(0.05, 0.8, 11, dtype=np.float64)
+    tcwv_axis = np.linspace(0.0, 6.0, 11, dtype=np.float64)
+
+    plan = _build_joint_grid_search_lut_plan(
+        case_arrays,
+        aot_axis=aot_axis,
+        tcwv_axis=tcwv_axis,
+        max_nodes_per_axis=4,
+        max_cases=524288,
+    )
+
+    for name in ("sza_deg", "saa_deg", "vza_deg", "vaa_deg", "tco3_atmcm", "elevation_km"):
+        assert plan.axes[name].size == 1, f"{name} should collapse below tolerance"
+    # Only the aot×tcwv grid survives — 121 cases, not ~500K.
+    assert plan.lut_case_count == aot_axis.size * tcwv_axis.size
 
 
 def test_joint_grid_search_lut_evaluate_matches_direct_at_grid_points(

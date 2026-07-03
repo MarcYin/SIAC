@@ -42,6 +42,25 @@ class _NativeTileState(TypedDict):
     tcwv: xr.DataArray | None
 
 
+def _maiac_best_quality_mask(qa_raw: np.ndarray) -> np.ndarray:
+    """Best-quality MCD19A2/VNP19 ``AOD_QA`` mask from the RAW 16-bit field.
+
+    The bit field must be decoded from the raw integer — scaling / valid-range
+    masking (``apply_scale_and_mask``) would corrupt it. Keeps clear +
+    best-quality + no-adjacency pixels, matching the harness ``maiac_qa.py``::
+
+        bits 0-2  cloud mask     (001 = clear)
+        bits 5-7  adjacency mask (000 = normal)
+        bits 8-11 AOD QA level   (0000 = best quality)
+    """
+    qa_int = np.asarray(qa_raw, dtype=np.int64)
+    mask = (
+        ((qa_int & 0b111) == 1) & (((qa_int >> 5) & 0b111) == 0) & (((qa_int >> 8) & 0b1111) == 0)
+    )
+    mask_array: np.ndarray = np.asarray(mask, dtype=bool)
+    return mask_array
+
+
 class _EarthAccessMAIACAODProvider:
     """Shared MAIAC AOD prior logic for MODIS and VIIRS products."""
 
@@ -64,6 +83,7 @@ class _EarthAccessMAIACAODProvider:
         probe_earthdata: bool = True,
         temporal_window_days: int = 2,
         max_granules: int = 8,
+        best_quality_qa: bool = False,
     ) -> None:
         runtime = build_earthaccess_runtime(
             cache_dir=cache_dir,
@@ -79,6 +99,7 @@ class _EarthAccessMAIACAODProvider:
         self.probe_earthdata = probe_earthdata
         self.temporal_window_days = max(0, int(temporal_window_days))
         self.max_granules = max(1, int(max_granules))
+        self.best_quality_qa = bool(best_quality_qa)
 
     @property
     def source_name(self) -> str:
@@ -233,9 +254,15 @@ class _EarthAccessMAIACAODProvider:
 
         aod = apply_scale_and_mask(aod_raw, aod_attrs)
         aod_unc = apply_scale_and_mask(aod_unc_raw, aod_unc_attrs)
-        qa = apply_scale_and_mask(qa_raw, qa_attrs)
 
-        valid = np.isfinite(aod) & np.isfinite(aod_unc) & np.isfinite(qa) & (qa > 0)
+        if self.best_quality_qa:
+            # Best-quality AOD_QA bit decode (clear + best + no-adjacency), matching
+            # the harness maiac_qa.py. The loose ``qa > 0`` below keeps lower-quality
+            # retrievals and reads systematically higher at clean-coastal/polar sites.
+            valid = np.isfinite(aod) & np.isfinite(aod_unc) & _maiac_best_quality_mask(qa_raw)
+        else:
+            qa = apply_scale_and_mask(qa_raw, qa_attrs)
+            valid = np.isfinite(aod) & np.isfinite(aod_unc) & np.isfinite(qa) & (qa > 0)
         aod = np.where(valid, aod, np.nan)
         aod_unc = np.where(valid, aod_unc, np.nan)
 

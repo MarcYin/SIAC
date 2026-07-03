@@ -44,6 +44,64 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 
+# CAMS AOD prior uncertainty, calibrated against 175 globally-spread
+# CAMS-vs-AERONET matchups. The legacy flat 50%-relative model
+# (``max(0.5*aot, 0.05)``) over-constrains where CAMS most under-estimates thick
+# aerosol: in the 0.4-0.9 range CAMS' *bias* reaches +0.15..+0.27, so the solver's
+# strong AOT prior pins the retrieval near the (too-low) CAMS value (Dhaka CAMS
+# 0.55 vs AERONET 1.11, retrieved 0.86). The calibration also showed that at *low*
+# AOD CAMS' bias is small (+0.03) even though the AERONET-CAMS scatter is ~0.13
+# (mostly AERONET representativeness, not CAMS error) -- and an end-to-end A/B
+# confirmed that loosening the prior at low AOD just lets a latent low-AOD
+# over-retrieval in the observation/surface term through, regressing clean sites.
+# So the prior must *keep its constraint where CAMS is high* per the calibrated
+# bias, not loosen everywhere the scatter is large. The Hill transition below is
+# tight at low CAMS (~0.06), loosens smoothly through a half-point at CAMS~0.55,
+# and plateaus near 0.46 -- matching the bias structure where it matters while
+# protecting the low-AOD regime the observation cannot constrain on its own.
+_CAMS_AOT_UNC_FLOOR = 0.05
+_CAMS_AOT_UNC_PLATEAU = 0.46
+_CAMS_AOT_UNC_HALF = 0.55  # CAMS AOD at which the prior is half-loosened
+_CAMS_AOT_UNC_POWER = 3.0
+
+
+def _calibrated_aot_uncertainty(aot: xr.DataArray) -> xr.DataArray:
+    """CAMS AOD prior 1-sigma uncertainty as a calibrated function of CAMS AOD.
+
+    Smoothly transitions from a tight low-AOD floor to a high-AOD plateau via a
+    Hill curve, so the AOT prior keeps its grip where CAMS is reliable (low AOD)
+    and loosens where CAMS under-estimates thick aerosol (high AOD).
+    """
+    powered = np.power(np.maximum(aot, 0.0), _CAMS_AOT_UNC_POWER)
+    loosen_fraction = powered / (powered + _CAMS_AOT_UNC_HALF**_CAMS_AOT_UNC_POWER)
+    return cast(
+        "xr.DataArray",
+        np.sqrt(_CAMS_AOT_UNC_FLOOR**2 + _CAMS_AOT_UNC_PLATEAU**2 * loosen_fraction).astype(
+            np.float32
+        ),
+    )
+
+
+# Optional CAMS AOD *center* calibration (experiment, default OFF). CAMS
+# under-estimates thick aerosol, so anchoring the AOT prior on raw CAMS biases
+# every method low at high AOD. Fitted E[AERONET|CAMS] from the same 175-matchup
+# calibration: ``CAMS + gain*CAMS^2/(CAMS^2+k^2)`` -- adds ~0 at low AOD and
+# ~+0.12..+0.17 across CAMS 0.3-1.2 where CAMS is biased low. Gated so the
+# validated raw-center + Hill-uncertainty behaviour stays the default.
+_APPLY_AOT_CENTER_CALIBRATION = False
+_CAMS_CENTER_GAIN = 0.177
+_CAMS_CENTER_K = 0.253
+
+
+def _calibrate_cams_aot_center(aot: xr.DataArray) -> xr.DataArray:
+    """Bias-correct the CAMS AOD prior center toward calibrated E[AERONET|CAMS]."""
+    if not _APPLY_AOT_CENTER_CALIBRATION:
+        return aot
+    powered = np.power(np.maximum(aot, 0.0), 2)
+    corrected = aot + _CAMS_CENTER_GAIN * powered / (powered + _CAMS_CENTER_K**2)
+    return cast("xr.DataArray", corrected.astype(np.float32))
+
+
 class _FsspecFilesystem(Protocol):
     def get(self, rpath: str, lpath: str) -> None: ...
     def ls(self, path: str, detail: bool = False) -> list[object]: ...
@@ -181,6 +239,7 @@ class CAMSProvider:
             self._extract_variable(cams_data, "aod550", bounds, crs, resolution, obs_time),
             "aod550",
         )
+        aot = _calibrate_cams_aot_center(aot)
         tcwv = self._convert_raw_cams_field(
             self._extract_variable(cams_data, "tcwv", bounds, crs, resolution, obs_time),
             "tcwv",
@@ -190,8 +249,9 @@ class CAMSProvider:
             "gtco3",
         )
 
-        # Uncertainties (empirical estimates)
-        aot_unc = np.maximum(aot * 0.5, 0.05)
+        # Uncertainties (empirical estimates). AOT uncertainty is calibrated
+        # against CAMS-vs-AERONET (see _calibrated_aot_uncertainty).
+        aot_unc = _calibrated_aot_uncertainty(aot)
         tcwv_unc = np.maximum(tcwv * 0.15, 0.2)
         tco3_unc = tco3 * 0.1
 
@@ -630,7 +690,7 @@ class CAMSProvider:
             aot=aot,
             tcwv=tcwv,
             tco3=tco3,
-            aot_unc=aot * 0.5,
+            aot_unc=_calibrated_aot_uncertainty(aot),
             tcwv_unc=tcwv * 0.2,
             tco3_unc=tco3 * 0.1,
             elevation=xr.zeros_like(aot),

@@ -44,6 +44,37 @@ def _weights(shape: tuple[int, int] = (2, 2)) -> BRDFKernelWeights:
     )
 
 
+def test_surface_prior_experiment_toggles_are_gated_and_apply_expected_formulas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boa = xr.DataArray(
+        np.array([[[0.03]], [[0.04]], [[0.10]]], dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["B02", "B04", "B8A"], "y": [0], "x": [0]},
+    )
+    boa_unc = xr.full_like(boa, 0.02)
+
+    monkeypatch.setattr(km, "_APPLY_PRIOR_DEBIAS", False)
+    monkeypatch.setattr(km, "_APPLY_DARK_TARGET_UNC", False)
+    assert km.debias_visible_prior(boa) is boa
+    assert km.inflate_dark_target_uncertainty(boa, boa_unc) is boa_unc
+
+    monkeypatch.setattr(km, "_APPLY_PRIOR_DEBIAS", True)
+    debiased = km.debias_visible_prior(boa)
+    a = np.array([0.0133, 0.0076, 0.0], dtype=np.float32)[:, None, None]
+    b = np.array([0.928, 0.950, 1.0], dtype=np.float32)[:, None, None]
+    full_correction = (boa.values + a) / b
+    expected_debias = boa.values + np.float32(0.3) * (full_correction - boa.values)
+    np.testing.assert_allclose(debiased.values, expected_debias, rtol=1e-6)
+
+    monkeypatch.setattr(km, "_APPLY_DARK_TARGET_UNC", True)
+    inflated = km.inflate_dark_target_uncertainty(boa, boa_unc)
+    deficit = np.maximum(0.0, 0.06 - boa.values)
+    expected_unc = np.sqrt(boa_unc.values**2 + (0.6 * deficit) ** 2)
+    np.testing.assert_allclose(inflated.values, expected_unc, rtol=1e-6)
+    assert inflated.values[2, 0, 0] == pytest.approx(boa_unc.values[2, 0, 0])
+
+
 def test_compute_surface_prior_maps_multispectral_output_before_psf(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

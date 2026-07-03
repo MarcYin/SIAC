@@ -63,6 +63,7 @@ class SurfacePriorMethod(SIACEnum):
     KERNEL_MODEL = "kernel_model"
     WHITTAKER = "whittaker"
     MONTHLY_DATABASE = "monthly_database"
+    BESTPIXEL = "bestpixel"
 
 
 class SolverMethod(SIACEnum):

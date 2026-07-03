@@ -138,6 +138,8 @@ _SOURCE_BASIS: dict[str, tuple[str, dict[str, str]]] = {
     "pc": ("sentinel-2a_msi", _BESTPIXEL_TO_S2_BAND_ID),
     "earth-search": ("sentinel-2a_msi", _BESTPIXEL_TO_S2_BAND_ID),
     "hls": ("sentinel-2a_msi", _BESTPIXEL_TO_S2_BAND_ID),
+    "hls-s30": ("sentinel-2a_msi", _BESTPIXEL_TO_S2_BAND_ID),
+    "hls2-s30": ("sentinel-2a_msi", _BESTPIXEL_TO_S2_BAND_ID),
     "auto": ("sentinel-2a_msi", _BESTPIXEL_TO_S2_BAND_ID),
 }
 
@@ -161,6 +163,10 @@ _DEFAULT_BANDS: tuple[str, ...] = (
     "swir16",
     "swir22",
 )
+
+#: Public alias for the default band set, shared by the bestpixel surface-prior
+#: builder so it does not duplicate the visible→SWIR selection.
+DEFAULT_BESTPIXEL_BANDS: tuple[str, ...] = _DEFAULT_BANDS
 
 
 def bestpixel_source_bands(

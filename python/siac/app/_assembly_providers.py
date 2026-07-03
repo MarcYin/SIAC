@@ -81,6 +81,7 @@ def _build_mcd19_provider(
         MCD19AODProvider(
             cache_dir=config.providers.atmo.cache_dir,
             source=earthaccess_source_from_auth(auth),
+            best_quality_qa=getattr(config.providers.atmo, "maiac_best_quality_qa", False),
         ),
     )
 
@@ -97,6 +98,7 @@ def _build_vnp19_provider(
         VNP19AODProvider(
             cache_dir=config.providers.atmo.cache_dir,
             source=earthaccess_source_from_auth(auth),
+            best_quality_qa=getattr(config.providers.atmo, "maiac_best_quality_qa", False),
         ),
     )
 

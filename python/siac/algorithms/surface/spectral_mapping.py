@@ -488,6 +488,39 @@ def _prepare_runtime(
     )
 
 
+# Cross-sensor radiometric harmonisation of the BRDF surface prior (experiment,
+# default OFF). The spectral mapping fixes the MODIS->S2 *spectral shape* but not
+# the *absolute calibration* difference between the two sensors' surface-
+# reflectance products. Calibrated against the S2-LUT surface (corrected at the
+# known AERONET AOD) at 26+ low-AOD clean sites, the MODIS-derived prior runs
+# ~10% dark in blue and ~4% in red -- a systematic offset that makes the
+# observation over-retrieve AOT (the solver adds aerosol to darken the corrected
+# BOA to the too-dark prior). This wavelength-linear gain (anchored blue x1.107
+# @490nm, red x1.040 @665nm, clamped to [1.0, 1.13] so it never darkens and tails
+# to 1.0 in the NIR/SWIR where no offset was measured) aligns the prior to the RT
+# surface basis, so at the true AOD corrected-BOA == prior and the solve lands on
+# truth by construction. Applied to all surface methods via the shared mapper.
+_APPLY_CROSS_SENSOR_GAIN = False
+_CROSS_SENSOR_GAIN_ANCHOR_WL = 490.0
+_CROSS_SENSOR_GAIN_ANCHOR = 1.107
+_CROSS_SENSOR_GAIN_SLOPE = (1.040 - 1.107) / (665.0 - 490.0)
+_CROSS_SENSOR_GAIN_MAX = 1.13
+
+
+def _band_wavelength_nm(band: object) -> float:
+    return float(getattr(band, "wavelength", getattr(band, "center_wavelength", 0.0)) or 0.0)
+
+
+def _cross_sensor_gain(wavelength_nm: float) -> float:
+    """Per-band MODIS->S2 surface-reflectance harmonisation gain (>= 1.0)."""
+    if wavelength_nm <= 0.0:
+        return 1.0
+    gain = _CROSS_SENSOR_GAIN_ANCHOR + _CROSS_SENSOR_GAIN_SLOPE * (
+        wavelength_nm - _CROSS_SENSOR_GAIN_ANCHOR_WL
+    )
+    return float(min(max(gain, 1.0), _CROSS_SENSOR_GAIN_MAX))
+
+
 class SpectralMapper:
     """Map multispectral reflectance using the published spectral-library runtime."""
 
@@ -698,6 +731,17 @@ class SpectralMapper:
             )
 
         reflectance_da = self._restore_target_cube(target_flat, flattened)
+        if _APPLY_CROSS_SENSOR_GAIN:
+            # Cross-sensor radiometric harmonisation (see _cross_sensor_gain): the
+            # MODIS-derived prior is systematically dark vs the S2 RT surface basis.
+            gains = np.array(
+                [_cross_sensor_gain(_band_wavelength_nm(band)) for band in self.target_bands],
+                dtype=np.float32,
+            )
+            gain_da = xr.DataArray(
+                gains, dims=["band"], coords={"band": list(self._target_band_names)}
+            )
+            reflectance_da = reflectance_da * gain_da
         uncertainty_da = self._restore_target_cube(target_unc_flat, flattened)
         source_fit_da = self._restore_spatial_field(source_fit_flat, flattened)
         spatial_reference = cast("xr.DataArray", flattened.source_data.isel(band=0, drop=True))

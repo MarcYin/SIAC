@@ -155,6 +155,64 @@ class TestAssembleGrids:
         assert sib.aux_resolution_m == pytest.approx(320.0)
         assert sib.aerosol_resolution_m == pytest.approx(120.0)
 
+    def test_adopts_surface_prior_native_solver_grid(
+        self, large_obs_bundle, large_atmo, mock_rt_model
+    ):
+        """When the prior carries solver_grid, M4 resolves on THAT grid.
+
+        Mirrors the surface-driven re-architecture: the bestpixel prior is built
+        on the composite's native grid (offset from the obs-bounds grid) and
+        carried via ``SurfacePrior.solver_grid``; M4 must adopt it for every field
+        so the prior is a no-op and TOA/atmo are co-registered onto it.
+        """
+        from siac.algorithms.grid.assembler import _build_target_template
+
+        # A native composite grid: 80 m (vs the 120 m obs-bounds default) with a
+        # +20 m offset origin, georeferenced (mimics the real tile-grid shift).
+        native_bounds = (300020.0, 5500020.0, 300660.0, 5500660.0)
+        native_grid = _build_target_template(native_bounds, large_obs_bundle.crs, 80.0)
+        h, w = native_grid.shape
+        coords = {"y": native_grid["y"], "x": native_grid["x"]}
+        boa = xr.DataArray(
+            np.full((h, w), 0.12, dtype=np.float32), dims=["y", "x"], coords=coords
+        ).rio.write_crs(large_obs_bundle.crs)
+        boa_unc = xr.DataArray(
+            np.full((h, w), 0.02, dtype=np.float32), dims=["y", "x"], coords=coords
+        ).rio.write_crs(large_obs_bundle.crs)
+        mask = xr.DataArray(
+            np.ones((h, w), dtype=bool), dims=["y", "x"], coords=coords
+        ).rio.write_crs(large_obs_bundle.crs)
+        surface = SurfacePrior(
+            boa=boa, boa_unc=boa_unc, kernels=None, mask=mask, solver_grid=native_grid
+        )
+
+        sib = assemble_grids(large_obs_bundle, large_atmo, surface, mock_rt_model)
+
+        default_grid = _build_target_template(large_obs_bundle.bounds, large_obs_bundle.crs, 120.0)
+        # The whole bundle is assembled on the adopted native grid, not obs-bounds.
+        assert sib.toa.shape[1:] == (h, w)
+        assert (h, w) != default_grid.shape
+        np.testing.assert_allclose(sib.toa["x"].values, native_grid["x"].values, atol=1e-6)
+        np.testing.assert_allclose(
+            sib.atmo_prior.aot["x"].values, native_grid["x"].values, atol=1e-6
+        )
+        assert sib.cloud_mask.shape == (h, w)
+        # aerosol_resolution_m follows the adopted grid (80 m), not the 120 m default.
+        assert sib.aerosol_resolution_m == pytest.approx(80.0)
+        # The prior is already on the adopted grid -> resample is a no-op (exact).
+        np.testing.assert_allclose(sib.surface_prior.boa.values, 0.12, atol=1e-6)
+
+    def test_default_solver_grid_uses_obs_bounds(
+        self, large_obs_bundle, large_atmo, large_surface, mock_rt_model
+    ):
+        """Without solver_grid (default), M4 builds the grid from observation bounds."""
+        from siac.algorithms.grid.assembler import _build_target_template
+
+        sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)
+        default_grid = _build_target_template(large_obs_bundle.bounds, large_obs_bundle.crs, 120.0)
+        assert sib.toa.shape[1:] == default_grid.shape
+        assert sib.aerosol_resolution_m == pytest.approx(120.0)
+
     def test_band_selection(self, large_obs_bundle, large_atmo, large_surface, mock_rt_model):
         """Non-MSI sensors should keep the wavelength-based aerosol defaults."""
         sib = assemble_grids(large_obs_bundle, large_atmo, large_surface, mock_rt_model)

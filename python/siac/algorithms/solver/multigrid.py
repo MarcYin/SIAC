@@ -65,6 +65,20 @@ FixedAtmosphericParameter: TypeAlias = Literal["none", "aot", "tcwv"]
 StageInitialState: TypeAlias = Literal["prior", "previous"]
 
 
+# Second-pass high-AOD refine. The coarse log AOT axis leaves a wide gap at its
+# top (1.143<->2.506 at the default n=11 over [0.001, 2.5]), so a thick-aerosol
+# cost minimum inside that gap is unsampled and the retrieval pins at the
+# second-highest node (LAMTO 1.52->1.14, NGHIA 1.83->1.14) even though the
+# observation cost cleanly prefers the higher value. When any pixel lands above
+# ``_HIGH_AOT_REFINE_MIN`` the solver re-searches a fine axis spanning the gap
+# and adopts it per-pixel ONLY where it yields a strictly lower grid cost --
+# self-gating, so already-resolved low/mid pixels never switch and the axis-length
+# invariant of the primary pass is untouched.
+_HIGH_AOT_REFINE_MIN = 0.8
+_HIGH_AOT_REFINE_LO = 0.5
+_HIGH_AOT_REFINE_POINTS = 9
+
+
 def _log_aot_axis(lo: float, hi: float, n: int) -> np.ndarray:
     """Log-spaced AOT grid-search axis.
 
@@ -778,6 +792,47 @@ class MultiGridSolver:
             )
         return cast("Float32Array", (weights / total).astype(np.float32))
 
+    @staticmethod
+    def _adopt_lower_cost_high_aot(
+        *,
+        near_top: np.ndarray,
+        block_size: int,
+        shape: tuple[int, int],
+        pass1_costs: np.ndarray,
+        pass2_costs: np.ndarray,
+        pass1: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        pass2: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Adopt the fine high-AOD solution where it strictly lowers the grid cost.
+
+        Compares the per-pixel (or per-block) minimum of each candidate cost cube;
+        a pixel switches to the high-AOD pass only if it was already retrieved
+        high (``near_top``) *and* the fine axis found a strictly lower cost. This
+        is self-gating: low/mid pixels, already resolved on the primary axis,
+        keep a lower primary cost and never switch.
+        """
+
+        def _cube_min(costs: np.ndarray) -> np.ndarray:
+            finite = np.where(np.isfinite(costs), costs, np.float32(np.inf))
+            return np.min(finite, axis=(0, 1))
+
+        improve_block = _cube_min(pass2_costs) < (_cube_min(pass1_costs) - np.float32(1e-6))
+        if block_size > 1:
+            improve = np.repeat(np.repeat(improve_block, block_size, axis=0), block_size, axis=1)
+            improve = improve[: shape[0], : shape[1]]
+        else:
+            improve = improve_block
+        # Only ever resolve *upward*: the fine pass exists to fill the sparse top
+        # of the log axis (pixels pinned low at the second-highest node), so it
+        # must not pull a pixel down into a biased-low minimum the dense lower
+        # grid already resolves -- that is the primary pass's responsibility.
+        moves_up = pass2[0] > pass1[0]
+        switch = near_top & improve & moves_up
+        out = []
+        for field1, field2 in zip(pass1, pass2, strict=True):
+            out.append(np.where(switch, field2, field1).astype(np.float32))
+        return out[0], out[1], out[2], out[3]
+
     def _solve_level_grid_search(
         self,
         *,
@@ -932,6 +987,76 @@ class MultiGridSolver:
         tcwv_best = np.asarray(tcwv_best, dtype=np.float32)
         aot_unc = np.asarray(aot_unc, dtype=np.float32)
         tcwv_unc = np.asarray(tcwv_unc, dtype=np.float32)
+
+        # Second-pass high-AOD refine (see _HIGH_AOT_REFINE_* above): where the
+        # primary solve pins a pixel high, re-search a fine axis over the sparse
+        # top of the log grid and keep it only where the grid cost strictly drops.
+        if solve_aot and bool(np.any(aot_best >= np.float32(_HIGH_AOT_REFINE_MIN))):
+            near_top = solve_valid_mask & (aot_best >= np.float32(_HIGH_AOT_REFINE_MIN))
+            fine_axis = np.geomspace(
+                _HIGH_AOT_REFINE_LO,
+                float(self.config.aot_bounds[1]),
+                _HIGH_AOT_REFINE_POINTS,
+                dtype=np.float32,
+            )
+            fine_provider = build_candidate_coeff_provider(
+                rt_model=rt_model,
+                bands=bands,
+                geometry=geometry,
+                atmo_prior=atmo_prior,
+                aot_axis=fine_axis,
+                tcwv_axis=tcwv_axis,
+                solve_aot=solve_aot,
+                solve_tcwv=solve_tcwv,
+                aot_bounds=self.config.aot_bounds,
+                tcwv_bounds=self.config.tcwv_bounds,
+                rt_sample_step=block_size,
+                shape=shape,
+            )
+            costs_high, obs_counts_high, _block_valid_high, refine_valid_high = (
+                evaluate_candidate_cost_cube(
+                    coeff_provider=fine_provider,
+                    aot_axis=fine_axis,
+                    tcwv_axis=tcwv_axis,
+                    toa_values=toa_values,
+                    boa_prior=boa_prior,
+                    boa_unc=boa_unc,
+                    band_weights=band_weights,
+                    solve_valid_mask=solve_valid_mask,
+                    aot_prior=aot_prior,
+                    tcwv_prior=tcwv_prior,
+                    aot_prior_unc=aot_prior_unc,
+                    tcwv_prior_unc=tcwv_prior_unc,
+                    block_size=block_size,
+                    fixed_parameter=fixed_parameter,
+                    block_support_mask=block_support_mask,
+                    block_cost_cube_fn=evaluate_block_grid_search_cost_cube_with_provider_qa,
+                    pixel_cost_cube_fn=evaluate_grid_search_cost_cube_with_provider_qa,
+                )
+            )
+            refined_high = quadratic_refine_grid_search_qa(
+                costs_high.astype(np.float32, copy=False),
+                obs_counts_high.astype(np.uint16, copy=False),
+                fine_axis.astype(np.float32, copy=False),
+                tcwv_axis.astype(np.float32, copy=False),
+                refine_valid_high,
+                fixed_parameter,
+            )
+            aot_best, tcwv_best, aot_unc, tcwv_unc = self._adopt_lower_cost_high_aot(
+                near_top=near_top,
+                block_size=block_size,
+                shape=shape,
+                pass1_costs=costs,
+                pass2_costs=np.asarray(costs_high, dtype=np.float32),
+                pass1=(aot_best, tcwv_best, aot_unc, tcwv_unc),
+                pass2=(
+                    np.asarray(refined_high[0], dtype=np.float32),
+                    np.asarray(refined_high[1], dtype=np.float32),
+                    np.asarray(refined_high[2], dtype=np.float32),
+                    np.asarray(refined_high[3], dtype=np.float32),
+                ),
+            )
+
         invalid_mask = np.asarray(invalid_mask, dtype=bool)
         boundary_mask = np.asarray(boundary_mask, dtype=bool)
         lower_aot_boundary_mask = np.asarray(lower_aot_boundary_mask, dtype=bool)

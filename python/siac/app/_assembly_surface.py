@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
+from siac.adapters.atmo import CAMSProvider
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.app._assembly_providers import (
@@ -36,6 +38,33 @@ def select_surface_prior_bands(sensor_config: SensorConfig | None) -> list[Any]:
     if selected:
         return selected
     return list(sensor_config.bands[:2])
+
+
+def _surface_driven_target_bands(
+    config: Any, sensor_config: SensorConfig | None
+) -> list[Any] | None:
+    """Surface-driven prior target bands from ``solver.surface_driven_solve_bands``.
+
+    Returns the resolved :class:`SensorBand` list when the surface-driven solver
+    is configured with an explicit band override (so the prior produces exactly
+    the bands the solver will use, e.g. the validated B01/B02/B04); ``None``
+    otherwise so callers fall back to the default aerosol bands. Scoped to the
+    surface-driven path — does not affect any other prior or the catalog default.
+    """
+    if sensor_config is None:
+        return None
+    solver_cfg = getattr(getattr(config, "algorithms", None), "solver", None)
+    if solver_cfg is None or str(getattr(solver_cfg, "method", "")) != "surface_driven":
+        return None
+    override = getattr(solver_cfg, "surface_driven_solve_bands", None)
+    if not override:
+        return None
+    resolved: list[Any] = []
+    for name in override:
+        cleaned = str(name).strip()
+        if cleaned:
+            resolved.append(sensor_config.get_band(cleaned))
+    return resolved or None
 
 
 def _select_visible_surface_prior_bands(sensor_config: SensorConfig) -> list[Any]:
@@ -374,6 +403,87 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
     return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=False)
 
 
+def make_bestpixel_surface_prior_fn(
+    config: Any,
+    *,
+    maiac_day_aod: Any | None = None,
+    anchor_atmo_provider: Any | None = None,
+) -> SurfacePriorFn:
+    """Build the bestpixel surface-prior callable (opt-in, surface-driven solver).
+
+    ``maiac_day_aod`` is an optional per-day MAIAC AOD gate source
+    ``(bounds, crs, periods) -> {"YYYY-MM-DD": aod}``. When ``None`` the
+    bestpixel builder lazily constructs the default earthaccess-backed source.
+    """
+
+    def _surface_prior(
+        observation: ObservationBundle,
+        atmo_prior: AtmosphericState | None,
+        rt_model: Any,
+        resolution: float,
+    ) -> SurfacePrior:
+        from siac.adapters.bestpixel import DEFAULT_BESTPIXEL_BANDS, bestpixel_source_bands
+        from siac.adapters.bestpixel_surface_prior import build_bestpixel_surface_prior
+
+        surface_cfg = config.algorithms.surface_prior
+        if str(surface_cfg.bestpixel_source) == "l1c":
+            raise NotImplementedError(
+                "surface_prior.bestpixel_source='l1c' is not implemented yet; "
+                "use 'l2a' or 'hls-s30'."
+            )
+        monthly_cfg = config.providers.monthly_composites
+        endpoint = str(monthly_cfg.bestpixel_endpoint)
+        bands = (
+            tuple(monthly_cfg.bestpixel_bands)
+            if monthly_cfg.bestpixel_bands
+            else DEFAULT_BESTPIXEL_BANDS
+        )
+        source_bands = bestpixel_source_bands(bands, endpoint=endpoint)
+        target_bands = _surface_driven_target_bands(
+            config, observation.sensor_config
+        ) or select_surface_prior_bands(observation.sensor_config)
+        spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
+            config,
+            source_bands=source_bands,
+            target_bands=target_bands,
+            context="bestpixel surface priors",
+        )
+        anchor_atmo_prior = None
+        if anchor_atmo_provider is not None:
+            obs_time = observation.metadata.get("observation_time")
+            anchor_atmo_prior = anchor_atmo_provider(
+                observation.bounds,
+                observation.crs,
+                obs_time,
+                max(float(resolution), 3000.0),
+            )
+        return build_bestpixel_surface_prior(
+            config,
+            observation,
+            resolution,
+            bands=bands,
+            source_bands=source_bands,
+            target_bands=target_bands,
+            spectral_library=spectral_library,
+            k_neighbors=spectral_k_neighbors,
+            maiac_day_aod=maiac_day_aod,
+            atmo_prior=atmo_prior,
+            anchor_atmo_prior=anchor_atmo_prior,
+            rt_model=rt_model,
+        )
+
+    requires_atmo = bool(
+        getattr(config.algorithms.surface_prior, "bestpixel_predict_visible", False)
+    )
+    return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=requires_atmo)
+
+
+@SURFACE_PRIOR_METHOD_REGISTRY.register("bestpixel")
+def _build_bestpixel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
+    _ = brdf_prov  # bestpixel priors do not use the BRDF provider.
+    return make_bestpixel_surface_prior_fn(config)
+
+
 @SURFACE_PRIOR_METHOD_REGISTRY.register("whittaker")
 def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
     def _surface_prior(
@@ -528,5 +638,54 @@ def resolve_surface_prior_provider(
             ),
         )
 
+    if method == "bestpixel":
+        # bestpixel priors need no BRDF provider; inject the auth-backed MAIAC
+        # per-day AOD gate source so the gate works with the run's credentials.
+        return make_bestpixel_surface_prior_fn(
+            config,
+            maiac_day_aod=_resolve_maiac_day_aod_source(config, auth),
+            anchor_atmo_provider=_resolve_bestpixel_anchor_atmo_source(config, auth),
+        )
+
     brdf_prov = resolve_brdf_provider(config, auth=auth)
     return _build_surface_prior_component(method, config, brdf_prov)
+
+
+def _resolve_maiac_day_aod_source(config: Any, auth: CredentialManager | None) -> Any:
+    """Build the earthaccess-backed per-day MAIAC AOD gate source for bestpixel."""
+    from siac.adapters.atmo.maiac_day_aod import MAIACDayAODProvider
+    from siac.adapters.earthdata import earthaccess_source_from_auth
+
+    provider = MAIACDayAODProvider(
+        cache_dir=config.providers.atmo.cache_dir,
+        source=earthaccess_source_from_auth(auth),
+    )
+    return provider.day_aod_map
+
+
+def _resolve_bestpixel_anchor_atmo_source(
+    config: Any, auth: CredentialManager | None
+) -> Any | None:
+    """Build an optional secondary atmospheric prior for bestpixel visible prediction."""
+    surface_cfg = config.algorithms.surface_prior
+    if not bool(getattr(surface_cfg, "bestpixel_predict_visible", False)):
+        return None
+    source = str(getattr(surface_cfg, "bestpixel_predict_visible_anchor_source", "atmo_prior"))
+    if source == "atmo_prior":
+        return None
+    if source != "cams":
+        raise ValueError(f"Unsupported bestpixel_predict_visible_anchor_source={source!r}")
+
+    data_path = getattr(surface_cfg, "bestpixel_predict_visible_cams_data_path", None)
+    if data_path is None:
+        data_path = CAMSProvider._JASMIN_CAMS_BASE_URL
+    cache_root = getattr(getattr(config, "paths", None), "cache_root", None)
+    cache_dir = Path(cache_root) / "cams_anchor" if cache_root is not None else None
+    provider = CAMSProvider(
+        data_path,
+        temporal_interp=False,
+        download_missing=True,
+        auth=auth,
+        cache_dir=cache_dir,
+    )
+    return provider.get_prior

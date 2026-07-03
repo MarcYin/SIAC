@@ -21,6 +21,27 @@ _CASE_ARRAY_NAMES: tuple[str, ...] = (
     "elevation_km",
 )
 
+#: Per-axis spread below which a scene-LUT axis collapses to a single (mean) node.
+#: The 6S coefficients vary negligibly across these spans, but per-pixel *float*
+#: geometry has thousands of distinct values, so without this the geometric axes
+#: never collapse (``unique.size`` is large) and the LUT cross-products them — e.g.
+#: a small AOI where the view/solar angles span <0.1 deg would still build
+#: ``4**6`` geometric nodes (~500K cases) of full 6S evaluations. Collapsing each
+#: near-constant axis to one node makes the per-build cost ~``N_aot * N_tcwv``.
+#: Units: degrees for angles, atm-cm for ozone, km for elevation, unitless AOT, cm
+#: TCWV. The grid-search aot550/tcwv_cm axes are supplied explicitly by the joint
+#: LUT builder and are never routed through the tolerance collapse there.
+_AXIS_COLLAPSE_TOLERANCE: dict[str, float] = {
+    "sza_deg": 0.5,
+    "saa_deg": 0.5,
+    "vza_deg": 0.5,
+    "vaa_deg": 0.5,
+    "aot550": 0.005,
+    "tcwv_cm": 0.05,
+    "tco3_atmcm": 0.005,
+    "elevation_km": 0.05,
+}
+
 
 @dataclass(frozen=True)
 class _SceneLUTPlan:
@@ -30,10 +51,18 @@ class _SceneLUTPlan:
     lut_case_count: int
 
 
-def _build_scene_lut_axis(values: np.ndarray, target_size: int) -> np.ndarray:
+def _build_scene_lut_axis(
+    values: np.ndarray, target_size: int, *, tolerance: float = 0.0
+) -> np.ndarray:
     finite = np.asarray(values[np.isfinite(values)], dtype=np.float64)
     if finite.size == 0:
         return np.zeros(1, dtype=np.float64)
+    # Collapse a physically-near-constant axis to one representative node. Without
+    # this, per-pixel float geometry (thousands of unique values, spread well below
+    # the tolerance) keeps the full ``target_size`` nodes and the LUT cross-products
+    # them needlessly. The single node uses the mean so per-pixel lookups land on it.
+    if tolerance > 0.0 and float(finite.max() - finite.min()) <= tolerance:
+        return np.array([float(finite.mean())], dtype=np.float64)
     unique = np.unique(finite)
     if unique.size <= max(1, target_size):
         return np.ascontiguousarray(unique, dtype=np.float64)
@@ -64,7 +93,9 @@ def _build_scene_lut_plan(
 ) -> _SceneLUTPlan:
     axes = {
         name: _build_scene_lut_axis(
-            np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis
+            np.asarray(case_arrays[name], dtype=np.float64),
+            max_nodes_per_axis,
+            tolerance=_AXIS_COLLAPSE_TOLERANCE.get(name, 0.0),
         )
         for name in _CASE_ARRAY_NAMES
     }
@@ -180,7 +211,9 @@ def _build_joint_grid_search_lut_plan(
             axes[name] = tcwv_axis_arr
         else:
             axes[name] = _build_scene_lut_axis(
-                np.asarray(case_arrays[name], dtype=np.float64), max_nodes_per_axis
+                np.asarray(case_arrays[name], dtype=np.float64),
+                max_nodes_per_axis,
+                tolerance=_AXIS_COLLAPSE_TOLERANCE.get(name, 0.0),
             )
 
     # Shrink only the geometric axes to fit the case budget.

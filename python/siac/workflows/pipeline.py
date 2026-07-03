@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import numpy as np
 import xarray as xr
 
 from siac.adapters.data.water_mask import DEFAULT_WATER_MASK_VRT_URL
@@ -126,6 +127,64 @@ def _stage_timeout(settings: PipelineExecutionSettings, *stage_names: str) -> fl
 _OUTPUTS_WRITTEN_METADATA_KEY = "_siac_outputs_written"
 
 
+def _finite_numeric_summary(values: Any) -> dict[str, float | int | None]:
+    arr = np.asarray(values, dtype=np.float64)
+    total = int(arr.size)
+    finite = arr[np.isfinite(arr)]
+    finite_count = int(finite.size)
+    if finite_count == 0:
+        return {
+            "count": 0,
+            "total": total,
+            "finite_fraction": 0.0,
+            "mean": None,
+            "median": None,
+            "std": None,
+            "p95": None,
+        }
+    return {
+        "count": finite_count,
+        "total": total,
+        "finite_fraction": float(finite_count / total) if total else 0.0,
+        "mean": float(np.mean(finite)),
+        "median": float(np.median(finite)),
+        "std": float(np.std(finite)),
+        "p95": float(np.nanpercentile(finite, 95.0)),
+    }
+
+
+def _solver_metadata(
+    solved: SolvedAtmosphere,
+    *,
+    solve_band_count: int | None = None,
+) -> dict[str, Any]:
+    aot = _finite_numeric_summary(solved.aot.values)
+    aot_unc = _finite_numeric_summary(solved.aot_unc.values)
+    cost_final = float(solved.cost_final)
+    metadata: dict[str, Any] = {
+        "cost_final": cost_final,
+        "n_iterations": int(solved.n_iterations),
+        "converged": bool(solved.converged),
+        "aot_count": aot["count"],
+        "aot_total": aot["total"],
+        "aot_finite_fraction": aot["finite_fraction"],
+        "aot_mean": aot["mean"],
+        "aot_median": aot["median"],
+        "aot_std": aot["std"],
+        "aot_p95": aot["p95"],
+        "aot_unc_count": aot_unc["count"],
+        "aot_unc_finite_fraction": aot_unc["finite_fraction"],
+        "aot_unc_mean": aot_unc["mean"],
+        "aot_unc_median": aot_unc["median"],
+        "aot_unc_p95": aot_unc["p95"],
+    }
+    if solve_band_count is not None:
+        metadata["solve_band_count"] = int(solve_band_count)
+        if solve_band_count > 0:
+            metadata["cost_final_per_band"] = float(cost_final / solve_band_count)
+    return metadata
+
+
 def _geometry_for_atmo_grid(
     geometry: GeometryAngles,
     atmo: AtmosphericState,
@@ -175,6 +234,15 @@ def _maybe_submit_lut_preload(
     )
     preload_geometry = _geometry_for_atmo_grid(obs.geometry, atmo)
     observer = resolve_execution_observer(observer_id)
+    if (
+        solver_config is not None
+        and str(getattr(solver_config, "surface_driven_aerosol_species", "none")) != "none"
+    ):
+        logger.info(
+            "Skipping RT preload because surface-driven aerosol-species mode "
+            "builds candidate RT setups inside the solver."
+        )
+        return None
 
     joint_preload_fn = rt_optional_capability(rt_model, "preload_joint_grid_search_lut")
     if joint_preload_fn is not None and solver_config is not None:
@@ -429,6 +497,9 @@ def _run_tail(
             solver_band_names=solver_band_names,
             reproject_cache_dir=reproject_cache_dir,
             dem_path=getattr(paths_config, "dem", None),
+            resample_workers=int(
+                getattr(getattr(config, "runtime", None), "grid_resample_workers", 1) or 1
+            ),
         )
     validate_solver_input_bundle(solver_inputs)
     logger.info("M4: Grid assembly complete (%.2fs).", time.monotonic() - t0)
@@ -484,6 +555,10 @@ def _run_tail(
             metadata={
                 **obs.metadata,
                 "skip_correction": True,
+                "solver": _solver_metadata(
+                    solved,
+                    solve_band_count=len(solver_inputs.bands),
+                ),
                 "sensor_config": obs.sensor_config,
                 "geometry": obs.geometry,
                 "crs": obs.crs,
@@ -546,6 +621,10 @@ def _run_tail(
             metadata={
                 **obs.metadata,
                 **corrected.metadata,
+                "solver": _solver_metadata(
+                    solved,
+                    solve_band_count=len(solver_inputs.bands),
+                ),
                 "sensor_config": obs.sensor_config,
                 "geometry": obs.geometry,
                 "crs": obs.crs,

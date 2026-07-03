@@ -89,6 +89,117 @@ class TestPoolArgmin:
         assert np.isclose(aot_pooled[1, 1], axis[0])  # outlier healed
 
 
+class TestIntegratedCostFieldAod:
+    def _arrays(self):
+        axis = np.array([0.1, 0.2, 0.3], dtype=np.float64)
+        cube = np.ones((3, 5, 5), dtype=np.float64)
+        cube[1] = 0.0
+        prior = np.full((5, 5), 0.2, dtype=np.float64)
+        prior_unc = np.full((5, 5), 1e6, dtype=np.float64)
+        valid = np.ones((5, 5), dtype=bool)
+        x = np.arange(5, dtype=np.float64) * 60.0
+        y = np.arange(5, dtype=np.float64) * 60.0
+        return axis, cube, prior, prior_unc, valid, x, y
+
+    def test_resolves_window_median_from_cost_cube(self) -> None:
+        from siac.algorithms.solver.surface_driven import integrated_cost_field_aod
+
+        axis, cube, prior, prior_unc, valid, x, y = self._arrays()
+        out = integrated_cost_field_aod(
+            cube=cube,
+            aot_axis=axis,
+            aot_prior=prior,
+            aot_prior_unc=prior_unc,
+            solve_valid=valid,
+            x=x,
+            y=y,
+            center_x=120.0,
+            center_y=120.0,
+            radius_m=90.0,
+            pool_window=1,
+            min_count=1,
+        )
+
+        assert out["aod"] == pytest.approx(0.2)
+        assert out["selected_pass"] == "main"
+        assert out["main"]["window_shape"] == [3, 3]
+        assert out["main"]["n_finite"] == 9
+
+    def test_auto2_uses_site_level_abs_gate(self) -> None:
+        from siac.algorithms.solver.surface_driven import integrated_cost_field_aod
+
+        axis, cube, prior, prior_unc, valid, x, y = self._arrays()
+        cube_abs = np.ones_like(cube)
+        cube_abs[0] = 0.0
+
+        clean_tail = integrated_cost_field_aod(
+            cube=cube,
+            cube_abs=cube_abs,
+            aot_axis=axis,
+            aot_prior=prior,
+            aot_prior_unc=prior_unc,
+            solve_valid=valid,
+            x=x,
+            y=y,
+            center_x=120.0,
+            center_y=120.0,
+            radius_m=90.0,
+            pool_window=1,
+            min_count=1,
+            clean_threshold=0.15,
+            high_threshold=0.6,
+        )
+        assert clean_tail["mode"] == "auto2"
+        assert clean_tail["selected_pass"] == "abs"
+        assert clean_tail["aod"] == pytest.approx(0.1)
+
+        cube_abs[:] = 1.0
+        cube_abs[2] = 0.0
+        moderate = integrated_cost_field_aod(
+            cube=cube,
+            cube_abs=cube_abs,
+            aot_axis=axis,
+            aot_prior=prior,
+            aot_prior_unc=prior_unc,
+            solve_valid=valid,
+            x=x,
+            y=y,
+            center_x=120.0,
+            center_y=120.0,
+            radius_m=90.0,
+            pool_window=1,
+            min_count=1,
+            clean_threshold=0.15,
+            high_threshold=0.6,
+        )
+        assert moderate["selected_pass"] == "shape"
+        assert moderate["aod"] == pytest.approx(0.2)
+
+    def test_loads_solver_dump_npz(self, tmp_path) -> None:  # noqa: ANN001
+        from siac.algorithms.solver.surface_driven import integrated_cost_field_aod_from_npz
+
+        axis, cube, prior, prior_unc, valid, x, y = self._arrays()
+        path = tmp_path / "cost_cube.npz"
+        np.savez(
+            path,
+            cube=cube.astype(np.float32),
+            cube_abs=np.zeros(0, dtype=np.float32),
+            aot_axis=axis.astype(np.float32),
+            aot_prior=prior.astype(np.float32),
+            aot_prior_unc=prior_unc.astype(np.float32),
+            solve_valid=valid,
+            x=x,
+            y=y,
+            pool_window=np.asarray([1]),
+            min_count=np.asarray([1]),
+        )
+
+        out = integrated_cost_field_aod_from_npz(
+            str(path), center_x=120.0, center_y=120.0, radius_m=90.0
+        )
+        assert out["aod"] == pytest.approx(0.2)
+
+
 # --------------------------------------------------------------------------- #
 # SurfaceDrivenSolver end-to-end
 # --------------------------------------------------------------------------- #
@@ -120,28 +231,48 @@ def _make_inputs(shape=(4, 4), toa_val=0.30, prior_boa=0.10):
     from siac.domain import SensorBand
     from siac.runtime import AtmosphericState, GeometryAngles, SurfacePrior
 
-    toa = xr.DataArray(np.full((1, *shape), toa_val, dtype=np.float32), dims=["band", "y", "x"])
-    cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"])
+    coords = {
+        "y": np.linspace(40.0, 40.3, shape[0], dtype=np.float64),
+        "x": np.linspace(13.0, 13.3, shape[1], dtype=np.float64),
+    }
+    toa = xr.DataArray(
+        np.full((1, *shape), toa_val, dtype=np.float32),
+        dims=["band", "y", "x"],
+        coords={"band": ["B02"], **coords},
+    )
+    cloud_mask = xr.DataArray(np.zeros(shape, dtype=bool), dims=["y", "x"], coords=coords)
     surface_prior = SurfacePrior(
-        boa=xr.DataArray(np.full(shape, prior_boa, dtype=np.float32), dims=["y", "x"]),
-        boa_unc=xr.DataArray(np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"]),
+        boa=xr.DataArray(
+            np.full(shape, prior_boa, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
+        boa_unc=xr.DataArray(
+            np.full(shape, 0.02, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
         kernels=None,
-        mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"]),
+        mask=xr.DataArray(np.ones(shape, dtype=bool), dims=["y", "x"], coords=coords),
     )
     geometry = GeometryAngles(
-        sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"]),
-        saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"]),
-        vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"]),
-        vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"]),
+        sza=xr.DataArray(np.full(shape, 0.5), dims=["y", "x"], coords=coords),
+        saa=xr.DataArray(np.full(shape, 2.5), dims=["y", "x"], coords=coords),
+        vza=xr.DataArray(np.full(shape, 0.1), dims=["y", "x"], coords=coords),
+        vaa=xr.DataArray(np.full(shape, 1.5), dims=["y", "x"], coords=coords),
     )
     atmo_prior = AtmosphericState(
-        aot=xr.DataArray(np.full(shape, 0.15, dtype=np.float32), dims=["y", "x"]),
-        tcwv=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"]),
-        tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
-        aot_unc=xr.DataArray(np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"]),
-        tcwv_unc=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"]),
-        tco3_unc=xr.DataArray(np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"]),
-        elevation=xr.DataArray(np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"]),
+        aot=xr.DataArray(np.full(shape, 0.15, dtype=np.float32), dims=["y", "x"], coords=coords),
+        tcwv=xr.DataArray(np.full(shape, 2.5, dtype=np.float32), dims=["y", "x"], coords=coords),
+        tco3=xr.DataArray(np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"], coords=coords),
+        aot_unc=xr.DataArray(
+            np.full(shape, 0.05, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
+        tcwv_unc=xr.DataArray(
+            np.full(shape, 0.3, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
+        tco3_unc=xr.DataArray(
+            np.full(shape, 0.01, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
+        elevation=xr.DataArray(
+            np.full(shape, 0.1, dtype=np.float32), dims=["y", "x"], coords=coords
+        ),
     )
     bands = [SensorBand("B02", 490.0, 65.0, 10.0, 0)]
     return toa, surface_prior, geometry, atmo_prior, cloud_mask, bands
@@ -233,6 +364,144 @@ class TestSurfaceDrivenSolver:
             toa, surface_prior, geometry, atmo_prior, _DummyRT(), cloud_mask, bands
         )
         assert result.success and np.all(np.isfinite(result.aot.values))
+
+    def test_species_mode_requires_native_sixs_backend(self) -> None:
+        from siac.algorithms.solver import SurfaceDrivenSolver
+
+        toa, surface_prior, geometry, atmo_prior, cloud_mask, bands = _make_inputs()
+        solver = SurfaceDrivenSolver(
+            _solver_config(surface_driven_aerosol_species="cci_climatology")
+        )
+
+        with pytest.raises(ValueError, match='requires algorithms.rt.backend="sixs"'):
+            solver.solve(toa, surface_prior, geometry, atmo_prior, _DummyRT(), cloud_mask, bands)
+
+    def test_species_mode_clones_three_candidates_and_selects_lowest_cost(self) -> None:
+        from types import SimpleNamespace
+
+        from siac.algorithms.solver import SurfaceDrivenSolver
+        from siac.config import RTSetupConfig
+        from siac.runtime.models import RTCoefficients
+
+        class _SpeciesRT:
+            def __init__(self, bias: float = 0.0, clones: list[RTSetupConfig] | None = None):
+                self.bias = bias
+                self.clones = clones if clones is not None else []
+                self._config = SimpleNamespace(month=6)
+                self.observation_time = None
+                self.rt_setup = RTSetupConfig()
+
+            @property
+            def backend_name(self) -> str:
+                return "sixs"
+
+            def with_rt_setup(self, rt_setup: RTSetupConfig) -> _SpeciesRT:
+                biases = [0.5, 0.0, 0.5]
+                bias = biases[len(self.clones)]
+                self.clones.append(rt_setup)
+                return _SpeciesRT(bias=bias, clones=self.clones)
+
+            def compute_coefficients(
+                self,
+                geometry,  # noqa: ANN001
+                atmo_state,  # noqa: ANN001
+                band,  # noqa: ANN001
+                compute_jacobian: bool = False,
+            ) -> RTCoefficients:
+                del geometry, band, compute_jacobian
+                template = atmo_state.aot
+                xbp = template + np.float32(self.bias)
+                return RTCoefficients(
+                    xap=xr.ones_like(template),
+                    xbp=xbp,
+                    xcp=xr.zeros_like(template),
+                )
+
+        toa, surface_prior, geometry, atmo_prior, cloud_mask, bands = _make_inputs()
+        rt = _SpeciesRT()
+        solver = SurfaceDrivenSolver(
+            _solver_config(
+                surface_driven_aerosol_species="cci_climatology",
+                surface_driven_aerosol_species_candidates=3,
+            )
+        )
+        result = solver.solve(toa, surface_prior, geometry, atmo_prior, rt, cloud_mask, bands)
+
+        assert result.success
+        assert len(rt.clones) == 3
+        assert all(clone.aerosol is not None for clone in rt.clones)
+        assert all(clone.aerosol.profile == "multimodal_log_normal" for clone in rt.clones)
+        assert abs(float(np.median(result.aot.values)) - 0.20) < 0.06
+
+    def test_reference_tcwv_routes_into_cost_cube_rt(self) -> None:
+        """The configured reference TCWV feeds the cost-cube RT; None keeps the
+        real scene-median (2.5 here) so existing behaviour is unchanged."""
+        from siac.algorithms.solver import SurfaceDrivenSolver
+
+        class _CapturingRT(_DummyRT):
+            def __init__(self) -> None:
+                self.seen_tcwv: list[float] = []
+
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                self.seen_tcwv.append(float(np.asarray(atmo_state.tcwv.values).reshape(-1)[0]))
+                return super().compute_coefficients(geometry, atmo_state, band, compute_jacobian)
+
+        toa, surface_prior, geometry, atmo_prior, cloud_mask, bands = _make_inputs()
+
+        rt_default = _CapturingRT()
+        SurfaceDrivenSolver(_solver_config()).solve(
+            toa, surface_prior, geometry, atmo_prior, rt_default, cloud_mask, bands
+        )
+        assert rt_default.seen_tcwv  # provider was exercised
+        assert all(v == pytest.approx(2.5) for v in rt_default.seen_tcwv)
+
+        rt_ref = _CapturingRT()
+        SurfaceDrivenSolver(_solver_config(surface_driven_reference_tcwv=2.0)).solve(
+            toa, surface_prior, geometry, atmo_prior, rt_ref, cloud_mask, bands
+        )
+        assert rt_ref.seen_tcwv
+        assert all(v == pytest.approx(2.0) for v in rt_ref.seen_tcwv)
+
+    def test_scene_mean_geometry_routes_into_cost_cube_rt(self) -> None:
+        """With scene_mean_geometry the cost-cube RT sees a single (mean) SZA for
+        every call; default (False) passes the per-pixel field through unchanged."""
+        from siac.algorithms.solver import SurfaceDrivenSolver
+
+        class _GeomRT(_DummyRT):
+            def __init__(self) -> None:
+                self.seen_sza_spread: list[float] = []
+
+            def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+                sza = np.asarray(geometry.sza.values)
+                self.seen_sza_spread.append(float(np.nanmax(sza) - np.nanmin(sza)))
+                return super().compute_coefficients(geometry, atmo_state, band, compute_jacobian)
+
+        toa, surface_prior, _geom, atmo_prior, cloud_mask, bands = _make_inputs()
+        # Per-pixel geometry with a real SZA spread across the grid.
+        ny, nx = cloud_mask.sizes["y"], cloud_mask.sizes["x"]
+        sza = np.linspace(0.4, 0.6, ny * nx, dtype=np.float64).reshape(ny, nx)
+        from siac.runtime import GeometryAngles
+
+        geometry = GeometryAngles(
+            sza=xr.DataArray(sza, dims=["y", "x"]),
+            saa=xr.DataArray(np.full((ny, nx), 2.5), dims=["y", "x"]),
+            vza=xr.DataArray(np.full((ny, nx), 0.1), dims=["y", "x"]),
+            vaa=xr.DataArray(np.full((ny, nx), 1.5), dims=["y", "x"]),
+        )
+
+        rt_default = _GeomRT()
+        SurfaceDrivenSolver(_solver_config()).solve(
+            toa, surface_prior, geometry, atmo_prior, rt_default, cloud_mask, bands
+        )
+        assert rt_default.seen_sza_spread
+        assert max(rt_default.seen_sza_spread) > 0.1  # per-pixel spread preserved
+
+        rt_mean = _GeomRT()
+        SurfaceDrivenSolver(_solver_config(surface_driven_scene_mean_geometry=True)).solve(
+            toa, surface_prior, geometry, atmo_prior, rt_mean, cloud_mask, bands
+        )
+        assert rt_mean.seen_sza_spread
+        assert all(s == pytest.approx(0.0) for s in rt_mean.seen_sza_spread)  # collapsed to mean
 
 
 # --------------------------------------------------------------------------- #

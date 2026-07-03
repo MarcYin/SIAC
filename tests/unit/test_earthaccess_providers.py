@@ -9,7 +9,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from siac.adapters.atmo.mcd19_earthaccess import MCD19AODProvider, VNP19AODProvider
+from siac.adapters.atmo.mcd19_earthaccess import (
+    MCD19AODProvider,
+    VNP19AODProvider,
+    _maiac_best_quality_mask,
+)
 from siac.adapters.atmo.merra2 import MERRA2Provider
 from siac.adapters.brdf.mcd43_earthaccess import (
     MCD19EarthAccessProvider,
@@ -35,6 +39,18 @@ class _StubEarthAccessSource:
         _ = granules, dest_dir
         self.download_calls.append(list(granules))
         return list(self.downloaded_paths)
+
+
+def test_maiac_best_quality_mask_decodes_aod_qa_bits() -> None:
+    # MCD19A2 AOD_QA: bits0-2 cloud (001=clear), bits5-7 adjacency (000), bits8-11 AOD QA (0000).
+    clear_best = 0b001  # cloud=clear, adjacency=0, aod_qa=0 -> kept
+    cloudy = 0b011  # cloud=cloudy -> rejected
+    adjacency = 0b001 | (0b001 << 5)  # clear but adjacency flagged -> rejected
+    poor_aod = 0b001 | (0b0001 << 8)  # clear but AOD QA level != best -> rejected
+    fill = 0  # cloud=000 undefined -> rejected
+    qa = np.array([[clear_best, cloudy, adjacency, poor_aod, fill]], dtype=np.uint16)
+    mask = _maiac_best_quality_mask(qa)
+    np.testing.assert_array_equal(mask, [[True, False, False, False, False]])
 
 
 def _fake_granule(day: int) -> dict[str, object]:

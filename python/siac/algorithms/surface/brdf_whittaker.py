@@ -11,7 +11,11 @@ from numpy import typing as npt
 
 from siac._rust_compat import whittaker_smooth_cube
 from siac.algorithms.brdf.kernels import BRDFKernels, compute_reflectance
-from siac.algorithms.surface.kernel_model import KernelModelDeriver
+from siac.algorithms.surface.kernel_model import (
+    KernelModelDeriver,
+    debias_visible_prior,
+    inflate_dark_target_uncertainty,
+)
 from siac.algorithms.surface.spectral_mapping import map_multispectral_reflectance
 from siac.geo._spatial import copy_spatial_metadata_like
 from siac.runtime import BRDFKernelWeights, GeometryAngles, SurfacePrior
@@ -175,6 +179,12 @@ class BRDFWhittakerDeriver(KernelModelDeriver):
             boa_unc = copy_spatial_metadata_like(
                 self._apply_psf(boa_unc, sigma_x, sigma_y), boa_unc
             )
+
+        # De-bias the visible prior (MODIS->S2 dark offset) before downstream use.
+        boa = copy_spatial_metadata_like(debias_visible_prior(boa), boa)
+        # Loosen the prior over dark targets to curb aerosol over-retrieval
+        # (shared with the kernel model — see inflate_dark_target_uncertainty).
+        boa_unc = copy_spatial_metadata_like(inflate_dark_target_uncertainty(boa, boa_unc), boa_unc)
 
         mask = copy_spatial_metadata_like(
             xr.DataArray(

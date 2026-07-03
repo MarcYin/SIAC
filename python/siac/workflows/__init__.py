@@ -7,7 +7,22 @@ from typing import Any
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "run_pipeline": ("siac.workflows.pipeline", "run_pipeline"),
+    "aod_scene_mean": ("siac.workflows.scene", "aod_scene_mean"),
+    "aod_quality_score": ("siac.workflows.scene", "aod_quality_score"),
+    "aod_rail_value": ("siac.workflows.scene", "aod_rail_value"),
     "execute_plan": ("siac.workflows.scene", "execute_plan"),
+    "process_scene_with_aod_rail_fallback": (
+        "siac.workflows.scene",
+        "process_scene_with_aod_rail_fallback",
+    ),
+    "process_scene_with_aod_selector": (
+        "siac.workflows.scene",
+        "process_scene_with_aod_selector",
+    ),
+    "process_scene_with_aod_ensemble": (
+        "siac.workflows.scene",
+        "process_scene_with_aod_ensemble",
+    ),
     "process_scene": ("siac.workflows.scene", "process_scene"),
     "process_s2": ("siac.workflows.sentinel2", "process_s2"),
 }

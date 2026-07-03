@@ -141,6 +141,8 @@ class RTModelBackend(Protocol):
       materialisation of the remote-LUT scene subset.
     - ``set_observation_time(datetime | None)`` — observation-time hint for
       backends whose physics depend on it.
+    - ``with_rt_setup(rt_setup)`` — fresh backend instance with the same runtime
+      config but different RT semantic setup, used by opt-in species candidates.
     """
 
     def compute_coefficients(

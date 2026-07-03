@@ -164,6 +164,14 @@ def test_bestpixel_source_bands_hls_uses_s2_basis() -> None:
     assert [b.rsrf_band_id for b in bands] == ["B02", "B08"]
 
 
+def test_bestpixel_source_bands_hls_s30_uses_s2_basis() -> None:
+    # HLS S30-only is still the Sentinel-2 branch of HLS; keep it out of the
+    # mixed HLS/Landsat semantics while using the S2A spectral basis.
+    bands = bestpixel_source_bands(("coastal", "blue", "nir", "swir16"), endpoint="hls-s30")
+    assert all(b.rsrf_sensor_unit_id == "sentinel-2a_msi" for b in bands)
+    assert [b.rsrf_band_id for b in bands] == ["B01", "B02", "B08", "B11"]
+
+
 def test_resolve_years_uses_full_years_before_scene() -> None:
     provider = BestPixelMonthlyCompositeProvider(lookback_years=5)
     years = provider._resolve_years(datetime(2026, 3, 29))

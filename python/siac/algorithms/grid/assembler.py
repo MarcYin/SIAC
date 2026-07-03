@@ -529,6 +529,7 @@ def _aggregate_native_exclusion_mask(
     *,
     template: xr.DataArray,
     fraction_threshold: float,
+    assume_aligned_native_grid: bool = True,
 ) -> xr.DataArray:
     threshold = float(fraction_threshold)
     if threshold <= 0.0:
@@ -536,7 +537,7 @@ def _aggregate_native_exclusion_mask(
             native_mask,
             target_shape,
             template=template,
-            assume_aligned_native_grid=True,
+            assume_aligned_native_grid=assume_aligned_native_grid,
         )
 
     fraction = _resample_da(native_mask.astype(np.float32), target_shape, "area", template=template)
@@ -776,6 +777,7 @@ def assemble_grids(
     solver_band_names: tuple[str, ...] | None = None,
     reproject_cache_dir: str | Path | None = None,
     dem_path: str | Path | None = None,
+    resample_workers: int = 1,
 ) -> SolverInputBundle:
     """Resample and align all upstream outputs to solver grids.
 
@@ -816,6 +818,26 @@ def assemble_grids(
     first_var = list(obs.toa.data_vars)[0]
     native_shape = obs.toa[first_var].shape  # (y, x)
     target_template = _build_target_template(obs.bounds, obs.crs, resolved_aerosol_resolution)
+    # Surface-driven "resolve on the prior's native grid": when the surface prior
+    # carries its own (composite native) grid, adopt it as the solver target so
+    # the prior is never resampled (the shares_template_grid no-op in
+    # _resample_surface_prior) and TOA, geometry, atmo and masks are all
+    # co-registered onto it. Default keeps the observation-bounds grid above
+    # (byte-identical legacy behaviour when surface.solver_grid is None).
+    if surface.solver_grid is not None:
+        target_template = _ensure_template_transform(surface.solver_grid)
+        # The adopted grid sets the true solver pixel size; align
+        # resolved_aerosol_resolution to it so physical->pixel conversions (the
+        # solver's spatial pooling window) stay correct even when the configured
+        # aerosol resolution differs from the composite's native resolution.
+        adopted_res = abs(float(target_template.rio.resolution()[0]))
+        if adopted_res > 0:
+            resolved_aerosol_resolution = adopted_res
+        logger.info(
+            "M4 adopting surface-prior native solver grid: shape=%s @ %.1fm",
+            target_template.shape,
+            resolved_aerosol_resolution,
+        )
     target_shape = target_template.shape
     logger.info(
         f"Resampling from {native_shape} to {target_shape} @ {resolved_aerosol_resolution}m"
@@ -841,6 +863,7 @@ def assemble_grids(
             fraction_threshold=float(
                 getattr(sharp_transition_filter, "solver_cell_fraction_threshold", 0.0)
             ),
+            assume_aligned_native_grid=(surface.solver_grid is None),
         )
 
     if water_mask_path is not None:
@@ -882,7 +905,20 @@ def assemble_grids(
 
     _toa_band_loader = obs.toa.attrs.get("_siac_toa_band_loader")
 
+    # On the prior native grid, prefer the RAW native band (reprojected once onto
+    # the composite grid) over the M1-harmonized obs.toa[bn] — which was already
+    # resampled to the 10 m reference grid — avoiding a 60m->10m->grid double
+    # resample on the AOD-load-bearing bands (notably the 60 m deep-blue B01).
+    # Matches the harness "raw TOA reprojected once onto the composite grid".
+    use_raw_toa = surface.solver_grid is not None and callable(_toa_band_loader)
+
     def _resample_toa_band(bn: str) -> tuple[str, xr.DataArray] | None:
+        if use_raw_toa:
+            try:
+                band_da = _toa_band_loader(bn, native=True)
+                return bn, _resample_da(band_da, target_shape, "area", template=target_template)
+            except (KeyError, RuntimeError):
+                logger.warning("Raw TOA load failed for %s; using the preloaded band", bn)
         if bn in obs.toa.data_vars:
             return bn, _resample_da(obs.toa[bn], target_shape, "area", template=target_template)
         if callable(_toa_band_loader):
@@ -897,7 +933,10 @@ def assemble_grids(
     #    run alongside the TOA band resampling.
     surface_aligned = _align_surface_prior_to_bands(surface, band_names)
 
-    with ThreadPoolExecutor(max_workers=max(len(band_names) + 4, 6)) as pool:
+    # resample_workers=1 (default) keeps M4 bit-reproducible: concurrent GDAL
+    # warps in this pool return non-deterministic grids, which moves the solver
+    # argmin at flat-cost sites (±2 within-EE sites run-to-run).
+    with ThreadPoolExecutor(max_workers=max(1, int(resample_workers))) as pool:
         toa_futures = {bn: pool.submit(_resample_toa_band, bn) for bn in band_names}
         geom_future = pool.submit(
             _resample_geometry, obs.geometry, target_shape, template=target_template
@@ -907,7 +946,11 @@ def assemble_grids(
             obs.cloud_mask,
             target_shape,
             template=target_template,
-            assume_aligned_native_grid=True,
+            # On the prior's native grid the cloud mask (observation grid) and the
+            # solver target differ in footprint, so it must be reprojected
+            # geospatially rather than shape-only index-remapped (which assumes a
+            # shared footprint). Default (obs-bounds target) stays shape-only.
+            assume_aligned_native_grid=(surface.solver_grid is None),
         )
         # Wave 19b: derive a per-scene identity for the atmo-prior cache.
         # The atmo prior depends on (bounds, sensing time, source) — those

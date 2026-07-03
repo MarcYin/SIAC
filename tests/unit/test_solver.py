@@ -2344,6 +2344,112 @@ class TestMultiGridSolver:
 
         assert np.all(obs_counts == 0)
 
+    def test_high_aot_second_pass_adopts_only_strict_lower_upward_moves(self):
+        """Fine high-AOD pass should switch only where it improves and moves upward."""
+        near_top = np.array(
+            [
+                [True, True, False],
+                [True, True, True],
+            ],
+            dtype=bool,
+        )
+        pass1_costs = np.full((2, 1, 2, 3), 10.0, dtype=np.float32)
+        pass2_costs = np.full_like(pass1_costs, 11.0)
+        pass2_costs[0, 0, 0, 0] = 8.0  # switch: near top, lower cost, upward
+        pass2_costs[0, 0, 0, 1] = 8.0  # no switch: second pass moves down
+        pass2_costs[0, 0, 0, 2] = 8.0  # no switch: primary pixel was not high
+        pass2_costs[0, 0, 1, 0] = 10.0  # no switch: not strictly lower
+        pass2_costs[0, 0, 1, 1] = 7.0  # switch
+        pass2_costs[0, 0, 1, 2] = np.float32(10.0 - 5.0e-7)  # below tolerance
+
+        aot1 = np.full((2, 3), 0.9, dtype=np.float32)
+        tcwv1 = np.full((2, 3), 2.0, dtype=np.float32)
+        aot_unc1 = np.full((2, 3), 0.1, dtype=np.float32)
+        tcwv_unc1 = np.full((2, 3), 0.2, dtype=np.float32)
+        aot2 = np.array(
+            [
+                [1.2, 0.8, 1.3],
+                [1.4, 1.5, 1.6],
+            ],
+            dtype=np.float32,
+        )
+        tcwv2 = np.full((2, 3), 3.0, dtype=np.float32)
+        aot_unc2 = np.full((2, 3), 0.3, dtype=np.float32)
+        tcwv_unc2 = np.full((2, 3), 0.4, dtype=np.float32)
+
+        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc = (
+            MultiGridSolver._adopt_lower_cost_high_aot(
+                near_top=near_top,
+                block_size=1,
+                shape=near_top.shape,
+                pass1_costs=pass1_costs,
+                pass2_costs=pass2_costs,
+                pass1=(aot1, tcwv1, aot_unc1, tcwv_unc1),
+                pass2=(aot2, tcwv2, aot_unc2, tcwv_unc2),
+            )
+        )
+
+        expected_switch = np.array(
+            [
+                [True, False, False],
+                [False, True, False],
+            ],
+            dtype=bool,
+        )
+        np.testing.assert_allclose(out_aot, np.where(expected_switch, aot2, aot1))
+        np.testing.assert_allclose(out_tcwv, np.where(expected_switch, tcwv2, tcwv1))
+        np.testing.assert_allclose(out_aot_unc, np.where(expected_switch, aot_unc2, aot_unc1))
+        np.testing.assert_allclose(out_tcwv_unc, np.where(expected_switch, tcwv_unc2, tcwv_unc1))
+
+    def test_high_aot_second_pass_broadcasts_block_cost_improvement(self):
+        """Block-grid second-pass improvements should map back to pixel space."""
+        near_top = np.array(
+            [
+                [False, False, True],
+                [False, False, True],
+                [True, False, True],
+            ],
+            dtype=bool,
+        )
+        pass1_costs = np.full((2, 1, 2, 2), 10.0, dtype=np.float32)
+        pass2_costs = np.full_like(pass1_costs, 11.0)
+        pass2_costs[0, 0, 0, 1] = 8.0
+        pass2_costs[0, 0, 1, 0] = 7.0
+
+        aot1 = np.full((3, 3), 0.9, dtype=np.float32)
+        tcwv1 = np.full((3, 3), 2.0, dtype=np.float32)
+        aot_unc1 = np.full((3, 3), 0.1, dtype=np.float32)
+        tcwv_unc1 = np.full((3, 3), 0.2, dtype=np.float32)
+        aot2 = np.full((3, 3), 1.2, dtype=np.float32)
+        tcwv2 = np.full((3, 3), 3.0, dtype=np.float32)
+        aot_unc2 = np.full((3, 3), 0.3, dtype=np.float32)
+        tcwv_unc2 = np.full((3, 3), 0.4, dtype=np.float32)
+
+        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc = (
+            MultiGridSolver._adopt_lower_cost_high_aot(
+                near_top=near_top,
+                block_size=2,
+                shape=near_top.shape,
+                pass1_costs=pass1_costs,
+                pass2_costs=pass2_costs,
+                pass1=(aot1, tcwv1, aot_unc1, tcwv_unc1),
+                pass2=(aot2, tcwv2, aot_unc2, tcwv_unc2),
+            )
+        )
+
+        expected_switch = np.array(
+            [
+                [False, False, True],
+                [False, False, True],
+                [True, False, False],
+            ],
+            dtype=bool,
+        )
+        np.testing.assert_allclose(out_aot, np.where(expected_switch, aot2, aot1))
+        np.testing.assert_allclose(out_tcwv, np.where(expected_switch, tcwv2, tcwv1))
+        np.testing.assert_allclose(out_aot_unc, np.where(expected_switch, aot_unc2, aot_unc1))
+        np.testing.assert_allclose(out_tcwv_unc, np.where(expected_switch, tcwv_unc2, tcwv_unc1))
+
     def test_grid_search_level_diag_reports_prior_only_floor_scenario(self):
         """End-to-end grid search should report unsupported floor hits and restore those pixels to the prior."""
         from siac.domain import SensorBand

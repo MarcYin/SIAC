@@ -79,7 +79,9 @@ quadratic_block_min_valid_fraction = 0.5
 aot_gamma = 3.0
 tcwv_gamma = 3.0
 smoothness_delta = 0.30
-water_mask_buffer_pixels = 10
+# ~10 m native mask px; 32 ≈ 300 m coastal adjacency buffer (BRDF kernels are
+# land models — exclude near-shore land contaminated by water-leaving radiance).
+water_mask_buffer_pixels = 32
 
 [[algorithms.solver.stages]]
 name = "aot_pass"

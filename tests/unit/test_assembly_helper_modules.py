@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -319,6 +320,83 @@ def test_build_preprocessor_runtime_sets_s2_preload_band_plan() -> None:
         "B03",
         "B08",
     )
+
+
+def test_build_preprocessor_runtime_adds_bestpixel_predictor_anchor_bands() -> None:
+    fake_preprocessor = SimpleNamespace(
+        sensor_config=SENTINEL2A_CONFIG,
+        config={},
+        preprocess=lambda _path: {
+            "toa": xr.Dataset(
+                {"B02": xr.DataArray(np.ones((1, 1), dtype=np.float32), dims=["y", "x"])}
+            ),
+            "geometry": "geometry",
+            "cloud_mask": xr.DataArray(np.zeros((1, 1), dtype=bool), dims=["y", "x"]),
+            "metadata": {"observation_time": "2024-01-03T00:00:00"},
+        },
+    )
+    config = SimpleNamespace(
+        sensor="s2",
+        algorithms=SimpleNamespace(
+            cloud_mask=SimpleNamespace(
+                model_dump=lambda **_kwargs: {"method": "mock"}, mode="auto"
+            ),
+            surface_prior=SimpleNamespace(method="bestpixel", bestpixel_predict_visible=True),
+        ),
+        paths=None,
+    )
+
+    preprocessor_mod.build_preprocessor_runtime(
+        config,
+        input_path=Path("scene.safe"),
+        get_preprocessor_fn=lambda *_args, **_kwargs: fake_preprocessor,
+    )
+
+    assert fake_preprocessor.config["preload_toa_bands"] == (
+        "B04",
+        "B03",
+        "B08",
+        "B8A",
+        "B11",
+        "B12",
+    )
+
+
+def test_bestpixel_surface_prior_receives_secondary_anchor_atmo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from siac.config import get_surface_driven_l2a_monthly_predictor_config
+
+    config = get_surface_driven_l2a_monthly_predictor_config(cache_root=tmp_path / "cache")
+    observation = SimpleNamespace(
+        sensor_config=SENTINEL2A_CONFIG,
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        metadata={"observation_time": datetime(2024, 7, 1, 10, 30)},
+    )
+    atmo_prior = SimpleNamespace(aot=xr.DataArray(np.array([[0.7]], dtype=np.float32)))
+    anchor_prior = SimpleNamespace(aot=xr.DataArray(np.array([[0.2]], dtype=np.float32)))
+    captured: dict[str, object] = {}
+
+    def _fake_build_bestpixel_surface_prior(*_args: object, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return "surface-prior"
+
+    monkeypatch.setattr(
+        "siac.adapters.bestpixel_surface_prior.build_bestpixel_surface_prior",
+        _fake_build_bestpixel_surface_prior,
+    )
+    provider = surface_mod.make_bestpixel_surface_prior_fn(
+        config,
+        maiac_day_aod=lambda *_args, **_kwargs: {},
+        anchor_atmo_provider=lambda *_args, **_kwargs: anchor_prior,
+    )
+
+    result = provider(observation, atmo_prior, object(), 60.0)
+
+    assert result == "surface-prior"
+    assert captured["atmo_prior"] is atmo_prior
+    assert captured["anchor_atmo_prior"] is anchor_prior
 
 
 def test_resolve_solver_and_rt_model_forward_expected_inputs(

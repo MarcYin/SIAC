@@ -284,6 +284,56 @@ def test_predict_visible_uncertainty_respects_systematic_floor() -> None:
     finite = np.isfinite(unc)
     assert finite.any()
     # The systematic floor is combined in quadrature, so every predicted pixel's
-    # uncertainty is at least the floor (k=1 -> zero spread -> exactly the floor).
+    # uncertainty is at least the floor (k=1 -> zero spread, zero composite
+    # quality -> exactly the floor).
     assert np.all(unc[finite] >= _MONTHLY_UNCERTAINTY_FLOOR - 1e-6)
     assert float(unc[0, 0, 0]) == pytest.approx(_MONTHLY_UNCERTAINTY_FLOOR, abs=1e-5)
+
+
+def test_predict_visible_uncertainty_folds_neighbour_quality() -> None:
+    from siac.algorithms.surface.brdf_monthly_database import _MONTHLY_UNCERTAINTY_FLOOR
+
+    # The kNN spread alone omits the per-neighbour reflectance uncertainty (BRDF
+    # absolute + spectral mapping) that kernel_model propagates. Folding the
+    # composite ``quality`` into the prediction uncertainty in quadrature stops
+    # the solver over-trusting the prior (Chachoengsao AOT 1.09 -> 0.53).
+    q_val = np.float32(0.02)
+    composites = []
+    for month_idx in range(15):
+        base = _make_composite(month_idx)
+        composites.append(
+            MonthlyBestPixelComposite(
+                reflectance=base.reflectance,
+                quality=xr.DataArray(
+                    np.full((2, 1), q_val, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                ),
+                sample_index=base.sample_index,
+                year=base.year,
+                month=base.month,
+            )
+        )
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+    )
+    corrected = xr.Dataset(
+        {
+            "B08": xr.DataArray(np.array([[0.47], [0.80]], dtype=np.float32), dims=["y", "x"]),
+            "B11": xr.DataArray(np.array([[0.37], [0.70]], dtype=np.float32), dims=["y", "x"]),
+            "B12": xr.DataArray(np.array([[0.27], [0.60]], dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+    prediction = database.predict_visible_with_diagnostics(corrected, k_neighbors=1)
+    unc = prediction.uncertainty.values
+    finite = np.isfinite(unc)
+    assert finite.any()
+    # k=1 -> zero neighbour spread, so the total is exactly the neighbour
+    # reflectance uncertainty and the floor in quadrature (strictly above the
+    # floor, proving ``quality`` is folded in rather than dropped).
+    expected = float(np.sqrt(q_val**2 + _MONTHLY_UNCERTAINTY_FLOOR**2))
+    assert expected > _MONTHLY_UNCERTAINTY_FLOOR
+    assert np.all(unc[finite] >= expected - 1e-6)
+    assert float(unc[0, 0, 0]) == pytest.approx(expected, abs=1e-5)

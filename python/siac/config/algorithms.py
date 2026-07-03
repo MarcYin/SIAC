@@ -78,13 +78,73 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     psf_sigma_y: float = Field(default=39.0, gt=0.0)
     apply_psf: bool = True
     whittaker_lambda: float = Field(default=10.0, gt=0.0)
+    #: --- bestpixel surface prior (method == "bestpixel") ----------------
+    #: The remaining bestpixel knobs (endpoint, bands, lookback_years,
+    #: months, top_k, max_cloud_cover, disk_cache, output_crs) are read from
+    #: ``providers.monthly_composites.bestpixel_*`` so they are not duplicated
+    #: here; only the surface-prior-specific selectors live below.
+    #:
+    #: Source product the bestpixel composites are built from. ``"l2a"``
+    #: (default) composites the STAC L2A surface-reflectance endpoint.
+    #: ``"hls-s30"`` composites Planetary Computer HLS S30 only; ``"hls"``
+    #: is the mixed HLS L30+S30 endpoint. ``"l1c"`` (custom atmospheric
+    #: correction of L1C) is not implemented in this phase and raises
+    #: ``NotImplementedError`` at build time.
+    bestpixel_source: Literal["l2a", "hls", "hls-s30", "l1c"] = "l2a"
+    #: Per-day AOD gate threshold for the MAIAC backstop. When set, scenes whose
+    #: acquisition-day MAIAC AOD exceeds this value are dropped before
+    #: compositing. ``None`` (default) lets the per-window low-AOD quantile
+    #: (``bestpixel_low_aod_frac``) decide which days to keep instead.
+    bestpixel_aod_max: float | None = Field(default=None, gt=0.0)
+    #: Fraction of the lowest-AOD days to keep per (year, month) window when
+    #: ``bestpixel_aod_max`` is unset. ``0.6`` keeps the cleanest 60 % of days.
+    bestpixel_low_aod_frac: float = Field(default=0.6, gt=0.0, le=1.0)
+    #: Robust sigma-clip multiplier applied across the per-band temporal
+    #: realizations before the median + MAD reduction. Realizations more than
+    #: ``robust_clip * MAD`` from the median are dropped. ``0.0`` (default)
+    #: disables the clip.
+    bestpixel_robust_clip: float = Field(default=0.0, ge=0.0)
+    #: Temporal reduction used to turn bestpixel observations into one
+    #: realization per seasonal window. ``"window"`` asks bestpixel for one
+    #: composite per (year, month) window (fast, but bestpixel ranks pixels
+    #: internally). ``"daily_median"`` first selects clean days via MAIAC, fetches
+    #: each selected day as a top-1 composite, then medians those daily surfaces
+    #: inside the window. The latter mirrors the validated L2A harness builder.
+    bestpixel_window_reduction: Literal["window", "daily_median"] = "window"
+    #: Replace selected visible bands in the bestpixel prior with the local
+    #: ExtraTree prediction from the monthly composite stack and scene NIR/SWIR
+    #: anchor bands. This is opt-in and requires the atmospheric prior and the
+    #: configured RT backend, which corrects the anchor bands TOA->BOA before
+    #: prediction (the prediction and the AOD solve share one RT space).
+    bestpixel_predict_visible: bool = False
+    #: Visible target bands replaced by the bestpixel ExtraTree predictor.
+    bestpixel_predict_visible_bands: tuple[str, ...] = ("B02", "B04")
+    #: Uncertainty floor applied to predicted visible bands. The validated
+    #: single-surface monthly L2A recipe uses 0.03 to avoid over-confident
+    #: predicted BOA locking the AOD solve to a biased prior.
+    bestpixel_predict_visible_uncertainty_floor: float = Field(default=0.006, ge=0.0)
+    #: Optional global debias applied to the predicted visible bands:
+    #: ``{band: (intercept, slope)}`` adds ``intercept + slope * anchor_aot``
+    #: to the prediction. Corrects the dictionary->solve RT-space offset (e.g.
+    #: Sen2Cor L2A composites solved in the libRadtran LUT space). Calibrate
+    #: against same-day QA-MAIAC AOD only (no ground truth needed); apply it
+    #: ONLY when the dictionary and solve live in different RT spaces — an
+    #: RT-consistent dictionary needs (and tolerates) no debias.
+    bestpixel_predict_visible_debias: dict[str, tuple[float, float]] | None = None
+    #: AOD source used to correct the scene NIR/SWIR anchor bands before the
+    #: ExtraTree visible-band prediction. ``"atmo_prior"`` reuses the configured
+    #: solver atmospheric prior; ``"cams"`` fetches a secondary CAMS scene prior
+    #: for the predictor anchor while leaving the solver prior unchanged.
+    bestpixel_predict_visible_anchor_source: Literal["atmo_prior", "cams"] = "atmo_prior"
+    #: Optional CAMS data source for ``bestpixel_predict_visible_anchor_source="cams"``.
+    #: When omitted, the public JASMIN CAMS mirror is used.
+    bestpixel_predict_visible_cams_data_path: str | Path | None = None
     spectral_mapping: SpectralMappingAlgorithmConfig = Field(
         default_factory=SpectralMappingAlgorithmConfig,
     )
     monthly_database_filter: MonthlyDatabaseQualityFilterConfig = Field(
         default_factory=MonthlyDatabaseQualityFilterConfig,
     )
-
 
 class SixSRadiosondeProfileConfig(SIACBaseModel):
     altitude_km: tuple[float, ...]
@@ -500,6 +560,12 @@ class LibRadtranAlgorithmConfig(SIACBaseModel):
     #: bundled, no download). reptran ``medium``/``fine`` tables are auto-fetched
     #: from the same ``reptran`` archive by the build harness.
     mol_abs_param: str = "reptran medium"
+    #: libRadtran ``aerosol_species_file`` selection (OPAC). One of the OPAC mixtures
+    #: (``continental_clean``/``continental_average``/``continental_polluted``/``urban``/
+    #: ``desert``/``maritime_clean``/``maritime_polluted``/``maritime_tropical``/``antarctic``)
+    #: or a path to a custom species-fraction file. Lets the cost vary by aerosol species
+    #: (matching the 6S Aerosol_cci candidates) instead of a fixed continental average.
+    aerosol_species: str = "continental_average"
     #: Optional per-spectral-region band models. Each entry ``(lo_nm, hi_nm,
     #: model)`` overrides ``mol_abs_param`` over ``[lo_nm, hi_nm]``; ``mol_abs_param``
     #: covers everything else. ``uvspec`` is run once per resulting contiguous
@@ -841,6 +907,90 @@ class SolverAlgorithmConfig(SIACBaseModel):
     #: AOT regime (loose when clean and at the high-AOD tail, tight in the
     #: moderate band where the surface signal is shallow); else flat 50 %.
     surface_driven_backstop_calibrated: bool = True
+    #: (surface_driven) reference column water vapour (g/cm²) for the cost-cube RT
+    #: sweep. ``None`` (default) keeps the current behaviour — the AOT sweep fixes
+    #: TCWV at the scene-median of the (real) atmospheric prior. Setting a value
+    #: (the validated recipe uses 2.0) runs the per-node TOA→BOA correction at a
+    #: fixed *reference* atmosphere instead of the real per-pixel TCWV. The
+    #: surface-driven harness validated the solve at this reference atmosphere
+    #: (TCWV=2.0, sea-level): the real per-pixel TCWV un-masks the surface prior's
+    #: blue dark bias and pushes the per-node cost minimum to higher AOT
+    #: (systematic over-retrieval). Affects only the surface-driven AOT cost cube;
+    #: the solved TCWV carried into the correction is unchanged.
+    surface_driven_reference_tcwv: float | None = Field(default=None, gt=0.0)
+    #: (surface_driven) when True, build the cost-cube RT coefficients from the
+    #: scene-mean (single nanmean SZA/SAA/VZA/VAA) geometry rather than per-pixel,
+    #: matching the validated harness, which evaluates the RT once at the AOI-mean
+    #: geometry. Per-pixel view azimuth varies across the swath and shifts the
+    #: shape-cube AOT minimum (RAA is a strong lever); the scene-mean removes that
+    #: per-pixel spread. ``False`` (default) keeps per-pixel geometry.
+    surface_driven_scene_mean_geometry: bool = False
+    #: (surface_driven) explicit solve-band override for the surface-driven path
+    #: only. ``None`` (default) keeps the sensor's ``default_aerosol_solver_bands``
+    #: (S2: B02,B04) so existing behaviour is unchanged. The validated L2A recipe
+    #: adds the 443 nm deep-blue B01 (``["B01","B02","B04"]``) — B01 deepens the
+    #: AOD signal so the surface can constrain the moderate regime. NOTE: this
+    #: does NOT change the catalog default (multigrid is unaffected); it only
+    #: feeds the surface-driven solver and its prior target bands.
+    surface_driven_solve_bands: tuple[str, ...] | None = None
+    #: (surface_driven) surface-mismatch cost form. ``chi2`` (default) is the
+    #: absolute per-band chi-square (unchanged behaviour). ``shape`` uses a
+    #: brightness anchor on the reddest band plus spectral-slope ratio terms —
+    #: robust to a multiplicative surface-brightness bias and to B01's dark bias.
+    #: ``auto2`` is the validated regime-dependent scheme: solve both an absolute
+    #: (non-B01) and a shape (all-band) cost, classify the regime by the
+    #: absolute-solved AOD, and use the shape solve only in the moderate band
+    #: (``surface_driven_aod_clean`` … ``surface_driven_aod_high``), else the
+    #: absolute solve (protects the clean and high-AOD tails).
+    surface_driven_cost_mode: Literal["chi2", "shape", "auto2"] = "chi2"
+    #: (surface_driven) AOT-axis layout. ``log`` (default) is the
+    #: ``grid_search_aot_points`` log-spaced axis (unchanged). ``acixthree`` is
+    #: the validated fine non-uniform axis (denser at low AOD: 0.01 steps to 0.2,
+    #: then coarsening) that avoids the coarse-grid quantisation that snaps clean
+    #: retrievals onto sparse nodes.
+    surface_driven_aot_axis: Literal["log", "acixthree"] = "log"
+    #: (surface_driven) when True, do NOT exclude cloud/water pixels from the
+    #: solve (the harness GATE=0 behaviour): the per-pixel surface-cost cube is
+    #: pooled spatially and the robust median + support gate handle reliability,
+    #: so high-AOD biomass / near-river stations whose TOA is finite and whose
+    #: cost has a real high-AOT minimum are solved instead of falling back to the
+    #: (biomass-under-estimating) MAIAC prior. Default keeps conservative masking.
+    surface_driven_ignore_cloud_water: bool = False
+    #: (surface_driven) ``auto2`` regime thresholds on the absolute-solved AOD:
+    #: shape cost is used only when clean < aod_abs <= high.
+    surface_driven_aod_clean: float = Field(default=0.15, ge=0.0)
+    surface_driven_aod_high: float = Field(default=0.6, gt=0.0)
+    #: (surface_driven, native 6S only) optional aerosol-species candidate
+    #: selection. ``none`` (default) preserves the configured RT aerosol profile.
+    #: ``cci_climatology`` builds the nearest Aerosol_cci climatological
+    #: multimodal-lognormal candidates for the scene centre/month, runs one
+    #: surface-cost solve per candidate, and chooses the minimum-cost candidate
+    #: per pixel. This is intentionally opt-in because it is expensive and the
+    #: species axis only exists on the native 6S path.
+    surface_driven_aerosol_species: Literal["none", "cci_climatology"] = "none"
+    #: Candidate count for ``surface_driven_aerosol_species="cci_climatology"``.
+    #: The research harness used 3 nearest LUT rows.
+    surface_driven_aerosol_species_candidates: int = Field(default=3, ge=1, le=35)
+    #: (surface_driven) when True, resolve on the surface prior's NATIVE grid
+    #: instead of a fresh grid built from the observation bounds. The bestpixel
+    #: surface prior is then built on the composite's own (tile-aligned) grid and
+    #: carried via ``SurfacePrior.solver_grid``; M4 adopts that grid as the solver
+    #: target, so the prior is never resampled and TOA is reprojected exactly once
+    #: onto it. This removes a sub-pixel composite-vs-observation-bounds resampling
+    #: smear (and a latent cloud-mask footprint misalignment).
+    #:
+    #: CORRECTNESS / ROBUSTNESS option, **not** a retrieval-accuracy lever: at
+    #: matched resolution the native grid differs from the obs-bounds grid by only
+    #: ~3% (sub-pixel registration), and the surface-driven solve is EE-neutral
+    #: (single-site Lahore: native@60m == obs-bounds@60m within ~3%, and the native
+    #: prior is marginally brighter, nudging AOT equal-or-higher, not lower). The
+    #: dominant grid lever is ``aerosol_resolution`` itself (a coarse 120m grid is
+    #: what shifts the retrieval, ~0.65 vs ~0.55 at Lahore), not the registration —
+    #: which is also why a partial native-grid attempt did not generalise on the
+    #: 62-site set. ``False`` (default) keeps the legacy obs-bounds grid.
+    #: Surface-driven / bestpixel-prior path only; multigrid and kernel_model are
+    #: unaffected.
+    surface_driven_resolve_on_prior_grid: bool = False
     aot_gamma: float = Field(default=10.0, ge=0.0)
     tcwv_gamma: float = Field(default=5.0, ge=0.0)
     alpha: float = -1.6
@@ -855,7 +1005,18 @@ class SolverAlgorithmConfig(SIACBaseModel):
     stages: tuple[SolverStageConfig, ...] = Field(default_factory=tuple)
     quadratic_block_size: int = Field(default=1, ge=1)
     quadratic_block_min_valid_fraction: float = Field(default=0.5, ge=0.0, le=1.0)
-    water_mask_buffer_pixels: int = Field(default=0, ge=0)
+    #: Dilation applied to the (land/)water exclusion mask before it is
+    #: resampled onto the solver grid, in *native* mask pixels. The Zenodo
+    #: landWater2020 product is ~10 m native, so 32 px ≈ 300 m — a coastal
+    #: adjacency buffer. The BRDF kernels are land models and water-leaving
+    #: radiance contaminates the TOA (and therefore the kernel prior) of
+    #: near-shore land pixels; excluding a ~300 m strip removes that
+    #: contamination. A buffer sweep on coastal AERONET sites (Napoli, 24 %
+    #: of the site window is water) showed the kernel over-retrieval pulling
+    #: monotonically toward truth and crossing back within expected error at
+    #: ~300 m, with no effect on near-inland sites. Smaller buffers (~150 m)
+    #: were insufficient and occasionally counter-productive.
+    water_mask_buffer_pixels: int = Field(default=32, ge=0)
     use_multigrid: bool = True
     min_grid_size: int = Field(default=4, ge=2)
     bounds: SolverBoundsConfig = Field(default_factory=SolverBoundsConfig)

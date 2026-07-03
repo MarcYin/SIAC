@@ -117,6 +117,14 @@ class AtmoProviderConfig(SIACBaseModel):
     cache_dir: Path | None = None
     download_missing: bool = True
     temporal_interpolation: TemporalInterpolation = TemporalInterpolation.NEAREST
+    #: (MAIAC / MCD19 + VNP19 only) decode the ``AOD_QA`` bit field and keep only
+    #: best-quality pixels (clear cloud mask + no adjacency + best AOD QA level)
+    #: instead of the loose ``QA > 0`` filter. Matches the validated ``maiac_qa``
+    #: best-quality recipe — the loose filter reads systematically higher at
+    #: clean-coastal/polar sites (~0.63 vs ~0.54), which the surface-driven
+    #: backstop then anchors to. ``False`` (default) preserves the legacy loose
+    #: filter (and the multigrid atmo prior). No effect for CAMS / MERRA-2.
+    maiac_best_quality_qa: bool = False
 
     @field_validator("data_path", mode="before")
     @classmethod
@@ -168,7 +176,9 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
 
     # --- bestpixel provider (kind == "bestpixel") -----------------------
     #: STAC source the ``bestpixel`` package composites from. One of
-    #: ``"auto" | "earth-search" | "pc" | "hls" | "mcd43a4"``.
+    #: ``"auto" | "earth-search" | "pc" | "hls" | "hls-s30" | "mcd43a4"``.
+    #: ``"hls"`` is mixed HLS L30+S30; ``"hls-s30"`` restricts the pool to
+    #: Planetary Computer HLS S30.
     bestpixel_endpoint: str = "pc"
     #: Canonical bestpixel band names to request. ``None`` selects a
     #: default set spanning visible→SWIR (coastal, blue, green, red, nir,
@@ -183,6 +193,14 @@ class MonthlyCompositeProviderConfig(SIACBaseModel):
     #: Set explicitly to widen the seasonal window (e.g. [2, 3, 4]) or to
     #: composite a full year ([1, 2, ..., 12]).
     bestpixel_months: tuple[int, ...] | None = None
+    #: When ``bestpixel_months`` is ``None``, widen the seasonal window to the
+    #: scene month ± this many calendar months (wrapping 1–12): e.g. a May scene
+    #: with ``1`` composites Apr/May/Jun of each lookback year. ``0`` (default)
+    #: keeps the scene month only. The validated ``comp_ref`` harness used ±1
+    #: (a 3-month seasonal window × the lookback years), tripling the realization
+    #: count so the temporal median + RMSE are better constrained. Ignored when
+    #: ``bestpixel_months`` is set explicitly.
+    bestpixel_seasonal_window_months: int = 0
     #: Output CRS bestpixel composites in: ``"utm"`` or ``"native"``.
     bestpixel_output_crs: str = "utm"
     #: Fixed clearest-observations-per-chunk depth.
