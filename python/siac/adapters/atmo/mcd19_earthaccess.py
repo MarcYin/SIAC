@@ -37,6 +37,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: AOD substituted when a granule yields nothing and the fallback is allowed.
+_DEFAULT_FALLBACK_AOT = 0.12
+
+
+class NoAtmosphericDataError(RuntimeError):
+    """Raised when an aerosol source has no usable data for a scene."""
+
+
 _MCD19_ORBIT_TIMESTAMP_RE = re.compile(
     r"(?P<year>\d{4})(?P<day_of_year>\d{3})(?P<hour>\d{2})(?P<minute>\d{2})[TA]"
 )
@@ -158,6 +166,7 @@ class _EarthAccessMAIACAODProvider:
         temporal_window_days: int = 2,
         max_granules: int = 8,
         best_quality_qa: bool = False,
+        allow_default_prior: bool = False,
     ) -> None:
         runtime = build_earthaccess_runtime(
             cache_dir=cache_dir,
@@ -174,6 +183,7 @@ class _EarthAccessMAIACAODProvider:
         self.temporal_window_days = max(0, int(temporal_window_days))
         self.max_granules = max(1, int(max_granules))
         self.best_quality_qa = bool(best_quality_qa)
+        self.allow_default_prior = bool(allow_default_prior)
 
     @property
     def source_name(self) -> str:
@@ -470,7 +480,29 @@ class _EarthAccessMAIACAODProvider:
         bounds: tuple[float, float, float, float],
         resolution: float,
     ) -> AtmosphericState:
-        aot = self._constant_array(bounds, resolution, 0.12)
+        """Constant stand-in for a granule that yielded no usable AOD.
+
+        Refused by default. A surface-driven retrieval is prior-limited wherever
+        the visible bands constrain AOT weakly, so an invented aerosol prior does
+        not degrade gracefully — it silently becomes the answer, and reads far
+        too low exactly where aerosol is thick. Failing here lets a fused
+        provider fall back on a source that actually measured something.
+        """
+
+        if not self.allow_default_prior:
+            raise NoAtmosphericDataError(
+                f"{self._source_name} produced no usable AOD for this scene and "
+                "constant-prior fallback is disabled. Fuse with another aerosol "
+                "source, or set providers.atmo.allow_default_prior=true to accept "
+                f"a fabricated AOD of {_DEFAULT_FALLBACK_AOT}."
+            )
+        logger.error(
+            "%s produced no usable AOD; substituting a CONSTANT aot=%.2f. This is "
+            "not a retrieval — treat the result as unvalidated.",
+            self._source_name,
+            _DEFAULT_FALLBACK_AOT,
+        )
+        aot = self._constant_array(bounds, resolution, _DEFAULT_FALLBACK_AOT)
         tcwv = self._constant_array(bounds, resolution, 1.5)
         tco3 = self._constant_array(bounds, resolution, 0.30)
 

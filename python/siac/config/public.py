@@ -352,12 +352,19 @@ def get_surface_driven_v1_config(
                 "bestpixel_window_reduction": "window",
                 "bestpixel_predict_visible": True,
                 "bestpixel_predict_visible_bands": ("B02", "B03", "B04"),
-                "bestpixel_predict_visible_uncertainty_floor": 0.006,
+                # Floor and debias are a matched pair, set by the RT space the
+                # surface was corrected in. A library already in the solver's
+                # space is trusted tightly and must NOT be debiased again;
+                # a live L2A prior carries a real cross-space offset, so it
+                # takes the MAIAC-calibrated affine and a looser floor. Applying
+                # both corrections, or neither, breaks the visible prior.
+                "bestpixel_predict_visible_uncertainty_floor": (
+                    0.006 if prepared_library_path else 0.015
+                ),
                 "bestpixel_predict_visible_anchor_source": "atmo_prior",
-                # The library is already in the solver's RT space, so the
-                # empirical cross-space debias must stay off: correcting the
-                # same offset twice re-introduces it.
-                "bestpixel_predict_visible_debias": None,
+                "bestpixel_predict_visible_debias": (
+                    None if prepared_library_path else dict(L2A_LUT_PREDICT_VISIBLE_DEBIAS)
+                ),
                 # The validated predictor is the 20-tree ensemble; the single
                 # tree's noisier realizations widen sigma ~15% and cost the
                 # thick-aerosol sites one AOD node.

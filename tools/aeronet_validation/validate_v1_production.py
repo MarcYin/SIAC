@@ -80,8 +80,11 @@ def _reference_tcwv_cm(matchup_id: str) -> float | None:
 def build_config(matchup_id: str, *, fusion: bool) -> Any:
     from siac.config import get_surface_driven_v1_config
 
+    # V1_LIVE_SURFACE=1 measures the works-anywhere configuration: no prepared
+    # library, so the surface prior is built live from L2A composites.
+    live_surface = bool(os.environ.get("V1_LIVE_SURFACE"))
     config = get_surface_driven_v1_config(
-        prepared_library_path=LIBRARY,
+        prepared_library_path=None if live_surface else LIBRARY,
         cache_root=os.environ.get("SIAC_V1_CACHE", "/gws/ssde/j25a/nceo_isp/public/siac_cache"),
     )
 
@@ -90,7 +93,9 @@ def build_config(matchup_id: str, *, fusion: bool) -> Any:
     )
     overrides: dict[str, Any] = {
         "algorithms": {
-            "surface_prior": {"prepared_library_scene_key": matchup_id},
+            "surface_prior": (
+                {} if live_surface else {"prepared_library_scene_key": matchup_id}
+            ),
         },
         # Anonymous public Sentinel-2 archive: no credentials, and the scene the
         # library was built from is fetched from the same source.

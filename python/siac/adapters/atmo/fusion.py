@@ -152,16 +152,45 @@ class FusedAODProvider:
         obs_time: datetime,
         resolution: float,
     ) -> AtmosphericState:
-        state = self._primary.get_prior(bounds, crs, obs_time, resolution)
+        # A source with no data for this scene is dropped, not substituted for.
+        # If that is the primary, another source is promoted to supply the whole
+        # atmospheric state — a real measurement from a second source beats a
+        # fabricated one from the first.
+        providers = [self._primary, *self._sources]
+        state = None
+        remaining = []
+        for index, provider in enumerate(providers):
+            try:
+                candidate = provider.get_prior(bounds, crs, obs_time, resolution)
+            except Exception as exc:  # noqa: BLE001 - any source may be unavailable
+                logger.warning(
+                    "Aerosol source %s unavailable for this scene (%s: %s); continuing without it.",
+                    getattr(provider, "source_name", "unknown"),
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            if state is None:
+                if index != 0:
+                    logger.warning(
+                        "Primary aerosol source unavailable; using %s for the atmospheric state.",
+                        getattr(provider, "source_name", "unknown"),
+                    )
+                state = candidate
+            else:
+                remaining.append(candidate)
+        if state is None:
+            raise RuntimeError(
+                "No configured aerosol source produced a prior for this scene: "
+                + ", ".join(getattr(p, "source_name", "unknown") for p in providers)
+            )
 
         fields = [state.aot]
-        for source in self._sources:
-            other = source.get_prior(bounds, crs, obs_time, resolution)
+        for other in remaining:
             aligned = _align_to(state.aot, other.aot)
             if aligned is None:
                 logger.warning(
-                    "Could not align AOD source %s onto the %s grid; continuing without it.",
-                    getattr(source, "source_name", "unknown"),
+                    "Could not align an AOD source onto the %s grid; continuing without it.",
                     getattr(self._primary, "source_name", "primary"),
                 )
                 continue

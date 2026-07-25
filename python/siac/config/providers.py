@@ -126,6 +126,11 @@ class AtmoProviderConfig(SIACBaseModel):
     #: backstop then anchors to. ``False`` (default) preserves the legacy loose
     #: filter (and the multigrid atmo prior). No effect for CAMS / MERRA-2.
     maiac_best_quality_qa: bool = False
+    #: Accept a fabricated constant AOD when the aerosol source has no usable
+    #: data for a scene. Off by default: a surface-driven retrieval is
+    #: prior-limited, so an invented prior silently becomes the answer instead
+    #: of failing visibly, and reads far too low exactly where aerosol is thick.
+    allow_default_prior: bool = False
     #: Additional AOD sources fused into the aerosol prior. ``kind`` remains the
     #: primary provider — it supplies water vapour, ozone, terrain and the grid —
     #: while these sources contribute aerosol optical depth only, combined under

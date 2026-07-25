@@ -230,8 +230,22 @@ def test_merra2_provider_rejects_non_positive_resolution() -> None:
         )
 
 
-def test_mcd19_provider_returns_default_prior_without_probe():
+def test_mcd19_provider_refuses_to_fabricate_a_prior_without_probe():
+    """No data must fail loudly, not silently become a constant retrieval."""
+    from siac.adapters.atmo.mcd19_earthaccess import NoAtmosphericDataError
+
     provider = MCD19AODProvider(probe_earthdata=False)
+    with pytest.raises(NoAtmosphericDataError, match="no usable AOD"):
+        provider.get_prior(
+            bounds=(0.0, 0.0, 1000.0, 1000.0),
+            crs="EPSG:4326",
+            obs_time=datetime(2024, 1, 1, 12, 0, 0),
+            resolution=500.0,
+        )
+
+
+def test_mcd19_provider_returns_default_prior_when_explicitly_allowed():
+    provider = MCD19AODProvider(probe_earthdata=False, allow_default_prior=True)
     state = provider.get_prior(
         bounds=(0.0, 0.0, 1000.0, 1000.0),
         crs="EPSG:4326",
@@ -979,13 +993,14 @@ def test_vnp19_provider_parses_aod_and_defaults_tcwv(monkeypatch):
     assert float(state.tcwv.mean()) == pytest.approx(1.5)
 
 
-def test_mcd19_provider_falls_back_to_default_prior_when_granule_parsing_fails(
+def test_mcd19_provider_falls_back_to_default_prior_when_granule_parsing_fails_and_allowed(
     tmp_path: Path, monkeypatch
 ):
     granule = tmp_path / "MCD19A2.A2024001.h29v07.061.fake.hdf"
     provider = MCD19AODProvider(
         source=_StubEarthAccessSource([granule]),
         probe_earthdata=True,
+        allow_default_prior=True,
     )
 
     def _boom(*args, **kwargs):

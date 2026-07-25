@@ -157,7 +157,8 @@ def test_earthaccess_source_typeerror_login_and_bounds_transform(monkeypatch):
 def test_atmo_earthaccess_provider_branches(provider_cls, key, monkeypatch):
     source = _StubSource(granules=[])
     catalog = _StubCatalog("SN")
-    p = provider_cls(source=source, catalog=catalog, probe_earthdata=True)
+    kwargs = {} if provider_cls is MERRA2Provider else {"allow_default_prior": True}
+    p = provider_cls(source=source, catalog=catalog, probe_earthdata=True, **kwargs)
 
     # source_name property and probe path with no granules warning branch.
     assert isinstance(p.source_name, str)
