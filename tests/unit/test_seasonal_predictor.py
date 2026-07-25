@@ -7,7 +7,12 @@ import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
 
-from siac.algorithms.surface.seasonal_predictor import seasonal_extra_tree_prior
+from siac.algorithms.surface.seasonal_predictor import (
+    _anchor_match_weights,
+    _field_on_template,
+    _weighted_median,
+    seasonal_extra_tree_prior,
+)
 from siac.domain import SensorBand, SensorConfig
 from siac.runtime import (
     AtmosphericState,
@@ -109,6 +114,48 @@ def _scene(height: int = 16, width: int = 16):
     return prior, observation, atmo, comp, transform
 
 
+def test_anchor_match_weights_favour_the_nearest_realization() -> None:
+    target = np.array([[0.2, 0.3, 0.4]], dtype=np.float64)
+    historical = np.array(
+        [
+            [[0.201, 0.299, 0.401]],
+            [[0.30, 0.40, 0.50]],
+        ],
+        dtype=np.float64,
+    )
+
+    weights = _anchor_match_weights(historical, target, scale=0.05)
+
+    assert weights[0, 0] == pytest.approx(1.0)
+    assert weights[0, 0] > 5.0 * weights[1, 0]
+
+
+def test_weighted_median_uses_anchor_weights() -> None:
+    values = np.array([[0.1], [0.3], [0.5]], dtype=np.float64)
+    weights = np.array([[0.8], [0.1], [0.1]], dtype=np.float64)
+
+    assert _weighted_median(values, weights)[0] == pytest.approx(0.1)
+
+
+def test_anchor_alignment_keeps_spatial_solver_field_without_explicit_crs() -> None:
+    _, observation, _, _, _ = _scene(height=8, width=8)
+    template = observation.toa["B8A"]
+    source = xr.DataArray(
+        np.arange(16, dtype=np.float32).reshape(4, 4),
+        dims=("y", "x"),
+        coords={
+            "y": template.y.values[::2],
+            "x": template.x.values[::2],
+        },
+    )
+
+    aligned = _field_on_template(source, template, fallback=-1.0, label="anchor AOD")
+
+    assert aligned.shape == template.shape
+    assert np.isfinite(aligned.values).all()
+    assert float(np.ptp(aligned.values)) > 0.0
+
+
 def test_seasonal_extra_tree_prior_corrects_anchor_with_rt_model() -> None:
     prior, observation, atmo, comp, transform = _scene()
     rt_model = _FakeRT()
@@ -127,6 +174,137 @@ def test_seasonal_extra_tree_prior_corrects_anchor_with_rt_model() -> None:
     assert rt_model.calls == ["B8A", "B11", "B12"]
     assert not out.boa.identical(prior.boa)
     assert float(out.boa.sel(band="B02").mean()) > 0.0
+
+
+def test_seasonal_extra_tree_prior_preserves_spatial_anchor_state_and_geometry() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    yy, xx = np.indices(atmo.aot.shape, dtype=np.float32)
+    atmo = AtmosphericState(
+        aot=atmo.aot + 0.001 * xx,
+        tcwv=atmo.tcwv + 0.01 * yy,
+        tco3=atmo.tco3 + 0.0001 * xx,
+        aot_unc=atmo.aot_unc + 0.001 * yy,
+        tcwv_unc=atmo.tcwv_unc + 0.001 * xx,
+        tco3_unc=atmo.tco3_unc + 0.0001 * yy,
+        elevation=atmo.elevation + 0.02 * xx,
+    )
+    geometry = GeometryAngles(
+        sza=observation.geometry.sza + 0.001 * yy,
+        saa=observation.geometry.saa + 0.002 * xx,
+        vza=observation.geometry.vza + 0.001 * xx,
+        vaa=observation.geometry.vaa + 0.002 * yy,
+    )
+    observation = ObservationBundle(
+        toa=observation.toa,
+        geometry=geometry,
+        cloud_mask=observation.cloud_mask,
+        sensor_config=observation.sensor_config,
+        metadata=observation.metadata,
+        crs=observation.crs,
+        bounds=observation.bounds,
+    )
+
+    class _CaptureRT:
+        def __init__(self) -> None:
+            self.states: list[AtmosphericState] = []
+            self.geometries: list[GeometryAngles] = []
+
+        def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+            _ = (band, compute_jacobian)
+            self.states.append(atmo_state)
+            self.geometries.append(geometry)
+            xap = xr.full_like(geometry.sza, 0.8)
+            return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+    rt_model = _CaptureRT()
+    seasonal_extra_tree_prior(
+        prior,
+        observation,
+        seasonal_composites=comp,
+        epsg=32632,
+        transform=transform,
+        anchor_aot=0.2,
+        anchor_aot_field=atmo.aot,
+        atmo_prior=atmo,
+        rt_model=rt_model,
+    )
+
+    assert len(rt_model.states) == 3
+    state = rt_model.states[0]
+    geom = rt_model.geometries[0]
+    np.testing.assert_allclose(state.aot.values, atmo.aot.values)
+    np.testing.assert_allclose(state.tcwv.values, atmo.tcwv.values)
+    np.testing.assert_allclose(state.tco3.values, atmo.tco3.values)
+    np.testing.assert_allclose(state.elevation.values, atmo.elevation.values)
+    np.testing.assert_allclose(geom.sza.values, geometry.sza.values, atol=1e-7)
+    np.testing.assert_allclose(geom.saa.values, geometry.saa.values, atol=1e-7)
+    np.testing.assert_allclose(geom.vza.values, geometry.vza.values, atol=1e-7)
+    np.testing.assert_allclose(geom.vaa.values, geometry.vaa.values, atol=1e-7)
+
+
+def test_seasonal_extra_tree_prior_scene_mean_geometry_keeps_atmosphere_spatial() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    yy, xx = np.indices(atmo.aot.shape, dtype=np.float32)
+    atmo = AtmosphericState(
+        aot=atmo.aot + 0.001 * xx,
+        tcwv=atmo.tcwv + 0.01 * yy,
+        tco3=atmo.tco3,
+        aot_unc=atmo.aot_unc,
+        tcwv_unc=atmo.tcwv_unc,
+        tco3_unc=atmo.tco3_unc,
+        elevation=atmo.elevation + 0.02 * xx,
+    )
+    geometry = GeometryAngles(
+        sza=observation.geometry.sza + 0.001 * yy,
+        saa=observation.geometry.saa + 0.002 * xx,
+        vza=observation.geometry.vza + 0.001 * xx,
+        vaa=observation.geometry.vaa + 0.002 * yy,
+    )
+    observation = ObservationBundle(
+        toa=observation.toa,
+        geometry=geometry,
+        cloud_mask=observation.cloud_mask,
+        sensor_config=observation.sensor_config,
+        metadata=observation.metadata,
+        crs=observation.crs,
+        bounds=observation.bounds,
+    )
+
+    class _CaptureRT:
+        def __init__(self) -> None:
+            self.states: list[AtmosphericState] = []
+            self.geometries: list[GeometryAngles] = []
+
+        def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):  # noqa: ANN001
+            _ = (band, compute_jacobian)
+            self.states.append(atmo_state)
+            self.geometries.append(geometry)
+            xap = xr.full_like(geometry.sza, 0.8)
+            return RTCoefficients(xap=xap, xbp=xr.zeros_like(xap), xcp=xr.zeros_like(xap))
+
+    rt_model = _CaptureRT()
+    seasonal_extra_tree_prior(
+        prior,
+        observation,
+        seasonal_composites=comp,
+        epsg=32632,
+        transform=transform,
+        anchor_aot=0.2,
+        anchor_aot_field=atmo.aot,
+        atmo_prior=atmo,
+        rt_model=rt_model,
+        scene_mean_geometry=True,
+    )
+
+    state = rt_model.states[0]
+    geom = rt_model.geometries[0]
+    assert float(np.ptp(state.aot.values)) > 0.0
+    assert float(np.ptp(state.tcwv.values)) > 0.0
+    assert float(np.ptp(state.elevation.values)) > 0.0
+    for field in (geom.sza, geom.saa, geom.vza, geom.vaa):
+        assert float(np.ptp(field.values)) == pytest.approx(0.0)
+    assert float(geom.sza.values[0, 0]) == pytest.approx(float(geometry.sza.mean()))
+    assert float(geom.vza.values[0, 0]) == pytest.approx(float(geometry.vza.mean()))
 
 
 def test_seasonal_extra_tree_prior_requires_rt_model_and_atmo_prior() -> None:
@@ -158,14 +336,14 @@ def test_seasonal_extra_tree_prior_requires_rt_model_and_atmo_prior() -> None:
 
 def test_seasonal_extra_tree_prior_applies_affine_debias() -> None:
     prior, observation, atmo, comp, transform = _scene()
-    common = dict(
-        seasonal_composites=comp,
-        epsg=32632,
-        transform=transform,
-        anchor_aot=0.4,
-        atmo_prior=atmo,
-        rt_model=_FakeRT(),
-    )
+    common = {
+        "seasonal_composites": comp,
+        "epsg": 32632,
+        "transform": transform,
+        "anchor_aot": 0.4,
+        "atmo_prior": atmo,
+        "rt_model": _FakeRT(),
+    }
     base = seasonal_extra_tree_prior(prior, observation, **common)
     shifted = seasonal_extra_tree_prior(
         prior,
@@ -197,3 +375,38 @@ def test_seasonal_extra_tree_prior_can_blend_toward_composite_reference() -> Non
     expected = float(np.median(comp[:, 1, 8, 8]))
     actual = float(blended.boa.sel(band="B02").isel(y=8, x=8))
     assert actual == pytest.approx(expected, rel=0.05)
+
+
+def test_seasonal_extra_tree_prior_attaches_tau_predictor_payload() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    out = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        seasonal_composites=comp,
+        epsg=32632,
+        transform=transform,
+        anchor_aot=0.2,
+        atmo_prior=atmo,
+        rt_model=_FakeRT(),
+        debias={"B02": (0.01, 0.02)},
+        attach_tau_predictor=True,
+    )
+    payload = out.tau_predictor
+    assert payload is not None
+    assert len(payload["trees"]) == comp.shape[0]
+    assert payload["anchor_bands"] == ("B8A", "B11", "B12")
+    assert payload["target_bands"] == ("B02", "B04")
+    assert payload["localizer"].shape == (4, 16, 16)
+    assert payload["debias"]["B02"] == (0.01, 0.02)
+    # default off keeps the field empty
+    out_off = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        seasonal_composites=comp,
+        epsg=32632,
+        transform=transform,
+        anchor_aot=0.2,
+        atmo_prior=atmo,
+        rt_model=_FakeRT(),
+    )
+    assert out_off.tau_predictor is None

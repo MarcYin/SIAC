@@ -15,7 +15,7 @@ import pytest
 import xarray as xr
 
 import siac.workflows.pipeline as pipeline
-from siac.runtime import AtmosphericState, CorrectionResult
+from siac.runtime import AtmosphericState, CorrectionResult, GeometryAngles
 
 
 def _install_fake_dask(monkeypatch: pytest.MonkeyPatch, *, mode: str = "success") -> Any:
@@ -308,6 +308,47 @@ def test_select_solver_bands_for_preload_includes_stage_requested_bands(mock_sen
     assert [band.name for band in bands] == ["B01", "B02", "B04"]
 
 
+def test_geometry_for_atmo_grid_extends_native_angle_edges() -> None:
+    source_coords = {
+        "y": np.array([10.0, 0.0], dtype=np.float32),
+        "x": np.array([0.0, 10.0, 20.0], dtype=np.float32),
+    }
+    target_coords = {
+        "y": np.array([15.0, 5.0, -5.0], dtype=np.float32),
+        "x": np.array([-5.0, 5.0, 15.0, 25.0], dtype=np.float32),
+    }
+    source = xr.DataArray(
+        np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords=source_coords,
+    )
+    target = xr.DataArray(
+        np.full((3, 4), 0.2, dtype=np.float32),
+        dims=("y", "x"),
+        coords=target_coords,
+    )
+    unc = xr.full_like(target, 0.1)
+    atmo = AtmosphericState(
+        aot=target,
+        tcwv=xr.full_like(target, 2.0),
+        tco3=xr.full_like(target, 0.3),
+        aot_unc=unc,
+        tcwv_unc=unc,
+        tco3_unc=unc,
+        elevation=xr.zeros_like(target),
+    )
+    geometry = GeometryAngles(sza=source, saa=source + 10.0, vza=source + 20.0, vaa=source + 30.0)
+
+    aligned = pipeline._geometry_for_atmo_grid(geometry, atmo)
+
+    assert aligned.sza.shape == target.shape
+    assert np.isfinite(aligned.sza.values).all()
+    # The corner is beyond both source-coordinate limits.  It must use the
+    # nearest native angle (1.0), not the source-field mean (3.5).
+    assert float(aligned.sza.values[0, 0]) == pytest.approx(1.0)
+    assert float(aligned.vza.values[-1, -1]) == pytest.approx(26.0)
+
+
 def test_run_pipeline_lut_preload_includes_stage_requested_bands(
     mock_preprocessor,
     mock_surface_prior_provider,
@@ -499,6 +540,33 @@ def test_run_tail_attaches_solver_quality_metadata(
     assert solver["aot_finite_fraction"] == pytest.approx(1.0)
     assert solver["aot_median"] == pytest.approx(0.15)
     assert solver["aot_unc_median"] == pytest.approx(0.05)
+
+
+def test_solver_metadata_preserves_scalar_diagnostics(mock_solved_atmosphere) -> None:
+    solved = dataclasses.replace(
+        mock_solved_atmosphere,
+        diagnostics={
+            "surface_tau_gate_fired": True,
+            "surface_cost_curve_min_aot": np.float32(0.2),
+            "surface_rt_branch": "default",
+            "surface_species_candidate_labels": ["continental", "desert"],
+            "surface_species_candidate_median_costs": [np.float32(1.25), float("inf")],
+            "surface_bad_numeric": float("nan"),
+            "surface_ignored_complex": {"not": "json-scalar"},
+            "surface_ignored_long_sequence": list(range(65)),
+        },
+    )
+
+    metadata = pipeline._solver_metadata(solved, solve_band_count=2)
+
+    assert metadata["surface_tau_gate_fired"] is True
+    assert metadata["surface_cost_curve_min_aot"] == pytest.approx(0.2)
+    assert metadata["surface_rt_branch"] == "default"
+    assert metadata["surface_species_candidate_labels"] == ["continental", "desert"]
+    assert metadata["surface_species_candidate_median_costs"] == [pytest.approx(1.25), None]
+    assert metadata["surface_bad_numeric"] is None
+    assert "surface_ignored_complex" not in metadata
+    assert "surface_ignored_long_sequence" not in metadata
 
 
 def test_aot_scatter_diagnostics_fill_nan_atmo_for_lut_call(

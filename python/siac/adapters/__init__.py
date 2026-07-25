@@ -9,6 +9,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "CAMSProvider": ("siac.adapters.atmo", "CAMSProvider"),
     "MERRA2Provider": ("siac.adapters.atmo", "MERRA2Provider"),
     "MCD19AODProvider": ("siac.adapters.atmo", "MCD19AODProvider"),
+    "CachedMCD19AODProvider": ("siac.adapters.atmo", "CachedMCD19AODProvider"),
     "VNP19AODProvider": ("siac.adapters.atmo", "VNP19AODProvider"),
     "AWSAuth": ("siac.adapters.auth", "AWSAuth"),
     "CDSAuth": ("siac.adapters.auth", "CDSAuth"),

@@ -132,6 +132,14 @@ class SIACConfig(SystemConfig):
         )
 
 
+#: Copernicus GLO-30 digital elevation model as a remote VRT. Terrain height
+#: sets surface pressure, which scales Rayleigh scattering — the dominant
+#: atmospheric signal in the blue bands the AOD solve relies on.
+COPERNICUS_GLO30_DEM_VRT = (
+    "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt"
+)
+
+
 def get_default_config() -> SIACConfig:
     return SIACConfig()
 
@@ -149,7 +157,7 @@ def get_jasmin_config() -> SIACConfig:
             ),
         ),
         paths=PathsConfig(
-            dem="/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt",
+            dem=COPERNICUS_GLO30_DEM_VRT,
         ),
         runtime=RuntimeConfig(n_jobs=8),
     )
@@ -234,6 +242,13 @@ def _get_surface_driven_bestpixel_config(
                 "aerosol_resolution": 60.0,
                 "grid_search_aot_points": 11,
                 "surface_driven_backstop_calibrated": True,
+                "surface_driven_backstop_escape_enabled": False,
+                "surface_driven_backstop_escape_low_aot": 0.08,
+                "surface_driven_backstop_escape_cost_threshold": 20.0,
+                "surface_driven_backstop_escape_delta": 0.05,
+                "surface_driven_backstop_escape_band_spread": 0.25,
+                "surface_driven_backstop_escape_min_jump": 0.35,
+                "surface_driven_backstop_escape_cost_ratio": 1.8,
                 "surface_driven_reference_tcwv": 2.0,
                 "surface_driven_scene_mean_geometry": True,
                 "surface_driven_resolve_on_prior_grid": False,
@@ -242,7 +257,8 @@ def _get_surface_driven_bestpixel_config(
                 "surface_driven_solve_bands": ["B01", "B02", "B04"],
                 "surface_driven_cost_mode": "auto2",
                 "surface_driven_aot_axis": "acixthree",
-                "surface_driven_ignore_cloud_water": True,
+                "surface_driven_allow_cloud_retrieval": False,
+                "surface_driven_ignore_cloud_water": False,
                 "surface_driven_aod_clean": 0.15,
                 "surface_driven_aod_high": 0.6,
                 "surface_driven_aerosol_species": "none",
@@ -284,6 +300,10 @@ def get_surface_driven_l2a_config(*, cache_root: str | Path | None = None) -> SI
 #: valid for Sen2Cor-composite priors + LUT solve only.
 L2A_LUT_PREDICT_VISIBLE_DEBIAS: dict[str, tuple[float, float]] = {
     "B02": (-0.0003, 0.0243),
+    # Spectral interpolation between the independently calibrated B02/B04
+    # terms.  It is dormant in the shipped B02/B04 preset and used only when a
+    # caller explicitly adds B03 to the same visible predictor.
+    "B03": (-0.0006, 0.0235),
     "B04": (-0.0011, 0.0223),
 }
 
@@ -322,6 +342,105 @@ def get_surface_driven_l2a_monthly_predictor_config(
             },
             "solver": {
                 "surface_driven_solve_bands": ("B02", "B04"),
+            },
+        },
+    )
+
+
+def get_surface_driven_v1_config(
+    *,
+    prepared_library_path: str | Path,
+    cache_root: str | Path | None = None,
+) -> SIACConfig:
+    """Return the validated v1 surface-driven AOD recipe.
+
+    This is the best-measured configuration on the 152-matchup AERONET campaign:
+    **84.6% within-EE, AOD RMSE 0.110, bias +0.001**, against 79.2% / 0.120 /
+    −0.021 for the same recipe on a single-source aerosol prior. It combines
+    four results, each measured by holding everything else fixed:
+
+    * **Prepared surface library, corrected in the solve's own RT space.** The
+      library is built offline from clear-sky Sentinel-2 L1C selected per pixel
+      by same-day aerosol loading, then atmospherically corrected with the same
+      6S + CCI-climatology model the solver uses. Correcting it in a different
+      RT space instead costs 5.4 points (74.3% vs 79.7%) on identical imagery,
+      which is why ``prepared_library_path`` is required rather than optional:
+      the library declares its RT space and the pipeline checks it.
+    * **Exact CCI climatology aerosol with a bounded absorbing fraction.**
+      Scene-resolved species cut AOD RMSE by a quarter against a fixed
+      continental profile and fix the high-AOD over-retrievals; capping the
+      soot-like fraction halves the mixture overshoots. Letting the solver
+      *select* species from the cost instead is degenerate — it prefers a
+      compensating-wrong model — so the mixture is prescribed, not searched.
+    * **A 0.006 surface-uncertainty floor.** The library is accurate enough to
+      be trusted tightly; at 0.015 the cost curve flattens and the retrieval
+      falls back on the aerosol prior (75.9% vs 72.4% measured on this route).
+    * **A fused ``max(MAIAC, CAMS)`` aerosol prior.** Both sources under-read,
+      independently, so their maximum removes most of the shared bias without
+      any fitting against reference data. This is the single largest term:
+      +5.4 points, concentrated in the prior-limited moderate band (69% → 84%).
+
+    ``prepared_library_path`` points at the per-scene library store; see
+    :class:`siac.adapters.surface_library.PreparedSurfaceLibrary` for its layout.
+    """
+
+    return _get_surface_driven_bestpixel_config(
+        cache_root=cache_root,
+        bestpixel_endpoint="pc",
+        bestpixel_source="l1c",
+    ).with_overrides(
+        paths={
+            # Real terrain, not the sea-level sentinel the bestpixel presets
+            # inherit. Elevation sets surface pressure and therefore Rayleigh
+            # optical depth, which is the dominant atmospheric term in the blue
+            # bands this recipe solves AOD from; assuming sea level over an
+            # elevated site mis-attributes molecular scattering to aerosol.
+            "dem": COPERNICUS_GLO30_DEM_VRT,
+        },
+        providers={
+            "atmo": {
+                "kind": "mcd19",
+                "maiac_best_quality_qa": True,
+                "fuse_aod_with": ("cams",),
+                "fuse_aod_op": "max",
+            },
+        },
+        algorithms={
+            "surface_prior": {
+                "prepared_library_path": Path(prepared_library_path).expanduser(),
+                "bestpixel_window_reduction": "window",
+                "bestpixel_predict_visible": True,
+                "bestpixel_predict_visible_bands": ("B02", "B03", "B04"),
+                "bestpixel_predict_visible_uncertainty_floor": 0.006,
+                "bestpixel_predict_visible_anchor_source": "atmo_prior",
+                # The library is already in the solver's RT space, so the
+                # empirical cross-space debias must stay off: correcting the
+                # same offset twice re-introduces it.
+                "bestpixel_predict_visible_debias": None,
+                # The validated predictor is the 20-tree ensemble; the single
+                # tree's noisier realizations widen sigma ~15% and cost the
+                # thick-aerosol sites one AOD node.
+                "bestpixel_predict_visible_model": "extra_trees_20",
+            },
+            "rt": {
+                "backend": "sixs",
+                "fallback_to_lut": False,
+            },
+            "solver": {
+                "surface_driven_solve_bands": ("B02", "B03", "B04"),
+                "surface_driven_tau_dependent_prior": True,
+                "surface_driven_aerosol_species": "cci_climatology_exact",
+                # The validated recipe scores the plain chi-squared cost. The
+                # bestpixel base preset selects "auto2", whose shape-augmented
+                # curve is ~4x flatter at thick-aerosol scenes, letting the
+                # backstop drag the minimum well below the surface solution
+                # (Cinzana: 0.80 vs 1.10 with identical priors and sigma).
+                "surface_driven_cost_mode": "chi2",
+                # One AOI-mean geometry for anchor correction and cost-cube RT,
+                # as validated. Sentinel-2 view angles vary little over a solve
+                # AOI, and per-pixel geometry shifts retrievals by ~one AOD node
+                # relative to the validated configuration.
+                "surface_driven_scene_mean_geometry": True,
             },
         },
     )

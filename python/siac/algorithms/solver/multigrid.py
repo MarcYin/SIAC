@@ -239,6 +239,7 @@ class SolverResult:
     qa: xr.Dataset | None = None
     level_history: list[dict] = field(default_factory=list)
     atmo_state: AtmosphericState | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 class MultiGridSolver:

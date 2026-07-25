@@ -76,6 +76,7 @@ class ZarrLUTBackend(_CompactLUTMixin, _SpectralLUTMixin):
         rt_setup: Any | None = None,
         scene_cache_enabled: bool = True,
         scene_cache_dir: str | Path | None = None,
+        scene_geometry_mode: str = "nearest",
     ):
         self.lut_path = str(lut_path)
         if interpolation_method not in self._SUPPORTED_INTERPOLATION_METHODS:
@@ -85,6 +86,15 @@ class ZarrLUTBackend(_CompactLUTMixin, _SpectralLUTMixin):
                 f"expected one of: {supported}"
             )
         self.interpolation_method = interpolation_method
+        environment_geometry_mode = os.environ.get("SIAC_LUT_SCENE_GEOMETRY_MODE")
+        self.scene_geometry_mode = (
+            str(environment_geometry_mode or scene_geometry_mode).strip().lower()
+        )
+        if self.scene_geometry_mode not in {"nearest", "linear"}:
+            raise ValueError(
+                "Unsupported LUT scene_geometry_mode "
+                f"{self.scene_geometry_mode!r}; expected 'nearest' or 'linear'"
+            )
         self.chunk_cache_size = chunk_cache_size
         self.storage_options = dict(storage_options or {})
         self._rt_setup = rt_setup

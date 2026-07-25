@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from siac.observability import current_execution_observer
 
@@ -23,6 +26,42 @@ class SubmitAdapter:
 
     def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return self._submit_fn(fn, *args, **kwargs)
+
+
+def _with_dem_elevation(atmo: Any, config: Any) -> Any:
+    """Return ``atmo`` with terrain elevation sampled from the configured DEM.
+
+    The atmospheric provider reports elevation from its own coarse model grid (or
+    not at all). M4 later replaces it from the DEM for the solver, but the
+    surface prior is built before that — so without this the prior is derived at
+    a different elevation than the retrieval that consumes it. Reading the DEM
+    here makes the two agree.
+
+    Degrades to the incoming state on any failure: a missing DEM must not abort
+    a run, and ``read_elevation_km`` already falls back to sea level itself.
+    """
+
+    if atmo is None:
+        return atmo
+    dem_path = getattr(getattr(config, "paths", None), "dem", None)
+    try:
+        from siac.geo.dem import read_elevation_km, use_sea_level_elevation
+
+        if use_sea_level_elevation(None if dem_path is None else str(dem_path)):
+            return atmo
+        elevation = read_elevation_km(atmo.aot, str(dem_path))
+        logger.info(
+            "M2->M3: terrain elevation from the DEM, median %.3f km "
+            "(prior and solver now share one elevation).",
+            float(np.nanmedian(np.asarray(elevation.values, dtype=float))),
+        )
+        return replace(atmo, elevation=elevation)
+    except Exception:  # noqa: BLE001 - elevation is an refinement, never fatal
+        logger.warning(
+            "Could not sample the DEM for the surface prior; keeping the provider's elevation.",
+            exc_info=True,
+        )
+        return atmo
 
 
 def fetch_priors(
@@ -105,6 +144,11 @@ def fetch_priors(
                 message="Atmospheric prior ready.",
             )
         if f_m3 is None:
+            # Give the surface prior the same terrain the solver will use. A prior
+            # built at one elevation and solved at another disagree about surface
+            # pressure, so molecular scattering is mis-attributed to aerosol; the
+            # DEM is otherwise first read in M4, after this stage.
+            atmo = _with_dem_elevation(atmo, config)
             logger.info("M3: Deriving surface prior from observation + atmospheric prior...")
             f_m3 = submit_fn(
                 call_with_retries_fn,

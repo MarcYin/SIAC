@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path  # noqa: TC003
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from siac.config._base import SIACBaseModel
 from siac.config.types import (
     DEFAULT_LUT_URL,
+    AODFusionOp,
     AtmoProviderKind,
     BRDFProviderKind,
     MonthlyCompositeProviderKind,
@@ -125,6 +126,66 @@ class AtmoProviderConfig(SIACBaseModel):
     #: backstop then anchors to. ``False`` (default) preserves the legacy loose
     #: filter (and the multigrid atmo prior). No effect for CAMS / MERRA-2.
     maiac_best_quality_qa: bool = False
+    #: Additional AOD sources fused into the aerosol prior. ``kind`` remains the
+    #: primary provider — it supplies water vapour, ozone, terrain and the grid —
+    #: while these sources contribute aerosol optical depth only, combined under
+    #: :attr:`fuse_aod_op`.
+    #:
+    #: The surface-driven retrieval defers to the aerosol prior wherever the
+    #: visible bands constrain AOT weakly (most of the clean and moderate range),
+    #: so the prior's centre is the dominant error term. Both routine sources
+    #: under-estimate independently — MAIAC by ~0.05 (0.17 above AOD 0.5), CAMS by
+    #: ~0.08 (0.27) — so ``max`` over the two removes most of the shared bias
+    #: without fitting against reference data. Measured on the 152-matchup
+    #: campaign: within-EE 79.2% → 84.6%, bias −0.021 → +0.001, and the
+    #: prior-limited moderate band 69% → 84%.
+    #:
+    #: ``("cams",)`` with ``kind="mcd19"`` is the validated configuration.
+    fuse_aod_with: tuple[AtmoProviderKind, ...] = ()
+    #: How :attr:`fuse_aod_with` sources combine with the primary AOD. ``max`` is
+    #: validated; ``mean`` preserves the shared under-estimate (it scored 27% in
+    #: the high-AOD band against 54% for ``max``) and ``min`` compounds it.
+    fuse_aod_op: AODFusionOp = "max"
+    #: Read the aerosol optical depth from a prepared per-scene store instead of
+    #: deriving it live. Live granule extraction over a small AOI can yield
+    #: nothing (missing granule, cloud screening, QA rejection), in which case a
+    #: default is substituted — and because the surface-driven retrieval is
+    #: prior-limited wherever the visible bands constrain AOT weakly, that
+    #: fabricated prior silently becomes the answer. Preparing the value offline
+    #: removes the failure mode. The store holds one ``<scene_key>.json`` per
+    #: scene with an ``aot`` (and optional ``aot_unc``); the remaining state
+    #: still comes from :attr:`kind`.
+    prepared_scalar_path: Path | None = None
+    #: Entry to read from :attr:`prepared_scalar_path` for this run.
+    prepared_scalar_scene_key: str | None = None
+    #: Fail when the prepared entry is missing (default), rather than silently
+    #: falling back to the live provider.
+    prepared_scalar_required: bool = True
+    #: Optional prepared total-column water vapour (cm precipitable water) for
+    #: the scene, overriding the live provider's field the same way the
+    #: prepared AOD does. The anchor bands (B8A/B11/B12) sit in water
+    #: absorption, so the tau-dependent surface prior inherits any TCWV error.
+    prepared_scalar_tcwv_cm: float | None = None
+
+    @field_validator("fuse_aod_with", mode="before")
+    @classmethod
+    def normalize_fuse_sources(cls, value: Any) -> tuple[Any, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        return tuple(value)
+
+    @model_validator(mode="after")
+    def validate_fusion_sources(self) -> AtmoProviderConfig:
+        if self.kind in self.fuse_aod_with:
+            raise ValueError(
+                f"providers.atmo.fuse_aod_with must not repeat the primary provider "
+                f"{self.kind.value!r}; list only the additional AOD sources."
+            )
+        if len(set(self.fuse_aod_with)) != len(self.fuse_aod_with):
+            raise ValueError("providers.atmo.fuse_aod_with must not contain duplicates.")
+        return self
 
     @field_validator("data_path", mode="before")
     @classmethod

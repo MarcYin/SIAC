@@ -337,3 +337,44 @@ def test_predict_visible_uncertainty_folds_neighbour_quality() -> None:
     assert expected > _MONTHLY_UNCERTAINTY_FLOOR
     assert np.all(unc[finite] >= expected - 1e-6)
     assert float(unc[0, 0, 0]) == pytest.approx(expected, abs=1e-5)
+
+
+def test_predict_visible_uncertainty_scale_zero_reproduces_spread_only_model() -> None:
+    from siac.algorithms.surface.brdf_monthly_database import _MONTHLY_UNCERTAINTY_FLOOR
+
+    q_val = np.float32(0.02)
+    composites = []
+    for month_idx in range(15):
+        base = _make_composite(month_idx)
+        composites.append(
+            MonthlyBestPixelComposite(
+                reflectance=base.reflectance,
+                quality=xr.DataArray(
+                    np.full((2, 1), q_val, dtype=np.float32),
+                    dims=["y", "x"],
+                    coords={"y": [0, 1], "x": [0]},
+                ),
+                sample_index=base.sample_index,
+                year=base.year,
+                month=base.month,
+            )
+        )
+    database = build_monthly_composite_database(
+        composites,
+        query_bands=("B08", "B11", "B12"),
+        visible_bands=("B02", "B03"),
+        composite_uncertainty_scale=0.0,
+    )
+    corrected = xr.Dataset(
+        {
+            "B08": xr.DataArray(np.array([[0.47]], dtype=np.float32), dims=["y", "x"]),
+            "B11": xr.DataArray(np.array([[0.37]], dtype=np.float32), dims=["y", "x"]),
+            "B12": xr.DataArray(np.array([[0.27]], dtype=np.float32), dims=["y", "x"]),
+        }
+    )
+
+    prediction = database.predict_visible_with_diagnostics(corrected, k_neighbors=1)
+
+    assert float(prediction.uncertainty.values[0, 0, 0]) == pytest.approx(
+        _MONTHLY_UNCERTAINTY_FLOOR, abs=1e-5
+    )

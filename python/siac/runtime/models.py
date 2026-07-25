@@ -12,6 +12,7 @@ import xarray as xr
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from siac.domain.rt_space import RTSpace
     from siac.domain.sensors import SensorBand, SensorConfig
 
 
@@ -429,6 +430,23 @@ class SurfacePrior:
     #: sub-pixel composite-vs-observation-bounds resampling smear). ``None``
     #: (default) keeps the legacy behaviour: M4 builds the grid from obs bounds.
     solver_grid: xr.DataArray | None = None
+    #: Optional runtime payload for the tau-dependent surface prior: the fitted
+    #: visible-band predictor trees, their climatological localizer on the
+    #: prior grid, and the anchor-band names. When present (and the solver opts
+    #: in via ``surface_driven_tau_dependent_prior``), M5 re-predicts the
+    #: visible prior from anchors corrected at EACH candidate AOD instead of a
+    #: single fixed anchor AOD — the retrieval becomes a joint surface/AOD
+    #: self-consistency solve. Runtime-only; never serialized.
+    tau_predictor: Any | None = None
+    #: RT space the prior's reflectance was atmospherically corrected in, for
+    #: priors produced by an explicit atmospheric correction (own-AC libraries).
+    #: ``None`` means the prior carries no managed RT identity — e.g. a BRDF
+    #: prior from an externally corrected product — so consistency cannot be
+    #: checked. When set, :func:`siac.app.planning.build_execution_plan` rejects
+    #: a mismatch against the solver's RT model: correcting a library in one RT
+    #: space and solving against it in another injects a systematic surface
+    #: offset that the solver converts into biased AOT.
+    rt_space: RTSpace | None = None
 
 
 @dataclass(frozen=True)
@@ -496,6 +514,7 @@ class SolvedAtmosphere:
     converged: bool
     qa: xr.Dataset | None = None
     level_history: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,9 @@ def _ordered_unique_band_names(names: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name for name in names if name))
 
 
-def _bestpixel_predict_visible_anchor_band_names(config: Any, sensor_config: SensorConfig) -> list[str]:
+def _bestpixel_predict_visible_anchor_band_names(
+    config: Any, sensor_config: SensorConfig
+) -> list[str]:
     surface_prior = getattr(getattr(config, "algorithms", None), "surface_prior", None)
     if surface_prior is None:
         return []
@@ -41,6 +43,16 @@ def _bestpixel_predict_visible_anchor_band_names(config: Any, sensor_config: Sen
     available = {band.name for band in getattr(sensor_config, "bands", ())}
     preferred = ("B8A", "B11", "B12")
     return [name for name in preferred if name in available]
+
+
+def _monthly_database_query_band_names(config: Any, sensor_config: SensorConfig) -> list[str]:
+    surface_prior = getattr(getattr(config, "algorithms", None), "surface_prior", None)
+    if surface_prior is None or str(getattr(surface_prior, "method", "")) != "monthly_database":
+        return []
+
+    from siac.app._assembly_surface import _select_route_b_query_bands
+
+    return [band.name for band in _select_route_b_query_bands(sensor_config)]
 
 
 def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[str, ...] | None:
@@ -70,6 +82,7 @@ def _toa_preload_band_names(config: Any, sensor_config: SensorConfig) -> tuple[s
                 continue
             names.extend(band.name for band in sensor_config.select_bands_in_range(wl_min, wl_max))
 
+    names.extend(_monthly_database_query_band_names(config, sensor_config))
     names.extend(_bestpixel_predict_visible_anchor_band_names(config, sensor_config))
     resolved = _ordered_unique_band_names(names)
     return resolved or None

@@ -60,6 +60,10 @@ class MonthlyDatabaseQualityFilterConfig(SIACBaseModel):
     max_composite_quality: float = Field(default=0.05, gt=0.0)
     max_source_fit_rmse: float = Field(default=0.05, gt=0.0)
     max_knn_feature_distance: float = Field(default=0.05, gt=0.0)
+    #: Scale applied when propagating the matched composite reflectance
+    #: uncertainty into the Route-B visible prediction. ``1`` is full
+    #: propagation; ``0`` reproduces the pre-2026-07-03 spread-plus-floor model.
+    composite_uncertainty_scale: float = Field(default=1.0, ge=0.0)
 
 
 class SurfacePriorAlgorithmConfig(SIACBaseModel):
@@ -77,6 +81,24 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     psf_sigma_x: float = Field(default=29.75, gt=0.0)
     psf_sigma_y: float = Field(default=39.0, gt=0.0)
     apply_psf: bool = True
+    #: Where the sensor PSF is applied. ``"observation"`` (default) convolves the
+    #: TOA with the fixed-width PSF and co-registers it to the coarse prior — the
+    #: physically-consistent SIAC v1 behaviour. ``"prior"`` is the legacy v2 path
+    #: that convolved the surface prior instead. ``"none"`` disables PSF entirely.
+    psf_target: Literal["observation", "prior", "none"] = "observation"
+    #: Half-width (metres) of the per-scene integer co-registration shift search
+    #: applied to the convolved TOA (observation target only). ≈ v1's ±50 px @ 10 m.
+    psf_shift_search_radius_m: float = Field(default=500.0, ge=0.0)
+    #: TOA↔prior correlation required to accept the fitted shift (else no shift).
+    psf_min_correlation: float = Field(default=0.6, ge=0.0, le=1.0)
+    #: Resolution at which the observation-side PSF convolution + shift fit runs.
+    #: ``native10m`` (default) works at the PSF calibration resolution where the
+    #: MODIS-footprint structure is resolvable and the integer co-registration
+    #: shift is meaningful; ``grid`` convolves on the coarse solver grid (cheaper,
+    #: but the shift is unlocalizable there and stays ~0).
+    psf_convolve_resolution: Literal["grid", "native10m"] = "native10m"
+    #: Preferred AOT-insensitive bands used to fit the co-registration shift.
+    psf_shift_reference_bands: tuple[str, ...] = ("B12", "B11")
     whittaker_lambda: float = Field(default=10.0, gt=0.0)
     #: --- bestpixel surface prior (method == "bestpixel") ----------------
     #: The remaining bestpixel knobs (endpoint, bands, lookback_years,
@@ -116,13 +138,42 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     #: anchor bands. This is opt-in and requires the atmospheric prior and the
     #: configured RT backend, which corrects the anchor bands TOA->BOA before
     #: prediction (the prediction and the AOD solve share one RT space).
+    #: Read the surface library from a prepared per-scene store instead of
+    #: building composites live. Preparing the library offline moves the
+    #: pipeline's slowest stage out of the retrieval and — because the
+    #: correction can then run in the solver's own RT model — removes the
+    #: library/solve RT-space mismatch that otherwise biases retrieved AOT.
+    #: The store holds one ``<scene_key>.npz`` per scene plus an optional
+    #: ``library.json`` recording the RT space it was corrected in.
+    prepared_library_path: Path | None = None
+    #: Band names stored in :attr:`prepared_library_path`, in array order. Only
+    #: needed when the store neither carries ``band_names`` nor uses the default
+    #: coastal/blue/green/red/nir/swir16/swir22 order.
+    prepared_library_bands: tuple[str, ...] | None = None
+    #: Entry to read from :attr:`prepared_library_path` for this run. By default
+    #: the entry is looked up from the observation's own identifiers (scene key
+    #: or product ID); set this when the store is keyed by a caller-defined name
+    #: instead, as when a library is indexed by validation-site identifiers.
+    prepared_library_scene_key: str | None = None
     bestpixel_predict_visible: bool = False
+    #: Regressor for the predict-visible mapping: one ``ExtraTreeRegressor``
+    #: per realization (default), or a 20-tree ``ExtraTreesRegressor``
+    #: ensemble whose smoother per-realization predictions tighten the
+    #: across-realization spread that becomes the prior sigma.
+    bestpixel_predict_visible_model: Literal["extra_tree", "extra_trees_20"] = "extra_tree"
     #: Visible target bands replaced by the bestpixel ExtraTree predictor.
     bestpixel_predict_visible_bands: tuple[str, ...] = ("B02", "B04")
     #: Uncertainty floor applied to predicted visible bands. The validated
     #: single-surface monthly L2A recipe uses 0.03 to avoid over-confident
     #: predicted BOA locking the AOD solve to a biased prior.
     bestpixel_predict_visible_uncertainty_floor: float = Field(default=0.006, ge=0.0)
+    #: Temporal aggregation for the per-realization visible predictions.
+    #: ``anchor_weighted`` keeps the same S2 prior source but gives more weight
+    #: to historical realizations whose local B8A/B11/B12 BOA resembles the
+    #: target scene.
+    bestpixel_predict_visible_aggregation: Literal["median", "anchor_weighted"] = "median"
+    #: BOA reflectance scale controlling NIR/SWIR realization matching.
+    bestpixel_predict_visible_anchor_match_scale: float = Field(default=0.05, gt=0.0)
     #: Optional global debias applied to the predicted visible bands:
     #: ``{band: (intercept, slope)}`` adds ``intercept + slope * anchor_aot``
     #: to the prediction. Corrects the dictionary->solve RT-space offset (e.g.
@@ -145,6 +196,19 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     monthly_database_filter: MonthlyDatabaseQualityFilterConfig = Field(
         default_factory=MonthlyDatabaseQualityFilterConfig,
     )
+
+    @model_validator(mode="after")
+    def _reconcile_psf_target(self) -> SurfacePriorAlgorithmConfig:
+        """Map the legacy ``apply_psf=False`` to ``psf_target="none"``.
+
+        ``apply_psf`` historically meant "no PSF anywhere" when False; preserve
+        that so existing configs keep working after the ``psf_target`` default
+        flipped to observation-side convolution.
+        """
+        if not self.apply_psf and self.psf_target != "none":
+            object.__setattr__(self, "psf_target", "none")
+        return self
+
 
 class SixSRadiosondeProfileConfig(SIACBaseModel):
     altitude_km: tuple[float, ...]
@@ -816,7 +880,7 @@ class RTAlgorithmConfig(SIACBaseModel):
 
 
 class SolverBoundsConfig(SIACBaseModel):
-    aot: tuple[float, float] = (0.001, 2.5)
+    aot: tuple[float, float] = (0.001, 4.0)
     tcwv: tuple[float, float] = (0.0, 7.0)
 
     @field_validator("aot", "tcwv")
@@ -907,6 +971,79 @@ class SolverAlgorithmConfig(SIACBaseModel):
     #: AOT regime (loose when clean and at the high-AOD tail, tight in the
     #: moderate band where the surface signal is shallow); else flat 50 %.
     surface_driven_backstop_calibrated: bool = True
+    #: Multiplicative width applied after selecting the calibrated or flat
+    #: atmospheric-backstop uncertainty. ``1`` preserves existing behaviour;
+    #: larger values let strong surface evidence move farther from the prior.
+    surface_driven_backstop_uncertainty_scale: float = Field(default=1.0, gt=0.0)
+    #: (surface_driven) optional tile-wide conflict gate for the atmospheric
+    #: backstop. When the surface-only AOT minimum exceeds the MAIAC prior by
+    #: more than this many calibrated sigmas, re-resolve the same surface/RT
+    #: likelihood with a flat 50 %-relative prior width. ``None`` preserves the
+    #: calibrated backstop everywhere.
+    surface_driven_backstop_conflict_z: float | None = Field(default=None, gt=0.0)
+    #: (surface_driven) when True, try a local ambiguity-aware escape when the
+    #: calibrated backstop collapses a suspiciously flat/edge low-aod minimum to a
+    #: near-zero result. The solver first runs the normal calibrated backstop;
+    #: if the resulting scene minimum is near the axis edge and the local curve is
+    #: weak/disagreeing, it also runs the same solve with an effectively open
+    #: prior and swaps qualifying low-aod pixels to the higher-AOD local minimum.
+    surface_driven_backstop_escape_enabled: bool = False
+    #: AOD below this value is treated as the "low-aod rail" regime that may be
+    #: corrected by the backstop escape path.
+    surface_driven_backstop_escape_low_aot: float = Field(
+        default=0.08,
+        ge=0.0,
+        lt=1.0,
+    )
+    #: Escape is only considered when the normal calibrated solve cost is at least this
+    #: large, otherwise the primary backstop-minimum is trusted.
+    surface_driven_backstop_escape_cost_threshold: float = Field(
+        default=20.0,
+        gt=0.0,
+    )
+    #: Relative gap to the second-best cost node below which the scene is considered
+    #: flat/ambiguous.
+    surface_driven_backstop_escape_delta: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+    )
+    #: If per-band argmin disagreement exceeds this spread, the scene is considered
+    #: ambiguous and more likely to have a low-aod rail lock.
+    surface_driven_backstop_escape_band_spread: float = Field(
+        default=0.25,
+        ge=0.0,
+    )
+    #: Minimum jump in AOT required before a no-backstop candidate can replace a
+    #: low-aod solution. Enforces a meaningful correction versus numerical noise.
+    surface_driven_backstop_escape_min_jump: float = Field(
+        default=0.35,
+        gt=0.0,
+    )
+    #: Allow escape replacement only when the no-backstop candidate cost does not
+    #: exceed the original median cost by more than this factor.
+    surface_driven_backstop_escape_cost_ratio: float = Field(
+        default=1.8,
+        gt=1.0,
+    )
+    #: (surface_driven) tau-dependent surface prior: when True (and the surface
+    #: prior carries a ``tau_predictor`` payload — the bestpixel predict-visible
+    #: prior attaches one), the cost cube re-predicts the visible prior from
+    #: the scene NIR/SWIR anchors corrected at EACH candidate AOD instead of a
+    #: single fixed anchor AOD. The retrieval becomes a joint surface/AOD
+    #: self-consistency solve: the predicted prior is only physically valid
+    #: near the true AOD, which restores surface information at high AOD where
+    #: a fixed-anchor prior goes invalid. Opt-in; default preserves behaviour.
+    surface_driven_tau_dependent_prior: bool = False
+    #: (surface_driven) cost-gated two-pass for the tau-dependent prior. When set
+    #: (and the prior carries a ``tau_predictor`` payload), the solver runs the
+    #: static prior first and re-solves with the tau-dependent prior ONLY where
+    #: the static per-band misfit exceeds this value — i.e. where the fixed-anchor
+    #: prediction has gone off the dictionary manifold (thick smoke/aerosol). The
+    #: static solve self-diagnoses (cost/band ~1 when it fits, ~20+ when it
+    #: fails), so no external smoke label is needed. ``None`` (default) keeps the
+    #: single-pass behaviour. Validated gate ~5 (threshold-insensitive 2-8).
+    surface_driven_tau_gate_cost: float | None = Field(default=None, gt=0.0)
     #: (surface_driven) reference column water vapour (g/cm²) for the cost-cube RT
     #: sweep. ``None`` (default) keeps the current behaviour — the AOT sweep fixes
     #: TCWV at the scene-median of the (real) atmospheric prior. Setting a value
@@ -918,12 +1055,10 @@ class SolverAlgorithmConfig(SIACBaseModel):
     #: (systematic over-retrieval). Affects only the surface-driven AOT cost cube;
     #: the solved TCWV carried into the correction is unchanged.
     surface_driven_reference_tcwv: float | None = Field(default=None, gt=0.0)
-    #: (surface_driven) when True, build the cost-cube RT coefficients from the
-    #: scene-mean (single nanmean SZA/SAA/VZA/VAA) geometry rather than per-pixel,
-    #: matching the validated harness, which evaluates the RT once at the AOI-mean
-    #: geometry. Per-pixel view azimuth varies across the swath and shifts the
-    #: shape-cube AOT minimum (RAA is a strong lever); the scene-mean removes that
-    #: per-pixel spread. ``False`` (default) keeps per-pixel geometry.
+    #: (surface_driven) when True, use one AOI-mean SZA/SAA/VZA/VAA geometry for
+    #: both NIR/SWIR anchor correction and cost-cube RT rather than per-pixel
+    #: angles. Atmospheric and elevation fields remain spatial. ``False``
+    #: (default) keeps per-pixel geometry.
     surface_driven_scene_mean_geometry: bool = False
     #: (surface_driven) explicit solve-band override for the surface-driven path
     #: only. ``None`` (default) keeps the sensor's ``default_aerosol_solver_bands``
@@ -942,32 +1077,71 @@ class SolverAlgorithmConfig(SIACBaseModel):
     #: absolute-solved AOD, and use the shape solve only in the moderate band
     #: (``surface_driven_aod_clean`` … ``surface_driven_aod_high``), else the
     #: absolute solve (protects the clean and high-AOD tails).
-    surface_driven_cost_mode: Literal["chi2", "shape", "auto2"] = "chi2"
+    #: ``profile_scale`` keeps the same surface prior but profiles one tightly
+    #: constrained multiplicative brightness adjustment at each AOT node.
+    #: ``loo_scale`` requires at least three solve bands and evaluates each band
+    #: after fitting that scale on the others, providing an internal predictive
+    #: check without another surface source.
+    #: ``additive_offset`` profiles one spectrally flat BOA-reflectance offset
+    #: at each AOT node. This removes a coherent surface-brightness mismatch
+    #: while retaining the visible spectral contrast that constrains aerosol.
+    #: ``trimmed_chi2`` requires at least three solve bands and drops only the
+    #: largest standardized visible-band residual at each pixel/AOT node.
+    surface_driven_cost_mode: Literal[
+        "chi2",
+        "shape",
+        "auto2",
+        "profile_scale",
+        "loo_scale",
+        "additive_offset",
+        "trimmed_chi2",
+    ] = "chi2"
+    #: One-sigma prior width for the common multiplicative surface scale used by
+    #: ``profile_scale`` and ``loo_scale``.  A value of 0.1 permits roughly 10 %
+    #: brightness adjustment while retaining the original surface spectrum.
+    surface_driven_profile_scale_sigma: float = Field(default=0.1, gt=0.0, le=1.0)
     #: (surface_driven) AOT-axis layout. ``log`` (default) is the
     #: ``grid_search_aot_points`` log-spaced axis (unchanged). ``acixthree`` is
     #: the validated fine non-uniform axis (denser at low AOD: 0.01 steps to 0.2,
     #: then coarsening) that avoids the coarse-grid quantisation that snaps clean
     #: retrievals onto sparse nodes.
     surface_driven_aot_axis: Literal["log", "acixthree"] = "log"
-    #: (surface_driven) when True, do NOT exclude cloud/water pixels from the
-    #: solve (the harness GATE=0 behaviour): the per-pixel surface-cost cube is
-    #: pooled spatially and the robust median + support gate handle reliability,
-    #: so high-AOD biomass / near-river stations whose TOA is finite and whose
-    #: cost has a real high-AOT minimum are solved instead of falling back to the
-    #: (biomass-under-estimating) MAIAC prior. Default keeps conservative masking.
+    #: (surface_driven) opt-in cloud-mask bypass for thick aerosol that a cloud
+    #: classifier has rejected. Water and pixels without complete finite
+    #: observations/priors remain excluded. The default uses the cloud mask.
+    surface_driven_allow_cloud_retrieval: bool = False
+    #: (surface_driven) legacy broad mask bypass. When True, both cloud and water
+    #: masks are ignored, while finite observation/prior support is still required.
+    #: Prefer ``surface_driven_allow_cloud_retrieval`` for smoke experiments so
+    #: retrieval remains restricted to land.
     surface_driven_ignore_cloud_water: bool = False
     #: (surface_driven) ``auto2`` regime thresholds on the absolute-solved AOD:
     #: shape cost is used only when clean < aod_abs <= high.
     surface_driven_aod_clean: float = Field(default=0.15, ge=0.0)
     surface_driven_aod_high: float = Field(default=0.6, gt=0.0)
+    #: (surface_driven, auto2) minimum relative cost improvement required for the
+    #: tail absolute-branch to replace the shape branch. This guards the clean/high
+    #: branch against low-confidence 0.01 rail-lock while preserving tail behavior
+    #: where the absolute branch is clearly better.
+    surface_driven_auto2_abs_cost_gain: float = Field(default=0.2, ge=0.0, le=1.0)
     #: (surface_driven, native 6S only) optional aerosol-species candidate
     #: selection. ``none`` (default) preserves the configured RT aerosol profile.
     #: ``cci_climatology`` builds the nearest Aerosol_cci climatological
     #: multimodal-lognormal candidates for the scene centre/month, runs one
-    #: surface-cost solve per candidate, and chooses the minimum-cost candidate
-    #: per pixel. This is intentionally opt-in because it is expensive and the
-    #: species axis only exists on the native 6S path.
-    surface_driven_aerosol_species: Literal["none", "cci_climatology"] = "none"
+    #: surface-cost solve per candidate, and fixes the candidate with the lowest
+    #: median surface cost across the tile for every solved pixel in that tile.
+    #: ``cci_climatology_exact`` instead uses one continuous monthly climatological
+    #: mixture, avoiding candidate quantisation and selection.
+    #: ``canonical_6s`` evaluates the five standard tropospheric 6S aerosol
+    #: profiles (continental, maritime, urban, desert, and biomass burning) and
+    #: fixes the lowest-median-cost profile for the whole tile. This basis is
+    #: independent of location and climatology, so episodic aerosol regimes remain
+    #: representable.
+    #: These are intentionally opt-in because the species axis only exists on
+    #: the native 6S path.
+    surface_driven_aerosol_species: Literal[
+        "none", "cci_climatology", "cci_climatology_exact", "canonical_6s"
+    ] = "none"
     #: Candidate count for ``surface_driven_aerosol_species="cci_climatology"``.
     #: The research harness used 3 nearest LUT rows.
     surface_driven_aerosol_species_candidates: int = Field(default=3, ge=1, le=35)

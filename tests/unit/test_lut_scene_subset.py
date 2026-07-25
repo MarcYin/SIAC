@@ -64,6 +64,80 @@ def test_subset_spectral_lut_uses_angle_means_and_range_filters():
     assert "wavelength" in subset.dims
 
 
+def test_subset_spectral_lut_linearly_interpolates_off_node_scene_angles():
+    coords = {
+        "sza": np.array([10.0, 20.0], dtype=np.float32),
+        "vza": np.array([0.0, 10.0], dtype=np.float32),
+        "raa": np.array([0.0, 90.0], dtype=np.float32),
+        "wavelength": np.array([500.0], dtype=np.float32),
+    }
+    sza, vza, raa = np.meshgrid(coords["sza"], coords["vza"], coords["raa"], indexing="ij")
+    values = (sza + 2.0 * vza + 0.1 * raa)[..., None].astype(np.float32)
+    lut = xr.Dataset(
+        {"TOA_rho1": (("sza", "vza", "raa", "wavelength"), values)},
+        coords=coords,
+    )
+    scene = {
+        "sza": np.full((2, 2), 15.0, dtype=np.float32),
+        "vza": np.full((2, 2), 5.0, dtype=np.float32),
+        "raa": np.full((2, 2), 45.0, dtype=np.float32),
+        "tco3": np.full((2, 2), 0.3, dtype=np.float32),
+        "elevation": np.zeros((2, 2), dtype=np.float32),
+    }
+
+    nearest = ZarrLUTBackend("dummy", scene_geometry_mode="nearest")
+    linear = ZarrLUTBackend("dummy", scene_geometry_mode="linear")
+
+    nearest_subset = nearest._subset_spectral_lut_for_scene(lut, **scene)
+    linear_subset = linear._subset_spectral_lut_for_scene(lut, **scene)
+
+    assert float(nearest_subset["TOA_rho1"].item()) == pytest.approx(49.0)
+    assert float(linear_subset["TOA_rho1"].item()) == pytest.approx(29.5)
+
+
+def test_scene_geometry_mode_controls_cache_key_and_disk_path(tmp_path):
+    scene = {
+        "sza": np.full((2, 2), 15.0, dtype=np.float32),
+        "vza": np.full((2, 2), 5.0, dtype=np.float32),
+        "raa": np.full((2, 2), 45.0, dtype=np.float32),
+        "tco3": np.full((2, 2), 0.3, dtype=np.float32),
+        "elevation": np.zeros((2, 2), dtype=np.float32),
+    }
+    axes = {
+        "sza": np.array([10.0, 20.0], dtype=np.float32),
+        "vza": np.array([0.0, 10.0], dtype=np.float32),
+        "raa": np.array([0.0, 90.0], dtype=np.float32),
+    }
+    nearest = ZarrLUTBackend("dummy", scene_cache_dir=tmp_path, scene_geometry_mode="nearest")
+    linear = ZarrLUTBackend("dummy", scene_cache_dir=tmp_path, scene_geometry_mode="linear")
+    nearest._lut_coords = axes
+    linear._lut_coords = axes
+
+    nearest_key = nearest._spectral_scene_cache_key(**scene)
+    linear_key = linear._spectral_scene_cache_key(**scene)
+
+    assert nearest_key[:3] == (10.0, 0.0, 0.0)
+    assert linear_key[:3] == (15.0, 5.0, 45.0)
+    assert nearest._scene_subset_cache_path(nearest_key) != linear._scene_subset_cache_path(
+        linear_key
+    )
+
+    close_scene = {
+        **scene,
+        "sza": np.full((2, 2), 15.21, dtype=np.float32),
+        "vza": np.full((2, 2), 5.24, dtype=np.float32),
+        "raa": np.full((2, 2), 44.80, dtype=np.float32),
+    }
+    assert linear._spectral_scene_cache_key(**close_scene) == linear_key
+
+
+def test_scene_geometry_mode_rejects_invalid_configuration(monkeypatch):
+    monkeypatch.setenv("SIAC_LUT_SCENE_GEOMETRY_MODE", "cubic")
+
+    with pytest.raises(ValueError, match="scene_geometry_mode"):
+        ZarrLUTBackend("dummy")
+
+
 def test_build_aot_tcwv_point_coords_clips_to_lut_axes():
     backend = ZarrLUTBackend("dummy")
     lut = xr.Dataset(
@@ -457,3 +531,107 @@ def test_scene_subset_disk_cache_disabled() -> None:
     backend = ZarrLUTBackend("dummy.zarr.zip", scene_cache_enabled=False)
     assert backend._scene_cache_dir is None
     assert backend._scene_subset_cache_path((1.0, 2.0, 3.0)) is None
+
+
+def test_spectral_subset_compute_workers_forces_serial_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = ZarrLUTBackend("dummy")
+    subset = _spectral_lut()
+    backend._lut = subset
+    backend._lut_coords = {name: coord.values for name, coord in subset.coords.items()}
+
+    class _Recorded:
+        def __init__(self, payload: xr.Dataset) -> None:
+            self.payload = payload
+            self.kwargs: dict[str, object] = {}
+
+        def compute(self, **kwargs: object) -> xr.Dataset:
+            self.kwargs = dict(kwargs)
+            return self.payload
+
+    recorded = _Recorded(subset)
+
+    def _fake_subset(*args, **kwargs) -> _Recorded:
+        del args, kwargs
+        return recorded
+
+    monkeypatch.setattr(backend, "_subset_spectral_lut_for_scene", _fake_subset)
+    monkeypatch.setenv("PHASE_D_SERIAL_POOLS", "1")
+    backend._get_or_build_spectral_scene_subset(
+        sza=np.full((2, 2), 20.0, dtype=np.float32),
+        vza=np.full((2, 2), 10.0, dtype=np.float32),
+        raa=np.full((2, 2), 90.0, dtype=np.float32),
+        tco3=np.full((2, 2), 300.0, dtype=np.float32),
+        elevation=np.full((2, 2), 0.5, dtype=np.float32),
+    )
+    assert recorded.kwargs["scheduler"] == "single-threaded"
+    assert "num_workers" not in recorded.kwargs
+
+
+def test_spectral_subset_compute_workers_accepts_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = ZarrLUTBackend("dummy")
+    subset = _spectral_lut()
+    backend._lut = subset
+    backend._lut_coords = {name: coord.values for name, coord in subset.coords.items()}
+
+    class _Recorded:
+        def __init__(self, payload: xr.Dataset) -> None:
+            self.payload = payload
+            self.kwargs: dict[str, object] = {}
+
+        def compute(self, **kwargs: object) -> xr.Dataset:
+            self.kwargs = dict(kwargs)
+            return self.payload
+
+    recorded = _Recorded(subset)
+
+    monkeypatch.setattr(backend, "_subset_spectral_lut_for_scene", lambda *_a, **_k: recorded)
+    monkeypatch.setenv("SIAC_LUT_SUBSET_COMPUTE_WORKERS", "4")
+    backend._get_or_build_spectral_scene_subset(
+        sza=np.full((2, 2), 20.0, dtype=np.float32),
+        vza=np.full((2, 2), 10.0, dtype=np.float32),
+        raa=np.full((2, 2), 90.0, dtype=np.float32),
+        tco3=np.full((2, 2), 300.0, dtype=np.float32),
+        elevation=np.full((2, 2), 0.5, dtype=np.float32),
+    )
+    assert recorded.kwargs["scheduler"] == "threads"
+    assert recorded.kwargs["num_workers"] == 4
+
+
+def test_spectral_subset_compute_falls_back_to_single_thread_on_thread_bootstrap_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = ZarrLUTBackend("dummy", scene_cache_enabled=False)
+    subset = _spectral_lut()
+    backend._lut = subset
+    backend._lut_coords = {name: coord.values for name, coord in subset.coords.items()}
+
+    class _Recorded:
+        def __init__(self, payload: xr.Dataset) -> None:
+            self.payload = payload
+            self.calls: list[dict[str, object]] = []
+            self.attempt = 0
+
+        def compute(self, **kwargs: object) -> xr.Dataset:
+            self.attempt += 1
+            self.calls.append(dict(kwargs))
+            if self.attempt == 1:
+                raise RuntimeError("can't start new thread")
+            return self.payload
+
+    recorded = _Recorded(subset)
+
+    monkeypatch.setattr(backend, "_subset_spectral_lut_for_scene", lambda *_a, **_k: recorded)
+    monkeypatch.setenv("SIAC_LUT_SUBSET_COMPUTE_WORKERS", "4")
+    backend._get_or_build_spectral_scene_subset(
+        sza=np.full((2, 2), 20.0, dtype=np.float32),
+        vza=np.full((2, 2), 10.0, dtype=np.float32),
+        raa=np.full((2, 2), 90.0, dtype=np.float32),
+        tco3=np.full((2, 2), 300.0, dtype=np.float32),
+        elevation=np.full((2, 2), 0.5, dtype=np.float32),
+    )
+    assert recorded.calls[0]["scheduler"] == "threads"
+    assert recorded.calls[0]["num_workers"] == 4
+    assert recorded.calls[1]["scheduler"] == "single-threaded"
+    assert "num_workers" not in recorded.calls[1]

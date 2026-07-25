@@ -138,6 +138,7 @@ def build_monthly_surface_prior_database(
     spectral_k_neighbors: int = 5,
     max_source_fit_rmse: float | None = None,
     median_key: str = "query",
+    composite_uncertainty_scale: float = 1.0,
 ) -> MonthlyCompositeDatabase:
     """Build a Route-B database from prepared monthly composites.
 
@@ -185,6 +186,7 @@ def build_monthly_surface_prior_database(
         visible_bands=tuple(band.name for band in visible_bands),
         max_source_fit_rmse=max_source_fit_rmse,
         median_key=median_key,
+        composite_uncertainty_scale=composite_uncertainty_scale,
     )
     logger.info(
         "Monthly surface-prior database complete: entries=%d visible_bands=%d query_bands=%d",
@@ -476,8 +478,16 @@ def query_surface_prior_from_monthly_database(
     )
     logger.info("M3 timing: _resample_dataset_with_validity %.3f s", time.perf_counter() - _t0)
     _t0 = time.perf_counter()
-    coarse_geometry = _resample_geometry_to_target_shape(observation.geometry, target_shape)
-    coarse_atmo = _resample_atmo_to_target_shape(atmo_prior, target_shape)
+    coarse_geometry = _resample_geometry_to_target_shape(
+        observation.geometry,
+        target_shape,
+        template=query_template,
+    )
+    coarse_atmo = _resample_atmo_to_target_shape(
+        atmo_prior,
+        target_shape,
+        template=coarse_geometry.sza,
+    )
     coarse_cloud_mask = _resample_cloud_mask_to_target_shape(observation.cloud_mask, target_shape)
     logger.info("M3 timing: resample geometry/atmo/cloud %.3f s", time.perf_counter() - _t0)
     coarse_invalid = coarse_cloud_mask | (~coarse_query_valid)
@@ -1038,21 +1048,42 @@ def _resample_atmo_to_observation_grid(
     observation: ObservationBundle,
     atmo_prior: AtmosphericState,
 ) -> AtmosphericState:
-    return _resample_atmo_to_target_shape(atmo_prior, _observation_shape(observation))
+    first_var = next(iter(observation.toa.data_vars))
+    return _resample_atmo_to_target_shape(
+        atmo_prior,
+        _observation_shape(observation),
+        template=observation.toa[first_var],
+    )
 
 
 def _resample_geometry_to_target_shape(
     geometry: GeometryAngles,
     target_shape: tuple[int, int],
+    *,
+    template: xr.DataArray | None = None,
 ) -> GeometryAngles:
     from concurrent.futures import ThreadPoolExecutor
 
-    if geometry.sza.shape == target_shape:
+    if template is not None:
+        from siac.geo.resample import shares_template_grid
+
+        if all(
+            shares_template_grid(field, template)
+            for field in (geometry.sza, geometry.saa, geometry.vza, geometry.vaa)
+        ):
+            return geometry
+    if template is None and geometry.sza.shape == target_shape:
         return geometry
     fields = {"sza": geometry.sza, "saa": geometry.saa, "vza": geometry.vza, "vaa": geometry.vaa}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
-            name: pool.submit(_resample_da, da, target_shape, "bilinear")
+            name: pool.submit(
+                _resample_da,
+                da,
+                target_shape,
+                "bilinear",
+                template=template,
+            )
             for name, da in fields.items()
         }
         results = {name: fut.result() for name, fut in futures.items()}
@@ -1062,10 +1093,28 @@ def _resample_geometry_to_target_shape(
 def _resample_atmo_to_target_shape(
     atmo_prior: AtmosphericState,
     target_shape: tuple[int, int],
+    *,
+    template: xr.DataArray | None = None,
 ) -> AtmosphericState:
     from concurrent.futures import ThreadPoolExecutor
 
-    if atmo_prior.aot.shape == target_shape:
+    if template is not None:
+        from siac.geo.resample import shares_template_grid
+
+        if all(
+            shares_template_grid(field, template)
+            for field in (
+                atmo_prior.aot,
+                atmo_prior.tcwv,
+                atmo_prior.tco3,
+                atmo_prior.aot_unc,
+                atmo_prior.tcwv_unc,
+                atmo_prior.tco3_unc,
+                atmo_prior.elevation,
+            )
+        ):
+            return atmo_prior
+    if template is None and atmo_prior.aot.shape == target_shape:
         return atmo_prior
     fields = {
         "aot": atmo_prior.aot,
@@ -1078,7 +1127,13 @@ def _resample_atmo_to_target_shape(
     }
     with ThreadPoolExecutor(max_workers=7) as pool:
         futures = {
-            name: pool.submit(_resample_da, da, target_shape, "bilinear")
+            name: pool.submit(
+                _resample_da,
+                da,
+                target_shape,
+                "bilinear",
+                template=template,
+            )
             for name, da in fields.items()
         }
         results = {name: fut.result() for name, fut in futures.items()}

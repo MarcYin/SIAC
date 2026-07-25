@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
@@ -28,12 +31,83 @@ from siac.adapters.earthdata_common import (
 from siac.runtime import AtmosphericState
 
 if TYPE_CHECKING:
-    from datetime import datetime
     from pathlib import Path
 
     from siac.adapters.data.earthaccess_catalog import EarthAccessCatalog
 
 logger = logging.getLogger(__name__)
+
+_MCD19_ORBIT_TIMESTAMP_RE = re.compile(
+    r"(?P<year>\d{4})(?P<day_of_year>\d{3})(?P<hour>\d{2})(?P<minute>\d{2})[TA]"
+)
+
+
+@lru_cache(maxsize=256)
+def _read_mcd19_orbit_times(path: str) -> tuple[datetime, ...]:
+    """Read per-layer UTC acquisition times from MCD19A2 global metadata."""
+    from osgeo import gdal
+
+    gdal.UseExceptions()
+    dataset = gdal.OpenEx(path, gdal.OF_RASTER | gdal.OF_READONLY)
+    if dataset is None:
+        return ()
+    raw = str(dataset.GetMetadata().get("Orbit_time_stamp", ""))
+    times: list[datetime] = []
+    for match in _MCD19_ORBIT_TIMESTAMP_RE.finditer(raw):
+        stamp = (
+            f"{match.group('year')}{match.group('day_of_year')}"
+            f"{match.group('hour')}{match.group('minute')}"
+        )
+        times.append(datetime.strptime(stamp, "%Y%j%H%M").replace(tzinfo=timezone.utc))
+    return tuple(times)
+
+
+def _nearest_valid_orbit_indices(
+    valid: np.ndarray,
+    orbit_times: tuple[datetime, ...],
+    obs_time: datetime,
+) -> np.ndarray | None:
+    """Choose the nearest-in-time valid orbit independently at each pixel."""
+    mask = np.asarray(valid, dtype=bool)
+    if mask.ndim != 3 or len(orbit_times) != mask.shape[0]:
+        return None
+    target = obs_time
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    else:
+        target = target.astimezone(timezone.utc)
+
+    def distance_seconds(value: datetime) -> float:
+        stamp = value
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = stamp.astimezone(timezone.utc)
+        return abs((stamp - target).total_seconds())
+
+    order = sorted(
+        range(len(orbit_times)),
+        key=lambda index: distance_seconds(orbit_times[index]),
+    )
+    selected = np.full(mask.shape[1:], -1, dtype=np.int16)
+    for index in order:
+        take = (selected < 0) & mask[index]
+        selected[take] = index
+    return selected
+
+
+def _select_orbit_values(values: np.ndarray, indices: np.ndarray) -> np.ndarray:
+    """Select one layer from an orbit stack using per-pixel layer indices."""
+    arr = np.asarray(values, dtype=np.float32)
+    if arr.ndim <= 2:
+        return arr
+    if arr.ndim != 3 or arr.shape[1:] != indices.shape:
+        return reduce_orbit_stack(arr)
+    out = np.full(indices.shape, np.nan, dtype=np.float32)
+    valid = indices >= 0
+    iy, ix = np.nonzero(valid)
+    out[iy, ix] = arr[indices[iy, ix], iy, ix]
+    return out
 
 
 class _NativeTileState(TypedDict):
@@ -125,6 +199,7 @@ class _EarthAccessMAIACAODProvider:
                         crs=crs,
                         resolution=resolution,
                         short_name=used_short_name,
+                        obs_time=obs_time,
                     )
                 except (OSError, ValueError, KeyError, RuntimeError):
                     # Narrowed (REVIEW.md §2.1, §3.3 mcd19_earthaccess.py:108).
@@ -197,13 +272,18 @@ class _EarthAccessMAIACAODProvider:
         crs: str,
         resolution: float,
         short_name: str | None,
+        obs_time: datetime | None = None,
     ) -> AtmosphericState:
         aot_tiles: list[xr.DataArray] = []
         aot_unc_tiles: list[xr.DataArray] = []
         tcwv_tiles: list[xr.DataArray] = []
 
         for path in paths:
-            tile_state = self._load_native_tile(path)
+            tile_state = (
+                self._load_native_tile(path, obs_time=obs_time)
+                if obs_time is not None
+                else self._load_native_tile(path)
+            )
             aot_tiles.append(tile_state["aot"])
             aot_unc_tiles.append(tile_state["aot_unc"])
             if tile_state["tcwv"] is not None:
@@ -216,8 +296,18 @@ class _EarthAccessMAIACAODProvider:
             crs=crs,
             resolution=resolution,
         )
-        aot = aot.fillna(0.12)
-        aot_unc = aot_unc.fillna(0.05)
+        finite_aot = np.asarray(aot.values, dtype=np.float64)
+        finite_aot = finite_aot[np.isfinite(finite_aot)]
+        finite_unc = np.asarray(aot_unc.values, dtype=np.float64)
+        finite_unc = finite_unc[np.isfinite(finite_unc)]
+        if finite_aot.size == 0:
+            raise ValueError(
+                f"{self._source_name} has no QA-valid AOD after reprojection to the requested AOI"
+            )
+        aot_fill = float(np.median(finite_aot))
+        unc_fill = max(float(np.median(finite_unc)) if finite_unc.size else 0.10, 0.05)
+        aot = aot.fillna(aot_fill)
+        aot_unc = aot_unc.fillna(unc_fill)
 
         if tcwv_tiles:
             tcwv = self._merge_tiles(tcwv_tiles, bounds=bounds, crs=crs, resolution=resolution)
@@ -247,7 +337,12 @@ class _EarthAccessMAIACAODProvider:
             elevation=elevation.astype(np.float32),
         )
 
-    def _load_native_tile(self, path: str | Path) -> _NativeTileState:
+    def _load_native_tile(
+        self,
+        path: str | Path,
+        *,
+        obs_time: datetime | None = None,
+    ) -> _NativeTileState:
         aod_raw, aod_attrs = self._read_dataset(path, self.aod_dataset)
         aod_unc_raw, aod_unc_attrs = self._read_dataset(path, self.aod_unc_dataset)
         qa_raw, qa_attrs = self._read_dataset(path, self.qa_dataset)
@@ -255,16 +350,54 @@ class _EarthAccessMAIACAODProvider:
         aod = apply_scale_and_mask(aod_raw, aod_attrs)
         aod_unc = apply_scale_and_mask(aod_unc_raw, aod_unc_attrs)
 
+        finite = np.isfinite(aod) & np.isfinite(aod_unc)
+        qa = apply_scale_and_mask(qa_raw, qa_attrs)
+        loose = finite & np.isfinite(qa) & (qa > 0)
+
         if self.best_quality_qa:
             # Best-quality AOD_QA bit decode (clear + best + no-adjacency), matching
             # the harness maiac_qa.py. The loose ``qa > 0`` below keeps lower-quality
             # retrievals and reads systematically higher at clean-coastal/polar sites.
-            valid = np.isfinite(aod) & np.isfinite(aod_unc) & _maiac_best_quality_mask(qa_raw)
+            valid = finite & _maiac_best_quality_mask(qa_raw)
+            # Over a small AOI on a hazy day the strict mask can reject every
+            # pixel. Falling through to no AOD at all is worse than a
+            # lower-quality retrieval: the caller then substitutes a default,
+            # which reads far too low exactly where aerosol is thick and the
+            # prior matters most. Degrade to the loose mask instead.
+            if not valid.any() and loose.any():
+                logger.info(
+                    "%s: no best-quality AOD pixels in this granule; "
+                    "falling back to the loose QA mask (%d pixels).",
+                    self._source_name,
+                    int(loose.sum()),
+                )
+                valid = loose
         else:
-            qa = apply_scale_and_mask(qa_raw, qa_attrs)
-            valid = np.isfinite(aod) & np.isfinite(aod_unc) & np.isfinite(qa) & (qa > 0)
+            valid = loose
         aod = np.where(valid, aod, np.nan)
         aod_unc = np.where(valid, aod_unc, np.nan)
+
+        orbit_indices: np.ndarray | None = None
+        if obs_time is not None and self._source_name == "MCD19":
+            try:
+                orbit_indices = _nearest_valid_orbit_indices(
+                    valid,
+                    _read_mcd19_orbit_times(str(path)),
+                    obs_time,
+                )
+            except (OSError, RuntimeError, ValueError):
+                logger.warning(
+                    "Could not read MCD19 orbit timestamps from %s; using orbit mean",
+                    path,
+                    exc_info=True,
+                )
+
+        if orbit_indices is None:
+            aod_2d = reduce_orbit_stack(aod)
+            aod_unc_2d = reduce_orbit_stack(aod_unc)
+        else:
+            aod_2d = _select_orbit_values(aod, orbit_indices)
+            aod_unc_2d = _select_orbit_values(aod_unc, orbit_indices)
 
         tcwv_da: xr.DataArray | None = None
         if self.tcwv_dataset is not None:
@@ -272,8 +405,13 @@ class _EarthAccessMAIACAODProvider:
                 tcwv_raw, tcwv_attrs = self._read_dataset(path, self.tcwv_dataset)
                 tcwv = apply_scale_and_mask(tcwv_raw, tcwv_attrs)
                 tcwv = np.where(np.isfinite(tcwv), tcwv, np.nan)
+                tcwv_2d = (
+                    reduce_orbit_stack(tcwv)
+                    if orbit_indices is None
+                    else _select_orbit_values(tcwv, orbit_indices)
+                )
                 tcwv_da = make_native_grid_dataarray(
-                    reduce_orbit_stack(tcwv),
+                    tcwv_2d,
                     granule_path=path,
                 )
             except (OSError, KeyError, ValueError, RuntimeError):
@@ -291,8 +429,8 @@ class _EarthAccessMAIACAODProvider:
                 tcwv_da = None
 
         return {
-            "aot": make_native_grid_dataarray(reduce_orbit_stack(aod), granule_path=path),
-            "aot_unc": make_native_grid_dataarray(reduce_orbit_stack(aod_unc), granule_path=path),
+            "aot": make_native_grid_dataarray(aod_2d, granule_path=path),
+            "aot_unc": make_native_grid_dataarray(aod_unc_2d, granule_path=path),
             "tcwv": tcwv_da,
         }
 
@@ -352,6 +490,107 @@ class MCD19AODProvider(_EarthAccessMAIACAODProvider):
 
     product_keys = ("mcd19_aod",)
     _source_name = "MCD19"
+
+
+class CachedMCD19AODProvider(MCD19AODProvider):
+    """Read same-day MCD19A2 fields from an already staged local cache.
+
+    This is deliberately network-free.  The normal Earthaccess provider can
+    silently fall back to a climatological field when a remote query or a
+    reprojection fails; callers that need to distinguish a real MAIAC field
+    from that fallback can use :meth:`get_cached_prior` and provide their own
+    fallback policy.
+    """
+
+    def __init__(
+        self,
+        cache_dir: str | Path,
+        *,
+        temporal_window_days: int = 0,
+        max_granules: int = 40,
+        best_quality_qa: bool = True,
+    ) -> None:
+        super().__init__(
+            cache_dir=cache_dir,
+            probe_earthdata=False,
+            temporal_window_days=temporal_window_days,
+            max_granules=max_granules,
+            best_quality_qa=best_quality_qa,
+        )
+        if self.cache_dir is None:
+            raise ValueError("CachedMCD19AODProvider requires a cache_dir.")
+
+    def _cached_paths(self, obs_time: datetime) -> list[Path]:
+        """Return local MCD19A2 granules in the configured temporal window."""
+        timestamp = (
+            obs_time.replace(tzinfo=timezone.utc)
+            if obs_time.tzinfo is None
+            else obs_time.astimezone(timezone.utc)
+        )
+        paths: list[Path] = []
+        for offset in range(-self.temporal_window_days, self.temporal_window_days + 1):
+            day = timestamp.date() + timedelta(days=offset)
+            stamp = day.strftime("%Y%j")
+            paths.extend(self.cache_dir.glob(f"MCD19A2.A{stamp}.*"))
+        return sorted(set(paths), key=lambda path: path.name)
+
+    def get_cached_prior(
+        self,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        obs_time: datetime,
+        resolution: float,
+    ) -> AtmosphericState | None:
+        """Return a QA-valid cached MAIAC field, or ``None`` when unavailable."""
+        paths = self._cached_paths(obs_time)
+        selected = self._select_candidate_paths(paths, obs_time, bounds, crs)
+        if not selected:
+            logger.info(
+                "No cached %s granules cover the requested AOI/time.", self._source_name
+            )
+            return None
+        try:
+            return self._load_from_granules(
+                selected[: self.max_granules],
+                bounds=bounds,
+                crs=crs,
+                resolution=resolution,
+                short_name="MCD19A2",
+                obs_time=obs_time,
+            )
+        except ValueError as exc:
+            # A same-day granule can legitimately have no QA-valid AOD at a
+            # small AOI.  That is an expected coverage condition for callers
+            # which supply a staged MAIAC fallback, not a parsing failure.
+            if "no QA-valid AOD" in str(exc):
+                logger.info(
+                    "Cached %s has no QA-valid AOD over the requested AOI.",
+                    self._source_name,
+                )
+                return None
+            logger.warning(
+                "Cached %s granule parsing failed; no spatial MAIAC field available",
+                self._source_name,
+                exc_info=True,
+            )
+            return None
+        except (OSError, KeyError, RuntimeError):
+            logger.warning(
+                "Cached %s granule parsing failed; no spatial MAIAC field available",
+                self._source_name,
+                exc_info=True,
+            )
+            return None
+
+    def get_prior(
+        self,
+        bounds: tuple[float, float, float, float],
+        crs: str,
+        obs_time: datetime,
+        resolution: float,
+    ) -> AtmosphericState:
+        state = self.get_cached_prior(bounds, crs, obs_time, resolution)
+        return state if state is not None else self._default_prior(bounds, resolution)
 
 
 class VNP19AODProvider(_EarthAccessMAIACAODProvider):

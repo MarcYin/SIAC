@@ -86,6 +86,7 @@ def call_grid_assembler(
     solver_band_names: tuple[str, ...] | None = None,
     reproject_cache_dir: str | Path | None = None,
     dem_path: str | Path | None = None,
+    toa_psf_config: Any | None = None,
     resample_workers: int = 1,
 ) -> SolverInputBundle:
     """Call the grid assembler with the current standardized interface."""
@@ -102,5 +103,35 @@ def call_grid_assembler(
         solver_band_names=solver_band_names,
         reproject_cache_dir=reproject_cache_dir,
         dem_path=dem_path,
+        toa_psf_config=toa_psf_config,
         resample_workers=resample_workers,
+    )
+
+
+def build_toa_psf_config(config: Any) -> Any | None:
+    """Build the observation-side PSF config from a resolved SIAC config.
+
+    Enabled only for the MODIS-coarse prior methods (``kernel_model`` /
+    ``whittaker``) with ``psf_target="observation"``; the monthly/library prior is
+    already at the sensor grid and needs no TOA convolution.
+    """
+    from siac.algorithms.grid.toa_psf import ToaPsfConfig
+
+    sp = getattr(getattr(config, "algorithms", None), "surface_prior", None)
+    if sp is None:
+        return None
+    method = getattr(sp, "method", None)
+    method_val = getattr(method, "value", method)
+    enabled = getattr(sp, "psf_target", "prior") == "observation" and method_val in (
+        "kernel_model",
+        "whittaker",
+    )
+    return ToaPsfConfig(
+        sigma_x=float(getattr(sp, "psf_sigma_x", 29.75)),
+        sigma_y=float(getattr(sp, "psf_sigma_y", 39.0)),
+        shift_search_radius_m=float(getattr(sp, "psf_shift_search_radius_m", 500.0)),
+        min_correlation=float(getattr(sp, "psf_min_correlation", 0.6)),
+        convolve_resolution=str(getattr(sp, "psf_convolve_resolution", "grid")),
+        reference_bands=tuple(getattr(sp, "psf_shift_reference_bands", ("B12", "B11"))),
+        enabled=enabled,
     )

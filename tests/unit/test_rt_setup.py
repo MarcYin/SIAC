@@ -149,3 +149,18 @@ def test_lut_effective_setup_exposes_packaged_preset() -> None:
     assert effective.surface.target is None
     assert effective.atmospheric_correction is None
     assert effective.reference_reflectance is None
+
+
+def test_lut_legacy_continental_aerosol_profile_is_compatible() -> None:
+    effective = resolve_effective_rt_setup(
+        RTAlgorithmConfig(
+            backend="lut",
+            setup={
+                "aerosol": {"profile": "continental"},
+            },
+        ),
+        "lut",
+    )
+
+    assert effective.aerosol is not None
+    assert effective.aerosol.profile == "continental_average"

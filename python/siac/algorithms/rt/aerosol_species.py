@@ -9,6 +9,7 @@ the nearest aerosol-type rows, and converts each row into a 6S
 from __future__ import annotations
 
 import csv
+import os
 from functools import lru_cache
 from importlib import resources
 from typing import TYPE_CHECKING, Any, cast
@@ -148,6 +149,16 @@ def candidate_fraction_sets(
     return tuple(out)
 
 
+def climatology_fraction_set(lon: float, lat: float, month: int) -> dict[str, float]:
+    """Return the continuous monthly CCI component fractions for one scene."""
+
+    percentages = climatology_fraction_percentages(lon, lat, month)
+    return {
+        name: float(percentages[index] / 100.0)
+        for index, name in enumerate(("dust", "sea_salt", "fine_strong", "fine_weak"))
+    }
+
+
 def _component_config(
     name: str, percentage_density: float
 ) -> SixSAerosolDistributionComponentConfig:
@@ -197,4 +208,51 @@ def candidate_cci_aerosol_setups(
             distribution=cci_distribution(fractions),
         )
         for fractions in candidate_fraction_sets(lon, lat, month, n=n)
+    )
+
+
+_DEFAULT_FINE_STRONG_CAP = 0.25
+
+
+def climatology_cci_aerosol_setup(
+    lon: float,
+    lat: float,
+    month: int,
+) -> RTAerosolSetupConfig:
+    """Return one native-6S setup using the continuous monthly CCI mixture.
+
+    The soot-like ``fine_strong`` fraction is capped (excess moved to
+    ``fine_weak``): large soot fractions in the CCI climatology over-absorb
+    and inflate retrieved AOT, while capping at 0.25 leaves the sites that
+    need absorbing aerosol unaffected. ``SIAC_SPECIES_FINE_STRONG_CAP``
+    overrides the cap (``none`` disables it).
+    """
+
+    fractions = climatology_fraction_set(lon, lat, month)
+    # Optional per-scene composition override from CAMS speciated AOD
+    # (dust, sea_salt, fine_strong=black_carbon, fine_weak=organic+sulphate),
+    # supplied as a normalized "d,s,fs,fw" string. Replaces the climatology
+    # mixture with the actual day's mix; the fine-strong cap below still applies.
+    cams_raw = os.environ.get("SIAC_CAMS_FRACTIONS", "")
+    if cams_raw.strip():
+        vals = [float(x) for x in cams_raw.split(",")]
+        if len(vals) == 4 and sum(vals) > 0.0:
+            total = sum(vals)
+            fractions = dict(
+                zip(("dust", "sea_salt", "fine_strong", "fine_weak"),
+                    [v / total for v in vals])
+            )
+    cap_raw = os.environ.get("SIAC_SPECIES_FINE_STRONG_CAP", "")
+    if cap_raw.lower() in {"none", "off"}:
+        cap = None
+    else:
+        cap = float(cap_raw) if cap_raw else _DEFAULT_FINE_STRONG_CAP
+    if cap is not None:
+        excess = fractions["fine_strong"] - cap
+        if excess > 0.0:
+            fractions["fine_strong"] = cap
+            fractions["fine_weak"] += excess
+    return RTAerosolSetupConfig(
+        profile="multimodal_log_normal",
+        distribution=cci_distribution(fractions),
     )

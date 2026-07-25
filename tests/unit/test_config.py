@@ -164,7 +164,8 @@ class TestSIACConfig:
         assert config.algorithms.solver.surface_driven_solve_bands == ("B01", "B02", "B04")
         assert config.algorithms.solver.surface_driven_cost_mode == "auto2"
         assert config.algorithms.solver.surface_driven_aot_axis == "acixthree"
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is True
+        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
+        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
 
     def test_surface_driven_l2a_helper_matches_recipe(self, tmp_path: Path):
         config = get_surface_driven_l2a_config(cache_root=tmp_path / "cache")
@@ -196,7 +197,8 @@ class TestSIACConfig:
         assert config.algorithms.solver.surface_driven_solve_bands == ("B01", "B02", "B04")
         assert config.algorithms.solver.surface_driven_cost_mode == "auto2"
         assert config.algorithms.solver.surface_driven_aot_axis == "acixthree"
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is True
+        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
+        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
 
     def test_surface_driven_l2a_monthly_predictor_helper_matches_recipe(self, tmp_path: Path):
         config = get_surface_driven_l2a_monthly_predictor_config(cache_root=tmp_path / "cache")
@@ -226,7 +228,8 @@ class TestSIACConfig:
         assert config.algorithms.solver.method == "surface_driven"
         assert config.algorithms.solver.surface_driven_solve_bands == ("B02", "B04")
         assert config.algorithms.solver.surface_driven_pool_radius_m == pytest.approx(600.0)
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is True
+        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
+        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
 
     def test_surface_driven_hls_s30_helper_matches_recipe(self, tmp_path: Path):
         config = get_surface_driven_hls_s30_config(cache_root=tmp_path / "cache")
@@ -240,7 +243,8 @@ class TestSIACConfig:
         assert config.algorithms.surface_prior.bestpixel_robust_clip == 1.5
         assert config.algorithms.solver.method == "surface_driven"
         assert config.algorithms.solver.surface_driven_solve_bands == ("B01", "B02", "B04")
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is True
+        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
+        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
 
     def test_solver_stage_rejects_solve_fixed_overlap(self):
         with pytest.raises(ValueError, match="cannot both solve and fix"):
@@ -508,6 +512,9 @@ class TestSixSConfig:
         )
         assert cfg.surface_driven_aerosol_species == "cci_climatology"
         assert cfg.surface_driven_aerosol_species_candidates == 5
+
+        exact = SolverAlgorithmConfig(surface_driven_aerosol_species="cci_climatology_exact")
+        assert exact.surface_driven_aerosol_species == "cci_climatology_exact"
 
     def test_rt_setup_accepts_canonical_profiles_and_components(self):
         cfg = RTSetupConfig(

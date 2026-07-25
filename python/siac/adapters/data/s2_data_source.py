@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from siac.errors import DataNotFoundError
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,6 +181,10 @@ def fetch_s2(
 ) -> Path:
     """Search, select best product, download.  Returns local SAFE path."""
     products = search_s2(backend, query)
+    if not products:
+        parsed = _parse_query(query)
+        description = parsed.product_id or parsed.mgrs_tile or "the requested area"
+        raise DataNotFoundError(f"No Sentinel-2 products found for {description}")
     best = select_best_product(products)
     logger.info(f"Selected: {best.product_id} (baseline={best.processing_baseline})")
     return backend.download(best, dest_dir)

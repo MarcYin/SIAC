@@ -13,6 +13,8 @@ from siac.adapters.atmo.mcd19_earthaccess import (
     MCD19AODProvider,
     VNP19AODProvider,
     _maiac_best_quality_mask,
+    _nearest_valid_orbit_indices,
+    _select_orbit_values,
 )
 from siac.adapters.atmo.merra2 import MERRA2Provider
 from siac.adapters.brdf.mcd43_earthaccess import (
@@ -51,6 +53,38 @@ def test_maiac_best_quality_mask_decodes_aod_qa_bits() -> None:
     qa = np.array([[clear_best, cloudy, adjacency, poor_aod, fill]], dtype=np.uint16)
     mask = _maiac_best_quality_mask(qa)
     np.testing.assert_array_equal(mask, [[True, False, False, False, False]])
+
+
+def test_mcd19_nearest_orbit_selection_falls_back_per_pixel() -> None:
+    orbit_times = (
+        datetime(2024, 1, 1, 9, 0),
+        datetime(2024, 1, 1, 11, 0),
+        datetime(2024, 1, 1, 13, 0),
+    )
+    valid = np.array(
+        [
+            [[True, True], [False, True]],
+            [[True, False], [False, True]],
+            [[True, True], [True, True]],
+        ],
+        dtype=bool,
+    )
+    indices = _nearest_valid_orbit_indices(
+        valid,
+        orbit_times,
+        datetime(2024, 1, 1, 10, 45),
+    )
+
+    assert indices is not None
+    np.testing.assert_array_equal(indices, [[1, 0], [2, 1]])
+    values = np.stack(
+        [
+            np.full((2, 2), 0.1, dtype=np.float32),
+            np.full((2, 2), 0.2, dtype=np.float32),
+            np.full((2, 2), 0.3, dtype=np.float32),
+        ]
+    )
+    np.testing.assert_allclose(_select_orbit_values(values, indices), [[0.2, 0.1], [0.3, 0.2]])
 
 
 def _fake_granule(day: int) -> dict[str, object]:
@@ -968,3 +1002,58 @@ def test_mcd19_provider_falls_back_to_default_prior_when_granule_parsing_fails(
 
     assert state.aot.shape == (2, 2)
     assert float(state.aot.mean()) == pytest.approx(0.12)
+
+
+def test_mcd19_provider_rejects_all_missing_reprojected_aod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MCD19AODProvider(probe_earthdata=False)
+    missing = xr.DataArray(np.full((2, 2), np.nan, dtype=np.float32), dims=("y", "x"))
+
+    monkeypatch.setattr(
+        provider,
+        "_load_native_tile",
+        lambda _path: {"aot": missing, "aot_unc": missing, "tcwv": None},
+    )
+    monkeypatch.setattr(provider, "_merge_tiles", lambda *_args, **_kwargs: missing)
+
+    with pytest.raises(ValueError, match="no QA-valid AOD after reprojection"):
+        provider._load_from_granules(
+            [Path("missing.hdf")],
+            bounds=(0.0, 0.0, 1.0, 1.0),
+            crs="EPSG:4326",
+            resolution=0.5,
+            short_name="MCD19A2",
+        )
+
+
+def test_mcd19_provider_fills_partial_aod_from_valid_scene_median(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MCD19AODProvider(probe_earthdata=False)
+    aot = xr.DataArray(np.array([[0.2, np.nan], [0.4, np.nan]], dtype=np.float32), dims=("y", "x"))
+    unc = xr.DataArray(
+        np.array([[0.03, np.nan], [0.07, np.nan]], dtype=np.float32), dims=("y", "x")
+    )
+
+    monkeypatch.setattr(
+        provider,
+        "_load_native_tile",
+        lambda _path: {"aot": aot, "aot_unc": unc, "tcwv": None},
+    )
+    monkeypatch.setattr(
+        provider,
+        "_merge_tiles",
+        lambda arrays, **_kwargs: aot if arrays[0] is aot else unc,
+    )
+
+    state = provider._load_from_granules(
+        [Path("partial.hdf")],
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="EPSG:4326",
+        resolution=0.5,
+        short_name="MCD19A2",
+    )
+
+    np.testing.assert_allclose(state.aot.values, [[0.2, 0.3], [0.4, 0.3]])
+    np.testing.assert_allclose(state.aot_unc.values, [[0.03, 0.05], [0.07, 0.05]])

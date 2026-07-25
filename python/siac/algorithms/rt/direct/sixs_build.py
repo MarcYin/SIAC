@@ -1551,6 +1551,16 @@ def _find_built_extension(
                 *resolved_root.rglob(f"{paths.module_name}*{suffix}"),
             }
             for candidate in matches:
+                # Worker sessions copy the extension into short-lived
+                # ``siac_rt6s_module_*`` directories. Recursive discovery must
+                # never promote one of those copies to the canonical module:
+                # its owning session can delete it while another process is
+                # constructing workers from the returned path.
+                if any(
+                    parent.name.startswith("siac_rt6s_module_")
+                    for parent in candidate.parents
+                ):
+                    continue
                 stat = candidate.stat()
                 if min_mtime is not None and stat.st_mtime < min_mtime:
                     continue

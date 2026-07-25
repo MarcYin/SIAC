@@ -611,6 +611,29 @@ def direct_source_indices(
     return indices
 
 
+def _resolve_surface_library(config: Any) -> Any | None:
+    """Return the configured prepared surface library, or ``None`` for live build.
+
+    A prepared library moves acquisition and atmospheric correction offline, so
+    the library can be corrected in the same RT model the solver uses (which the
+    live composite path cannot guarantee) and the slowest pipeline stage is paid
+    once rather than per scene.
+    """
+
+    surface_cfg = getattr(getattr(config, "algorithms", None), "surface_prior", None)
+    library_path = getattr(surface_cfg, "prepared_library_path", None)
+    if not library_path:
+        return None
+
+    from siac.adapters.surface_library import PreparedSurfaceLibrary
+
+    return PreparedSurfaceLibrary(
+        library_path,
+        band_names=getattr(surface_cfg, "prepared_library_bands", None),
+        scene_key=getattr(surface_cfg, "prepared_library_scene_key", None),
+    )
+
+
 def build_bestpixel_surface_prior(
     config: Any,
     observation: ObservationBundle,
@@ -627,7 +650,20 @@ def build_bestpixel_surface_prior(
     rt_model: Any | None = None,
 ) -> SurfacePrior:
     """Build the bestpixel-backed :class:`SurfacePrior` for the solver."""
-    periods = _fetch_periods(config, observation, resolution, bands, maiac_day_aod=maiac_day_aod)
+    library = _resolve_surface_library(config)
+    if library is None:
+        periods = _fetch_periods(
+            config, observation, resolution, bands, maiac_day_aod=maiac_day_aod
+        )
+        library_rt_space = None
+    else:
+        from siac.adapters.surface_library import realization_to_period
+
+        periods = [
+            realization_to_period(realization)
+            for realization in library.realizations(observation, resolution, bands)
+        ]
+        library_rt_space = library.rt_space
     # Surface-driven "resolve on the prior's native grid": build the prior (and
     # every realization) on the composite's own tile-aligned grid instead of a
     # fresh observation-bounds grid. This removes the sub-pixel composite-vs-obs
@@ -751,6 +787,7 @@ def build_bestpixel_surface_prior(
         mask=mask,
         monthly_composites=(),
         solver_grid=target_template if used_native_grid else None,
+        rt_space=library_rt_space,
     )
     if not predict_visible:
         return prior
@@ -800,8 +837,12 @@ def build_bestpixel_surface_prior(
         epsg=epsg,
         transform=transform,
         anchor_aot=anchor_aot,
+        anchor_aot_field=predictor_anchor_prior.aot,
         target_band_columns=target_band_columns,
         debias=debias,
+        predictor_model=str(
+            getattr(surface_cfg, "bestpixel_predict_visible_model", "extra_tree")
+        ),
         uncertainty_floor=float(
             getattr(surface_cfg, "bestpixel_predict_visible_uncertainty_floor", 0.006)
         ),
@@ -810,4 +851,32 @@ def build_bestpixel_surface_prior(
         ),
         atmo_prior=atmo_prior,
         rt_model=rt_model,
+        attach_tau_predictor=(
+            bool(
+                getattr(
+                    getattr(getattr(config, "algorithms", None), "solver", None),
+                    "surface_driven_tau_dependent_prior",
+                    False,
+                )
+            )
+            or getattr(
+                getattr(getattr(config, "algorithms", None), "solver", None),
+                "surface_driven_tau_gate_cost",
+                None,
+            )
+            is not None
+        ),
+        ensemble_aggregation=str(
+            getattr(surface_cfg, "bestpixel_predict_visible_aggregation", "median")
+        ),
+        anchor_match_scale=float(
+            getattr(surface_cfg, "bestpixel_predict_visible_anchor_match_scale", 0.05)
+        ),
+        scene_mean_geometry=bool(
+            getattr(
+                getattr(getattr(config, "algorithms", None), "solver", None),
+                "surface_driven_scene_mean_geometry",
+                False,
+            )
+        ),
     )

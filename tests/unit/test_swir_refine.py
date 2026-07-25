@@ -250,32 +250,49 @@ def test_query_surface_prior_from_monthly_database_returns_visible_surface_prior
 def test_query_surface_prior_from_monthly_database_honors_target_resolution() -> None:
     sensor_config = _sensor_config()
     target_shape = (4, 2)
+    bounds = (600000.0, 4199920.0, 600040.0, 4200000.0)
+
+    def georeferenced(values: np.ndarray) -> xr.DataArray:
+        return _with_geo(xr.DataArray(values, dims=["y", "x"]))
+
     obs = ObservationBundle(
         toa=xr.Dataset(
             {
-                "B02": xr.DataArray(np.zeros(target_shape, dtype=np.float32), dims=["y", "x"]),
-                "B03": xr.DataArray(np.zeros(target_shape, dtype=np.float32), dims=["y", "x"]),
-                "B08": xr.DataArray(np.full(target_shape, 0.47, dtype=np.float32), dims=["y", "x"]),
-                "B11": xr.DataArray(np.full(target_shape, 0.37, dtype=np.float32), dims=["y", "x"]),
-                "B12": xr.DataArray(np.full(target_shape, 0.27, dtype=np.float32), dims=["y", "x"]),
+                "B02": georeferenced(np.zeros(target_shape, dtype=np.float32)),
+                "B03": georeferenced(np.zeros(target_shape, dtype=np.float32)),
+                "B08": georeferenced(np.full(target_shape, 0.47, dtype=np.float32)),
+                "B11": georeferenced(np.full(target_shape, 0.37, dtype=np.float32)),
+                "B12": georeferenced(np.full(target_shape, 0.27, dtype=np.float32)),
             }
         ),
-        geometry=_geometry(target_shape),
-        cloud_mask=xr.DataArray(np.zeros(target_shape, dtype=bool), dims=["y", "x"]),
+        geometry=GeometryAngles(
+            sza=georeferenced(np.full(target_shape, 0.5, dtype=np.float32)),
+            saa=georeferenced(np.full(target_shape, 2.5, dtype=np.float32)),
+            vza=georeferenced(np.full(target_shape, 0.1, dtype=np.float32)),
+            vaa=georeferenced(np.full(target_shape, 1.5, dtype=np.float32)),
+        ),
+        cloud_mask=georeferenced(np.zeros(target_shape, dtype=bool)),
         sensor_config=sensor_config,
         metadata={"observation_time": datetime(2024, 7, 15, 10, 30)},
         crs="EPSG:32632",
-        bounds=(0.0, 0.0, 2.0, 4.0),
+        bounds=bounds,
     )
+
+    class _GridCheckingRTModel(_IdentityRTModel):
+        def compute_coefficients(self, geometry, atmo_state, band, compute_jacobian=False):
+            assert atmo_state.aot.dims == geometry.sza.dims
+            np.testing.assert_array_equal(atmo_state.aot.coords["x"], geometry.sza.coords["x"])
+            np.testing.assert_array_equal(atmo_state.aot.coords["y"], geometry.sza.coords["y"])
+            return super().compute_coefficients(geometry, atmo_state, band, compute_jacobian)
 
     prior = query_surface_prior_from_monthly_database(
         observation=obs,
         atmo_prior=_atmo((2, 1)),
-        rt_model=_IdentityRTModel(),
+        rt_model=_GridCheckingRTModel(),
         database=_database(),
         query_band_names=("B08", "B11", "B12"),
         visible_band_names=("B02", "B03"),
-        target_resolution=1.0,
+        target_resolution=20.0,
         k_neighbors=1,
     )
 

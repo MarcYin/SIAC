@@ -40,6 +40,7 @@ def _wrap_solved(result: Any, inputs: SolverInputBundle) -> SolvedAtmosphere:
         converged=result.success,
         qa=getattr(result, "qa", None),
         level_history=tuple(getattr(result, "level_history", ())),
+        diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
     )
 
 

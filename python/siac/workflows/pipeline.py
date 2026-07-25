@@ -41,6 +41,7 @@ from siac.runtime.validation import (
     validate_atmospheric_state,
     validate_correction_result,
     validate_observation_bundle,
+    validate_rt_space_consistency,
     validate_solved_atmosphere,
     validate_solver_input_bundle,
     validate_surface_prior,
@@ -81,6 +82,7 @@ from siac.workflows._pipeline_outputs import (
 from siac.workflows._pipeline_outputs import (
     surface_template as _surface_template,
 )
+from siac.workflows.scene_setup import build_toa_psf_config
 from siac.workflows.scene_setup import call_grid_assembler as _call_grid_assembler
 
 if TYPE_CHECKING:
@@ -153,6 +155,40 @@ def _finite_numeric_summary(values: Any) -> dict[str, float | int | None]:
     }
 
 
+def _solver_diagnostic_metadata(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key, value in diagnostics.items():
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, bool | str):
+            metadata[str(key)] = value
+            continue
+        if isinstance(value, int | float):
+            numeric = float(value)
+            metadata[str(key)] = numeric if np.isfinite(numeric) else None
+            continue
+        if value is None:
+            metadata[str(key)] = None
+            continue
+        if isinstance(value, list | tuple) and len(value) <= 64:
+            sequence: list[bool | str | float | None] = []
+            for item in value:
+                if isinstance(item, np.generic):
+                    item = item.item()
+                if isinstance(item, bool | str):
+                    sequence.append(item)
+                elif isinstance(item, int | float):
+                    numeric = float(item)
+                    sequence.append(numeric if np.isfinite(numeric) else None)
+                elif item is None:
+                    sequence.append(None)
+                else:
+                    break
+            else:
+                metadata[str(key)] = sequence
+    return metadata
+
+
 def _solver_metadata(
     solved: SolvedAtmosphere,
     *,
@@ -182,6 +218,9 @@ def _solver_metadata(
         metadata["solve_band_count"] = int(solve_band_count)
         if solve_band_count > 0:
             metadata["cost_final_per_band"] = float(cost_final / solve_band_count)
+    diagnostics = getattr(solved, "diagnostics", None)
+    if isinstance(diagnostics, dict):
+        metadata.update(_solver_diagnostic_metadata(diagnostics))
     return metadata
 
 
@@ -197,11 +236,47 @@ def _geometry_for_atmo_grid(
         for field in (geometry.sza, geometry.saa, geometry.vza, geometry.vaa)
     ):
         return geometry
+
+    def _align_angle(field: xr.DataArray) -> xr.DataArray:
+        """Align an angle field without turning edge pixels into a scene mean.
+
+        Sentinel-2's coarse angle grid can stop just inside a clipped AOI.  A
+        linear interpolation therefore leaves a narrow outer rim as NaN.  The
+        generic field helper fills that rim with the source mean, which erases
+        the native angle gradient for LUT preloading.  Preserve the nearest
+        valid edge value instead; the M4 geometry path uses the same physical
+        edge-extension behaviour through GDAL resampling.
+        """
+        aligned = resample_field_to_template(field, template, gap_fill=False)
+        values = np.asarray(aligned.values, dtype=np.float32)
+        if np.all(np.isfinite(values)):
+            return aligned
+        if (
+            field.ndim == 2
+            and field.dims == template.dims
+            and all(dim in field.coords and dim in template.coords for dim in template.dims)
+        ):
+            try:
+                nearest = field.interp(
+                    coords={dim: template.coords[dim] for dim in template.dims},
+                    method="nearest",
+                    kwargs={"fill_value": "extrapolate"},
+                )
+                nearest_values = np.asarray(nearest.values, dtype=np.float32)
+                values = np.where(np.isfinite(values), values, nearest_values)
+            except (TypeError, ValueError, KeyError, RuntimeError):
+                logger.debug(
+                    "Angle-edge extrapolation failed; using generic gap fill.", exc_info=True
+                )
+        if not np.all(np.isfinite(values)):
+            return resample_field_to_template(field, template)
+        return aligned.copy(data=values)
+
     return GeometryAngles(
-        sza=resample_field_to_template(geometry.sza, template),
-        saa=resample_field_to_template(geometry.saa, template),
-        vza=resample_field_to_template(geometry.vza, template),
-        vaa=resample_field_to_template(geometry.vaa, template),
+        sza=_align_angle(geometry.sza),
+        saa=_align_angle(geometry.saa),
+        vza=_align_angle(geometry.vza),
+        vaa=_align_angle(geometry.vaa),
     )
 
 
@@ -465,6 +540,7 @@ def _run_tail(
     validate_surface_prior(surface)
     aerosol_resolution = _aerosol_resolution(config)
     solver_config = getattr(getattr(config, "algorithms", None), "solver", None)
+    validate_rt_space_consistency(surface, rt_model, solver_config)
     paths_config = getattr(config, "paths", None)
     water_mask_path = getattr(paths_config, "water_mask", None) or DEFAULT_WATER_MASK_VRT_URL
     cache_root = getattr(paths_config, "cache_root", None)
@@ -497,6 +573,7 @@ def _run_tail(
             solver_band_names=solver_band_names,
             reproject_cache_dir=reproject_cache_dir,
             dem_path=getattr(paths_config, "dem", None),
+            toa_psf_config=build_toa_psf_config(config),
             resample_workers=int(
                 getattr(getattr(config, "runtime", None), "grid_resample_workers", 1) or 1
             ),

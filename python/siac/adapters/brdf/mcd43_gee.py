@@ -21,6 +21,8 @@ import logging
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from shlex import quote
+from shutil import which
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -44,6 +46,8 @@ logger = logging.getLogger(__name__)
 #: out rather than importing it. Override via ``providers.brdf.data_path`` ->
 #: ``edown_executable`` in config or the constructor.
 DEFAULT_EDOWN_EXECUTABLE = "/home/users/marcyin/.pixi/envs/base/bin/edown"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOCAL_EDOWN_RUNTIME = REPO_ROOT / "tools" / "edown_runtime"
 
 GEE_COLLECTION_ID = "MODIS/061/MCD43A1"
 #: MCD43A1 stores BRDF parameters as int16 scaled by 1000.
@@ -80,6 +84,15 @@ class MCD43GEEProvider:
         self.cache_dir = Path(cache_dir).expanduser()
         self.edown_executable = str(edown_executable)
         self.download_timeout_s = download_timeout_s
+
+    @property
+    def edown_executable(self) -> str:
+        return self._edown_executable
+
+    @edown_executable.setter
+    def edown_executable(self, value: str) -> None:
+        self._edown_executable = str(value)
+        self._edown_executables = self._resolve_edown_executables(self._edown_executable)
 
     @property
     def source_name(self) -> str:
@@ -284,8 +297,7 @@ class MCD43GEEProvider:
         if any(out_root.glob("images/*/*.tif")):
             return out_root
         out_root.mkdir(parents=True, exist_ok=True)
-        command = [
-            self.edown_executable,
+        command_core = [
             "download",
             "--collection-id",
             GEE_COLLECTION_ID,
@@ -300,26 +312,82 @@ class MCD43GEEProvider:
             "--output-root",
             str(out_root),
         ]
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self.download_timeout_s,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            logger.error("edown invocation failed (%s): %s", self.edown_executable, exc)
-            return None
-        if result.returncode != 0 and not any(out_root.glob("images/*/*.tif")):
+        for candidate in self._edown_executables:
+            try:
+                result = subprocess.run(
+                    [candidate, *command_core],
+                    capture_output=True,
+                    text=True,
+                    timeout=self.download_timeout_s,
+                    check=False,
+                )
+            except OSError as exc:
+                logger.error("edown invocation failed (%s): %s", candidate, exc)
+                if any(out_root.glob("images/*/*.tif")):
+                    return out_root
+                if candidate != self._edown_executables[-1]:
+                    logger.warning("Attempting fallback edown executable for %s", GEE_COLLECTION_ID)
+                    continue
+                return None
+            except subprocess.TimeoutExpired as exc:
+                logger.error("edown invocation timed out (%s): %s", candidate, exc)
+                return None
+            if result.returncode == 0 or any(out_root.glob("images/*/*.tif")):
+                return out_root
+            stderr = result.stderr or result.stdout or ""
+            if (
+                ("No module named 'edown'" in stderr)
+                and candidate != self._edown_executables[-1]
+            ):
+                logger.warning(
+                    "edown command missing module in %s; trying fallback executable: %s",
+                    quote(candidate),
+                    self._edown_executables[self._edown_executables.index(candidate) + 1],
+                )
+                continue
             logger.error(
                 "edown download failed (rc=%s) for %s: %s",
                 result.returncode,
                 GEE_COLLECTION_ID,
-                (result.stderr or result.stdout or "").strip()[-500:],
+                stderr.strip()[-500:],
             )
             return None
         return out_root
+
+    @staticmethod
+    def _resolve_edown_executables(edown_executable: str | Path) -> tuple[str, ...]:
+        """Resolve candidate edown executable paths, with fallbacks.
+
+        The configured path can be either the executable path, a legacy runtime
+        directory, or an explicit PATH lookup string. We try the requested path
+        first, then fallback to known-good repository/runtime locations.
+        """
+        raw = Path(edown_executable).expanduser()
+        candidates: list[Path] = []
+
+        def _add_candidate(path: Path | None) -> None:
+            if path is None:
+                return
+            path = Path(path).expanduser()
+            if not path.exists() and (found := which(str(path))) is not None:
+                path = Path(found)
+            if path.exists() and path.is_dir():
+                path = path / "bin" / "edown"
+            path = path.expanduser()
+            if path.exists() and str(path) not in seen:
+                seen.add(str(path))
+                candidates.append(path)
+
+        seen: set[str] = set()
+        _add_candidate(raw)
+        _add_candidate(LOCAL_EDOWN_RUNTIME)
+        _add_candidate(LOCAL_EDOWN_RUNTIME / "bin" / "edown")
+        _add_candidate(Path(DEFAULT_EDOWN_EXECUTABLE))
+
+        if not candidates:
+            # Keep the explicit path as a final attempt for transparent error handling.
+            candidates.append(raw)
+        return tuple(str(path) for path in candidates)
 
     def _read_tiff_to_band_layers(
         self,

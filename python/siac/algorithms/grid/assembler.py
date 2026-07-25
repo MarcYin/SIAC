@@ -9,6 +9,7 @@ See PLANS.md §4.4 for the full specification.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import warnings
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
@@ -37,9 +38,18 @@ from siac.runtime.models import copy_spatial_metadata_like
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from siac.algorithms.grid.toa_psf import ToaPsfConfig
+
 logger = logging.getLogger(__name__)
 
 BoolArray: TypeAlias = npt.NDArray[np.bool_]
+
+
+# Atmospheric providers may set this attribute when they have a compact,
+# stable source identifier (for example, a MAIAC granule or matching L2A
+# asset).  Fields without it are fingerprinted below so cache correctness
+# does not depend on a provider remembering to supply one.
+_ATMO_CACHE_ID_ATTR = "siac_atmo_cache_identity"
 
 
 # ── Internal resampling helpers ────────────────────────────────────────
@@ -601,6 +611,65 @@ def _resample_geometry(
     )
 
 
+def _update_atmo_cache_hash(digest: Any, value: object) -> None:
+    """Add an array-like value to an atmospheric-field cache fingerprint."""
+    array = np.ascontiguousarray(np.asarray(value))
+    digest.update(str(array.dtype).encode("utf-8"))
+    digest.update(repr(array.shape).encode("utf-8"))
+    digest.update(array.tobytes())
+
+
+def _atmo_field_cache_token(field: xr.DataArray) -> str:
+    """Return a stable identity for one atmospheric input field.
+
+    M4 can receive distinct providers or explicit atmospheric overrides for
+    the same Sentinel-2 acquisition.  Scene bounds and sensing time alone
+    therefore do not identify a safe reprojection-cache entry.  Prefer a
+    provider-supplied provenance key; otherwise fingerprint the small source
+    field together with its grid definition.
+    """
+    explicit = field.attrs.get(_ATMO_CACHE_ID_ATTR)
+    if explicit is not None:
+        value = str(explicit).strip()
+        if value:
+            return f"provenance:{value}"
+
+    digest = hashlib.sha256()
+    digest.update(b"siac-atmo-field-v1\0")
+    for dim in field.dims:
+        digest.update(dim.encode("utf-8"))
+        digest.update(b"\0")
+    _update_atmo_cache_hash(digest, field.values)
+    for coord_name in sorted(field.coords):
+        coord = field.coords[coord_name]
+        digest.update(coord_name.encode("utf-8"))
+        digest.update(b"\0")
+        for dim in coord.dims:
+            digest.update(dim.encode("utf-8"))
+            digest.update(b"\0")
+        _update_atmo_cache_hash(digest, coord.values)
+        # CRS/transform metadata can live on the scalar spatial_ref coordinate.
+        for key, value in sorted(coord.attrs.items()):
+            digest.update(str(key).encode("utf-8"))
+            digest.update(repr(value).encode("utf-8"))
+            digest.update(b"\0")
+    for key in ("crs", "transform", "grid_mapping"):
+        if key in field.attrs:
+            digest.update(key.encode("utf-8"))
+            digest.update(repr(field.attrs[key]).encode("utf-8"))
+            digest.update(b"\0")
+    return f"content:{digest.hexdigest()}"
+
+
+def _atmo_cache_source_identity(
+    scene_identity: str,
+    field_name: str,
+    field: xr.DataArray,
+) -> str:
+    """Build the content-addressable identity for one M2-to-M4 field."""
+    return f"atmo-v2:{scene_identity}:{field_name}:{_atmo_field_cache_token(field)}"
+
+
 def _resample_atmo_state(
     atmo: AtmosphericState,
     target_shape: tuple[int, int],
@@ -611,15 +680,12 @@ def _resample_atmo_state(
 ) -> AtmosphericState:
     """Resample all atmospheric state fields to target shape.
 
-    Wave 19b: when both ``cache_dir`` and ``scene_identity`` are provided,
-    each of the seven CAMS atmo-prior fields routes through
-    ``cached_reproject_match`` keyed by
-    ``f"cams-atmo:{scene_identity}:{field_name}"``. The CAMS reprojection
-    from native 5×5 lat/lon to the scene UTM grid is one of the larger
-    per-field warp costs in the wave-17 profile (~3 s × 7 fields ≈ 21 s).
-    On subsequent runs of the same scene+date the cache hits and skips
-    the warp entirely. Both args default to ``None`` for backwards
-    compatibility (no caching).
+    When both ``cache_dir`` and ``scene_identity`` are provided, each field
+    routes through ``cached_reproject_match``.  The key includes the scene,
+    field name, and the field's source provenance (or a source-grid/content
+    fingerprint when provenance is unavailable).  This keeps cache hits for
+    repeated runs while preventing a scalar override or different provider
+    from being reused as a spatial atmospheric field for the same scene.
     """
     if cache_dir is not None and scene_identity:
         from siac.geo.cached_reprojection import cached_reproject_match
@@ -637,7 +703,11 @@ def _resample_atmo_state(
                 return cached_reproject_match(
                     field,
                     TargetGrid.from_template(template),
-                    source_identity=f"cams-atmo:{scene_identity}:{field_name}",
+                    source_identity=_atmo_cache_source_identity(
+                        scene_identity,
+                        field_name,
+                        field,
+                    ),
                     cache_dir=cache_dir,
                     resampling=resampling,
                 )
@@ -683,6 +753,18 @@ def _resample_surface_prior(
     if "band" in mask.dims:
         mask = mask.all(dim="band")
 
+    tau_predictor = sp.tau_predictor
+    if tau_predictor is not None and "localizer" in tau_predictor:
+        # Resample the climatological localizer planes onto the solver grid so
+        # M5 can evaluate the tau-dependent prediction per candidate AOD.
+        localizer_grid = _resample_da(
+            tau_predictor["localizer"], target_shape, "area", template=template
+        )
+        tau_predictor = {
+            **tau_predictor,
+            "localizer_grid": np.asarray(localizer_grid.values, dtype=np.float64),
+        }
+
     return SurfacePrior(
         boa=_resample_da(sp.boa, target_shape, "area", template=template),
         boa_unc=_resample_da(sp.boa_unc, target_shape, "area", template=template),
@@ -694,6 +776,7 @@ def _resample_surface_prior(
             assume_aligned_native_grid=True,
         ),
         monthly_composites=sp.monthly_composites,
+        tau_predictor=tau_predictor,
     )
 
 
@@ -727,6 +810,7 @@ def _align_surface_prior_to_bands(
         kernels=sp.kernels,
         mask=mask,
         monthly_composites=sp.monthly_composites,
+        tau_predictor=sp.tau_predictor,
     )
 
 
@@ -763,6 +847,43 @@ def _resolve_solver_bands(
 # ── Public API ─────────────────────────────────────────────────────────
 
 
+def _resolve_psf_shift_reference(
+    obs: ObservationBundle,
+    surface: SurfacePrior,
+    reference_bands: tuple[str, ...],
+    target_shape: tuple[int, int],
+    target_template: xr.DataArray,
+    toa_band_loader: Any,
+) -> tuple[xr.DataArray | None, xr.DataArray | None]:
+    """Grid a shared AOT-insensitive (TOA, prior) reference band for the shift fit.
+
+    Returns the first ``reference_bands`` entry present in BOTH the (pre-alignment)
+    prior and the loadable TOA, each resampled to the solver grid — or ``(None,
+    None)`` when no shared band exists (shift then skipped, TOA only convolved).
+    """
+    boa = surface.boa
+    if "band" not in boa.dims or "band" not in boa.coords:
+        return None, None
+    prior_band_names = {str(value) for value in np.asarray(boa.coords["band"].values).tolist()}
+    for name in reference_bands:
+        if name not in prior_band_names:
+            continue
+        toa_native: xr.DataArray | None = None
+        if name in obs.toa.data_vars:
+            toa_native = obs.toa[name]
+        elif callable(toa_band_loader):
+            try:
+                toa_native = toa_band_loader(name, native=True)
+            except (KeyError, RuntimeError):
+                toa_native = None
+        if toa_native is None:
+            continue
+        toa_ref = _resample_da(toa_native, target_shape, "area", template=target_template)
+        prior_ref = _resample_da(boa.sel(band=name), target_shape, "area", template=target_template)
+        return toa_ref, prior_ref
+    return None, None
+
+
 def assemble_grids(
     obs: ObservationBundle,
     atmo: AtmosphericState,
@@ -777,6 +898,7 @@ def assemble_grids(
     solver_band_names: tuple[str, ...] | None = None,
     reproject_cache_dir: str | Path | None = None,
     dem_path: str | Path | None = None,
+    toa_psf_config: ToaPsfConfig | None = None,
     resample_workers: int = 1,
 ) -> SolverInputBundle:
     """Resample and align all upstream outputs to solver grids.
@@ -1009,6 +1131,34 @@ def assemble_grids(
             elevation=read_elevation_km(target_template, dem_arg),
         )
 
+    # tau-dependent prior: the solver additionally needs the scene anchor-band
+    # TOA on the solver grid to re-correct at each candidate AOD.
+    if surface_resampled.tau_predictor is not None:
+        payload = dict(surface_resampled.tau_predictor)
+        anchor_planes = []
+        anchor_ok = True
+        for anchor_name in payload.get("anchor_bands", ()):
+            resampled = _resample_toa_band(anchor_name)
+            if resampled is None:
+                logger.warning(
+                    "tau-dependent prior: anchor band %s unavailable; disabling.", anchor_name
+                )
+                anchor_ok = False
+                break
+            anchor_planes.append(np.asarray(resampled[1].values, dtype=np.float64))
+        if anchor_ok and anchor_planes:
+            from dataclasses import replace as _replace
+
+            payload["anchor_toa_grid"] = np.stack(anchor_planes, axis=0)
+            payload["anchor_sensor_bands"] = [
+                obs.sensor_config.get_band(name) for name in payload.get("anchor_bands", ())
+            ]
+            surface_resampled = _replace(surface_resampled, tau_predictor=payload)
+        else:
+            from dataclasses import replace as _replace
+
+            surface_resampled = _replace(surface_resampled, tau_predictor=None)
+
     if toa_arrays:
         toa_da = xr.concat(toa_arrays, dim="band")
         toa_da = toa_da.assign_coords(band=resolved_band_names)
@@ -1020,6 +1170,80 @@ def assemble_grids(
         ).expand_dims("band")
         toa_da = toa_da.assign_coords(band=[first])
     toa_da = copy_spatial_metadata_like(toa_da, target_template)
+
+    # Observation-side PSF: convolve the gridded TOA with the fixed-width sensor
+    # PSF and co-register it to the coarse MODIS prior with a per-scene integer
+    # shift (SIAC v1 methodology). The shift is fitted on an AOT-insensitive SWIR
+    # reference band that the prior carries only for this purpose; that band is
+    # dropped from the bundle by `_align_surface_prior_to_bands`, so the solver is
+    # unchanged. No-op when `toa_psf_config` is None / disabled.
+    if toa_psf_config is not None and getattr(toa_psf_config, "enabled", False):
+        from siac.algorithms.grid.toa_psf import psf_convolve_and_align_toa
+
+        fine_mode = getattr(toa_psf_config, "convolve_resolution", "grid") == "native10m"
+        if fine_mode:
+            # Convolve + fit the co-registration shift at the PSF calibration
+            # resolution (~10 m), where the MODIS-footprint structure (~500 m ≈
+            # 50 px) is resolvable and the integer shift is meaningful — then
+            # downsample to the solver grid. On the coarse solver grid the PSF
+            # blur washes out the ~4 px features, leaving the shift unlocalizable.
+            fine_res = float(getattr(toa_psf_config, "target_resolution_m", 10.0))
+            fine_template = _build_target_template(obs.bounds, obs.crs, fine_res)
+            fine_shape = fine_template.shape
+            # `resolved_band_names` already excludes bands that failed to load in
+            # the solver-grid pass above, so each one resolves again here.
+            fine_bands: list[xr.DataArray] = []
+            for bn in resolved_band_names:
+                src = obs.toa[bn] if bn in obs.toa.data_vars else _toa_band_loader(bn, native=True)
+                fine_bands.append(_resample_da(src, fine_shape, "area", template=fine_template))
+            fine_toa = xr.concat(fine_bands, dim="band").assign_coords(band=resolved_band_names)
+            fine_toa = copy_spatial_metadata_like(fine_toa, fine_template)
+            toa_ref, prior_ref = _resolve_psf_shift_reference(
+                obs,
+                surface,
+                toa_psf_config.reference_bands,
+                fine_shape,
+                fine_template,
+                _toa_band_loader,
+            )
+            conv_fine, shift_fit = psf_convolve_and_align_toa(
+                fine_toa, toa_ref, prior_ref, None, grid_resolution_m=fine_res, cfg=toa_psf_config
+            )
+            toa_da = copy_spatial_metadata_like(
+                _resample_da(conv_fine, target_shape, "area", template=target_template),
+                target_template,
+            )
+        else:
+            toa_ref_grid, prior_ref_grid = _resolve_psf_shift_reference(
+                obs,
+                surface,
+                toa_psf_config.reference_bands,
+                target_shape,
+                target_template,
+                _toa_band_loader,
+            )
+            # `_resample_surface_prior` already reduces a banded mask to 2-D (y, x).
+            prior_valid = (
+                None
+                if surface_resampled.mask is None
+                else np.asarray(surface_resampled.mask.values, dtype=bool)
+            )
+            toa_da, shift_fit = psf_convolve_and_align_toa(
+                toa_da,
+                toa_ref_grid,
+                prior_ref_grid,
+                prior_valid,
+                grid_resolution_m=resolved_aerosol_resolution,
+                cfg=toa_psf_config,
+            )
+        logger.info(
+            "M4 PSF-on-TOA (%s): shift=(dx=%d, dy=%d) r=%.3f accepted=%s",
+            "native10m" if fine_mode else "grid",
+            shift_fit.dx,
+            shift_fit.dy,
+            shift_fit.correlation,
+            shift_fit.accepted,
+        )
 
     bundle = SolverInputBundle(
         toa=toa_da,

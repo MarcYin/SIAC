@@ -414,11 +414,12 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         sza, saa, vza, vaa = self._georeference_angle_grids(
             [
                 sun_angles["zenith"],
-                sun_angles["azimuth"],
+                self._unwrap_azimuth_grid_degrees(sun_angles["azimuth"]),
                 view_angles["zenith"],
-                view_angles["azimuth"],
+                self._unwrap_azimuth_grid_degrees(view_angles["azimuth"]),
             ],
             ref_da,
+            metadata_root=root,
         )
 
         # Convert to radians
@@ -723,7 +724,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         return angles
 
     def _parse_view_angles(self, root: ET.Element) -> dict[str, np.ndarray]:
-        """Parse view angle grids from XML (arithmetic mean across detectors).
+        """Parse spatial view-angle grids and combine bands/detectors.
 
         REVIEW.md §1.1 #5: previously this used a running ``(a + b) / 2`` step
         per band, which biases toward the last-seen entry rather than producing
@@ -755,7 +756,7 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
 
         if zenith_values and azimuth_values:
             mean_vza = float(np.mean(zenith_values))
-            mean_vaa = float(np.mean(azimuth_values))
+            mean_vaa = self._circular_nanmean_degrees(np.asarray(azimuth_values))
         else:
             # Fallback to defaults from ``siac.constants``; warn so the
             # operator notices the XML didn't carry the angles we needed
@@ -771,14 +772,92 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
             mean_vza = DEFAULT_S2_VZA_DEG
             mean_vaa = DEFAULT_S2_VAA_DEG
 
-        # Create uniform grids (simplified - full implementation would parse per-detector grids)
-        zenith_grid = np.full((23, 23), mean_vza)
-        azimuth_grid = np.full((23, 23), mean_vaa)
+        detector_entries = self._findall_descendants(root, "Viewing_Incidence_Angles_Grids", ns)
+        by_band: dict[int, list[tuple[np.ndarray, np.ndarray]]] = {}
+        for entry in detector_entries:
+            band_id = entry.get("bandId")
+            if band_id is None:
+                continue
+            try:
+                zenith = self._parse_named_angle_grid(entry, "Zenith", ns)
+                azimuth = self._parse_named_angle_grid(entry, "Azimuth", ns)
+                by_band.setdefault(int(band_id), []).append((zenith, azimuth))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring malformed Sentinel-2 detector angle grid bandId=%r detectorId=%r",
+                    band_id,
+                    entry.get("detectorId"),
+                    exc_info=True,
+                )
+
+        band_zenith: list[np.ndarray] = []
+        band_azimuth: list[np.ndarray] = []
+        for entries in by_band.values():
+            zenith_stack = np.stack([entry[0] for entry in entries])
+            azimuth_stack = np.stack([entry[1] for entry in entries])
+            band_zenith.append(self._nanmean(zenith_stack, axis=0))
+            band_azimuth.append(self._circular_nanmean_grid_degrees(azimuth_stack, axis=0))
+
+        if band_zenith:
+            zenith_grid = self._nanmean(np.stack(band_zenith), axis=0)
+            azimuth_grid = self._circular_nanmean_grid_degrees(np.stack(band_azimuth), axis=0)
+            zenith_grid = np.where(np.isfinite(zenith_grid), zenith_grid, mean_vza)
+            azimuth_grid = np.where(np.isfinite(azimuth_grid), azimuth_grid, mean_vaa)
+        else:
+            logger.warning(
+                "Sentinel-2 detector viewing grids are unavailable; using tile-mean viewing "
+                "geometry."
+            )
+            zenith_grid = np.full((23, 23), mean_vza)
+            azimuth_grid = np.full((23, 23), mean_vaa)
 
         return {
-            "zenith": zenith_grid,
-            "azimuth": azimuth_grid,
+            "zenith": np.asarray(zenith_grid, dtype=np.float32),
+            "azimuth": np.asarray(azimuth_grid, dtype=np.float32),
         }
+
+    def _parse_named_angle_grid(
+        self,
+        parent: ET.Element,
+        name: str,
+        ns: str,
+    ) -> np.ndarray:
+        angle = self._find_child(parent, name, ns)
+        if angle is None:
+            raise ValueError(f"Missing {name} angle grid")
+        return self._parse_angle_grid(angle, ns)
+
+    @staticmethod
+    def _nanmean(values: np.ndarray, *, axis: int) -> np.ndarray:
+        finite = np.isfinite(values)
+        count = np.sum(finite, axis=axis)
+        total = np.sum(np.where(finite, values, 0.0), axis=axis)
+        return np.divide(
+            total,
+            count,
+            out=np.full_like(total, np.nan, dtype=np.float64),
+            where=count > 0,
+        )
+
+    @staticmethod
+    def _circular_nanmean_grid_degrees(values: np.ndarray, *, axis: int) -> np.ndarray:
+        radians = np.deg2rad(values)
+        finite = np.isfinite(radians)
+        count = np.sum(finite, axis=axis)
+        sine = np.sum(np.where(finite, np.sin(radians), 0.0), axis=axis)
+        cosine = np.sum(np.where(finite, np.cos(radians), 0.0), axis=axis)
+        angle = np.mod(np.rad2deg(np.arctan2(sine, cosine)), 360.0)
+        return np.where(count > 0, angle, np.nan)
+
+    @classmethod
+    def _circular_nanmean_degrees(cls, values: np.ndarray) -> float:
+        return float(cls._circular_nanmean_grid_degrees(values, axis=0))
+
+    @staticmethod
+    def _unwrap_azimuth_grid_degrees(values: np.ndarray) -> np.ndarray:
+        radians = np.deg2rad(np.asarray(values, dtype=np.float64))
+        unwrapped = np.unwrap(np.unwrap(radians, axis=1), axis=0)
+        return np.asarray(np.rad2deg(unwrapped), dtype=np.float32)
 
     def _parse_angle_grid(self, elem: ET.Element, ns: str) -> np.ndarray:
         """Parse angle values from grid element.
@@ -881,6 +960,8 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         self,
         angle_grids: list[np.ndarray],
         ref_da: xr.DataArray,
+        *,
+        metadata_root: ET.Element | None = None,
     ) -> list[xr.DataArray]:
         """Wrap raw angle grids (23×23) as georeferenced DataArrays.
 
@@ -891,14 +972,21 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
         """
         bounds = ref_da.rio.bounds()  # (left, bottom, right, top)
         crs = ref_da.rio.crs
+        origin_and_step = self._angle_grid_origin_and_step(metadata_root)
+        if origin_and_step is not None:
+            ulx, uly, col_step, row_step, metadata_crs = origin_and_step
+            crs = metadata_crs or crs
 
         results: list[xr.DataArray] = []
         for angles in angle_grids:
             src = np.asarray(angles, dtype=np.float32)
             h, w = src.shape
-            # Pixel-centre coordinates spanning the tile extent.
-            x = np.linspace(bounds[0], bounds[2], w, dtype=np.float64)
-            y = np.linspace(bounds[3], bounds[1], h, dtype=np.float64)  # top→bottom
+            if origin_and_step is None:
+                x = np.linspace(bounds[0], bounds[2], w, dtype=np.float64)
+                y = np.linspace(bounds[3], bounds[1], h, dtype=np.float64)
+            else:
+                x = ulx + np.arange(w, dtype=np.float64) * col_step
+                y = uly - np.arange(h, dtype=np.float64) * row_step
             da = xr.DataArray(
                 src,
                 dims=["y", "x"],
@@ -908,6 +996,46 @@ class Sentinel2Preprocessor(BaseSatellitePreprocessor):
                 da = da.rio.write_crs(crs)
             results.append(da)
         return results
+
+    def _angle_grid_origin_and_step(
+        self,
+        root: ET.Element | None,
+    ) -> tuple[float, float, float, float, str | None] | None:
+        if root is None:
+            return None
+        ns = self._get_namespace(root)
+        geopositions = self._findall_descendants(root, "Geoposition", ns)
+        geoposition = next(
+            (item for item in geopositions if item.get("resolution") == "10"),
+            geopositions[0] if geopositions else None,
+        )
+        sun_grid = self._find_descendant(root, "Sun_Angles_Grid", ns)
+        if geoposition is None or sun_grid is None:
+            return None
+        zenith = self._find_child(sun_grid, "Zenith", ns)
+        if zenith is None:
+            return None
+        try:
+            ulx = float(self._required_child_text(geoposition, "ULX", ns))
+            uly = float(self._required_child_text(geoposition, "ULY", ns))
+            col_step = float(self._required_child_text(zenith, "COL_STEP", ns))
+            row_step = float(self._required_child_text(zenith, "ROW_STEP", ns))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Could not parse Sentinel-2 angle-grid georeferencing; deriving it from the "
+                "loaded raster extent.",
+                exc_info=True,
+            )
+            return None
+        crs_element = self._find_descendant(root, "HORIZONTAL_CS_CODE", ns)
+        metadata_crs = None if crs_element is None else crs_element.text
+        return ulx, uly, col_step, row_step, metadata_crs
+
+    def _required_child_text(self, parent: ET.Element, name: str, ns: str) -> str:
+        child = self._find_child(parent, name, ns)
+        if child is None or child.text is None:
+            raise ValueError(f"Missing {name} below {parent.tag}")
+        return child.text
 
     def _cloud_mask_settings(self, input_path: Path) -> dict[str, Any]:
         """Resolve cloud-mask settings from preprocessor config and input path."""

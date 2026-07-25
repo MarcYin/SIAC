@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 from textwrap import dedent
 
 import numpy as np
+import xarray as xr
 
 from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor
 
@@ -98,6 +99,71 @@ def test_parse_view_angles_does_not_fall_back_when_xml_has_data() -> None:
     # If the fallback fires, VZA would be 5.0deg and VAA 100.0deg.
     assert not np.allclose(parsed["zenith"], 5.0)
     assert not np.allclose(parsed["azimuth"], 100.0)
+
+
+def test_parse_view_angles_combines_detector_grids_with_circular_azimuth() -> None:
+    root = ET.fromstring(
+        dedent(
+            """\
+            <root>
+              <Mean_Viewing_Incidence_Angle bandId="1">
+                <ZENITH_ANGLE>3</ZENITH_ANGLE><AZIMUTH_ANGLE>359</AZIMUTH_ANGLE>
+              </Mean_Viewing_Incidence_Angle>
+              <Mean_Viewing_Incidence_Angle bandId="2">
+                <ZENITH_ANGLE>7</ZENITH_ANGLE><AZIMUTH_ANGLE>3</AZIMUTH_ANGLE>
+              </Mean_Viewing_Incidence_Angle>
+              <Viewing_Incidence_Angles_Grids bandId="1" detectorId="1">
+                <Zenith><Values_List><VALUES>2 NaN</VALUES><VALUES>2 NaN</VALUES></Values_List></Zenith>
+                <Azimuth><Values_List><VALUES>359 NaN</VALUES><VALUES>359 NaN</VALUES></Values_List></Azimuth>
+              </Viewing_Incidence_Angles_Grids>
+              <Viewing_Incidence_Angles_Grids bandId="1" detectorId="2">
+                <Zenith><Values_List><VALUES>NaN 4</VALUES><VALUES>NaN 4</VALUES></Values_List></Zenith>
+                <Azimuth><Values_List><VALUES>NaN 1</VALUES><VALUES>NaN 1</VALUES></Values_List></Azimuth>
+              </Viewing_Incidence_Angles_Grids>
+              <Viewing_Incidence_Angles_Grids bandId="2" detectorId="1">
+                <Zenith><Values_List><VALUES>6 8</VALUES><VALUES>6 8</VALUES></Values_List></Zenith>
+                <Azimuth><Values_List><VALUES>3 5</VALUES><VALUES>3 5</VALUES></Values_List></Azimuth>
+              </Viewing_Incidence_Angles_Grids>
+            </root>
+            """
+        )
+    )
+
+    parsed = _preprocessor()._parse_view_angles(root)
+
+    assert np.allclose(parsed["zenith"], [[4.0, 6.0], [4.0, 6.0]])
+    assert np.allclose(parsed["azimuth"], [[1.0, 3.0], [1.0, 3.0]], atol=1e-5)
+
+
+def test_georeference_angle_grids_uses_tile_metadata_not_subset_extent() -> None:
+    root = ET.fromstring(
+        dedent(
+            """\
+            <root>
+              <HORIZONTAL_CS_CODE>EPSG:32628</HORIZONTAL_CS_CODE>
+              <Geoposition resolution="10"><ULX>300000</ULX><ULY>1700040</ULY></Geoposition>
+              <Sun_Angles_Grid>
+                <Zenith><COL_STEP>5000</COL_STEP><ROW_STEP>5000</ROW_STEP></Zenith>
+              </Sun_Angles_Grid>
+            </root>
+            """
+        )
+    )
+    subset = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [1651000.0, 1650000.0], "x": [350000.0, 351000.0]},
+    ).rio.write_crs("EPSG:32628")
+
+    (grid,) = _preprocessor()._georeference_angle_grids(
+        [np.zeros((2, 3), dtype=np.float32)],
+        subset,
+        metadata_root=root,
+    )
+
+    assert np.array_equal(grid.x.values, [300000.0, 305000.0, 310000.0])
+    assert np.array_equal(grid.y.values, [1700040.0, 1695040.0])
+    assert str(grid.rio.crs) == "EPSG:32628"
 
 
 def test_parse_sun_angles_reads_unprefixed_values_list() -> None:

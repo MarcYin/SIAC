@@ -35,6 +35,8 @@ from siac.domain.protocols import (
 from siac.domain.protocols import (
     SurfacePriorDeriver as SurfacePriorDeriver,
 )
+from siac.domain.rt_space import RTSpace as RTSpace
+from siac.domain.rt_space import describe_aerosol_model as describe_aerosol_model
 from siac.domain.sensors import SensorBand as SensorBand
 from siac.domain.sensors import SensorConfig as SensorConfig
 from siac.domain.spectral import RelativeSpectralResponse as RelativeSpectralResponse

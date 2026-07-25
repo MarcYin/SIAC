@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
+from itertools import product
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -71,6 +73,7 @@ class _SpectralLUTMixin:
         # helpers provided by the ZarrLUTBackend facade.
         lut_path: str
         interpolation_method: str
+        scene_geometry_mode: str
         _lut_coords: dict[str, np.ndarray]
         _scene_subset_logged: bool
         _scene_cache_dir: Path | None
@@ -118,6 +121,8 @@ class _SpectralLUTMixin:
 
         @staticmethod
         def _weighted_spectral_mean(data: xr.DataArray, weights: xr.DataArray) -> xr.DataArray: ...
+
+    _LINEAR_SCENE_CACHE_ANGLE_STEP_DEG = 0.5
 
     @classmethod
     def _axis_midpoint(cls, axis: np.ndarray) -> float:
@@ -310,15 +315,13 @@ class _SpectralLUTMixin:
         tco3: np.ndarray,
         elevation: np.ndarray,
     ) -> tuple[float, ...]:
-        """Build a stable scene cache key snapped to the LUT grid.
+        """Build a stable scene cache key for the configured geometry mode.
 
-        Angle means are snapped to the nearest LUT coordinate (mirroring
-        ``_subset_spectral_lut_for_scene``) so that different spatial
-        resolutions of the same scene (e.g. the atmospheric grid used by
-        preload vs. the coarse grid used by M3) always produce the *same*
-        key and share a single download.
+        Nearest mode snaps angle means to the LUT coordinate. Linear mode keeps
+        the rounded physical means because two scenes within the same nearest
+        cell can have different interpolation weights.
         """
-        return cast(
+        key = cast(
             "tuple[float, ...]",
             spectral_scene_cache_key(
                 sza=sza,
@@ -326,9 +329,23 @@ class _SpectralLUTMixin:
                 raa=raa,
                 tco3=tco3,
                 elevation=elevation,
-                snap_axes=self._lut_coords,
+                snap_axes=(self._lut_coords if self.scene_geometry_mode == "nearest" else None),
             ),
         )
+        if self.scene_geometry_mode != "linear":
+            return key
+
+        # Atmospheric, surface-anchor, and solver grids sample the same scene at
+        # different resolutions, so their angle means can differ by a few tenths
+        # of a degree. Reuse one continuous-interpolation subset within that
+        # negligible tolerance instead of loading the same eight LUT corners
+        # several times per scene.
+        step = self._LINEAR_SCENE_CACHE_ANGLE_STEP_DEG
+        quantized = list(key)
+        for index in range(min(3, len(quantized))):
+            value = float(quantized[index])
+            quantized[index] = float(np.floor(value / step + 0.5) * step)
+        return tuple(quantized)
 
     def _spectral_scene_summary(
         cls,
@@ -423,7 +440,8 @@ class _SpectralLUTMixin:
                 # cutting wall-clock time from ~33 s (sequential) to a few seconds.
                 _t0 = time.perf_counter()
                 if hasattr(subset, "compute"):
-                    subset = subset.compute(scheduler="threads", num_workers=8)
+                    workers = self._spectral_subset_compute_workers()
+                    subset = self._compute_spectral_subset(subset, workers=workers)
                 logger.info("subset.compute() (materialise) %.3f s", time.perf_counter() - _t0)
 
             # Single publication site (we hold the build lock, so no other
@@ -441,13 +459,62 @@ class _SpectralLUTMixin:
             self._store_scene_subset_to_disk(scene_key, subset)
         return scene_key, subset
 
+    @staticmethod
+    def _spectral_subset_compute_workers() -> int:
+        """Resolve worker count for LUT subset materialization."""
+        # In production harnesses, runtime and algorithm pools are usually
+        # coordinated via PHASE_D_MAX_WORKERS. Mirror that setting unless a
+        # dedicated override is explicitly provided.
+        fallback = os.environ.get("PHASE_D_MAX_WORKERS", "8").strip()
+
+        # Keep phase-D serial mode deterministic and thread-safe.
+        if os.environ.get("PHASE_D_SERIAL_POOLS", "0").strip().lower() == "1":
+            return 1
+        value = os.environ.get("SIAC_LUT_SUBSET_COMPUTE_WORKERS")
+        if value is None:
+            try:
+                return max(1, int(fallback))
+            except (TypeError, ValueError):
+                return 8
+
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid SIAC_LUT_SUBSET_COMPUTE_WORKERS=%r; using 8", value)
+            return 8
+        return max(1, parsed)
+
+    @staticmethod
+    def _compute_spectral_subset(
+        subset: xr.Dataset,
+        *,
+        workers: int,
+    ) -> xr.Dataset:
+        """Materialise a scene subset with safe scheduler fallback."""
+        if workers <= 1:
+            return subset.compute(scheduler="single-threaded")
+
+        try:
+            return subset.compute(scheduler="threads", num_workers=workers)
+        except RuntimeError as error:
+            # In constrained environments, thread creation can fail intermittently
+            # with a hard cap on process threads.  Falling back keeps retrievals
+            # progressing deterministically without requiring queue tuning.
+            if "can't start new thread" in str(error).lower():
+                logger.warning(
+                    "LUT subset materialization fallback to single-threaded due thread bootstrap error: %s",
+                    error,
+                )
+                return subset.compute(scheduler="single-threaded")
+            raise
+
     #: Disk-format version of the scene-subset cache. Bump whenever
     #: ``_subset_spectral_lut_for_scene`` semantics change (axis selection,
     #: averaging, unit handling): the key carries no semantic inputs beyond the
     #: scene coordinates, so without a bump old caches would silently serve
     #: subsets built by the old logic. v2: ozone range converted atm-cm -> DU
     #: before slicing (pre-v2 entries were pinned to the 200 DU edge node).
-    _SCENE_SUBSET_CACHE_VERSION = "v2"
+    _SCENE_SUBSET_CACHE_VERSION = "v3"
 
     def _scene_subset_cache_path(self, scene_key: tuple[float, ...]) -> Path | None:
         """On-disk path for this LUT + grid-snapped scene subset (or None)."""
@@ -458,6 +525,8 @@ class _SpectralLUTMixin:
         # scenes never collide and a re-run of the same scene hits.
         raw = (
             self._SCENE_SUBSET_CACHE_VERSION
+            + "|"
+            + self.scene_geometry_mode
             + "|"
             + self.lut_path
             + "|"
@@ -575,15 +644,24 @@ class _SpectralLUTMixin:
     ) -> xr.Dataset:
         """Subset spectral LUT using scene-angle means and ozone/elevation ranges."""
         out = lut
+        linear_geometry: dict[str, tuple[np.ndarray, float]] = {}
 
         for dim, scene_values in {"sza": sza, "vza": vza, "raa": raa}.items():
             if dim in out.coords:
                 axis = np.asarray(out.coords[dim].values, dtype=np.float32)
                 finite_scene_values = self._require_finite_values(scene_values, name=dim)
                 value = self._finite_mean(finite_scene_values, fallback=self._axis_midpoint(axis))
-                out = out.sel({dim: value}, method="nearest")
+                axis_min, axis_max = self._axis_bounds(axis)
+                value = float(np.clip(value, axis_min, axis_max))
+                if self.scene_geometry_mode == "linear" and axis.size > 1:
+                    linear_geometry[dim] = (axis, value)
+                else:
+                    out = out.sel({dim: value}, method="nearest")
             if dim in out.dims and out.sizes.get(dim, 0) == 1:
                 out = out.squeeze(dim=dim, drop=True)
+
+        if linear_geometry:
+            out = self._linear_select_scene_geometry(out, axes=linear_geometry)
 
         # The spectral-LUT schema stores ozone in Dobson units while the SIAC
         # state carries tco3 in atm-cm (DU / 1000). Convert BEFORE slicing:
@@ -612,6 +690,72 @@ class _SpectralLUTMixin:
             out = subset
 
         return out
+
+    @staticmethod
+    def _linear_select_scene_geometry(
+        dataset: xr.Dataset,
+        *,
+        axes: dict[str, tuple[np.ndarray, float]],
+    ) -> xr.Dataset:
+        """Trilinearly collapse scene geometry from at most eight corner slabs."""
+        choices: list[list[tuple[str, int, float]]] = []
+        for dim, (axis, value) in axes.items():
+            choices.append(
+                [
+                    (dim, index, weight)
+                    for index, weight in _SpectralLUTMixin._scene_axis_brackets(
+                        axis,
+                        value=value,
+                        dim=dim,
+                    )
+                ]
+            )
+
+        attrs = dict(dataset.attrs)
+        result: xr.Dataset | None = None
+        for corner in product(*choices):
+            indexers = {dim: index for dim, index, _weight in corner}
+            weight = float(np.prod([entry_weight for _dim, _index, entry_weight in corner]))
+            term = dataset.isel(indexers, drop=True)
+            if weight != 1.0:
+                term = term * weight
+            result = term if result is None else result + term
+        if result is None:
+            return dataset
+        return result.assign_attrs(attrs)
+
+    @staticmethod
+    def _scene_axis_brackets(
+        axis: np.ndarray,
+        *,
+        value: float,
+        dim: str,
+    ) -> tuple[tuple[int, float], ...]:
+        """Return one exact node or two weighted bracketing nodes."""
+        values = np.asarray(axis, dtype=np.float64).reshape(-1)
+        if values.size == 0 or not np.all(np.isfinite(values)):
+            raise ValueError(f"LUT coordinate {dim!r} must contain finite values")
+
+        order = np.argsort(values)
+        ordered = values[order]
+        upper = int(np.searchsorted(ordered, value, side="left"))
+        if upper <= 0:
+            return ((int(order[0]), 1.0),)
+        if upper >= ordered.size:
+            return ((int(order[-1]), 1.0),)
+        if ordered[upper] == value:
+            return ((int(order[upper]), 1.0),)
+
+        lower = upper - 1
+        lo_value = float(ordered[lower])
+        hi_value = float(ordered[upper])
+        if hi_value <= lo_value:
+            raise ValueError(f"LUT coordinate {dim!r} must contain distinct values")
+        weight = (float(value) - lo_value) / (hi_value - lo_value)
+        return (
+            (int(order[lower]), 1.0 - weight),
+            (int(order[upper]), weight),
+        )
 
     @staticmethod
     def _build_aot_tcwv_point_coords(

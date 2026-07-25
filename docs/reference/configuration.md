@@ -135,7 +135,12 @@ Main fields:
 - `method`
 - `psf_sigma_x`
 - `psf_sigma_y`
-- `apply_psf`
+- `apply_psf` — legacy switch; `false` maps to `psf_target = "none"`
+- `psf_target` — where the sensor PSF is applied for the MODIS-derived priors: `observation` (default) convolves the TOA with the fixed-width PSF and co-registers it to the coarse prior with a per-scene integer shift (SIAC v1 behaviour); `prior` convolves the surface prior instead (legacy v2); `none` disables PSF
+- `psf_shift_search_radius_m` — half-width (metres) of the integer co-registration shift search (observation target)
+- `psf_min_correlation` — TOA↔prior correlation required to accept the fitted shift
+- `psf_shift_reference_bands` — AOT-insensitive SWIR bands used to fit the shift (default `["B12", "B11"]`)
+- `psf_convolve_resolution` — `native10m` (default) fits the shift at the PSF calibration resolution where the MODIS-footprint structure is resolvable; `grid` convolves on the coarse solver grid (cheaper, but the shift is unlocalizable there)
 - `whittaker_lambda`
 - `monthly_database_resolution_policy` — for `method = "monthly_database"`, choose `provider_or_coarser` to build the Route-B database at the prepared/provider grid when it is coarser than the AOT grid, or `aerosol` to force the Route-B database/query grid to the configured solver `aerosol_resolution`
 - `bestpixel_source` — for `method = "bestpixel"`, `l2a` uses Sentinel-2 L2A

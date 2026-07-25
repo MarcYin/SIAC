@@ -13,6 +13,7 @@ from siac.runtime.models import copy_spatial_metadata_like
 
 if TYPE_CHECKING:
     from siac.domain import SensorBand
+    from siac.domain.rt_space import RTSpace
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,13 @@ class MonthlyCompositeCollection:
     composites: tuple[MonthlyBestPixelComposite | MonthlyKernelWeightComposite, ...]
     source_bands: tuple[SensorBand, ...]
     source_name: str | None = None
+    #: RT space the composite reflectance was atmospherically corrected in, for
+    #: libraries built by an explicit own-AC. Propagated to
+    #: :attr:`siac.runtime.models.SurfacePrior.rt_space` so the pipeline can
+    #: reject solving against a library corrected in a different RT space.
+    #: ``None`` for externally corrected sources (e.g. vendor L2A), whose space
+    #: is not managed here and therefore cannot be checked.
+    rt_space: RTSpace | None = None
 
 
 def build_monthly_best_pixel_composite(

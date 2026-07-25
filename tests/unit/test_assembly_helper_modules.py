@@ -319,6 +319,8 @@ def test_build_preprocessor_runtime_sets_s2_preload_band_plan() -> None:
         "B04",
         "B03",
         "B08",
+        "B11",
+        "B12",
     )
 
 

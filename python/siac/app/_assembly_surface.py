@@ -67,6 +67,39 @@ def _surface_driven_target_bands(
     return resolved or None
 
 
+def _prior_side_psf_enabled(config: Any) -> bool:
+    """True when the surface prior itself should be PSF-convolved (legacy path).
+
+    Only the ``"prior"`` target keeps convolving the prior; ``"observation"`` moves
+    the PSF onto the TOA (done in the grid assembler) and ``"none"`` disables it.
+    """
+    return bool(getattr(config.algorithms.surface_prior, "psf_target", "prior") == "prior")
+
+
+def _append_shift_reference_band(
+    target_bands: list[Any], sensor_config: SensorConfig | None, config: Any
+) -> list[Any]:
+    """Append an AOT-insensitive SWIR band so the prior carries a shift reference.
+
+    Used only for the MODIS-coarse priors with observation-side PSF: the grid
+    assembler fits the TOA↔prior co-registration shift on this band. It is dropped
+    from the solver bundle by ``_align_surface_prior_to_bands`` (solver unaffected).
+    """
+    sp = config.algorithms.surface_prior
+    if getattr(sp, "psf_target", "prior") != "observation" or sensor_config is None:
+        return target_bands
+    existing = {getattr(band, "name", None) for band in target_bands}
+    for name in getattr(sp, "psf_shift_reference_bands", ("B12", "B11")):
+        if name in existing:
+            return target_bands
+        try:
+            band = sensor_config.get_band(name)
+        except KeyError:
+            continue
+        return [*target_bands, band]
+    return target_bands
+
+
 def _select_visible_surface_prior_bands(sensor_config: SensorConfig) -> list[Any]:
     preferred_by_sensor = {
         "MSI": ("B01", "B02", "B04"),
@@ -291,6 +324,7 @@ def prepare_monthly_surface_prior_runtime(
     median_key = str(
         getattr(config.algorithms.surface_prior, "monthly_database_median_key", "query")
     )
+    composite_uncertainty_scale = float(getattr(monthly_filter, "composite_uncertainty_scale", 1.0))
     database = build_database_fn(
         monthly_composites=monthly_composites,
         geometry=database_geometry,
@@ -300,6 +334,7 @@ def prepare_monthly_surface_prior_runtime(
         spectral_k_neighbors=spectral_k_neighbors,
         max_source_fit_rmse=max_source_fit_rmse,
         median_key=median_key,
+        composite_uncertainty_scale=composite_uncertainty_scale,
     )
     return MonthlySurfacePriorRuntime(
         visible_bands=visible_bands,
@@ -371,6 +406,7 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
     ) -> SurfacePrior:
         _ = (atmo_prior, rt_model)
         target_bands = select_surface_prior_bands(observation.sensor_config)
+        target_bands = _append_shift_reference_band(target_bands, observation.sensor_config, config)
         spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
             config,
             source_bands=tuple(brdf_prov.source_bands),
@@ -388,7 +424,7 @@ def _build_kernel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
         deriver = KernelModelDeriver(
             psf_sigma_x=config.algorithms.surface_prior.psf_sigma_x,
             psf_sigma_y=config.algorithms.surface_prior.psf_sigma_y,
-            apply_psf=config.algorithms.surface_prior.apply_psf,
+            apply_psf=_prior_side_psf_enabled(config),
         )
         return deriver.compute_surface_prior(
             brdf_weights,
@@ -426,10 +462,17 @@ def make_bestpixel_surface_prior_fn(
         from siac.adapters.bestpixel_surface_prior import build_bestpixel_surface_prior
 
         surface_cfg = config.algorithms.surface_prior
-        if str(surface_cfg.bestpixel_source) == "l1c":
+        # ``bestpixel_source`` selects the LIVE acquisition source; a prepared
+        # library supplies already-corrected reflectance and never acquires, so
+        # the unimplemented live-L1C path does not apply to it.
+        if (
+            str(surface_cfg.bestpixel_source) == "l1c"
+            and not getattr(surface_cfg, "prepared_library_path", None)
+        ):
             raise NotImplementedError(
-                "surface_prior.bestpixel_source='l1c' is not implemented yet; "
-                "use 'l2a' or 'hls-s30'."
+                "surface_prior.bestpixel_source='l1c' is not implemented for live "
+                "composite building; use 'l2a' or 'hls-s30', or supply an L1C-derived "
+                "library via surface_prior.prepared_library_path."
             )
         monthly_cfg = config.providers.monthly_composites
         endpoint = str(monthly_cfg.bestpixel_endpoint)
@@ -442,6 +485,7 @@ def make_bestpixel_surface_prior_fn(
         target_bands = _surface_driven_target_bands(
             config, observation.sensor_config
         ) or select_surface_prior_bands(observation.sensor_config)
+        target_bands = _append_shift_reference_band(target_bands, observation.sensor_config, config)
         spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
             config,
             source_bands=source_bands,
@@ -494,6 +538,7 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
     ) -> SurfacePrior:
         _ = (atmo_prior, rt_model)
         target_bands = select_surface_prior_bands(observation.sensor_config)
+        target_bands = _append_shift_reference_band(target_bands, observation.sensor_config, config)
         spectral_library, spectral_k_neighbors = surface_prior_mapping_state(
             config,
             source_bands=tuple(brdf_prov.source_bands),
@@ -512,7 +557,7 @@ def _build_whittaker_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorF
             temporal_lambda=config.algorithms.surface_prior.whittaker_lambda,
             psf_sigma_x=config.algorithms.surface_prior.psf_sigma_x,
             psf_sigma_y=config.algorithms.surface_prior.psf_sigma_y,
-            apply_psf=config.algorithms.surface_prior.apply_psf,
+            apply_psf=_prior_side_psf_enabled(config),
         )
         return deriver.compute_surface_prior(
             brdf_weights,
@@ -605,10 +650,14 @@ def _build_monthly_surface_prior(
                     temporal_window=config.providers.brdf.temporal_window,
                 ),
             )
+            # The monthly→kernel fallback yields a MODIS-coarse prior but does NOT
+            # flow through the observation-side PSF assembler path (that is gated to
+            # the kernel/whittaker methods). Keep prior-side PSF here so the coarse
+            # fallback prior is still scale-matched, unless PSF is fully disabled.
             fallback_deriver = KernelModelDeriver(
                 psf_sigma_x=config.algorithms.surface_prior.psf_sigma_x,
                 psf_sigma_y=config.algorithms.surface_prior.psf_sigma_y,
-                apply_psf=config.algorithms.surface_prior.apply_psf,
+                apply_psf=getattr(config.algorithms.surface_prior, "psf_target", "prior") != "none",
             )
             return fallback_deriver.compute_surface_prior(
                 brdf_weights,

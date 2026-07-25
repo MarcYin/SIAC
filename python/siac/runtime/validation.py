@@ -93,6 +93,40 @@ def validate_surface_prior(prior: SurfacePrior) -> None:
         ) from err
 
 
+def validate_rt_space_consistency(
+    prior: SurfacePrior, rt_model: object, solver_config: object = None
+) -> None:
+    """Reject a surface prior corrected in a different RT space than the solve.
+
+    A prior whose reflectance was produced by atmospheric correction is only
+    meaningful in the RT model that corrected it. Solving against it with a
+    different backend or aerosol model injects a systematic surface offset,
+    which the solver converts into biased AOT because surface error amplifies
+    into AOT error by one to two orders of magnitude.
+
+    Priors that carry no RT identity (``rt_space is None``) are not checked:
+    externally corrected products such as BRDF kernels have no managed space.
+    """
+
+    from siac.domain.rt_space import RTSpace
+
+    prior_space = prior.rt_space
+    if prior_space is None:
+        return
+
+    solve_space = RTSpace.for_solver(rt_model, solver_config)
+    if solve_space is None or prior_space.matches(solve_space):
+        return
+
+    raise ValidationError(
+        f"Surface prior was atmospherically corrected in RT space {prior_space}, "
+        f"but the solver runs in {solve_space}. Correcting the surface library in "
+        "one RT space and solving in another injects a systematic surface offset "
+        "that biases retrieved AOT. Rebuild the prior in the solver's RT space, or "
+        "configure the solver to use the prior's."
+    )
+
+
 def validate_solver_input_bundle(sib: SolverInputBundle) -> None:
     config_bands = {b.name for b in sib.sensor_config.bands}
     solver_bands = {b.name for b in sib.bands}

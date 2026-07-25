@@ -131,6 +131,7 @@ class MonthlyCompositeDatabase:
     feature_names: tuple[str, ...]
     y_coords: xr.DataArray
     x_coords: xr.DataArray
+    composite_uncertainty_scale: float = 1.0
     composites: tuple[MonthlyBestPixelComposite, ...] = ()
 
     @cached_property
@@ -198,9 +199,10 @@ class MonthlyCompositeDatabase:
             neighbour_quality = np.nan_to_num(np.asarray(quality, dtype=np.float32), nan=0.0)[
                 np.newaxis, :, :
             ]
+            scaled_quality = np.float32(self.composite_uncertainty_scale) * neighbour_quality
             floored_uncertainty = np.sqrt(
                 np.asarray(uncertainty, dtype=np.float32) ** 2
-                + neighbour_quality**2
+                + scaled_quality**2
                 + _MONTHLY_UNCERTAINTY_FLOOR**2
             ).astype(np.float32)
             uncertainty_da = xr.DataArray(
@@ -336,6 +338,7 @@ def build_monthly_composite_database(
     visible_bands: Sequence[str],
     max_source_fit_rmse: float | None = None,
     median_key: str = "query",
+    composite_uncertainty_scale: float = 1.0,
 ) -> MonthlyCompositeDatabase:
     """Build the Route-B database from one or more monthly composites.
 
@@ -352,6 +355,8 @@ def build_monthly_composite_database(
         raise ValueError("visible_bands must not be empty")
     if median_key not in ("query", "all"):
         raise ValueError(f"median_key must be 'query' or 'all', got {median_key!r}")
+    if not np.isfinite(composite_uncertainty_scale) or composite_uncertainty_scale < 0.0:
+        raise ValueError("composite_uncertainty_scale must be finite and >= 0")
     include_visible_median = median_key == "all"
 
     query_names = tuple(query_bands)
@@ -471,5 +476,6 @@ def build_monthly_composite_database(
         feature_names=feature_names,
         y_coords=first.coords["y"],
         x_coords=first.coords["x"],
+        composite_uncertainty_scale=float(composite_uncertainty_scale),
         composites=tuple(composites),
     )

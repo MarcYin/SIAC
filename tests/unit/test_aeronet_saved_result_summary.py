@@ -45,6 +45,19 @@ def test_summarize_result_files_prefers_phase_d_within_ee(tmp_path: Path) -> Non
     assert summary.out_sites == ("site",)
 
 
+def test_summarize_result_files_counts_phase_d_failure_as_out(tmp_path: Path) -> None:
+    path = _write_json(
+        tmp_path / "failed.json",
+        {"matchup_id": "failed-site", "status": "FAILED", "reason": "missing prior"},
+    )
+
+    summary = summarize_result_files([path])
+
+    assert summary.total == 1
+    assert summary.within_ee == 0
+    assert summary.out_sites == ("failed-site",)
+
+
 def test_expand_result_patterns_accepts_globs(tmp_path: Path) -> None:
     first = _write_json(tmp_path / "a.json", {"flag": "OK"})
     second = _write_json(tmp_path / "b.json", {"flag": "OK"})

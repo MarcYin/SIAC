@@ -10,8 +10,10 @@ from siac.adapters.data.s2_data_source import (
     S2Product,
     S2Query,
     deduplicate_products,
+    fetch_s2,
     select_best_product,
 )
+from siac.errors import DataNotFoundError
 
 # ── S2Query ───────────────────────────────────────────────────────────
 
@@ -132,3 +134,16 @@ class TestDeduplication:
     def test_select_best_empty_raises(self):
         with pytest.raises(ValueError, match="No products"):
             select_best_product([])
+
+
+def test_fetch_reports_empty_catalog_as_data_unavailable(tmp_path):
+    class EmptyBackend:
+        def search(self, query):  # noqa: ANN001
+            return []
+
+        def download(self, product, dest_dir):  # noqa: ANN001
+            raise AssertionError("download must not run for an empty search")
+
+    product_id = "S2B_MSIL1C_20240410T110619_N0510_R137_T30TVK_20240410T120333"
+    with pytest.raises(DataNotFoundError, match=product_id):
+        fetch_s2(EmptyBackend(), product_id, tmp_path)

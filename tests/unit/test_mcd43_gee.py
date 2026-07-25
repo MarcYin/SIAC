@@ -209,7 +209,7 @@ def _write_fake_edown(path: Path, payload_dir: Path) -> None:
     """A stand-in edown that writes a synthetic tiff into the output root."""
     script = textwrap.dedent(
         f"""
-        #!/usr/bin/env python3
+        #!{os.sys.executable}
         import sys
         from pathlib import Path
         sys.path.insert(0, {str(Path(__file__).parent)!r})
@@ -220,6 +220,21 @@ def _write_fake_edown(path: Path, payload_dir: Path) -> None:
         images.mkdir(parents=True, exist_ok=True)
         _write_synthetic_tiff(images / "MODIS_061_MCD43A1_2024_02_17.tif")
         print("fake edown wrote 1 image")
+        """
+    ).strip()
+    path.write_text(script)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IRUSR)
+
+
+def _write_missing_module_edown(path: Path) -> None:
+    """A stand-in edown that fails with the exact ModuleNotFoundError pattern."""
+    script = textwrap.dedent(
+        f"""
+        #!{os.sys.executable}
+        import sys
+
+        sys.stderr.write("ModuleNotFoundError: No module named 'edown'\\n")
+        raise SystemExit(1)
         """
     ).strip()
     path.write_text(script)
@@ -257,6 +272,27 @@ def test_get_brdf_parameters_end_to_end_with_fake_edown(tmp_path: Path) -> None:
         temporal_window=4,
     )
     assert np.isfinite(again.f0.values).any()
+
+
+def test_get_brdf_parameters_falls_back_when_primary_edown_is_broken(tmp_path: Path) -> None:
+    primary = tmp_path / "bad_edown"
+    fallback = tmp_path / "good_edown"
+    _write_missing_module_edown(primary)
+    _write_fake_edown(fallback, tmp_path)
+
+    provider = MCD43GEEProvider(cache_dir=tmp_path / "cache", edown_executable=str(primary))
+    provider._edown_executables = (str(primary), str(fallback))
+
+    bounds, _ = _target_template()
+    weights = provider.get_brdf_parameters(
+        bounds=bounds,
+        crs="EPSG:4326",
+        obs_time=datetime(2024, 2, 17),
+        target_resolution=0.01,
+        bands=_s2_bands(),
+        temporal_window=4,
+    )
+    assert np.isfinite(weights.f0.values).any()
 
 
 def test_qa_uncertainty_scales_with_reflectance() -> None:

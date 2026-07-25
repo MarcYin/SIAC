@@ -66,13 +66,16 @@ from siac.config.public import get_default_config as get_default_config
 from siac.config.public import get_jasmin_config as get_jasmin_config
 from siac.config.public import get_lut_config as get_lut_config
 from siac.config.public import (
+    get_surface_driven_hls_s30_config as get_surface_driven_hls_s30_config,
+)
+from siac.config.public import (
     get_surface_driven_l2a_config as get_surface_driven_l2a_config,
 )
 from siac.config.public import (
     get_surface_driven_l2a_monthly_predictor_config as get_surface_driven_l2a_monthly_predictor_config,
 )
 from siac.config.public import (
-    get_surface_driven_hls_s30_config as get_surface_driven_hls_s30_config,
+    get_surface_driven_v1_config as get_surface_driven_v1_config,
 )
 from siac.config.request import RunRequest as RunRequest
 from siac.config.resolve import resolve_auth as resolve_auth

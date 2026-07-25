@@ -69,6 +69,18 @@ def _finite_fixed_prior_field(
     return cast("Float32Array", filled)
 
 
+def _has_spatial_variation(field: np.ndarray) -> bool:
+    """Whether a fixed atmospheric field cannot be represented by one LUT scalar."""
+
+    values = np.asarray(field, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    if finite.size < 2:
+        return False
+    span = float(np.max(finite) - np.min(finite))
+    scale = max(1.0, float(np.max(np.abs(finite))))
+    return span > (1e-6 * scale)
+
+
 def _subsample_geometry(geometry: GeometryAngles, step: int) -> GeometryAngles:
     """Return a subsampled copy of the geometry angles."""
     return GeometryAngles(
@@ -276,8 +288,17 @@ def build_candidate_coeff_provider(
     # or sixs.mode == "direct"), build_joint_grid_search_lut returns None
     # and we fall through to the original per-candidate compute path.
     joint_lut = None
+    # JointGridSearchLUT.evaluate accepts scalar AOT and TCWV coordinates. A
+    # parameter fixed to a non-uniform prior must instead remain a field in
+    # each per-candidate RT call; otherwise the shortcut silently substitutes
+    # its scalar axis value for the requested physical state.
+    spatial_fixed_parameters: list[str] = []
+    if not solve_aot and _has_spatial_variation(coeff_atmo_template.aot.values):
+        spatial_fixed_parameters.append("aot")
+    if not solve_tcwv and _has_spatial_variation(coeff_atmo_template.tcwv.values):
+        spatial_fixed_parameters.append("tcwv")
     joint_lut_builder = rt_optional_capability(rt_model, "build_joint_grid_search_lut")
-    if joint_lut_builder is not None:
+    if joint_lut_builder is not None and not spatial_fixed_parameters:
         try:
             joint_lut = joint_lut_builder(
                 geometry=coeff_geometry,
@@ -292,6 +313,11 @@ def build_candidate_coeff_provider(
                 "per-candidate scene-LUT compute path."
             )
             joint_lut = None
+    elif joint_lut_builder is not None:
+        logger.info(
+            "Skipping joint grid-search LUT to preserve fixed spatial %s field(s).",
+            ",".join(spatial_fixed_parameters),
+        )
 
     if joint_lut is not None:
         logger.info(

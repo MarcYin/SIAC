@@ -107,7 +107,7 @@ aerosol_resolution = 60.0          # 60m beat 120m on the high-AOD subset (Napol
 grid_search_aot_points = 11        # log-spaced AOT nodes (only used when aot_axis="log")
 surface_driven_backstop_calibrated = true
 surface_driven_reference_tcwv = 2.0  # cost-cube RT at the validated reference atmosphere (with sea-level dem above)
-surface_driven_scene_mean_geometry = true  # evaluate cost-cube RT at AOI-mean geometry (matches harness)
+surface_driven_scene_mean_geometry = true  # use one AOI-mean geometry for anchor correction and AOD solving
 # Resolve on the surface prior's NATIVE (composite) grid instead of a fresh grid
 # built from the observation bounds. CORRECTNESS / ROBUSTNESS option, NOT an EE
 # lever: it removes a ~3% sub-pixel composite-vs-obs-bounds prior smear and fixes
@@ -119,15 +119,20 @@ surface_driven_scene_mean_geometry = true  # evaluate cost-cube RT at AOI-mean g
 surface_driven_resolve_on_prior_grid = false
 surface_driven_pool_radius_m = 600.0
 water_mask_buffer_pixels = 32
-# Validated L2A 85.5% recipe (surface-driven scoped; multigrid unaffected):
+# L2A surface-driven recipe (surface-driven scoped; multigrid unaffected):
 surface_driven_solve_bands = ["B01", "B02", "B04"]   # add 443nm deep-blue B01 (deepens AOD signal)
 surface_driven_cost_mode = "auto2"  # shape (moderate band) + absolute (clean/high tails)
 surface_driven_aot_axis = "acixthree"  # fine non-uniform AOT axis (denser at low AOD)
-surface_driven_ignore_cloud_water = true  # harness GATE=0: solve finite TOA; pooling/support reject bad pixels
+# Cloud/water/no-observation pixels are excluded and remain NaN in the AOD field.
+# For a diagnosed thick-aerosol false positive only, set the cloud-only rescue to
+# true; water and finite-observation support remain enforced.
+surface_driven_allow_cloud_retrieval = false
+surface_driven_ignore_cloud_water = false  # legacy broad override; avoid for normal retrieval
 surface_driven_aod_clean = 0.15
 surface_driven_aod_high = 0.6
 # Native-6S Path A switch (heavy, not the measured LUT default above):
-# set [algorithms.rt].backend = "sixs", then enable the 3 nearest CCI species.
+# Set [algorithms.rt].backend = "sixs", then select one tile-wide aerosol
+# mixture from the 3 nearest CCI species using minimum median surface cost.
 surface_driven_aerosol_species = "none"  # "cci_climatology" for native 6S + CCI species
 surface_driven_aerosol_species_candidates = 3
 

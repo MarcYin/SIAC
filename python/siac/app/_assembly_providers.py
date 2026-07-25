@@ -403,6 +403,39 @@ def resolve_monthly_composite_provider(
 
 
 def resolve_atmo_provider(config: Any, auth: CredentialManager | None = None) -> AtmoPriorFn:
-    provider_name = config.providers.atmo.kind
-    provider = _build_registered_component(ATMO_PROVIDER_REGISTRY, provider_name, config, auth)
-    return cast("AtmosphericPriorProvider", provider).get_prior
+    atmo_config = config.providers.atmo
+    provider = cast(
+        "AtmosphericPriorProvider",
+        _build_registered_component(ATMO_PROVIDER_REGISTRY, atmo_config.kind, config, auth),
+    )
+
+    fuse_with = tuple(getattr(atmo_config, "fuse_aod_with", ()) or ())
+    if fuse_with:
+        from siac.adapters.atmo.fusion import FusedAODProvider
+
+        sources = [
+            cast(
+                "AtmosphericPriorProvider",
+                _build_registered_component(ATMO_PROVIDER_REGISTRY, kind, config, auth),
+            )
+            for kind in fuse_with
+        ]
+        provider = FusedAODProvider(
+            provider, sources, op=getattr(atmo_config, "fuse_aod_op", "max")
+        )
+
+    prepared_path = getattr(atmo_config, "prepared_scalar_path", None)
+    if prepared_path:
+        from siac.adapters.atmo.prepared import PreparedScalarAODProvider
+
+        # Applied last: a prepared AOD is authoritative over anything derived
+        # live, including a fusion, since it was validated when it was prepared.
+        provider = PreparedScalarAODProvider(
+            provider,
+            prepared_path,
+            scene_key=getattr(atmo_config, "prepared_scalar_scene_key", None),
+            required=bool(getattr(atmo_config, "prepared_scalar_required", True)),
+            tcwv_cm=getattr(atmo_config, "prepared_scalar_tcwv_cm", None),
+        )
+
+    return provider.get_prior

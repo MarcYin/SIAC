@@ -26,6 +26,35 @@ from siac.runtime import (
 from siac.runtime.validation import validate_solver_input_bundle
 
 
+def test_atmo_cache_identity_fingerprints_unmarked_source_field() -> None:
+    """Same scene must not share a cache entry when an atmo field changes."""
+    first = xr.DataArray(
+        [[1.2, 1.3], [1.4, 1.5]],
+        dims=("y", "x"),
+        coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
+    )
+    second = first.copy(data=first.values + 0.2)
+
+    first_id = assembler_mod._atmo_cache_source_identity("scene", "tcwv", first)
+    second_id = assembler_mod._atmo_cache_source_identity("scene", "tcwv", second)
+
+    assert first_id.startswith("atmo-v2:scene:tcwv:content:")
+    assert first_id != second_id
+
+
+def test_atmo_cache_identity_uses_provider_provenance() -> None:
+    """A provider can avoid content hashing with an immutable asset identity."""
+    field = xr.DataArray(
+        [[1.2, 1.3]],
+        dims=("y", "x"),
+        attrs={"siac_atmo_cache_identity": "l2a-wvp:asset-a"},
+    )
+
+    source_id = assembler_mod._atmo_cache_source_identity("scene", "tcwv", field)
+
+    assert source_id == "atmo-v2:scene:tcwv:provenance:l2a-wvp:asset-a"
+
+
 @pytest.fixture
 def large_obs_bundle():
     """ObservationBundle at 64x64 (simulating ~10 m native) with 4 bands."""

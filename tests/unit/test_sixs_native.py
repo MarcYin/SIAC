@@ -777,6 +777,22 @@ def test_find_built_extension_searches_recent_extra_roots(tmp_path: Path) -> Non
     assert found == module_path
 
 
+def test_find_built_extension_ignores_runtime_isolation_copies(tmp_path: Path) -> None:
+    build_paths = resolve_build_paths(SixSAlgorithmConfig(build_dir=str(tmp_path / "build")))
+    build_paths.root_dir.mkdir(parents=True, exist_ok=True)
+    stable_module = build_paths.root_dir / f"{build_paths.module_name}.cpython-stable.so"
+    stable_module.write_text("stable", encoding="utf-8")
+    isolated_dir = build_paths.root_dir / "siac_rt6s_module_transient"
+    isolated_dir.mkdir()
+    isolated_module = isolated_dir / f"{build_paths.module_name}.cpython-transient.so"
+    isolated_module.write_text("transient", encoding="utf-8")
+    isolated_module.touch()
+
+    found = _find_built_extension(build_paths)
+
+    assert found == stable_module
+
+
 def test_scene_lut_plan_and_auto_selection_reduce_native_case_count() -> None:
     case_arrays = {
         "sza_deg": np.full(32, 25.0, dtype=np.float64),

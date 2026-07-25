@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
+
+#: How several AOD sources combine into one aerosol prior. See
+#: :class:`siac.adapters.atmo.fusion.FusedAODProvider`.
+AODFusionOp = Literal["max", "min", "mean"]
 
 DEFAULT_LUT_URL = (
     "https://gws-access.jasmin.ac.uk/public/nceo_isp/"

@@ -96,6 +96,19 @@ def _merge_rt_setup(base: RTSetupConfig, override: RTSetupConfig | None) -> RTSe
     return RTSetupConfig.model_validate(payload)
 
 
+def _coerce_lut_setup(requested: RTSetupConfig) -> RTSetupConfig:
+    """Coerce legacy LUT RT setup values to the packaged preset schema."""
+
+    aerosol = requested.aerosol
+    if aerosol is None or aerosol.profile != "continental":
+        return requested
+
+    return requested.model_copy(
+        deep=True,
+        update={"aerosol": aerosol.model_copy(update={"profile": "continental_average"})},
+    )
+
+
 def resolve_backend_rt_setup(backend: str, setup: Any) -> RTSetupConfig:
     """Resolve an explicit RT setup payload against backend defaults."""
 
@@ -116,6 +129,7 @@ def resolve_backend_rt_setup(backend: str, setup: Any) -> RTSetupConfig:
         # natively, so (unlike sixs) the aerosol family is not rejected.
         return _merge_rt_setup(DEFAULT_LIBRADTRAN_RT_SETUP, requested)
     if backend == "lut":
+        requested = _coerce_lut_setup(requested)
         validate_lut_requested_setup(requested)
         return DEFAULT_LUT_RT_SETUP.model_copy(deep=True)
     return requested
