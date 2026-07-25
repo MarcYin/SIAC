@@ -282,7 +282,7 @@ L2A_LUT_PREDICT_VISIBLE_DEBIAS: dict[str, tuple[float, float]] = {
 
 def get_surface_driven_v1_config(
     *,
-    prepared_library_path: str | Path,
+    prepared_library_path: str | Path | None = None,
     cache_root: str | Path | None = None,
 ) -> SIACConfig:
     """Return the validated v1 surface-driven AOD recipe.
@@ -297,8 +297,7 @@ def get_surface_driven_v1_config(
       by same-day aerosol loading, then atmospherically corrected with the same
       6S + CCI-climatology model the solver uses. Correcting it in a different
       RT space instead costs 5.4 points (74.3% vs 79.7%) on identical imagery,
-      which is why ``prepared_library_path`` is required rather than optional:
-      the library declares its RT space and the pipeline checks it.
+      so the library declares its RT space and the pipeline checks it.
     * **Exact CCI climatology aerosol with a bounded absorbing fraction.**
       Scene-resolved species cut AOD RMSE by a quarter against a fixed
       continental profile and fix the high-AOD over-retrievals; capping the
@@ -313,14 +312,19 @@ def get_surface_driven_v1_config(
       any fitting against reference data. This is the single largest term:
       +5.4 points, concentrated in the prior-limited moderate band (69% → 84%).
 
-    ``prepared_library_path`` points at the per-scene library store; see
-    :class:`siac.adapters.surface_library.PreparedSurfaceLibrary` for its layout.
+    **Surface source.** With ``prepared_library_path`` set, the prior comes from
+    that per-scene library (see
+    :class:`siac.adapters.surface_library.PreparedSurfaceLibrary` for its
+    layout) — the configuration the 84.6% was measured on. Left unset, the prior
+    is built live from Sentinel-2 L2A composites, which runs on any scene with
+    no offline preparation but corrects the surface in the L2A processor's RT
+    space rather than the solver's, costing a few points.
     """
 
     return _get_surface_driven_bestpixel_config(
         cache_root=cache_root,
         bestpixel_endpoint="pc",
-        bestpixel_source="l1c",
+        bestpixel_source="l1c" if prepared_library_path else "l2a",
     ).with_overrides(
         paths={
             # Real terrain, not the sea-level sentinel the bestpixel presets
@@ -340,7 +344,11 @@ def get_surface_driven_v1_config(
         },
         algorithms={
             "surface_prior": {
-                "prepared_library_path": Path(prepared_library_path).expanduser(),
+                "prepared_library_path": (
+                    Path(prepared_library_path).expanduser()
+                    if prepared_library_path is not None
+                    else None
+                ),
                 "bestpixel_window_reduction": "window",
                 "bestpixel_predict_visible": True,
                 "bestpixel_predict_visible_bands": ("B02", "B03", "B04"),
