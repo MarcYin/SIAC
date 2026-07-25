@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RUNTIME="/gws/ssde/j25a/nceo_isp/public/siac_env/edown_runtime"
+PY="/home/users/marcyin/SIAC/.pixi/envs/default/bin/python"
+
+export PYTHONPATH="${RUNTIME}${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${PY}" -m edown "$@"

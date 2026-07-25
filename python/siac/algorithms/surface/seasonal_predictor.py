@@ -145,7 +145,9 @@ def _scene_mean_angle(field: xr.DataArray, *, circular: bool) -> xr.DataArray:
     if finite.size == 0:
         mean = 0.0
     elif circular:
-        mean = float(np.mod(np.arctan2(np.mean(np.sin(finite)), np.mean(np.cos(finite))), 2.0 * np.pi))
+        mean = float(
+            np.mod(np.arctan2(np.mean(np.sin(finite)), np.mean(np.cos(finite))), 2.0 * np.pi)
+        )
     else:
         mean = float(np.mean(finite))
     return xr.full_like(field, np.float32(mean))

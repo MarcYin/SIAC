@@ -135,9 +135,7 @@ class SIACConfig(SystemConfig):
 #: Copernicus GLO-30 digital elevation model as a remote VRT. Terrain height
 #: sets surface pressure, which scales Rayleigh scattering — the dominant
 #: atmospheric signal in the blue bands the AOD solve relies on.
-COPERNICUS_GLO30_DEM_VRT = (
-    "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt"
-)
+COPERNICUS_GLO30_DEM_VRT = "/vsicurl/https://raw.githubusercontent.com/MarcYin/Copernicus_GLO_30_DEM_VRT/refs/heads/main/copernicus_GLO_30_dem.vrt"
 
 
 def get_default_config() -> SIACConfig:
@@ -242,27 +240,16 @@ def _get_surface_driven_bestpixel_config(
                 "aerosol_resolution": 60.0,
                 "grid_search_aot_points": 11,
                 "surface_driven_backstop_calibrated": True,
-                "surface_driven_backstop_escape_enabled": False,
-                "surface_driven_backstop_escape_low_aot": 0.08,
-                "surface_driven_backstop_escape_cost_threshold": 20.0,
-                "surface_driven_backstop_escape_delta": 0.05,
-                "surface_driven_backstop_escape_band_spread": 0.25,
-                "surface_driven_backstop_escape_min_jump": 0.35,
-                "surface_driven_backstop_escape_cost_ratio": 1.8,
                 "surface_driven_reference_tcwv": 2.0,
                 "surface_driven_scene_mean_geometry": True,
                 "surface_driven_resolve_on_prior_grid": False,
                 "surface_driven_pool_radius_m": 600.0,
                 "water_mask_buffer_pixels": 32,
                 "surface_driven_solve_bands": ["B01", "B02", "B04"],
-                "surface_driven_cost_mode": "auto2",
                 "surface_driven_aot_axis": "acixthree",
                 "surface_driven_allow_cloud_retrieval": False,
                 "surface_driven_ignore_cloud_water": False,
-                "surface_driven_aod_clean": 0.15,
-                "surface_driven_aod_high": 0.6,
                 "surface_driven_aerosol_species": "none",
-                "surface_driven_aerosol_species_candidates": 3,
             },
         },
     }
@@ -275,21 +262,6 @@ def _get_surface_driven_bestpixel_config(
         payload["providers"]["monthly_composites"]["bestpixel_disk_cache"] = root / "bestpixel"
 
     return SIACConfig.model_validate(payload)
-
-
-def get_surface_driven_l2a_config(*, cache_root: str | Path | None = None) -> SIACConfig:
-    """Return the opt-in S2 L2A clean-day surface-driven AOD recipe.
-
-    Uses the Planetary Computer Sentinel-2 L2A bestpixel endpoint
-    (``bestpixel_endpoint="pc"``), MAIAC low-AOD day gating, and the
-    surface-driven AOT solver.
-    """
-
-    return _get_surface_driven_bestpixel_config(
-        cache_root=cache_root,
-        bestpixel_endpoint="pc",
-        bestpixel_source="l2a",
-    )
 
 
 #: Global visible-predictor debias for Sen2Cor L2A dictionaries solved in the
@@ -306,45 +278,6 @@ L2A_LUT_PREDICT_VISIBLE_DEBIAS: dict[str, tuple[float, float]] = {
     "B03": (-0.0006, 0.0235),
     "B04": (-0.0011, 0.0223),
 }
-
-
-def get_surface_driven_l2a_monthly_predictor_config(
-    *, cache_root: str | Path | None = None
-) -> SIACConfig:
-    """Return the default single-surface monthly L2A predictor AOD recipe (K2).
-
-    This preset uses Planetary Computer Sentinel-2 L2A monthly bestpixel
-    composites as the dictionary for the ExtraTree visible-band surface prior
-    (anchor bands corrected through the configured RT backend), applies the
-    globally MAIAC-calibrated Sen2Cor->LUT debias and a 0.015 BOA uncertainty
-    floor, and solves surface-driven AOD from B02/B04 with the standard 1.2 km
-    cost-pooling window. Validated 2026-07-03: 52/62 = 83.9% within-EE,
-    AOD RMSE 0.108 over the 62-site AERONET set (deterministic).
-    """
-
-    return _get_surface_driven_bestpixel_config(
-        cache_root=cache_root,
-        bestpixel_endpoint="pc",
-        bestpixel_source="l2a",
-    ).with_overrides(
-        providers={
-            "monthly_composites": {
-                "bestpixel_top_k": 15,
-            },
-        },
-        algorithms={
-            "surface_prior": {
-                "bestpixel_window_reduction": "window",
-                "bestpixel_predict_visible": True,
-                "bestpixel_predict_visible_bands": ("B02", "B04"),
-                "bestpixel_predict_visible_uncertainty_floor": 0.015,
-                "bestpixel_predict_visible_debias": dict(L2A_LUT_PREDICT_VISIBLE_DEBIAS),
-            },
-            "solver": {
-                "surface_driven_solve_bands": ("B02", "B04"),
-            },
-        },
-    )
 
 
 def get_surface_driven_v1_config(
@@ -430,12 +363,6 @@ def get_surface_driven_v1_config(
                 "surface_driven_solve_bands": ("B02", "B03", "B04"),
                 "surface_driven_tau_dependent_prior": True,
                 "surface_driven_aerosol_species": "cci_climatology_exact",
-                # The validated recipe scores the plain chi-squared cost. The
-                # bestpixel base preset selects "auto2", whose shape-augmented
-                # curve is ~4x flatter at thick-aerosol scenes, letting the
-                # backstop drag the minimum well below the surface solution
-                # (Cinzana: 0.80 vs 1.10 with identical priors and sigma).
-                "surface_driven_cost_mode": "chi2",
                 # One AOI-mean geometry for anchor correction and cost-cube RT,
                 # as validated. Sentinel-2 view angles vary little over a solve
                 # AOI, and per-pixel geometry shifts retrievals by ~one AOD node
@@ -443,19 +370,4 @@ def get_surface_driven_v1_config(
                 "surface_driven_scene_mean_geometry": True,
             },
         },
-    )
-
-
-def get_surface_driven_hls_s30_config(*, cache_root: str | Path | None = None) -> SIACConfig:
-    """Return the opt-in HLS S30 clean-day surface-driven AOD recipe.
-
-    Uses the Planetary Computer HLS S30-only bestpixel endpoint
-    (``bestpixel_endpoint="hls-s30"``), MAIAC low-AOD day gating, and the same
-    surface-driven AOT solver settings as the L2A helper.
-    """
-
-    return _get_surface_driven_bestpixel_config(
-        cache_root=cache_root,
-        bestpixel_endpoint="hls-s30",
-        bestpixel_source="hls-s30",
     )

@@ -25,7 +25,9 @@ from tools.aeronet_validation.analyze_surface_driven_failures import (  # noqa: 
     _row_for_mid,
 )
 
-from siac.algorithms.solver.surface_driven import integrated_cost_field_aod_from_npz  # noqa: E402
+from tools.aeronet_validation.cost_field_analysis import (  # noqa: E402
+    integrated_cost_field_aod_from_npz,
+)
 
 DEFAULT_RESULTS_DIR = (
     DEFAULT_ROOT / "phaseD_results_campaign250_surface_bad89_R2_localdiag_20260705"

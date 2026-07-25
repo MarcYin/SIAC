@@ -1,2 +1,1 @@
 """Aerosol-species climatology assets."""
-

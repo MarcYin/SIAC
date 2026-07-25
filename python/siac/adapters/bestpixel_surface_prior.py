@@ -840,9 +840,7 @@ def build_bestpixel_surface_prior(
         anchor_aot_field=predictor_anchor_prior.aot,
         target_band_columns=target_band_columns,
         debias=debias,
-        predictor_model=str(
-            getattr(surface_cfg, "bestpixel_predict_visible_model", "extra_tree")
-        ),
+        predictor_model=str(getattr(surface_cfg, "bestpixel_predict_visible_model", "extra_tree")),
         uncertainty_floor=float(
             getattr(surface_cfg, "bestpixel_predict_visible_uncertainty_floor", 0.006)
         ),
@@ -859,12 +857,6 @@ def build_bestpixel_surface_prior(
                     False,
                 )
             )
-            or getattr(
-                getattr(getattr(config, "algorithms", None), "solver", None),
-                "surface_driven_tau_gate_cost",
-                None,
-            )
-            is not None
         ),
         ensemble_aggregation=str(
             getattr(surface_cfg, "bestpixel_predict_visible_aggregation", "median")

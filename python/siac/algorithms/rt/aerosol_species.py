@@ -239,8 +239,7 @@ def climatology_cci_aerosol_setup(
         if len(vals) == 4 and sum(vals) > 0.0:
             total = sum(vals)
             fractions = dict(
-                zip(("dust", "sea_salt", "fine_strong", "fine_weak"),
-                    [v / total for v in vals])
+                zip(("dust", "sea_salt", "fine_strong", "fine_weak"), [v / total for v in vals])
             )
     cap_raw = os.environ.get("SIAC_SPECIES_FINE_STRONG_CAP", "")
     if cap_raw.lower() in {"none", "off"}:

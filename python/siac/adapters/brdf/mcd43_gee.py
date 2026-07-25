@@ -335,10 +335,7 @@ class MCD43GEEProvider:
             if result.returncode == 0 or any(out_root.glob("images/*/*.tif")):
                 return out_root
             stderr = result.stderr or result.stdout or ""
-            if (
-                ("No module named 'edown'" in stderr)
-                and candidate != self._edown_executables[-1]
-            ):
+            if ("No module named 'edown'" in stderr) and candidate != self._edown_executables[-1]:
                 logger.warning(
                     "edown command missing module in %s; trying fallback executable: %s",
                     quote(candidate),

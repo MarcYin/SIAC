@@ -545,9 +545,7 @@ class CachedMCD19AODProvider(MCD19AODProvider):
         paths = self._cached_paths(obs_time)
         selected = self._select_candidate_paths(paths, obs_time, bounds, crs)
         if not selected:
-            logger.info(
-                "No cached %s granules cover the requested AOI/time.", self._source_name
-            )
+            logger.info("No cached %s granules cover the requested AOI/time.", self._source_name)
             return None
         try:
             return self._load_from_granules(

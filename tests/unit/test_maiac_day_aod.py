@@ -136,6 +136,7 @@ def test_day_aod_map_drops_all_nan_day(monkeypatch: pytest.MonkeyPatch) -> None:
         return np.full((2, 2), np.nan, dtype=np.float32), {}
 
     monkeypatch.setattr(maiac_mod, "read_hdf4_dataset", _fake_read)
+
     def _fake_native(values: np.ndarray, *, granule_path: str | Path) -> xr.DataArray:
         return xr.DataArray(np.asarray(values), dims=("y", "x"))
 

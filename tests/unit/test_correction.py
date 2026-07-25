@@ -152,9 +152,7 @@ class TestAtmosphericCorrector:
         assert np.isfinite(result.boa["B04"].values[0, 0])
         assert bool(result.cloud_mask.values[0, 0])
 
-    def test_correct_skips_fully_invalid_band_from_scene_mask(
-        self, sample_inputs, mock_rt_model
-    ):
+    def test_correct_skips_fully_invalid_band_from_scene_mask(self, sample_inputs, mock_rt_model):
         """A band with no valid pixel anywhere (e.g. the Sentinel-2 cirrus band
         B10, which has no surface product and corrects to NaN everywhere) carries
         no per-pixel validity signal and must not flag the whole scene invalid."""

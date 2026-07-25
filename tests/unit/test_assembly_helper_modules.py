@@ -367,9 +367,11 @@ def test_build_preprocessor_runtime_adds_bestpixel_predictor_anchor_bands() -> N
 def test_bestpixel_surface_prior_receives_secondary_anchor_atmo(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from siac.config import get_surface_driven_l2a_monthly_predictor_config
+    from siac.config import get_surface_driven_v1_config
 
-    config = get_surface_driven_l2a_monthly_predictor_config(cache_root=tmp_path / "cache")
+    config = get_surface_driven_v1_config(
+        prepared_library_path=tmp_path / "library", cache_root=tmp_path / "cache"
+    )
     observation = SimpleNamespace(
         sensor_config=SENTINEL2A_CONFIG,
         bounds=(0.0, 0.0, 1.0, 1.0),

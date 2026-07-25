@@ -25,7 +25,7 @@ def stub_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         providers,
         "_build_registered_component",
-        lambda registry, name, config, auth=None: _Recorder(str(name)),
+        lambda _registry, name, _config, auth=None: _Recorder(str(name)),  # noqa: ARG005
     )
 
 

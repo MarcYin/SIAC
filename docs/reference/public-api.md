@@ -34,16 +34,12 @@ Useful constructors:
 - `SIACConfig()`
 - `SIACConfig.from_file(path)`
 - `SIACConfig.load(path=None, **overrides)`
-- `get_surface_driven_l2a_config(cache_root=None)` for the opt-in S2 L2A
-  clean-day surface-driven AOD recipe
-- `get_surface_driven_l2a_monthly_predictor_config(cache_root=None)` for the
-  default monthly L2A ExtraTree visible-prior recipe (`unc_floor=0.015`, the
-  globally MAIAC-calibrated Sen2Cor->LUT debias, B02/B04 solve, scene-mean AOD
-  summary via `siac.workflows.aod_scene_mean`; validated 52/62 = 83.9%
-  within-EE on the 62-site AERONET set, deterministic)
-- `get_surface_driven_hls_s30_config(cache_root=None)` for the same
-  surface-driven recipe using Planetary Computer HLS S30-only bestpixel
-  composites
+- `get_surface_driven_v1_config(prepared_library_path, cache_root=None)` for
+  the validated v1 surface-driven AOD recipe: a prepared surface library in the
+  solver's own RT space, native 6S with the CCI-climatology aerosol species, a
+  max(MAIAC, CAMS) aerosol backstop, and the 20-tree visible predictor. Scores
+  85.0% within EE on the 152-site AERONET campaign (79.6% with a single-source
+  aerosol prior).
 
 Useful methods:
 

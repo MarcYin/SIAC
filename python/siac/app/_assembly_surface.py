@@ -465,9 +465,8 @@ def make_bestpixel_surface_prior_fn(
         # ``bestpixel_source`` selects the LIVE acquisition source; a prepared
         # library supplies already-corrected reflectance and never acquires, so
         # the unimplemented live-L1C path does not apply to it.
-        if (
-            str(surface_cfg.bestpixel_source) == "l1c"
-            and not getattr(surface_cfg, "prepared_library_path", None)
+        if str(surface_cfg.bestpixel_source) == "l1c" and not getattr(
+            surface_cfg, "prepared_library_path", None
         ):
             raise NotImplementedError(
                 "surface_prior.bestpixel_source='l1c' is not implemented for live "
@@ -520,12 +519,6 @@ def make_bestpixel_surface_prior_fn(
         getattr(config.algorithms.surface_prior, "bestpixel_predict_visible", False)
     )
     return mark_surface_prior_metadata(_surface_prior, requires_atmo_prior=requires_atmo)
-
-
-@SURFACE_PRIOR_METHOD_REGISTRY.register("bestpixel")
-def _build_bestpixel_surface_prior(config: Any, brdf_prov: Any) -> SurfacePriorFn:
-    _ = brdf_prov  # bestpixel priors do not use the BRDF provider.
-    return make_bestpixel_surface_prior_fn(config)
 
 
 @SURFACE_PRIOR_METHOD_REGISTRY.register("whittaker")

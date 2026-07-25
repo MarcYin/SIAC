@@ -61,8 +61,7 @@ class GenericAODCalibrator:
             self.aod_min,
             self.aod_max,
         )
-        prediction = (
-            (model_prediction + self.aod_shift) * np.exp(self.global_log_offset)
-            - self.aod_shift
-        )
+        prediction = (model_prediction + self.aod_shift) * np.exp(
+            self.global_log_offset
+        ) - self.aod_shift
         return np.clip(prediction, self.aod_min, self.aod_max)

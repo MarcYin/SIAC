@@ -34,7 +34,6 @@ from siac.app._assembly_surface import (
     make_bestpixel_surface_prior_fn,
     resolve_surface_prior_provider,
 )
-from siac.app.registry import SURFACE_PRIOR_METHOD_REGISTRY
 from siac.catalog.sensors.sentinel2 import SENTINEL2A_CONFIG
 from siac.config import SIACConfig
 from siac.runtime import SurfacePrior
@@ -717,16 +716,8 @@ def test_default_maiac_day_aod_is_callable() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# registry dispatch + l1c guard
+# resolver dispatch + l1c guard
 # --------------------------------------------------------------------------- #
-def test_registry_dispatch_returns_surface_prior_fn() -> None:
-    factory = SURFACE_PRIOR_METHOD_REGISTRY.get("bestpixel")
-    config = SIACConfig.model_validate({"algorithms": {"surface_prior": {"method": "bestpixel"}}})
-    fn = factory(config, None)
-    assert callable(fn)
-    assert fn.requires_atmo_prior is False
-
-
 def test_resolve_surface_prior_provider_handles_bestpixel() -> None:
     config = SIACConfig.model_validate({"algorithms": {"surface_prior": {"method": "bestpixel"}}})
     fn = resolve_surface_prior_provider(config)

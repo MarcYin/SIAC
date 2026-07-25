@@ -68,7 +68,9 @@ def test_cached_provider_returns_none_without_matching_granules(tmp_path: Path) 
     assert state is None
 
 
-def test_cached_provider_treats_empty_qa_coverage_as_expected(tmp_path: Path, monkeypatch, caplog) -> None:
+def test_cached_provider_treats_empty_qa_coverage_as_expected(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
     """A staged fallback should not report valid-but-empty MAIAC data as a parser failure."""
     path = tmp_path / "MCD19A2.A2024002.h18v08.061.fake.hdf"
     path.touch()

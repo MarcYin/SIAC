@@ -117,9 +117,7 @@ def _period_dict(band_dn: dict[str, int], *, unc_dn: int = 200) -> dict[str, Any
         "bands": {
             name: np.full((height, width), dn, dtype=np.uint16) for name, dn in band_dn.items()
         },
-        "boa_unc": {
-            name: np.full((height, width), unc_dn, dtype=np.float32) for name in band_dn
-        },
+        "boa_unc": {name: np.full((height, width), unc_dn, dtype=np.float32) for name in band_dn},
         "observation_count": np.full((height, width), 5, dtype=np.uint16),
         "quality": np.zeros((height, width), dtype=np.uint16),
         "grid": {
@@ -134,9 +132,7 @@ def _period_dict(band_dn: dict[str, int], *, unc_dn: int = 200) -> dict[str, Any
     }
 
 
-def _install_fake_bestpixel(
-    monkeypatch: pytest.MonkeyPatch, periods: list[dict[str, Any]]
-) -> None:
+def _install_fake_bestpixel(monkeypatch: pytest.MonkeyPatch, periods: list[dict[str, Any]]) -> None:
     def _build_monthly_composites(**_kwargs: Any) -> list[dict[str, Any]]:
         return periods
 

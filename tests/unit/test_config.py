@@ -28,11 +28,8 @@ from siac.config import (
     SixSAlgorithmConfig,
     SolverAlgorithmConfig,
     SurfacePriorAlgorithmConfig,
-    get_surface_driven_hls_s30_config,
     get_jasmin_config,
     get_lut_config,
-    get_surface_driven_l2a_config,
-    get_surface_driven_l2a_monthly_predictor_config,
     load_system_config,
     overlay_env_secrets,
 )
@@ -141,110 +138,6 @@ class TestSIACConfig:
         assert config.algorithms.solver.water_mask_buffer_pixels == 32
         assert config.algorithms.solver.stages[0].bands == ("B01", "B02", "B04")
         assert config.algorithms.solver.sharp_transition_filter.enabled is True
-
-    def test_surface_driven_l2a_example_config_matches_recipe(self):
-        config = SIACConfig.from_file(Path("docs/siac-config.surface-driven.example.toml"))
-
-        assert config.providers.atmo.kind == "mcd19"
-        assert config.providers.atmo.maiac_best_quality_qa is True
-        assert config.providers.monthly_composites.kind == "bestpixel"
-        assert config.providers.monthly_composites.bestpixel_endpoint == "pc"
-        assert config.providers.monthly_composites.bestpixel_lookback_years == 5
-        assert config.providers.monthly_composites.bestpixel_seasonal_window_months == 1
-        assert config.algorithms.surface_prior.method == "bestpixel"
-        assert config.algorithms.surface_prior.bestpixel_source == "l2a"
-        assert config.algorithms.surface_prior.bestpixel_window_reduction == "daily_median"
-        assert config.algorithms.surface_prior.bestpixel_low_aod_frac == 0.6
-        assert config.algorithms.surface_prior.bestpixel_robust_clip == 1.5
-        assert config.algorithms.rt.backend == "lut"
-        assert config.algorithms.solver.method == "surface_driven"
-        assert config.algorithms.solver.aerosol_resolution == 60.0
-        assert config.algorithms.solver.surface_driven_reference_tcwv == 2.0
-        assert config.algorithms.solver.surface_driven_scene_mean_geometry is True
-        assert config.algorithms.solver.surface_driven_solve_bands == ("B01", "B02", "B04")
-        assert config.algorithms.solver.surface_driven_cost_mode == "auto2"
-        assert config.algorithms.solver.surface_driven_aot_axis == "acixthree"
-        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
-
-    def test_surface_driven_l2a_helper_matches_recipe(self, tmp_path: Path):
-        config = get_surface_driven_l2a_config(cache_root=tmp_path / "cache")
-
-        assert str(config.paths.dem) == "none"
-        assert config.providers.atmo.kind == "mcd19"
-        assert config.providers.atmo.maiac_best_quality_qa is True
-        assert config.providers.atmo.cache_dir == tmp_path / "cache" / "atmo"
-        assert config.providers.s2.processing_level == "L1C"
-        assert config.providers.s2.max_cloud_cover == 100.0
-        assert config.providers.monthly_composites.kind == "bestpixel"
-        assert config.providers.monthly_composites.bestpixel_endpoint == "pc"
-        assert config.providers.monthly_composites.bestpixel_lookback_years == 5
-        assert config.providers.monthly_composites.bestpixel_seasonal_window_months == 1
-        assert (
-            config.providers.monthly_composites.bestpixel_disk_cache
-            == tmp_path / "cache" / "bestpixel"
-        )
-        assert config.algorithms.surface_prior.method == "bestpixel"
-        assert config.algorithms.surface_prior.bestpixel_source == "l2a"
-        assert config.algorithms.surface_prior.bestpixel_window_reduction == "daily_median"
-        assert config.algorithms.surface_prior.bestpixel_low_aod_frac == 0.6
-        assert config.algorithms.surface_prior.bestpixel_robust_clip == 1.5
-        assert config.algorithms.rt.backend == "lut"
-        assert config.algorithms.solver.method == "surface_driven"
-        assert config.algorithms.solver.aerosol_resolution == 60.0
-        assert config.algorithms.solver.surface_driven_reference_tcwv == 2.0
-        assert config.algorithms.solver.surface_driven_scene_mean_geometry is True
-        assert config.algorithms.solver.surface_driven_solve_bands == ("B01", "B02", "B04")
-        assert config.algorithms.solver.surface_driven_cost_mode == "auto2"
-        assert config.algorithms.solver.surface_driven_aot_axis == "acixthree"
-        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
-
-    def test_surface_driven_l2a_monthly_predictor_helper_matches_recipe(self, tmp_path: Path):
-        config = get_surface_driven_l2a_monthly_predictor_config(cache_root=tmp_path / "cache")
-
-        assert config.providers.monthly_composites.bestpixel_endpoint == "pc"
-        assert config.providers.monthly_composites.bestpixel_top_k == 15
-        assert config.algorithms.surface_prior.method == "bestpixel"
-        assert config.algorithms.surface_prior.bestpixel_source == "l2a"
-        assert config.algorithms.surface_prior.bestpixel_window_reduction == "window"
-        assert config.algorithms.surface_prior.bestpixel_predict_visible is True
-        assert config.algorithms.surface_prior.bestpixel_predict_visible_bands == (
-            "B02",
-            "B04",
-        )
-        assert (
-            config.algorithms.surface_prior.bestpixel_predict_visible_uncertainty_floor
-            == pytest.approx(0.015)
-        )
-        assert (
-            config.algorithms.surface_prior.bestpixel_predict_visible_anchor_source == "atmo_prior"
-        )
-        debias = config.algorithms.surface_prior.bestpixel_predict_visible_debias
-        assert debias is not None
-        assert debias["B02"] == pytest.approx((-0.0003, 0.0243))
-        assert debias["B04"] == pytest.approx((-0.0011, 0.0223))
-        assert config.runtime.grid_resample_workers == 1
-        assert config.algorithms.solver.method == "surface_driven"
-        assert config.algorithms.solver.surface_driven_solve_bands == ("B02", "B04")
-        assert config.algorithms.solver.surface_driven_pool_radius_m == pytest.approx(600.0)
-        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
-
-    def test_surface_driven_hls_s30_helper_matches_recipe(self, tmp_path: Path):
-        config = get_surface_driven_hls_s30_config(cache_root=tmp_path / "cache")
-
-        assert config.providers.monthly_composites.kind == "bestpixel"
-        assert config.providers.monthly_composites.bestpixel_endpoint == "hls-s30"
-        assert config.algorithms.surface_prior.method == "bestpixel"
-        assert config.algorithms.surface_prior.bestpixel_source == "hls-s30"
-        assert config.algorithms.surface_prior.bestpixel_window_reduction == "daily_median"
-        assert config.algorithms.surface_prior.bestpixel_low_aod_frac == 0.6
-        assert config.algorithms.surface_prior.bestpixel_robust_clip == 1.5
-        assert config.algorithms.solver.method == "surface_driven"
-        assert config.algorithms.solver.surface_driven_solve_bands == ("B01", "B02", "B04")
-        assert config.algorithms.solver.surface_driven_allow_cloud_retrieval is False
-        assert config.algorithms.solver.surface_driven_ignore_cloud_water is False
 
     def test_solver_stage_rejects_solve_fixed_overlap(self):
         with pytest.raises(ValueError, match="cannot both solve and fix"):
@@ -504,14 +397,9 @@ class TestSixSConfig:
 
         default_cfg = SolverAlgorithmConfig()
         assert default_cfg.surface_driven_aerosol_species == "none"
-        assert default_cfg.surface_driven_aerosol_species_candidates == 3
 
-        cfg = SolverAlgorithmConfig(
-            surface_driven_aerosol_species="cci_climatology",
-            surface_driven_aerosol_species_candidates=5,
-        )
-        assert cfg.surface_driven_aerosol_species == "cci_climatology"
-        assert cfg.surface_driven_aerosol_species_candidates == 5
+        cfg = SolverAlgorithmConfig(surface_driven_aerosol_species="cci_climatology_exact")
+        assert cfg.surface_driven_aerosol_species == "cci_climatology_exact"
 
         exact = SolverAlgorithmConfig(surface_driven_aerosol_species="cci_climatology_exact")
         assert exact.surface_driven_aerosol_species == "cci_climatology_exact"

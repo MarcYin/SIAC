@@ -17,9 +17,7 @@ def _rows() -> list[dict[str, object]]:
             "truth": truth,
             "baseline": baseline,
         }
-        for index, (truth, baseline) in enumerate(
-            ((0.1, 0.1), (0.4, 0.1), (0.8, 0.8))
-        )
+        for index, (truth, baseline) in enumerate(((0.1, 0.1), (0.4, 0.1), (0.8, 0.8)))
     ]
 
 

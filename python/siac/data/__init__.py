@@ -1,2 +1,1 @@
 """Packaged SIAC data assets."""
-

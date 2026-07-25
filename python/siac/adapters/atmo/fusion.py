@@ -160,8 +160,7 @@ class FusedAODProvider:
             aligned = _align_to(state.aot, other.aot)
             if aligned is None:
                 logger.warning(
-                    "Could not align AOD source %s onto the %s grid; "
-                    "continuing without it.",
+                    "Could not align AOD source %s onto the %s grid; continuing without it.",
                     getattr(source, "source_name", "unknown"),
                     getattr(self._primary, "source_name", "primary"),
                 )

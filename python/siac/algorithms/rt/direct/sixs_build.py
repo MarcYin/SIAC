@@ -1556,10 +1556,7 @@ def _find_built_extension(
                 # never promote one of those copies to the canonical module:
                 # its owning session can delete it while another process is
                 # constructing workers from the returned path.
-                if any(
-                    parent.name.startswith("siac_rt6s_module_")
-                    for parent in candidate.parents
-                ):
+                if any(parent.name.startswith("siac_rt6s_module_") for parent in candidate.parents):
                     continue
                 stat = candidate.stat()
                 if min_mtime is not None and stat.st_mtime < min_mtime:

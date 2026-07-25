@@ -34,8 +34,6 @@ def test_generic_aod_calibrator_rejects_mismatched_rows() -> None:
 
 
 def test_generic_aod_calibrator_clips_model_before_global_offset() -> None:
-    model = GenericAODCalibrator(
-        ("a", "b"), _FixedEstimator([-10.0]), global_log_offset=0.1
-    )
+    model = GenericAODCalibrator(("a", "b"), _FixedEstimator([-10.0]), global_log_offset=0.1)
     prediction = model.predict([0.0], [{"a": 1.0}])
     assert prediction[0] == pytest.approx((np.exp(0.1) - 1.0) / 3.0)

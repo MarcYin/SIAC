@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 # Explicit "use sea level (elevation = 0)" sentinels for ``paths.dem`` — handy
 # because TOML has no null literal, so a user can write dem = "none".
-_SEA_LEVEL_SENTINELS = frozenset({"none", "sealevel", "sea_level", "sea-level", "0", "off", "false"})
+_SEA_LEVEL_SENTINELS = frozenset(
+    {"none", "sealevel", "sea_level", "sea-level", "0", "off", "false"}
+)
 
 
 def use_sea_level_elevation(dem_path: str | None) -> bool:

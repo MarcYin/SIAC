@@ -2377,16 +2377,14 @@ class TestMultiGridSolver:
         aot_unc2 = np.full((2, 3), 0.3, dtype=np.float32)
         tcwv_unc2 = np.full((2, 3), 0.4, dtype=np.float32)
 
-        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc = (
-            MultiGridSolver._adopt_lower_cost_high_aot(
-                near_top=near_top,
-                block_size=1,
-                shape=near_top.shape,
-                pass1_costs=pass1_costs,
-                pass2_costs=pass2_costs,
-                pass1=(aot1, tcwv1, aot_unc1, tcwv_unc1),
-                pass2=(aot2, tcwv2, aot_unc2, tcwv_unc2),
-            )
+        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc = MultiGridSolver._adopt_lower_cost_high_aot(
+            near_top=near_top,
+            block_size=1,
+            shape=near_top.shape,
+            pass1_costs=pass1_costs,
+            pass2_costs=pass2_costs,
+            pass1=(aot1, tcwv1, aot_unc1, tcwv_unc1),
+            pass2=(aot2, tcwv2, aot_unc2, tcwv_unc2),
         )
 
         expected_switch = np.array(
@@ -2425,16 +2423,14 @@ class TestMultiGridSolver:
         aot_unc2 = np.full((3, 3), 0.3, dtype=np.float32)
         tcwv_unc2 = np.full((3, 3), 0.4, dtype=np.float32)
 
-        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc = (
-            MultiGridSolver._adopt_lower_cost_high_aot(
-                near_top=near_top,
-                block_size=2,
-                shape=near_top.shape,
-                pass1_costs=pass1_costs,
-                pass2_costs=pass2_costs,
-                pass1=(aot1, tcwv1, aot_unc1, tcwv_unc1),
-                pass2=(aot2, tcwv2, aot_unc2, tcwv_unc2),
-            )
+        out_aot, out_tcwv, out_aot_unc, out_tcwv_unc = MultiGridSolver._adopt_lower_cost_high_aot(
+            near_top=near_top,
+            block_size=2,
+            shape=near_top.shape,
+            pass1_costs=pass1_costs,
+            pass2_costs=pass2_costs,
+            pass1=(aot1, tcwv1, aot_unc1, tcwv_unc1),
+            pass2=(aot2, tcwv2, aot_unc2, tcwv_unc2),
         )
 
         expected_switch = np.array(
