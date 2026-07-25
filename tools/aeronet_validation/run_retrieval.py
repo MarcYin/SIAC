@@ -10,13 +10,13 @@ the stage is resumable and SLURM-array friendly.
 
 from __future__ import annotations
 
-import argparse
 import logging
+import os
 import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from tools.aeronet_validation.common import (
@@ -26,12 +26,17 @@ from tools.aeronet_validation.common import (
     ExperimentPaths,
     map_legacy_earthdata_env,
     read_json,
+    require_slurm_execution,
     resolve_cams_data_path,
     resolve_lut_path,
     write_json,
 )
 
+if TYPE_CHECKING:
+    import argparse
+
 logger = logging.getLogger("aeronet_validation.run")
+LOCAL_EDOWN_RUNTIME = Path(__file__).resolve().parents[1] / "edown_runtime"
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,21 @@ class RunSettings:
     max_workers: int
     save_rasters: bool
     overwrite: bool
+
+
+def _resolve_edown_executable() -> Path:
+    configured = os.environ.get("SIAC_EDOWN_EXECUTABLE") or os.environ.get("EDOWN_EXECUTABLE")
+    candidates = [Path(configured).expanduser()] if configured else []
+    candidates.append(LOCAL_EDOWN_RUNTIME)
+
+    from siac.adapters.brdf.mcd43_gee import DEFAULT_EDOWN_EXECUTABLE
+
+    candidates.append(Path(DEFAULT_EDOWN_EXECUTABLE).expanduser())
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    searched = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(f"edown executable not found; searched: {searched}")
 
 
 def build_config_payload(
@@ -72,6 +92,7 @@ def build_config_payload(
             "brdf": {
                 "kind": "mcd43_gee",
                 "cache_dir": str(cache / "mcd43_gee"),
+                "data_path": str(_resolve_edown_executable()),
                 "temporal_window": 16,
                 "use_cache": True,
             },
@@ -148,7 +169,8 @@ def extract_site_statistics(
         window_values = values[in_window]
         finite = window_values[np.isfinite(window_values)]
         nearest = field.sel(x=x_site, y=y_site, method="nearest")
-        statistics[f"{name}_nearest"] = float(nearest.values)
+        nearest_value = float(nearest.values)
+        statistics[f"{name}_nearest"] = nearest_value if np.isfinite(nearest_value) else None
         statistics[f"{name}_window_mean"] = float(finite.mean()) if finite.size else None
         statistics[f"{name}_window_median"] = float(np.median(finite)) if finite.size else None
         statistics[f"{name}_window_std"] = float(finite.std(ddof=0)) if finite.size else None
@@ -181,8 +203,8 @@ def run_single(
     result_path = run_dir / "result.json"
     if result_path.exists() and not settings.overwrite:
         existing_status = read_json(result_path).get("status")
-        if existing_status == "ok":
-            logger.info("Skipping %s/%s: successful result exists", approach, matchup_id)
+        if existing_status in {"ok", "no_valid_observation"}:
+            logger.info("Skipping %s/%s: terminal result exists", approach, matchup_id)
             return {"matchup_id": matchup_id, "approach": approach, "status": "cached"}
         logger.info(
             "Re-running %s/%s: previous result status was %r",
@@ -222,7 +244,9 @@ def run_single(
         record.update(
             extract_site_statistics(result, longitude, latitude, settings.extract_radius_m)
         )
-        record["status"] = "ok"
+        record["status"] = (
+            "ok" if int(record.get("aot_window_n_valid", 0)) > 0 else "no_valid_observation"
+        )
         if settings.save_rasters:
             _save_rasters(result, run_dir / "fields.nc")
     except Exception as error:  # noqa: BLE001 - per-task failure is recorded, not fatal
@@ -328,6 +352,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-workers", type=int, default=4)
     parser.add_argument("--no-rasters", action="store_true", help="Skip writing fields.nc.")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--allow-login",
+        action="store_true",
+        help="Run locally on an interactive node (not recommended).",
+    )
 
 
 def _preflight_gee_source() -> None:
@@ -338,16 +367,10 @@ def _preflight_gee_source() -> None:
     credentials under ~/.config/earthengine. Checking once per job turns an
     obscure mid-pipeline failure into an immediate, actionable error.
     """
-    from pathlib import Path
-
-    from siac.adapters.brdf.mcd43_gee import DEFAULT_EDOWN_EXECUTABLE
-
-    edown = Path(DEFAULT_EDOWN_EXECUTABLE)
-    if not edown.exists():
-        raise SystemExit(
-            f"edown executable not found at {edown}. Install edown (the GEE BRDF "
-            "downloader) or set providers.brdf.data_path to its path."
-        )
+    try:
+        edown = _resolve_edown_executable()
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
     creds = Path.home() / ".config" / "earthengine" / "credentials"
     if not creds.exists():
         raise SystemExit(
@@ -358,6 +381,14 @@ def _preflight_gee_source() -> None:
 
 
 def run(args: argparse.Namespace, paths: ExperimentPaths) -> None:
+    require_slurm_execution(
+        "AERONET retrieval stage",
+        allow_login=args.allow_login,
+        suggestion=(
+            "Use `make-slurm` from `tools.aeronet_validation.cli` and submit via "
+            "`sbatch` (for example: `sbatch <data-root>/slurm/submit_runs.sbatch`)."
+        ),
+    )
     paths.ensure()
     _preflight_gee_source()
     settings = RunSettings(

@@ -33,6 +33,8 @@ def _is_within_ee(record: dict[str, Any]) -> bool:
         return bool(record["within_ee"])
     if "flag" in record:
         return str(record["flag"]).upper() == "OK"
+    if "status" in record and str(record["status"]).upper() != "OK":
+        return False
     raise ValueError("Result JSON must contain either 'within_ee' or 'flag'.")
 
 

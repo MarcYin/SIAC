@@ -8,7 +8,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 DEFAULT_DATA_ROOT = Path("/gws/ssde/j25a/nceo_isp/public/siac_refactor")
 
@@ -23,6 +23,11 @@ DEFAULT_DEM = (
     "refs/heads/main/copernicus_GLO_30_dem.vrt"
 )
 DEFAULT_WATER_MASK = "https://zenodo.org/records/14899246/files/landWater2020.vrt?download=1"
+_SLURM_ENV_VARS: Final[tuple[str, ...]] = (
+    "SLURM_JOB_ID",
+    "SLURM_ARRAY_JOB_ID",
+    "SLURM_JOB_NAME",
+)
 
 #: Surface-prior approaches under comparison. Each entry is a nested config
 #: overlay merged into the shared base config, so the solver/RT side stays
@@ -37,6 +42,39 @@ APPROACHES: dict[str, dict[str, Any]] = {
     "monthly_database": {
         "algorithms": {"surface_prior": {"method": "monthly_database"}},
         "providers": {"monthly_composites": {"kind": "generated_brdf"}},
+    },
+    "monthly_database_spread_only": {
+        "algorithms": {
+            "surface_prior": {
+                "method": "monthly_database",
+                "monthly_database_filter": {"composite_uncertainty_scale": 0.0},
+            }
+        },
+        "providers": {"monthly_composites": {"kind": "generated_brdf"}},
+    },
+    "monthly_database_spread_only_aot25": {
+        "algorithms": {
+            "surface_prior": {
+                "method": "monthly_database",
+                "monthly_database_filter": {"composite_uncertainty_scale": 0.0},
+            },
+            "solver": {"bounds": {"aot": (0.001, 2.5)}},
+        },
+        "providers": {"monthly_composites": {"kind": "generated_brdf"}},
+    },
+    "monthly_database_spread_only_aot25_legacy_resample": {
+        "algorithms": {
+            "surface_prior": {
+                "method": "monthly_database",
+                "monthly_database_filter": {"composite_uncertainty_scale": 0.0},
+            },
+            "solver": {
+                "bounds": {"aot": (0.001, 2.5)},
+                "water_mask_buffer_pixels": 0,
+            },
+        },
+        "providers": {"monthly_composites": {"kind": "generated_brdf"}},
+        "runtime": {"grid_resample_workers": 6},
     },
 }
 
@@ -115,6 +153,28 @@ class ExperimentPaths:
             self.slurm_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
+
+
+def is_slurm_job() -> bool:
+    """Return True when current process runs under a Slurm allocation."""
+    return any(var in os.environ for var in _SLURM_ENV_VARS)
+
+
+def require_slurm_execution(
+    workload_name: str,
+    *,
+    allow_login: bool = False,
+    suggestion: str = "Submit through the matching Slurm script instead of running locally.",
+) -> None:
+    """Guard against running expensive compute on login nodes.
+
+    Some experiment workflows are designed to run under batch scheduling and can
+    be costly in both CPU and memory. By default we fail fast when those jobs
+    are started interactively, and ask for explicit override.
+    """
+    if allow_login or is_slurm_job():
+        return
+    raise SystemExit(f"Refusing to run {workload_name} on the login node.\n{suggestion}")
 
 
 def setup_logging(level: str = "INFO", log_file: Path | None = None) -> None:

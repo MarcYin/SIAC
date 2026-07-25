@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import xarray as xr
@@ -32,11 +33,21 @@ from siac.runtime import AtmosphericState, GeometryAngles, RTCoefficients
 
 # Sentinel-2 visible/NIR/SWIR bands (nominal centre/bandwidth in nm).
 _BAND_CATALOG: dict[str, SensorBand] = {
-    "B01": SensorBand(name="B01", center_wavelength=443.0, bandwidth=20.0, resolution=60.0, band_index=0),
-    "B02": SensorBand(name="B02", center_wavelength=492.0, bandwidth=66.0, resolution=10.0, band_index=1),
-    "B03": SensorBand(name="B03", center_wavelength=560.0, bandwidth=36.0, resolution=10.0, band_index=2),
-    "B04": SensorBand(name="B04", center_wavelength=665.0, bandwidth=31.0, resolution=10.0, band_index=3),
-    "B8A": SensorBand(name="B8A", center_wavelength=865.0, bandwidth=21.0, resolution=20.0, band_index=8),
+    "B01": SensorBand(
+        name="B01", center_wavelength=443.0, bandwidth=20.0, resolution=60.0, band_index=0
+    ),
+    "B02": SensorBand(
+        name="B02", center_wavelength=492.0, bandwidth=66.0, resolution=10.0, band_index=1
+    ),
+    "B03": SensorBand(
+        name="B03", center_wavelength=560.0, bandwidth=36.0, resolution=10.0, band_index=2
+    ),
+    "B04": SensorBand(
+        name="B04", center_wavelength=665.0, bandwidth=31.0, resolution=10.0, band_index=3
+    ),
+    "B8A": SensorBand(
+        name="B8A", center_wavelength=865.0, bandwidth=21.0, resolution=20.0, band_index=8
+    ),
 }
 
 
@@ -67,8 +78,13 @@ def _scene(case: PointCase) -> tuple[GeometryAngles, AtmosphericState]:
     geom = GeometryAngles.from_degrees(_u(case.sza), _u(150.0), _u(case.vza), _u(150.0 - case.raa))
     zeros = _u(0.0)
     atmo = AtmosphericState(
-        aot=_u(case.aot), tcwv=_u(case.tcwv), tco3=_u(case.tco3),
-        aot_unc=zeros, tcwv_unc=zeros, tco3_unc=zeros, elevation=_u(case.elevation),
+        aot=_u(case.aot),
+        tcwv=_u(case.tcwv),
+        tco3=_u(case.tco3),
+        aot_unc=zeros,
+        tcwv_unc=zeros,
+        tco3_unc=zeros,
+        elevation=_u(case.elevation),
     )
     return geom, atmo
 
@@ -93,6 +109,12 @@ def main() -> None:
     parser.add_argument("--wavelength-max", type=float, default=2500.0)
     parser.add_argument("--nodes", type=int, default=3, help="Grid nodes per aot/tcwv axis.")
     parser.add_argument("--json", type=str, default=None, help="Optional path for a JSON report.")
+    parser.add_argument(
+        "--reference-json",
+        type=Path,
+        default=None,
+        help="Reuse direct libRadtran coefficients from an earlier JSON report.",
+    )
     args = parser.parse_args()
 
     bands = [_BAND_CATALOG[name] for name in args.bands.split(",")]
@@ -102,35 +124,75 @@ def main() -> None:
         scene_lut_max_nodes_per_axis=int(args.nodes),
         scene_lut_max_cases=2 * int(args.nodes) ** 2,
     )
-    libradtran = LibRadtranBackend(libradtran_config=lr_cfg, rt_setup=DEFAULT_LIBRADTRAN_RT_SETUP)
+    libradtran = (
+        None
+        if args.reference_json is not None
+        else LibRadtranBackend(libradtran_config=lr_cfg, rt_setup=DEFAULT_LIBRADTRAN_RT_SETUP)
+    )
+    reference: dict[tuple[str, str, str], float] = {}
+    if args.reference_json is not None:
+        payload = json.loads(args.reference_json.read_text())
+        reference = {
+            (str(entry["case"]), str(entry["band"]), str(entry["coeff"])): float(
+                entry["libradtran"]
+            )
+            for entry in payload["entries"]
+        }
     remote = ZarrLUTBackend(args.lut_path, rt_setup=DEFAULT_LUT_RT_SETUP)
 
     report: list[dict] = []
-    print(f"{'case':16s} {'band':5s} {'coeff':4s} {'libradtran':>12s} {'remoteLUT':>12s} {'rel_diff':>10s}")
+    print(
+        f"{'case':16s} {'band':5s} {'coeff':4s} {'libradtran':>12s} {'remoteLUT':>12s} {'rel_diff':>10s}"
+    )
     for case in _cases():
         geom, atmo = _scene(case)
         for band in bands:
-            lr = _scalars(libradtran.compute_coefficients(geom, atmo, band))
+            if libradtran is None:
+                lr = {
+                    coeff: reference[(case.name, band.name, coeff)]
+                    for coeff in ("xap", "xbp", "xcp")
+                }
+            else:
+                lr = _scalars(libradtran.compute_coefficients(geom, atmo, band))
             rm = _scalars(remote.compute_coefficients(geom, atmo, band))
             for coeff in ("xap", "xbp", "xcp"):
                 rel = _rel(rm[coeff], lr[coeff])
                 report.append(
-                    {"case": case.name, "band": band.name, "coeff": coeff,
-                     "libradtran": lr[coeff], "remote_lut": rm[coeff], "rel_diff": rel}
+                    {
+                        "case": case.name,
+                        "band": band.name,
+                        "coeff": coeff,
+                        "libradtran": lr[coeff],
+                        "remote_lut": rm[coeff],
+                        "rel_diff": rel,
+                    }
                 )
-                print(f"{case.name:16s} {band.name:5s} {coeff:4s} {lr[coeff]:12.5f} {rm[coeff]:12.5f} {rel:10.4f}")
+                print(
+                    f"{case.name:16s} {band.name:5s} {coeff:4s} {lr[coeff]:12.5f} {rm[coeff]:12.5f} {rel:10.4f}"
+                )
 
     rels = [r["rel_diff"] for r in report]
-    print(f"\nrel_diff: mean={np.mean(rels):.4f} median={np.median(rels):.4f} max={np.max(rels):.4f}")
+    print(
+        f"\nrel_diff: mean={np.mean(rels):.4f} median={np.median(rels):.4f} max={np.max(rels):.4f}"
+    )
     if args.json:
-        with open(args.json, "w") as fh:
+        with Path(args.json).open("w") as fh:
             json.dump(
-                {"identity": {"generator": "libRadtran", "aerosol_profile": "continental_average",
-                              "atmospheric_profile_shape": "us_standard"},
-                 "entries": report,
-                 "summary": {"mean_rel": float(np.mean(rels)), "median_rel": float(np.median(rels)),
-                             "max_rel": float(np.max(rels))}},
-                fh, indent=2,
+                {
+                    "identity": {
+                        "generator": "libRadtran",
+                        "aerosol_profile": "continental_average",
+                        "atmospheric_profile_shape": "us_standard",
+                    },
+                    "entries": report,
+                    "summary": {
+                        "mean_rel": float(np.mean(rels)),
+                        "median_rel": float(np.median(rels)),
+                        "max_rel": float(np.max(rels)),
+                    },
+                },
+                fh,
+                indent=2,
             )
         print(f"wrote {args.json}")
 
