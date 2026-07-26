@@ -37,6 +37,7 @@ from siac.adapters.live_l1c_library import (
     resolve_mgrs_tile,
 )
 from siac.adapters.surface_library import PREDICTOR_BAND_ORDER
+from siac.algorithms.water_vapour import relative_azimuth_deg
 from siac.catalog.sensors.sentinel2 import SENTINEL2A_CONFIG
 from siac.config.algorithms import RTSetupConfig
 from siac.domain.rt_space import RTSpace
@@ -183,9 +184,23 @@ class _FakeWVPReader:
         transform: tuple[float, float, float, float, float, float],
         width: int,
         height: int,
+        sza_deg: float = 0.0,
+        vza_deg: float = 0.0,
+        raa_deg: float = 0.0,
+        elevation_km: Any = 0.0,
     ) -> np.ndarray | None:
         _ = (crs, transform)
-        self.calls.append({"mgrs_tile": mgrs_tile, "sensing_token": sensing_token, "day": day})
+        self.calls.append(
+            {
+                "mgrs_tile": mgrs_tile,
+                "sensing_token": sensing_token,
+                "day": day,
+                "sza_deg": sza_deg,
+                "vza_deg": vza_deg,
+                "raa_deg": raa_deg,
+                "elevation_km": elevation_km,
+            }
+        )
         value = self._values.get(sensing_token)
         if value is None:
             return None
@@ -681,6 +696,209 @@ def test_a_winner_index_on_a_different_grid_is_rejected(tmp_path: Path) -> None:
     library = _library(tmp_path, _FakeReader({}), _FakeRTModel())
 
     with pytest.raises(ValueError, match="cannot be co-registered"):
+        library.realizations(_observation(), _RES, ["blue"])
+
+
+# --------------------------------------------------------------------------- #
+# CIBR water vapour from the scene's own L1C
+# --------------------------------------------------------------------------- #
+class _FakeBandReader:
+    """Serves named L1C bands, recording exactly which were requested."""
+
+    def __init__(self, planes: dict[str, dict[str, float]]) -> None:
+        self._planes = planes
+        self.requests: list[tuple[str, tuple[str, ...]]] = []
+
+    def read_bands(
+        self,
+        bands: Sequence[str],
+        *,
+        mgrs_tile: str,
+        sensing_token: str,
+        crs: str,
+        transform: tuple[float, float, float, float, float, float],
+        width: int,
+        height: int,
+    ) -> dict[str, np.ndarray] | None:
+        _ = (mgrs_tile, crs, transform)
+        self.requests.append((sensing_token, tuple(bands)))
+        values = self._planes.get(sensing_token)
+        if values is None:
+            return None
+        return {
+            band: np.full((height, width), values[band], dtype=np.float32)
+            for band in bands
+            if band in values
+        }
+
+
+def _cibr_inputs(water_vapour_cm: float, b8a: float, image: dict[str, Any]) -> dict[str, float]:
+    """B8A/B09 pair that inverts back to ``water_vapour_cm`` for this geometry."""
+    from siac.algorithms.water_vapour import _coefficients
+
+    raa = float(relative_azimuth_deg(image["vaa"], image["saa"]))
+    features = np.array([[b8a, image["sza"], image["vza"], raa, _ELEVATION_KM]])
+    b0, b1 = _coefficients(features)[0]
+    log_cibr = (np.sqrt(water_vapour_cm) - b1) / b0
+    return {"B8A": b8a, "B09": float((955.19 / 813.04) * b8a / (10.0**log_cibr))}
+
+
+def test_cibr_reader_retrieves_the_column_from_the_scenes_own_bands() -> None:
+    from siac.adapters.live_l1c_library import CIBRWaterVapourReader
+
+    band_reader = _FakeBandReader({"20220605T101031": _cibr_inputs(2.1, 0.2, _IMAGE_A)})
+    reader = CIBRWaterVapourReader(band_reader)
+
+    water = reader.read(
+        mgrs_tile="33WXP",
+        sensing_token="20220605T101031",
+        day="2022-06-05",
+        crs=_CRS,
+        transform=_TRANSFORM,
+        width=4,
+        height=3,
+        sza_deg=float(_IMAGE_A["sza"]),
+        vza_deg=float(_IMAGE_A["vza"]),
+        raa_deg=float(relative_azimuth_deg(_IMAGE_A["vaa"], _IMAGE_A["saa"])),
+        elevation_km=_ELEVATION_KM,
+    )
+
+    assert water is not None
+    assert water.shape == (3, 4)
+    np.testing.assert_allclose(water, 2.1, rtol=1e-3)
+    # Only the two bands the retrieval needs are fetched.
+    assert band_reader.requests == [("20220605T101031", ("B8A", "B09"))]
+
+
+def test_cibr_reader_returns_none_when_a_band_is_missing() -> None:
+    from siac.adapters.live_l1c_library import CIBRWaterVapourReader
+
+    reader = CIBRWaterVapourReader(_FakeBandReader({"20220605T101031": {"B8A": 0.2}}))
+
+    assert (
+        reader.read(
+            mgrs_tile="33WXP",
+            sensing_token="20220605T101031",
+            day="2022-06-05",
+            crs=_CRS,
+            transform=_TRANSFORM,
+            width=2,
+            height=2,
+            sza_deg=40.0,
+            vza_deg=3.0,
+            raa_deg=40.0,
+            elevation_km=_ELEVATION_KM,
+        )
+        is None
+    )
+
+
+def test_cibr_reader_returns_none_when_nothing_retrieves() -> None:
+    from siac.adapters.live_l1c_library import CIBRWaterVapourReader
+
+    # A dark continuum: below the B8A floor there is no stable band ratio.
+    reader = CIBRWaterVapourReader(
+        _FakeBandReader({"20220605T101031": {"B8A": 0.01, "B09": 0.005}})
+    )
+
+    assert (
+        reader.read(
+            mgrs_tile="33WXP",
+            sensing_token="20220605T101031",
+            day="2022-06-05",
+            crs=_CRS,
+            transform=_TRANSFORM,
+            width=2,
+            height=2,
+            sza_deg=40.0,
+            vza_deg=3.0,
+            raa_deg=40.0,
+            elevation_km=_ELEVATION_KM,
+        )
+        is None
+    )
+
+
+def test_index_image_folds_its_own_relative_azimuth() -> None:
+    image = IndexImage(
+        image_id="20220605T101031_x_T33WXP",
+        day="2022-06-05",
+        sza=40.0,
+        saa=150.0,
+        vza=3.0,
+        vaa=190.0,
+    )
+    # 190 - 150 = 40; and a pair 200 apart folds to 160, never to 20.
+    assert image.raa == pytest.approx(40.0)
+    wide = IndexImage(image_id="x_y_z", day="2022-06-05", sza=40.0, saa=0.0, vza=3.0, vaa=200.0)
+    assert wide.raa == pytest.approx(160.0)
+
+
+def test_library_defaults_to_the_scene_derived_cibr_water_vapour(tmp_path: Path) -> None:
+    _write_index(tmp_path)
+    band_reader = _FakeBandReader(
+        {
+            "20220605T101031": _cibr_inputs(1.8, 0.2, _IMAGE_A),
+            "20220615T101031": _cibr_inputs(1.8, 0.2, _IMAGE_B),
+            "20220710T101031": _cibr_inputs(2.6, 0.2, _IMAGE_C),
+        }
+    )
+
+    class _Reader(_FakeReader):
+        def read_bands(self, bands: Sequence[str], **kwargs: Any) -> Any:
+            return band_reader.read_bands(bands, **kwargs)
+
+    reader = _Reader({"20220605T101031": 0.1, "20220615T101031": 0.2, "20220710T101031": 0.3})
+    rt_model = _FakeRTModel()
+    library = LiveL1CSurfaceLibrary(
+        tmp_path,
+        rt_model=rt_model,
+        dem_path=_DEM,
+        cams_data_path=_CAMS,
+        toa_reader=reader,
+        tco3_source=_FakeTCO3(),
+    )
+
+    library.realizations(_observation(), _RES, ["blue"])
+
+    # No Planetary Computer call anywhere: the column came from the L1C itself.
+    assert {token for token, _bands in band_reader.requests} == {
+        "20220605T101031",
+        "20220615T101031",
+        "20220710T101031",
+    }
+    retrieved = sorted({round(state[0], 2) for state in rt_model.states})
+    assert retrieved == [pytest.approx(1.8, abs=0.02), pytest.approx(2.6, abs=0.02)]
+
+
+def test_cibr_needs_a_band_capable_toa_reader(tmp_path: Path) -> None:
+    _write_index(tmp_path)
+    library = LiveL1CSurfaceLibrary(
+        tmp_path,
+        rt_model=_FakeRTModel(),
+        dem_path=_DEM,
+        cams_data_path=_CAMS,
+        toa_reader=_FakeReader({"20220605T101031": 0.1}),
+        tco3_source=_FakeTCO3(),
+    )
+
+    with pytest.raises(MissingLibraryInputError, match="read named bands"):
+        library.realizations(_observation(), _RES, ["blue"])
+
+
+def test_an_unknown_water_vapour_source_is_rejected(tmp_path: Path) -> None:
+    _write_index(tmp_path)
+    library = LiveL1CSurfaceLibrary(
+        tmp_path,
+        rt_model=_FakeRTModel(),
+        dem_path=_DEM,
+        cams_data_path=_CAMS,
+        toa_reader=_FakeReader({"20220605T101031": 0.1}),
+        tco3_source=_FakeTCO3(),
+        water_vapour_source="nonsense",
+    )
+
+    with pytest.raises(ValueError, match="Unknown water_vapour_source"):
         library.realizations(_observation(), _RES, ["blue"])
 
 

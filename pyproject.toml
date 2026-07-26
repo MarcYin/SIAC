@@ -130,6 +130,7 @@ include = [
     { path = "siac/data/aero_species/aerosolClimatology.nc", format = ["sdist", "wheel"] },
     { path = "siac/data/aero_species/aerosol_type_lut.csv", format = ["sdist", "wheel"] },
     { path = "siac/data/cci_mie_table.json", format = ["sdist", "wheel"] },
+    { path = "siac/data/water_vapour_lut_CIBR_9_8A.txt", format = ["sdist", "wheel"] },
 ]
 
 # ============================================================================

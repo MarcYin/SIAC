@@ -26,8 +26,10 @@ measured source, per winning day:
 ==============  ========================================================
 AOD 550 nm      MAIAC, from the index's own per-day scalars (or the
                 :class:`~siac.adapters.atmo.maiac_day_aod.MAIACDayAODProvider`)
-Water vapour    the matching Sentinel-2 L2A ``WVP`` band, read from the
-                Planetary Computer and mosaicked through the same index
+Water vapour    retrieved from the acquisition's OWN L1C B8A/B09 band
+                ratio (:mod:`siac.algorithms.water_vapour`), so no
+                published Level-2A product has to exist or be reachable;
+                ``water_vapour_source="l2a"`` reads Sen2Cor's instead
 Ozone           CAMS ``gtco3`` for that day at the scene's overpass hour,
                 via :class:`~siac.adapters.atmo.cams.CAMSProvider`
 Terrain         the configured DEM (Copernicus GLO-30), sampled onto the
@@ -89,9 +91,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "LIBRARY_BAND_NAMES",
+    "WATER_VAPOUR_BAND_NAMES",
     "CAMSTCO3Source",
+    "CIBRWaterVapourReader",
     "GCSL1CTOAReader",
     "IndexImage",
+    "L1CBandReader",
     "L1CTOAReader",
     "LiveL1CSurfaceLibrary",
     "MissingLibraryInputError",
@@ -108,6 +113,10 @@ __all__ = [
 #: :data:`~siac.adapters.surface_library.PREDICTOR_BAND_ORDER`
 #: (coastal, blue, green, red, nir, swir16, swir22).
 LIBRARY_BAND_NAMES: tuple[str, ...] = ("B01", "B02", "B03", "B04", "B8A", "B11", "B12")
+
+#: Bands the CIBR water-vapour retrieval needs: the 940 nm absorption band and
+#: its continuum neighbour.
+WATER_VAPOUR_BAND_NAMES: tuple[str, ...] = ("B8A", "B09")
 
 #: L1C digital-number scale factor (DN -> reflectance).
 _L1C_DN_SCALE = 10000.0
@@ -176,6 +185,14 @@ class IndexImage:
         """``YYYYMMDDTHHMMSS`` sensing token used to find the L1C SAFE product."""
 
         return self.image_id.split("_")[0]
+
+    @property
+    def raa(self) -> float:
+        """Relative azimuth folded into ``[0, 180]`` (the LUT's convention)."""
+
+        from siac.algorithms.water_vapour import relative_azimuth_deg
+
+        return float(relative_azimuth_deg(self.vaa, self.saa))
 
 
 @dataclass(frozen=True)
@@ -342,8 +359,25 @@ class L1CTOAReader(Protocol):
         """
 
 
+class L1CBandReader(Protocol):
+    """Reads named L1C bands of one acquisition onto a grid."""
+
+    def read_bands(
+        self,
+        bands: Sequence[str],
+        *,
+        mgrs_tile: str,
+        sensing_token: str,
+        crs: str,
+        transform: tuple[float, float, float, float, float, float],
+        width: int,
+        height: int,
+    ) -> dict[str, np.ndarray] | None:
+        """Return TOA reflectance per requested band, or ``None`` if unavailable."""
+
+
 class WVPReader(Protocol):
-    """Reads one acquisition's Sentinel-2 L2A water-vapour band onto a grid."""
+    """Resolves one acquisition's total column water vapour over the AOI."""
 
     def read(
         self,
@@ -355,8 +389,16 @@ class WVPReader(Protocol):
         transform: tuple[float, float, float, float, float, float],
         width: int,
         height: int,
+        sza_deg: float,
+        vza_deg: float,
+        raa_deg: float,
+        elevation_km: np.ndarray | float,
     ) -> np.ndarray | None:
-        """Return a ``(y, x)`` total column water vapour field in cm, or ``None``."""
+        """Return a ``(y, x)`` total column water vapour field in cm, or ``None``.
+
+        The geometry and terrain arguments let a reader retrieve the column from
+        the scene itself; a reader that reads a published product ignores them.
+        """
 
 
 class TCO3Source(Protocol):
@@ -374,13 +416,13 @@ def _baseline_offset(processing_baseline: str | None) -> float:
     return _BASELINE_OFFSET_DN if int(text) >= _OFFSET_BASELINE else 0.0
 
 
-def _band_jp2_urls(product: S2Product) -> dict[str, str]:
-    """Map each library band to its ``/vsicurl`` JP2 URL inside a SAFE product."""
+def _band_jp2_urls(product: S2Product, bands: Sequence[str]) -> dict[str, str]:
+    """Map each requested band to its ``/vsicurl`` JP2 URL inside a SAFE product."""
 
     prefix = gcs._resolve_safe_prefix(product)
     objects = gcs._list_objects_under(prefix)
     urls: dict[str, str] = {}
-    for band in LIBRARY_BAND_NAMES:
+    for band in bands:
         for item in objects:
             name = str(item.get("name", ""))
             if name.endswith(f"_{band}.jp2") and "/IMG_DATA/" in name:
@@ -427,8 +469,9 @@ class GCSL1CTOAReader:
         )
         return by_token
 
-    def read(
+    def read_bands(
         self,
+        bands: Sequence[str],
         *,
         mgrs_tile: str,
         sensing_token: str,
@@ -436,7 +479,15 @@ class GCSL1CTOAReader:
         transform: tuple[float, float, float, float, float, float],
         width: int,
         height: int,
-    ) -> np.ndarray | None:
+    ) -> dict[str, np.ndarray] | None:
+        """Read named L1C bands onto the target grid, in reflectance.
+
+        Every band gets the same radiometric handling, including the
+        ``RADIO_ADD_OFFSET`` that processing baselines N0400 and later apply.
+        Missing that offset on one band silently biases anything derived from a
+        band *ratio* — which is why v1's own TCWV call ended up commented out.
+        """
+
         import rasterio
 
         product = self._products_for_tile(mgrs_tile).get(sensing_token)
@@ -445,16 +496,14 @@ class GCSL1CTOAReader:
                 "Live L1C library: no L1C product on GCS for %s at %s", mgrs_tile, sensing_token
             )
             return None
-        urls = _band_jp2_urls(product)
+        urls = _band_jp2_urls(product, bands)
         if not urls:
             logger.warning("Live L1C library: no JP2 bands under %s", product.product_id)
             return None
         offset = _baseline_offset(product.processing_baseline)
-        planes: np.ndarray = np.full(
-            (len(LIBRARY_BAND_NAMES), height, width), np.nan, dtype=np.float32
-        )
+        planes: dict[str, np.ndarray] = {}
         with rasterio.Env(**_GDAL_REMOTE_ENV, CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".jp2"):
-            for index, band in enumerate(LIBRARY_BAND_NAMES):
+            for band in bands:
                 url = urls.get(band)
                 if url is None:
                     continue
@@ -466,8 +515,37 @@ class GCSL1CTOAReader:
                     height=height,
                     resampling=self._resampling,
                 )
-                planes[index] = (dn - offset) / _L1C_DN_SCALE
+                planes[band] = ((dn - offset) / _L1C_DN_SCALE).astype(np.float32)
         return planes
+
+    def read(
+        self,
+        *,
+        mgrs_tile: str,
+        sensing_token: str,
+        crs: str,
+        transform: tuple[float, float, float, float, float, float],
+        width: int,
+        height: int,
+    ) -> np.ndarray | None:
+        planes = self.read_bands(
+            LIBRARY_BAND_NAMES,
+            mgrs_tile=mgrs_tile,
+            sensing_token=sensing_token,
+            crs=crs,
+            transform=transform,
+            width=width,
+            height=height,
+        )
+        if planes is None:
+            return None
+        stack: np.ndarray = np.full(
+            (len(LIBRARY_BAND_NAMES), height, width), np.nan, dtype=np.float32
+        )
+        for index, band in enumerate(LIBRARY_BAND_NAMES):
+            if band in planes:
+                stack[index] = planes[band]
+        return stack
 
 
 class PlanetaryComputerWVPReader:
@@ -545,6 +623,10 @@ class PlanetaryComputerWVPReader:
         transform: tuple[float, float, float, float, float, float],
         width: int,
         height: int,
+        sza_deg: float = 0.0,  # noqa: ARG002 - a published product needs no geometry
+        vza_deg: float = 0.0,  # noqa: ARG002
+        raa_deg: float = 0.0,  # noqa: ARG002
+        elevation_km: np.ndarray | float = 0.0,  # noqa: ARG002
     ) -> np.ndarray | None:
         import rasterio
 
@@ -563,6 +645,88 @@ class PlanetaryComputerWVPReader:
                 resampling=self._resampling,
             )
         return cast("np.ndarray", dn / np.float32(_WVP_DN_SCALE))
+
+
+class CIBRWaterVapourReader:
+    """Retrieves water vapour from the acquisition's own L1C TOA.
+
+    The Continuum Interpolated Band Ratio (B8A continuum / B09 940 nm
+    absorption) sounds the column directly from the imagery already being
+    fetched, so no published Level-2A product has to exist, be reachable, or
+    have been processed with a baseline whose radiometry we understand. See
+    :mod:`siac.algorithms.water_vapour` for the retrieval itself.
+
+    Both bands are read through the same :class:`GCSL1CTOAReader`, which applies
+    one radiometric offset to all of them — a band *ratio* is exactly where a
+    per-band offset mismatch would do its damage.
+    """
+
+    def __init__(self, band_reader: L1CBandReader) -> None:
+        self._band_reader = band_reader
+
+    def read(
+        self,
+        *,
+        mgrs_tile: str,
+        sensing_token: str,
+        day: str,
+        crs: str,
+        transform: tuple[float, float, float, float, float, float],
+        width: int,
+        height: int,
+        sza_deg: float,
+        vza_deg: float,
+        raa_deg: float,
+        elevation_km: np.ndarray | float,
+    ) -> np.ndarray | None:
+        from siac.algorithms.water_vapour import retrieve_water_vapour
+
+        planes = self._band_reader.read_bands(
+            WATER_VAPOUR_BAND_NAMES,
+            mgrs_tile=mgrs_tile,
+            sensing_token=sensing_token,
+            crs=crs,
+            transform=transform,
+            width=width,
+            height=height,
+        )
+        missing = (
+            list(WATER_VAPOUR_BAND_NAMES)
+            if planes is None
+            else [band for band in WATER_VAPOUR_BAND_NAMES if band not in planes]
+        )
+        if planes is None or missing:
+            logger.info(
+                "Live L1C library: %s at %s has no %s for the CIBR water-vapour retrieval",
+                mgrs_tile,
+                sensing_token,
+                ",".join(missing),
+            )
+            return None
+        result = retrieve_water_vapour(
+            toa_b09=planes["B09"],
+            toa_b8a=planes["B8A"],
+            sza_deg=sza_deg,
+            vza_deg=vza_deg,
+            raa_deg=raa_deg,
+            elevation_km=elevation_km,
+        )
+        if not result.valid.any():
+            logger.warning(
+                "Live L1C library: CIBR retrieved no valid water vapour for %s (%s)",
+                sensing_token,
+                day,
+            )
+            return None
+        logger.info(
+            "Live L1C library: CIBR water vapour for %s (%s): median %.3f cm, %.1f%% filled "
+            "from this acquisition's own median",
+            sensing_token,
+            day,
+            float(np.nanmedian(result.water_vapour_cm[result.valid])),
+            100.0 * result.masked_fraction,
+        )
+        return result.water_vapour_cm
 
 
 class CAMSTCO3Source:
@@ -841,6 +1005,7 @@ class LiveL1CSurfaceLibrary:
         | None = None,
         toa_reader: L1CTOAReader | None = None,
         wvp_reader: WVPReader | None = None,
+        water_vapour_source: str = "cibr",
         tco3_source: TCO3Source | None = None,
         keep_fraction: float = _KEEP_FRACTION,
         max_workers: int = _DEFAULT_MAX_WORKERS,
@@ -855,6 +1020,7 @@ class LiveL1CSurfaceLibrary:
         self._maiac_day_aod = maiac_day_aod
         self._toa_reader = toa_reader
         self._wvp_reader = wvp_reader
+        self._water_vapour_source = str(water_vapour_source)
         self._tco3_source = tco3_source
         self._keep_fraction = float(keep_fraction)
         self._max_workers = max(1, int(max_workers))
@@ -890,8 +1056,21 @@ class LiveL1CSurfaceLibrary:
         return self._toa_reader
 
     def _water_vapour_reader(self) -> WVPReader:
-        if self._wvp_reader is None:
+        if self._wvp_reader is not None:
+            return self._wvp_reader
+        source = self._water_vapour_source
+        if source == "cibr":
+            reader = self._reader()
+            if not hasattr(reader, "read_bands"):
+                raise MissingLibraryInputError(
+                    "water_vapour_source='cibr' retrieves the column from the scene's own L1C "
+                    "B8A/B09, so the TOA reader must be able to read named bands."
+                )
+            self._wvp_reader = CIBRWaterVapourReader(cast("L1CBandReader", reader))
+        elif source == "l2a":
             self._wvp_reader = PlanetaryComputerWVPReader()
+        else:
+            raise ValueError(f"Unknown water_vapour_source {source!r}; expected 'cibr' or 'l2a'.")
         return self._wvp_reader
 
     def _ozone_source(self) -> TCO3Source:
@@ -906,8 +1085,12 @@ class LiveL1CSurfaceLibrary:
             self._tco3_source = CAMSTCO3Source(self._cams_data_path, cache_dir=self._cams_cache_dir)
         return self._tco3_source
 
-    def _elevation_km(self, template: xr.DataArray) -> float:
-        """Scene terrain height (km) sampled from the configured DEM."""
+    def _elevation_field(self, template: xr.DataArray) -> np.ndarray:
+        """Per-pixel terrain height (km) sampled from the configured DEM.
+
+        The field, not just its median, because the water-vapour retrieval keys
+        on altitude per pixel; the 6S correction takes the median from it.
+        """
 
         from siac.geo.dem import read_elevation_km, use_sea_level_elevation
 
@@ -919,14 +1102,16 @@ class LiveL1CSurfaceLibrary:
                 "siac.config.public.COPERNICUS_GLO30_DEM_VRT; a sea-level placeholder would "
                 "under-attribute AOD over high terrain."
             )
-        elevation = read_elevation_km(template, dem)
-        value = _finite_median(np.asarray(elevation.values, dtype=np.float64))
+        elevation: np.ndarray = np.asarray(
+            read_elevation_km(template, dem).values, dtype=np.float64
+        )
+        value = _finite_median(elevation)
         if value is None:
             raise MissingLibraryInputError(
                 f"The DEM at {dem} yielded no finite elevation over the scene AOI."
             )
         logger.info("Live L1C library: terrain elevation %.3f km from %s", value, dem)
-        return value
+        return elevation
 
     def _day_aod(self, index: MosaicIndex, observation: ObservationBundle) -> dict[str, float]:
         """Per-day AOD for the correction: the index's own scalars, else MAIAC."""
@@ -1013,8 +1198,9 @@ class LiveL1CSurfaceLibrary:
         transform: tuple[float, float, float, float, float, float],
         width: int,
         height: int,
+        elevation_km: np.ndarray,
     ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
-        """Read each winning acquisition's L1C TOA and its L2A water vapour."""
+        """Read each winning acquisition's L1C TOA and its water vapour."""
 
         toa_reader = self._reader()
         wvp_reader = self._water_vapour_reader()
@@ -1044,11 +1230,15 @@ class LiveL1CSurfaceLibrary:
                         mgrs_tile=mgrs_tile,
                         sensing_token=image.sensing_token,
                         day=image.day,
+                        sza_deg=image.sza,
+                        vza_deg=image.vza,
+                        raa_deg=image.raa,
+                        elevation_km=elevation_km,
                         **grid,
                     )
                 except Exception:  # noqa: BLE001 - reported as a missing input below
                     logger.warning(
-                        "Live L1C library: failed reading L2A WVP for %s",
+                        "Live L1C library: failed resolving water vapour for %s",
                         image.image_id,
                         exc_info=True,
                     )
@@ -1091,7 +1281,8 @@ class LiveL1CSurfaceLibrary:
 
         mgrs_tile = resolve_mgrs_tile(observation, self._scene_key)
         day_aod = self._day_aod(index, observation)
-        elevation_km = self._elevation_km(template)
+        elevation_field = self._elevation_field(template)
+        elevation_km = float(np.median(elevation_field[np.isfinite(elevation_field)]))
         ozone = self._ozone_source()
         rt_model = self._effective_rt_model(observation, lon, lat)
         sensor_bands = [observation.sensor_config.get_band(name) for name in LIBRARY_BAND_NAMES]
@@ -1123,6 +1314,7 @@ class LiveL1CSurfaceLibrary:
             transform=transform,
             width=width,
             height=height,
+            elevation_km=elevation_field,
         )
 
         corrected: list[np.ndarray] = []
