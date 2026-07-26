@@ -611,26 +611,54 @@ def direct_source_indices(
     return indices
 
 
-def _resolve_surface_library(config: Any) -> Any | None:
-    """Return the configured prepared surface library, or ``None`` for live build.
+def _resolve_surface_library(
+    config: Any,
+    *,
+    rt_model: Any | None = None,
+    atmo_prior: Any | None = None,
+    maiac_day_aod: MAIACDayAODCallable | None = None,
+) -> Any | None:
+    """Return the configured surface library, or ``None`` for a live composite.
 
-    A prepared library moves acquisition and atmospheric correction offline, so
-    the library can be corrected in the same RT model the solver uses (which the
-    live composite path cannot guarantee) and the slowest pipeline stage is paid
-    once rather than per scene.
+    Two managed sources exist, both correcting the library in the solver's own RT
+    model so the library/solve RT-space mismatch that biases retrieved AOT cannot
+    arise. ``prepared_library_path`` reads an offline store, moving the pipeline's
+    slowest stage out of the retrieval entirely; ``live_l1c_index_path`` runs the
+    same construction per scene from a mosaic winner index. The prepared store
+    wins when both are set — it is strictly cheaper for a scene it covers.
     """
 
     surface_cfg = getattr(getattr(config, "algorithms", None), "surface_prior", None)
     library_path = getattr(surface_cfg, "prepared_library_path", None)
-    if not library_path:
+    if library_path:
+        from siac.adapters.surface_library import PreparedSurfaceLibrary
+
+        return PreparedSurfaceLibrary(
+            library_path,
+            band_names=getattr(surface_cfg, "prepared_library_bands", None),
+            scene_key=getattr(surface_cfg, "prepared_library_scene_key", None),
+        )
+
+    index_path = getattr(surface_cfg, "live_l1c_index_path", None)
+    if not index_path:
         return None
+    if rt_model is None:
+        raise ValueError(
+            "surface_prior.live_l1c_index_path builds the surface library in the solver's RT "
+            "model, so it requires an RT backend; none was supplied to the surface prior."
+        )
 
-    from siac.adapters.surface_library import PreparedSurfaceLibrary
+    from siac.adapters.live_l1c_library import LiveL1CSurfaceLibrary, median_scalar
 
-    return PreparedSurfaceLibrary(
-        library_path,
-        band_names=getattr(surface_cfg, "prepared_library_bands", None),
+    return LiveL1CSurfaceLibrary(
+        index_path,
+        rt_model=rt_model,
+        solver_config=getattr(getattr(config, "algorithms", None), "solver", None),
         scene_key=getattr(surface_cfg, "prepared_library_scene_key", None),
+        tcwv=median_scalar(getattr(atmo_prior, "tcwv", None)),
+        tco3=median_scalar(getattr(atmo_prior, "tco3", None)),
+        elevation_km=median_scalar(getattr(atmo_prior, "elevation", None)),
+        maiac_day_aod=maiac_day_aod,
     )
 
 
@@ -650,7 +678,12 @@ def build_bestpixel_surface_prior(
     rt_model: Any | None = None,
 ) -> SurfacePrior:
     """Build the bestpixel-backed :class:`SurfacePrior` for the solver."""
-    library = _resolve_surface_library(config)
+    library = _resolve_surface_library(
+        config,
+        rt_model=rt_model,
+        atmo_prior=atmo_prior,
+        maiac_day_aod=maiac_day_aod,
+    )
     if library is None:
         periods = _fetch_periods(
             config, observation, resolution, bands, maiac_day_aod=maiac_day_aod

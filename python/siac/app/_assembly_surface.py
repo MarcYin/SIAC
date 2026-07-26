@@ -462,16 +462,19 @@ def make_bestpixel_surface_prior_fn(
         from siac.adapters.bestpixel_surface_prior import build_bestpixel_surface_prior
 
         surface_cfg = config.algorithms.surface_prior
-        # ``bestpixel_source`` selects the LIVE acquisition source; a prepared
-        # library supplies already-corrected reflectance and never acquires, so
-        # the unimplemented live-L1C path does not apply to it.
-        if str(surface_cfg.bestpixel_source) == "l1c" and not getattr(
-            surface_cfg, "prepared_library_path", None
+        # ``bestpixel_source`` selects the acquisition source. L1C carries no
+        # surface reflectance, so it is only meaningful with a library that
+        # applies the atmospheric correction itself: a prepared store built
+        # offline, or the live index-driven build.
+        if str(surface_cfg.bestpixel_source) == "l1c" and not (
+            getattr(surface_cfg, "prepared_library_path", None)
+            or getattr(surface_cfg, "live_l1c_index_path", None)
         ):
             raise NotImplementedError(
-                "surface_prior.bestpixel_source='l1c' is not implemented for live "
-                "composite building; use 'l2a' or 'hls-s30', or supply an L1C-derived "
-                "library via surface_prior.prepared_library_path."
+                "surface_prior.bestpixel_source='l1c' needs a library that applies the "
+                "atmospheric correction: use 'l2a' or 'hls-s30', supply a prepared "
+                "L1C-derived library via surface_prior.prepared_library_path, or point "
+                "surface_prior.live_l1c_index_path at a per-scene mosaic winner index."
             )
         monthly_cfg = config.providers.monthly_composites
         endpoint = str(monthly_cfg.bestpixel_endpoint)

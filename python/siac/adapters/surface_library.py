@@ -44,6 +44,7 @@ __all__ = [
     "PreparedSurfaceLibrary",
     "SurfaceLibrary",
     "SurfaceLibraryRealization",
+    "observation_scene_key",
     "realization_to_period",
 ]
 
@@ -68,6 +69,24 @@ def canonical_band_name(name: str) -> str:
     """Map a library's band name onto the predictor's canonical name."""
 
     return _BAND_ALIASES.get(str(name), str(name))
+
+
+def observation_scene_key(observation: ObservationBundle) -> str:
+    """Identifier a per-scene surface library is keyed by.
+
+    Shared by every per-scene library source (prepared store, live L1C build) so
+    one scene resolves to the same entry whichever source is configured.
+    """
+
+    metadata = observation.metadata or {}
+    for field in ("scene_key", "matchup_id", "product_id", "scene_id"):
+        value = metadata.get(field)
+        if value:
+            return str(value)
+    raise ValueError(
+        "A per-scene surface library needs a scene key: set observation metadata "
+        "'scene_key' (or 'product_id'), or pass scene_key explicitly."
+    )
 
 
 @dataclass(frozen=True)
@@ -209,15 +228,7 @@ class PreparedSurfaceLibrary:
 
     @staticmethod
     def _observation_key(observation: ObservationBundle) -> str:
-        metadata = observation.metadata or {}
-        for field in ("scene_key", "matchup_id", "product_id", "scene_id"):
-            value = metadata.get(field)
-            if value:
-                return str(value)
-        raise ValueError(
-            "Prepared surface library needs a scene key: set observation metadata "
-            "'scene_key' (or 'product_id'), or pass scene_key explicitly."
-        )
+        return observation_scene_key(observation)
 
     def realizations(
         self,

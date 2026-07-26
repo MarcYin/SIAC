@@ -150,11 +150,23 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     #: needed when the store neither carries ``band_names`` nor uses the default
     #: coastal/blue/green/red/nir/swir16/swir22 order.
     prepared_library_bands: tuple[str, ...] | None = None
-    #: Entry to read from :attr:`prepared_library_path` for this run. By default
-    #: the entry is looked up from the observation's own identifiers (scene key
-    #: or product ID); set this when the store is keyed by a caller-defined name
-    #: instead, as when a library is indexed by validation-site identifiers.
+    #: Entry to read from :attr:`prepared_library_path` or
+    #: :attr:`live_l1c_index_path` for this run. By default the entry is looked
+    #: up from the observation's own identifiers (scene key or product ID); set
+    #: this when the store is keyed by a caller-defined name instead, as when a
+    #: library is indexed by validation-site identifiers.
     prepared_library_scene_key: str | None = None
+    #: Build the surface library live from Sentinel-2 L1C instead of reading a
+    #: prepared store, using the per-scene mosaic winner index under this
+    #: directory (one ``<scene_key>.npz`` holding ``months``/``winners``/
+    #: ``image_table``/``day_scalars``). Only the winning acquisitions' L1C
+    #: top-of-atmosphere data are fetched — from the anonymous
+    #: ``gs://gcp-public-data-sentinel-2`` bucket — and each month's mosaic is
+    #: corrected in the solver's own RT model at that day's aerosol loading, so
+    #: the library and the solve share one RT space. Requires
+    #: ``bestpixel_source="l1c"``; :attr:`prepared_library_path` takes precedence
+    #: when both are set.
+    live_l1c_index_path: Path | None = None
     bestpixel_predict_visible: bool = False
     #: Regressor for the predict-visible mapping: one ``ExtraTreeRegressor``
     #: per realization (default), or a 20-tree ``ExtraTreesRegressor``
