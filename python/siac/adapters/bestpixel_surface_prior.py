@@ -32,6 +32,7 @@ import logging
 import math
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
@@ -615,7 +616,6 @@ def _resolve_surface_library(
     config: Any,
     *,
     rt_model: Any | None = None,
-    atmo_prior: Any | None = None,
     maiac_day_aod: MAIACDayAODCallable | None = None,
 ) -> Any | None:
     """Return the configured surface library, or ``None`` for a live composite.
@@ -648,16 +648,24 @@ def _resolve_surface_library(
             "model, so it requires an RT backend; none was supplied to the surface prior."
         )
 
-    from siac.adapters.live_l1c_library import LiveL1CSurfaceLibrary, median_scalar
+    from siac.adapters.live_l1c_library import LiveL1CSurfaceLibrary
 
+    # The live build corrects at measured per-day water vapour, ozone and
+    # terrain, so it needs the same DEM and CAMS archive the rest of the run
+    # uses. Both are passed explicitly (and required by the library) rather than
+    # defaulted, so a scene without them fails loudly instead of being corrected
+    # at an invented atmosphere.
+    paths_cfg = getattr(config, "paths", None)
+    atmo_cfg = getattr(getattr(config, "providers", None), "atmo", None)
+    cache_root = getattr(paths_cfg, "cache_root", None)
     return LiveL1CSurfaceLibrary(
         index_path,
         rt_model=rt_model,
+        dem_path=getattr(paths_cfg, "dem", None),
+        cams_data_path=getattr(atmo_cfg, "data_path", None),
+        cams_cache_dir=(Path(cache_root) / "cams_library" if cache_root is not None else None),
         solver_config=getattr(getattr(config, "algorithms", None), "solver", None),
         scene_key=getattr(surface_cfg, "prepared_library_scene_key", None),
-        tcwv=median_scalar(getattr(atmo_prior, "tcwv", None)),
-        tco3=median_scalar(getattr(atmo_prior, "tco3", None)),
-        elevation_km=median_scalar(getattr(atmo_prior, "elevation", None)),
         maiac_day_aod=maiac_day_aod,
     )
 
@@ -678,12 +686,7 @@ def build_bestpixel_surface_prior(
     rt_model: Any | None = None,
 ) -> SurfacePrior:
     """Build the bestpixel-backed :class:`SurfacePrior` for the solver."""
-    library = _resolve_surface_library(
-        config,
-        rt_model=rt_model,
-        atmo_prior=atmo_prior,
-        maiac_day_aod=maiac_day_aod,
-    )
+    library = _resolve_surface_library(config, rt_model=rt_model, maiac_day_aod=maiac_day_aod)
     if library is None:
         periods = _fetch_periods(
             config, observation, resolution, bands, maiac_day_aod=maiac_day_aod

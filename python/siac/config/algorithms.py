@@ -166,6 +166,12 @@ class SurfacePriorAlgorithmConfig(SIACBaseModel):
     #: the library and the solve share one RT space. Requires
     #: ``bestpixel_source="l1c"``; :attr:`prepared_library_path` takes precedence
     #: when both are set.
+    #:
+    #: The correction is run at measured state throughout, so the run must also
+    #: supply ``paths.dem`` (terrain) and ``providers.atmo.data_path`` (CAMS
+    #: ozone); Sentinel-2 L2A water vapour comes from the Planetary Computer.
+    #: A missing source raises rather than defaulting — see
+    #: :class:`~siac.adapters.live_l1c_library.MissingLibraryInputError`.
     live_l1c_index_path: Path | None = None
     bestpixel_predict_visible: bool = False
     #: Regressor for the predict-visible mapping: one ``ExtraTreeRegressor``
