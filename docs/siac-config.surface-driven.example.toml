@@ -121,20 +121,20 @@ surface_driven_pool_radius_m = 600.0
 water_mask_buffer_pixels = 32
 # L2A surface-driven recipe (surface-driven scoped; multigrid unaffected):
 surface_driven_solve_bands = ["B01", "B02", "B04"]   # add 443nm deep-blue B01 (deepens AOD signal)
-surface_driven_cost_mode = "auto2"  # shape (moderate band) + absolute (clean/high tails)
+# surface_driven_cost_mode was removed when the falsified shape/auto cost modes
+# were pruned; the surface cost is now chi2 unconditionally.
 surface_driven_aot_axis = "acixthree"  # fine non-uniform AOT axis (denser at low AOD)
 # Cloud/water/no-observation pixels are excluded and remain NaN in the AOD field.
 # For a diagnosed thick-aerosol false positive only, set the cloud-only rescue to
 # true; water and finite-observation support remain enforced.
 surface_driven_allow_cloud_retrieval = false
 surface_driven_ignore_cloud_water = false  # legacy broad override; avoid for normal retrieval
-surface_driven_aod_clean = 0.15
-surface_driven_aod_high = 0.6
+# surface_driven_aod_clean / surface_driven_aod_high were the regime thresholds
+# of the pruned auto cost mode and went with it.
 # Native-6S Path A switch (heavy, not the measured LUT default above):
-# Set [algorithms.rt].backend = "sixs", then select one tile-wide aerosol
-# mixture from the 3 nearest CCI species using minimum median surface cost.
-surface_driven_aerosol_species = "none"  # "cci_climatology" for native 6S + CCI species
-surface_driven_aerosol_species_candidates = 3
+# Set [algorithms.rt].backend = "sixs" to resolve the scene's CCI climatology
+# aerosol mixture from its own location and month.
+surface_driven_aerosol_species = "none"  # "cci_climatology_exact" for native 6S + CCI species
 
 [output.defaults]
 format = "cog"
