@@ -878,7 +878,11 @@ def correct_toa_realization(
             f"TOA must be (band, y, x) with {len(sensor_bands)} bands; got {toa_values.shape}."
         )
 
-    finite_aod = np.isfinite(aod_values) & (aod_values > 0.0)
+    # MAIAC reports 0.000 on very clean days, and such a day can win every pixel
+    # of a realization (La Parguera 2018-06). A measured zero is an aerosol
+    # state — the interpolation clamps it to the lowest node — so only NaN,
+    # the absence of a measurement, refuses.
+    finite_aod = np.isfinite(aod_values) & (aod_values >= 0.0)
     if not finite_aod.any():
         raise MissingLibraryInputError(
             "No finite per-pixel AOD for this realization; the correction has no aerosol state."

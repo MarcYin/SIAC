@@ -440,6 +440,35 @@ def test_correction_without_any_finite_aod_is_rejected() -> None:
         )
 
 
+def test_correction_with_measured_zero_aod_clamps_to_the_node_floor() -> None:
+    # MAIAC 0.000 on a very clean day is a measurement, not a gap: a realization
+    # whose every pixel was won by such a day corrects at the lowest AOD node
+    # instead of being rejected (La Parguera 2018-06).
+    bands = [SENTINEL2A_CONFIG.get_band(name) for name in LIBRARY_BAND_NAMES]
+    toa = np.full((len(bands), 2, 2), 0.1, dtype=np.float32)
+
+    def correct(aod_value: float) -> np.ndarray:
+        return correct_toa_realization(
+            rt_model=_FakeRTModel(),
+            sensor_bands=bands,
+            toa=toa,
+            aod=np.full((2, 2), aod_value, dtype=np.float32),
+            sza_deg=40.0,
+            saa_deg=150.0,
+            vza_deg=3.0,
+            vaa_deg=190.0,
+            tcwv=1.4,
+            tco3=_TCO3,
+            elevation_km=0.0,
+        )
+
+    at_zero = correct(0.0)
+    # xap = 1 + aot and the node axis floors at 0.01, so the zero plane is
+    # evaluated at the floor node: identical to correcting at 0.01 outright.
+    np.testing.assert_allclose(at_zero, correct(0.01), rtol=1e-6)
+    np.testing.assert_allclose(at_zero, 1.01 * 0.1, rtol=1e-5)
+
+
 # --------------------------------------------------------------------------- #
 # realizations
 # --------------------------------------------------------------------------- #
