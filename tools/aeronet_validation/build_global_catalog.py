@@ -9,7 +9,6 @@ import json
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 from tools.aeronet_validation.global_candidate_pool import (
     LANDCOVER_BAND,
@@ -21,6 +20,7 @@ from tools.aeronet_validation.global_candidate_pool import (
 from tools.aeronet_validation.global_catalog_sampler import (
     DEFAULT_TARGETS,
     composition,
+    latitude_band,
     sample_catalog,
 )
 
@@ -57,18 +57,53 @@ def fetch_tile(
         raise RuntimeError(f"edown failed for {bbox}: {result.stderr[-400:]}")
 
 
-def read_tile(cache: Path) -> tuple[Any, list[float], list[float]] | None:
-    import rioxarray as rxr
+def read_tile(cache: Path):
+    """Return the class grid and a resolver from pixel indices to lon/lat.
+
+    The raster is delivered on the collection's native grid, which for MCD12Q1
+    is sinusoidal. Longitude there is a function of both axes, so the resolver
+    transforms points rather than returning separable coordinate vectors.
+    """
+
+    import rasterio
+    from pyproj import Transformer
 
     rasters = sorted(cache.glob("images/*/*.tif"))
     if not rasters:
         return None
-    raster = rxr.open_rasterio(rasters[-1]).squeeze("band", drop=True)
-    return (
-        raster.values.astype(int),
-        [float(v) for v in raster.x.values],
-        [float(v) for v in raster.y.values],
-    )
+    with rasterio.open(rasters[-1]) as source:
+        codes = source.read(1).astype(int)
+        transform = source.transform
+        to_wgs84 = Transformer.from_crs(source.crs, "EPSG:4326", always_xy=True)
+
+    def to_lonlat(rows, columns):
+        # Pixel centres through the affine, then out of the native projection.
+        x = transform.c + transform.a * (columns + 0.5) + transform.b * (rows + 0.5)
+        y = transform.f + transform.d * (columns + 0.5) + transform.e * (rows + 0.5)
+        return to_wgs84.transform(x, y)
+
+    return codes, to_lonlat
+
+
+def check_geography(selected: list) -> None:
+    """Refuse a catalogue whose coordinates are not plausible lon/lat.
+
+    Native-grid rasters arrive in projected metres, and treating those as
+    degrees produces a catalogue that looks complete -- right row count, right
+    land-cover quotas -- while every point is nonsense and every latitude band
+    collapses to one value. That failure is invisible in the row count, so it is
+    asserted here instead.
+    """
+
+    longitudes = [float(candidate.longitude) for candidate in selected]
+    latitudes = [float(candidate.latitude) for candidate in selected]
+    if not all(-180.0 <= value <= 180.0 for value in longitudes):
+        raise RuntimeError("catalogue longitudes are outside [-180, 180]; check the raster CRS")
+    if not all(-90.0 <= value <= 90.0 for value in latitudes):
+        raise RuntimeError("catalogue latitudes are outside [-90, 90]; check the raster CRS")
+    bands = {latitude_band(value) for value in latitudes}
+    if len(bands) < 2:
+        raise RuntimeError(f"every catalogue point landed in one latitude band ({bands})")
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -88,15 +123,15 @@ def run(args: argparse.Namespace) -> dict:
             empty += 1
             continue
         fetched += 1
-        codes, longitudes, latitudes = payload
+        codes, to_lonlat = payload
         pool.extend(
             candidates_from_class_grid(
                 codes,
-                longitudes=longitudes,
-                latitudes=latitudes,
+                to_lonlat=to_lonlat,
                 tile_id=f"t{index:04d}",
                 per_tile=int(args.per_tile),
                 seed=index,
+                within=bbox,
             )
         )
         if (index + 1) % 10 == 0:
@@ -105,6 +140,9 @@ def run(args: argparse.Namespace) -> dict:
     if not pool:
         raise RuntimeError("WorldCover produced no candidates; check edown and the cache")
     selected = sample_catalog(pool, total=int(args.total), seed=int(args.seed))
+    # Checked before writing, so a catalogue that fails never lands on disk to
+    # be picked up by a downstream stage.
+    check_geography(selected)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8") as stream:

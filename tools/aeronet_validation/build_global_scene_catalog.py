@@ -61,6 +61,15 @@ def aoi_bbox(longitude: float, latitude: float, *, half_width_m: float = AOI_HAL
     """WGS84 bbox of the AOI footprint around a catalogue point."""
 
     latitude = float(latitude)
+    # A projected coordinate reaching here would be silently accepted by
+    # Earth Engine as a geometry spanning the planet many times over, which it
+    # answers with "User memory limit exceeded" after a long wait rather than a
+    # useful error. Refuse it here instead.
+    if not -180.0 <= float(longitude) <= 180.0 or not -90.0 <= latitude <= 90.0:
+        raise ValueError(
+            f"({longitude}, {latitude}) is not a WGS84 coordinate; "
+            "the catalogue may hold projected metres"
+        )
     degrees_lat = half_width_m / 111_320.0
     scale = max(math.cos(math.radians(latitude)), 1e-6)
     degrees_lon = half_width_m / (111_320.0 * scale)

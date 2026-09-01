@@ -5,6 +5,7 @@
 #SBATCH --partition=standard
 #SBATCH --qos=standard
 #SBATCH --time=16:00:00
+# SKIP_FETCH=1 reuses the cached land-cover tiles (all 540 present).
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=/gws/ssde/j25a/nceo_isp/public/siac_refactor/slurm/global_catalog_%j.out
@@ -30,6 +31,6 @@ mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUT" "$CACHE"
   --total "${CATALOG_TOTAL:-5000}" \
   --tile-degrees 10.0 \
   --per-tile 400 \
-  --seed 20260901
+  --seed 20260901 ${SKIP_FETCH:+--skip-fetch}
 
 rm -rf "$TMPDIR"

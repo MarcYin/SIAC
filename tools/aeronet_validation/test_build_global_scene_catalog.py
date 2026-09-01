@@ -72,3 +72,15 @@ def test_month_window_straddles_the_month_midpoint() -> None:
     start, end = month_window(2021, 2)
     assert start == "2021-01-26"
     assert end == "2021-03-07"
+
+
+def test_projected_coordinates_are_refused_before_reaching_earth_engine() -> None:
+    """Regression: a metres-not-degrees catalogue must fail fast.
+
+    Earth Engine accepts the resulting geometry and spends minutes on it before
+    answering "User memory limit exceeded", which reads as a quota problem
+    rather than as bad input.
+    """
+
+    with pytest.raises(ValueError, match="not a WGS84 coordinate"):
+        aoi_bbox(-5262074.17, -5529868.92)
