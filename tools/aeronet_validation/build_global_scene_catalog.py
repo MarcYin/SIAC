@@ -32,7 +32,11 @@ from tools.aeronet_validation.global_scene_selection import (
     SceneOption,
     assign_target_months,
     choose_scene,
+    cloud_balance,
+    cloud_quota,
+    cloud_stratum,
     matchup_id,
+    next_cloud_target,
     season_balance,
 )
 
@@ -52,6 +56,12 @@ WINDOW_HALF_DAYS = 20
 #: Stop once this many usable acquisitions have been found; more years only add
 #: choice that ``choose_scene`` rarely needs, at one Earth Engine listing each.
 MIN_OPTIONS = 6
+
+#: How near the target cloud level counts as hitting it, for the early stop.
+#: Wide enough that a genuinely uniform AOI -- always clear, or always clouded --
+#: stops after exhausting its years rather than after finding a perfect match it
+#: never had.
+CLOUD_TOLERANCE = 15.0
 
 #: S2C joined the constellation in 2025 and carries the same L1C product naming.
 SUPPORTED_SPACECRAFT = ("Sentinel-2A", "Sentinel-2B", "Sentinel-2C")
@@ -130,8 +140,18 @@ def search_options(
     years: Sequence[int] = ELIGIBLE_YEARS,
     min_options: int = MIN_OPTIONS,
     max_cloud: float = MAX_SCENE_CLOUD_COVER,
+    target_cloud: float | None = None,
+    cloud_tolerance: float = CLOUD_TOLERANCE,
 ) -> tuple[tuple[SceneOption, ...], int]:
-    """Collect candidate acquisitions, stopping once there are enough."""
+    """Collect candidate acquisitions, stopping once there are enough.
+
+    "Enough" has to account for the target cloud level. Counting merely usable
+    acquisitions was fine under a 20% ceiling, where usable meant clear; at 90%
+    nearly every acquisition qualifies, so the search would stop after one year
+    and offer no cloudy scene to choose from -- silently reverting the corpus to
+    near-clear whatever the targets say. The search now also keeps going until
+    something near the target appears.
+    """
 
     from edown import AOI, SearchConfig
     from edown.discovery import search_images
@@ -156,8 +176,15 @@ def search_options(
         except DiscoveryError:
             continue  # No acquisitions that month; a polar winter, most likely.
         collected.extend(options_from_images(result.images))
-        usable = sum(1 for option in collected if option.cloud_cover <= float(max_cloud))
-        if usable >= int(min_options):
+        usable = [option for option in collected if option.cloud_cover <= float(max_cloud)]
+        if len(usable) < int(min_options):
+            continue
+        if target_cloud is None:
+            break
+        if any(
+            abs(option.cloud_cover - float(target_cloud)) <= float(cloud_tolerance)
+            for option in usable
+        ):
             break
     return tuple(collected), searches
 
@@ -173,7 +200,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         rows = [row for index, row in enumerate(rows) if index % args.shard_count == args.shard]
     if args.limit:
         rows = rows[: int(args.limit)]
-    months = assign_target_months([row["sample_id"] for row in rows], seed=args.seed)
+    sample_ids = [row["sample_id"] for row in rows]
+    months = assign_target_months(sample_ids, seed=args.seed)
+    # Quota over this shard. Shards are an interleaved subsample of the
+    # catalogue, so holding the proportions within each one holds them globally
+    # without needing a pass over all shards to rebalance.
+    quota = cloud_quota(len(rows))
+    realised: dict[float, int] = dict.fromkeys(quota, 0)
 
     selected: dict[str, SceneOption] = {}
     records: list[dict[str, Any]] = []
@@ -182,6 +215,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for position, row in enumerate(rows):
         sample_id = row["sample_id"]
         target = months[sample_id]
+        target_cloud = next_cloud_target(realised, quota)
         options, used = search_options(
             float(row["longitude"]),
             float(row["latitude"]),
@@ -189,13 +223,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             target,
             years=tuple(args.eligible_years),
             min_options=args.min_options,
+            target_cloud=target_cloud,
         )
         searches += used
-        scene = choose_scene(options, target_month=target)
+        scene = choose_scene(options, target_month=target, target_cloud=target_cloud)
         if scene is None:
             unresolved.append(sample_id)
             continue
         selected[sample_id] = scene
+        realised[cloud_stratum(scene.cloud_cover)] += 1
         records.append(
             {
                 "sample_id": sample_id,
@@ -205,6 +241,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "mgrs_tile": scene.mgrs_tile,
                 "cloud_cover": scene.cloud_cover,
                 "target_month": target,
+                "target_cloud": target_cloud,
                 "longitude": row["longitude"],
                 "latitude": row["latitude"],
                 "land_cover": row.get("land_cover", ""),
@@ -229,6 +266,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "earth_engine_searches": searches,
         "searches_per_aoi": searches / len(rows) if rows else 0.0,
         "season_balance": season_balance(selected),
+        "cloud_quota": {f"{level:g}%": count for level, count in quota.items()},
+        "cloud_realised": {f"{level:g}%": count for level, count in realised.items()},
+        "cloud_balance": cloud_balance(selected),
+        "cloud_cover_mean": (
+            sum(s.cloud_cover for s in selected.values()) / len(selected) if selected else 0.0
+        ),
         "catalog": str(output),
     }
     output.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

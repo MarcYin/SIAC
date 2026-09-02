@@ -23,7 +23,10 @@ CACHE=/work/scratch-pw5/marcyin/global_corpus/landcover_tiles
 export PYTHONPATH=$PROJECT:$PROJECT/python
 export TMPDIR=/work/scratch-pw5/marcyin/global_corpus/tmp_$SLURM_JOB_ID
 export MPLCONFIGDIR=$TMPDIR/matplotlib
-mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUT" "$CACHE"
+# Array tasks race on the shared parent; mkdir -p can still report EEXIST
+# on this filesystem, which set -e would turn into a dead shard.
+mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUT" 2>/dev/null || true
+test -d "$TMPDIR" && test -d "$OUT" "$CACHE"
 
 "$PROJECT/.pixi/envs/default/bin/python" -u -m tools.aeronet_validation.build_global_catalog \
   --output "$OUT/global_aoi_catalog.csv" \

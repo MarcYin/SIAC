@@ -25,7 +25,10 @@ NAME=${NAME:-global_scene_catalog}
 export PYTHONPATH=$PROJECT:$PROJECT/python:/gws/ssde/j25a/nceo_isp/public/siac_env/edown_runtime
 export TMPDIR=/work/scratch-pw5/marcyin/global_corpus/tmp_scenes_${SLURM_JOB_ID}
 export MPLCONFIGDIR=$TMPDIR/matplotlib
-mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUT"
+# Array tasks race on the shared parent; mkdir -p can still report EEXIST
+# on this filesystem, which set -e would turn into a dead shard.
+mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUT" 2>/dev/null || true
+test -d "$TMPDIR" && test -d "$OUT"
 
 test -s "$OUT/global_aoi_catalog.csv"
 
