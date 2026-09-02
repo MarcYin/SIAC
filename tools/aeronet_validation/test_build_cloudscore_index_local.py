@@ -94,3 +94,15 @@ def test_written_index_matches_the_consumed_schema(tmp_path) -> None:
     receipt = json.loads(out.with_suffix(".json").read_text())
     assert receipt["status"] == "ok"
     assert receipt["candidate_days"] == 2
+
+
+def test_fetch_asks_for_chunks_below_the_server_ceiling() -> None:
+    """Regression: edown's own default sits exactly at the server limit.
+
+    It sized a chunk at 50,466,816 bytes against a 50,331,648 ceiling, so the
+    estimate omits per-request overhead and the image is rejected outright.
+    """
+
+    from tools.aeronet_validation.build_cloudscore_index_local import REQUEST_BYTE_LIMIT
+
+    assert REQUEST_BYTE_LIMIT < 50331648
