@@ -1634,3 +1634,53 @@ variance, 58-77% persistent per site), which only more *scenes* reduces. The
 
 For reference, the fetched Cloud Score+ raster is already 960x960 at its native
 10 m for this AOI, 0.4 MB compressed.
+
+### Global corpus: catalogue and scene selection (2026-09-02)
+
+5,000 AOIs drawn, **4,850 scenes selected (97.0%)** at 1.50 Earth Engine
+listings per AOI. `global_scene_catalog.csv`.
+
+| stratum | quota | realised | delta |
+|---|---:|---:|---:|
+| 5% | 2000 | 1976 | -24 |
+| 20% | 1250 | 1219 | -31 |
+| 45% | 1000 | 955 | -45 |
+| 75% | 750 | 700 | -50 |
+
+The four deltas sum to exactly 150, the number of unresolved AOIs: the quota is
+5,000 slots and only 4,850 scenes exist to fill them, so the shortfall is
+arithmetic rather than a failure of the deficit rule. It lands proportionally
+harder on the cloudy strata because those are what the rule was still targeting
+when each shard ran out of AOIs.
+
+Cloud cover spans 0-73% across the deciles (mean 26.7), against 0-12% under the
+old 20% ceiling. Scene years are flat across 2018-2025 (559-641 each), which is
+the per-AOI year shuffle working -- calendar order would have piled them on
+2018. Season is even to within 6.9-8.9% per month. Land-cover quotas held
+exactly (bare_sparse 0.250, grassland 0.099, shrubland 0.097).
+
+4,411 distinct products serve 4,850 scenes, so ~9% of AOIs share an acquisition
+with a neighbour in the same tile. Those pairs share an atmospheric state and
+one L1C download; the surfaces differ. Mild correlation, and a small fetch
+saving.
+
+Two failures worth remembering, both silent. The catalogue's first run wrote
+5,001 rows with perfect land-cover quotas and every coordinate in projected
+metres -- see the coordinate fix above. And the scene array's first run was
+cancelled mid-flight, after which `sacct` reported 25 COMPLETED tasks that were
+all `.extern` steps; no shard CSV had been written at all. A state summary is
+not evidence that output exists.
+
+### Next stage, not yet launched
+
+Per-AOI scout -> targeted Cloud Score+ fetch -> local index, for 4,850 scenes:
+
+* ~1.29M public SCL reads for scouting -- no quota, ~13 min across 25 shards at
+  the measured 0.015 s per read.
+* ~548,000 Earth Engine pixel requests for the shortlisted Cloud Score+ images,
+  at 113 per scene.
+
+The fetch throughput is the unmeasured term. Three images took 15.5 s including
+Earth Engine init and search; 113 images per scene will not scale linearly
+because edown downloads ten at a time, but the per-scene cost needs measuring on
+a handful of scenes before committing 4,850. That is the pilot to run first.
