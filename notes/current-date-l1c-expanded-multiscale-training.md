@@ -1684,3 +1684,49 @@ The fetch throughput is the unmeasured term. Three images took 15.5 s including
 Earth Engine init and search; 113 images per scene will not scale linearly
 because edown downloads ten at a time, but the per-scene cost needs measuring on
 a handful of scenes before committing 4,850. That is the pilot to run first.
+
+### Corpus index built: 4,849 of 4,850 (2026-09-02)
+
+`cloudscore_index20/` holds a locally composed Cloud Score+ winner index per AOI.
+25 shards, 4.6-6.0 h each, 108.4 s per scene:
+
+| stage | seconds |
+|---|---:|
+| stac | 2.2 |
+| scout | 5.7 |
+| aod | 46.6 |
+| fetch | 46.5 |
+| index | 2.4 |
+
+**463 acquisitions surveyed per scene, 111 shortlisted -- a 76% cut.** Across the
+corpus that is 458,838 Cloud Score+ requests instead of roughly 2.0 million.
+
+The AOD stage cost 46.6 s at scale against 27.8 s in the pilot; the pilot drew
+southern-hemisphere AOIs and MAIAC granule density varies with latitude. Still
+17x better than the earthaccess path it replaced.
+
+Three failures worth recording, each invisible in job state.
+
+**The Planetary Computer SAS token expires in ~45 minutes.** Fetched once for a
+4.5 h shard, it took all 25 shards down at the same wall-clock minute -- 10:34,
+against an advertised expiry of 10:33:58Z -- after each had built ~26 indices
+and looked healthy throughout. `SasToken` now renews five minutes early; the
+completed run logged 196 renewals, 7.8 per shard, so every shard would otherwise
+have died at its 26th AOI.
+
+**edown sizes chunks against exactly Earth Engine's ceiling.** One measured
+50,466,816 bytes against a 50,331,648 limit, a 0.3% overshoot that omits
+per-request overhead, and the server rejects the whole image. This failed 1.2%
+of AOIs, scattered evenly across land cover and cloud strata because whether an
+AOI trips it depends on how its bbox lands on each image's native grid -- which
+is why the counts alone were undiagnosable. Requesting 32 MiB chunks cleared 49
+of the 50.
+
+**The last AOI is a UTM seam, not a bug.** `t0144_shrubland...T01KAB` at
+-179.849 sits at the western edge of zone 1: 143 acquisitions found, all 143
+rejected by the footprint gate because none covers the AOI whole. The gate is
+refusing to build a library from partial coverage, which is correct. Same class
+as the earlier cross-zone bestpixel failures. An antimeridian wrap was the
+obvious hypothesis and was wrong -- the polygon is clean at 0.073 degrees.
+
+Next: capture (L1C multiscale + teacher) against this index.
