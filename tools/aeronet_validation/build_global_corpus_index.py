@@ -30,11 +30,11 @@ from tools.aeronet_validation.build_cloudscore_index_local import (
     read_planes,
     write_index,
 )
-from tools.aeronet_validation.build_l2a_scl_index import SAS_URL, _imports, _session
+from tools.aeronet_validation.build_l2a_scl_index import _imports, _session
 from tools.aeronet_validation.cloudscore_index_policy import LIBRARY_YEARS, seasonal_windows
 from tools.aeronet_validation.maiac_gee_day_aod import day_aod_map
 from tools.aeronet_validation.scout_prefilter import ScoutRecord, shortlist
-from tools.aeronet_validation.scout_scl import query_items, scout, scout_grid
+from tools.aeronet_validation.scout_scl import SasToken, query_items, scout, scout_grid
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -208,7 +208,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     imports = _imports()
     session = _session(imports["requests"])
-    sas = str(session.get(SAS_URL, timeout=60).json()["token"])
+    # Renewed as the run proceeds: a token fetched once lapses ~45 minutes in
+    # and takes every remaining AOI with it.
+    token = SasToken(session)
 
     done: list[dict[str, Any]] = []
     failures: dict[str, str] = {}
@@ -227,7 +229,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     cache_root=cache_root,
                     edown=args.edown,
                     imports=imports,
-                    sas=sas,
+                    sas=token.value,
                     session=session,
                     library_years=tuple(args.library_years),
                     top_k=args.top_k,
@@ -255,6 +257,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "failed": len(failures),
         "failures": dict(list(failures.items())[:10]),
         "wall_seconds": round(elapsed, 1),
+        "sas_renewals": token.renewals,
         "seconds_per_scene": round(elapsed / max(1, len(done)), 2),
         "mean_seconds": {
             stage: mean(stage) for stage in ("stac", "scout", "aod", "fetch", "index")

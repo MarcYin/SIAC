@@ -158,6 +158,50 @@ def scout_grid(
 GRID_KEYS = ("surface", "comp", "winners", "boa")
 
 
+class SasToken:
+    """A Planetary Computer SAS token that renews itself before it expires.
+
+    The tokens are valid for about 45 minutes. Fetching one at the start of a
+    long run and reusing it fails silently and identically across every worker
+    the moment it lapses -- measured as all 25 shards of a 4.5 hour array
+    ceasing to produce output at the same wall-clock minute, having looked
+    healthy until then.
+    """
+
+    #: Renew this long before expiry, so a scene in flight cannot straddle it.
+    MARGIN_SECONDS = 300.0
+
+    def __init__(
+        self, session: Any, url: str = SAS_URL, margin_seconds: float | None = None
+    ) -> None:
+        self._session = session
+        self._url = url
+        self._margin = float(self.MARGIN_SECONDS if margin_seconds is None else margin_seconds)
+        self._token = ""
+        self._expires_at = 0.0
+        self.renewals = 0
+
+    def _refresh(self) -> None:
+        response = self._session.get(self._url, timeout=60)
+        response.raise_for_status()
+        payload = response.json()
+        self._token = str(payload["token"])
+        expiry = payload.get("msft:expiry")
+        if expiry:
+            moment = dt.datetime.fromisoformat(str(expiry).replace("Z", "+00:00"))
+            self._expires_at = moment.timestamp()
+        else:
+            # No expiry advertised: assume the observed 45 minute lifetime.
+            self._expires_at = time.time() + 45 * 60
+        self.renewals += 1
+
+    @property
+    def value(self) -> str:
+        if not self._token or time.time() >= self._expires_at - self._margin:
+            self._refresh()
+        return self._token
+
+
 def archive_grid_spec(path: Path) -> tuple[str, tuple[float, ...], int, int]:
     """Read ``(crs, transform, height, width)`` from a teacher or index npz.
 

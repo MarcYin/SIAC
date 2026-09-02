@@ -217,3 +217,73 @@ def test_the_survey_reads_native_by_default() -> None:
 
     assert SCOUT_RESOLUTION_M == SCL_NATIVE_RESOLUTION_M
     assert inspect.signature(scout).parameters["overview_level"].default is None
+
+
+def test_sas_token_renews_before_it_expires() -> None:
+    """Regression: a token fetched once lapses mid-run and takes the rest with it.
+
+    Measured as all 25 shards of a 4.5 hour array ceasing to produce output at
+    the same wall-clock minute -- the token's expiry -- having looked healthy
+    until that moment.
+    """
+
+    import datetime as dt
+
+    from tools.aeronet_validation.scout_scl import SasToken
+
+    issued = []
+
+    class _Response:
+        def __init__(self, expiry_seconds: float) -> None:
+            self._expiry = expiry_seconds
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            issued.append(len(issued))
+            moment = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=self._expiry)
+            return {
+                "token": f"token{len(issued)}",
+                "msft:expiry": moment.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+
+    class _Session:
+        def __init__(self, expiry_seconds: float) -> None:
+            self._expiry = expiry_seconds
+
+        def get(self, url, timeout=None):  # noqa: ARG002 - signature mirrors requests
+            return _Response(self._expiry)
+
+    # Comfortably valid: fetched once, then reused.
+    fresh = SasToken(_Session(3600.0), margin_seconds=300.0)
+    assert fresh.value == "token1"
+    assert fresh.value == "token1"
+    assert fresh.renewals == 1
+
+    # Inside the safety margin: renewed on every use rather than served stale.
+    expiring = SasToken(_Session(60.0), margin_seconds=300.0)
+    first = expiring.value
+    second = expiring.value
+    assert first != second
+    assert expiring.renewals == 2
+
+
+def test_sas_token_without_an_advertised_expiry_still_renews() -> None:
+    from tools.aeronet_validation.scout_scl import SasToken
+
+    class _Session:
+        def get(self, url, timeout=None):  # noqa: ARG002 - signature mirrors requests
+            class _Response:
+                def raise_for_status(self) -> None:
+                    return None
+
+                def json(self) -> dict[str, str]:
+                    return {"token": "bare"}
+
+            return _Response()
+
+    token = SasToken(_Session())
+    assert token.value == "bare"
+    # Assumed lifetime, not treated as never-expiring.
+    assert token._expires_at > 0.0  # noqa: SLF001 - asserting the fallback was applied
