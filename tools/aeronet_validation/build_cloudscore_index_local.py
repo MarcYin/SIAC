@@ -50,6 +50,16 @@ SCHEMA = "siac_l1c_cloudscore_winner_index_v1"
 #: 1.1% of AOIs failed outright at the fetch.
 REQUEST_BYTE_LIMIT = 32 * 1024 * 1024
 
+#: Archived clear-score rasters are stored as uint8. Quantising to 1/254 leaves
+#: the winner field bit-identical -- the per-day weight term separates
+#: candidates far more coarsely than that -- while halving the archive.
+#:
+#: The scale is 254, not 255, so that 255 is free to mean nodata. Scaling by 255
+#: would encode a perfectly clear pixel and an unobserved one identically, which
+#: is silent: it turns the clearest pixels into gaps.
+CLEAR_SCORE_SCALE = 254.0
+CLEAR_SCORE_NODATA = 255
+
 #: ``day -> AOD`` lookup. Injectable so the policy can be validated against a
 #: reference index's own AOD values before the MAIAC path is trusted.
 AODLookup = Callable[[Sequence[str]], "dict[str, float | None]"]
@@ -218,6 +228,12 @@ def read_planes(cache: Path, template: Any) -> dict[str, np.ndarray]:
     for path in sorted(cache.glob(f"images/*/{FILE_PREFIX}_*.tif")):
         image_id = path.stem[len(FILE_PREFIX) + 1 :]
         raster = rxr.open_rasterio(path).squeeze("band", drop=True)
+        if raster.dtype == np.uint8:
+            # Archived form: decode before resampling, so nodata becomes NaN
+            # rather than being interpolated as a score.
+            decoded = raster.values.astype(np.float64)
+            decoded = np.where(decoded == CLEAR_SCORE_NODATA, np.nan, decoded / CLEAR_SCORE_SCALE)
+            raster = raster.copy(data=decoded).rio.write_nodata(np.nan, inplace=False)
         planes[image_id] = raster.rio.reproject_match(
             template, resampling=Resampling.nearest
         ).values.astype(np.float64)
