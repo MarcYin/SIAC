@@ -1730,3 +1730,25 @@ as the earlier cross-zone bestpixel failures. An antimeridian wrap was the
 obvious hypothesis and was wrong -- the polygon is clean at 0.073 degrees.
 
 Next: capture (L1C multiscale + teacher) against this index.
+
+### Two settings fixed for the global corpus (2026-09-03)
+
+**No acquisition metadata in the training input.** `--no-date-metadata
+--no-sensor-metadata` removes all five channels in `METADATA_BANDS`:
+`doy_sin`, `doy_cos`, `sensor_s2b`, `sensor_s2c`, `processing_baseline`. The
+sweep found they do not help, and dropping them should generalise better --
+the model has no business keying on which satellite or which processing
+baseline produced a scene, and a corpus spanning 2018-2025 correlates baseline
+with date with everything else that drifted over those years. Both flags are
+`BooleanOptionalAction` defaulting to True, so this must be set explicitly at
+training time; it is not the default.
+
+**Snow support policy on.** `--snow-support-policy recurrent-library` on
+`build_optimal_m5_teacher`, which defaults to `off`. This is the gross-outlier
+case: snow in the current scene but not in the monthly composites, or in the
+composites but not in the scene. Either way the surface prior is wrong by a
+large margin rather than a small one, and the solver has no way to tell.
+`profile_library_support` checks whether the library actually carries snow
+support for a snowy scene, at NDSI 0.4 / green 0.2, requiring a minimum of 3
+history realizations. Note it lives on the *final teacher* stage, not on the
+dictionary stage.
