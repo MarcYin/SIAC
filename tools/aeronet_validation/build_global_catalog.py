@@ -9,6 +9,7 @@ import json
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tools.aeronet_validation.global_candidate_pool import (
     LANDCOVER_BAND,
@@ -19,10 +20,14 @@ from tools.aeronet_validation.global_candidate_pool import (
 )
 from tools.aeronet_validation.global_catalog_sampler import (
     DEFAULT_TARGETS,
+    Candidate,
     composition,
     latitude_band,
     sample_catalog,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # MCD12Q1 is annual; the window selects one epoch.
 LANDCOVER_WINDOW = ("2021-01-01", "2021-12-31")
@@ -85,6 +90,48 @@ def read_tile(cache: Path):
     return codes, to_lonlat
 
 
+def draw_fingerprint(bbox, per_tile: int, seed: int) -> str:
+    """Identify the draw policy, so a cached tile draw cannot outlive its inputs."""
+
+    return json.dumps(
+        {"bbox": [round(float(v), 6) for v in bbox], "per_tile": int(per_tile), "seed": int(seed)},
+        sort_keys=True,
+    )
+
+
+def load_tile_draw(cache: Path, fingerprint: str) -> list[Candidate] | None:
+    """Reuse a previous draw for this tile if the policy is unchanged.
+
+    Sampling the pool costs far more than reading the raster -- the class index
+    is built pixel by pixel over a 67-megapixel grid -- so a rerun that only
+    needs a different total, or that died partway, should not repeat it.
+    """
+
+    path = cache / "candidates.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if payload.get("fingerprint") != fingerprint:
+        return None
+    return [Candidate(**row) for row in payload.get("candidates", [])]
+
+
+def store_tile_draw(cache: Path, fingerprint: str, candidates: Sequence[Candidate]) -> None:
+    path = cache / "candidates.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(
+            {"fingerprint": fingerprint, "candidates": [asdict(c) for c in candidates]},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def check_geography(selected: list) -> None:
     """Refuse a catalogue whose coordinates are not plausible lon/lat.
 
@@ -118,22 +165,30 @@ def run(args: argparse.Namespace) -> dict:
             except RuntimeError as error:
                 print(f"tile {index} fetch failed, skipping: {error}", flush=True)
                 continue
-        payload = read_tile(cache)
-        if payload is None:
+        fingerprint = draw_fingerprint(bbox, args.per_tile, index)
+        drawn = None if args.redraw else load_tile_draw(cache, fingerprint)
+        if drawn is None:
+            payload = read_tile(cache)
+            if payload is None:
+                empty += 1
+                continue
+            codes, to_lonlat = payload
+            drawn = list(
+                candidates_from_class_grid(
+                    codes,
+                    to_lonlat=to_lonlat,
+                    tile_id=f"t{index:04d}",
+                    per_tile=int(args.per_tile),
+                    seed=index,
+                    within=bbox,
+                )
+            )
+            store_tile_draw(cache, fingerprint, drawn)
+        elif not cache.is_dir():
             empty += 1
             continue
         fetched += 1
-        codes, to_lonlat = payload
-        pool.extend(
-            candidates_from_class_grid(
-                codes,
-                to_lonlat=to_lonlat,
-                tile_id=f"t{index:04d}",
-                per_tile=int(args.per_tile),
-                seed=index,
-                within=bbox,
-            )
-        )
+        pool.extend(drawn)
         if (index + 1) % 10 == 0:
             print(f"  {index + 1}/{len(tiles)} tiles, pool {len(pool)}", flush=True)
 
@@ -176,6 +231,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--seed", type=int, default=20260901)
     value.add_argument("--edown", default="/home/users/marcyin/SIAC/tools/edown_runtime")
     value.add_argument("--skip-fetch", action="store_true")
+    value.add_argument(
+        "--redraw", action="store_true", help="Ignore cached per-tile draws and resample."
+    )
     return value
 
 
