@@ -42,6 +42,14 @@ BAND = CLOUD_SCORE_BAND
 FILE_PREFIX = "GOOGLE_CLOUD_SCORE_PLUS_V1_S2_HARMONIZED"
 SCHEMA = "siac_l1c_cloudscore_winner_index_v1"
 
+#: Chunk budget for a Cloud Score+ fetch, below edown's 48 MiB default.
+#: edown sizes chunks against this limit but the server measured one at
+#: 50,466,816 bytes against its own 50,331,648 ceiling -- a 0.3% overshoot, so
+#: the estimate omits per-request overhead. Rejection is total for the image, so
+#: the margin is worth more than the extra chunks it costs: without it, roughly
+#: 1.1% of AOIs failed outright at the fetch.
+REQUEST_BYTE_LIMIT = 32 * 1024 * 1024
+
 #: ``day -> AOD`` lookup. Injectable so the policy can be validated against a
 #: reference index's own AOD values before the MAIAC path is trusted.
 AODLookup = Callable[[Sequence[str]], "dict[str, float | None]"]
@@ -151,6 +159,8 @@ def fetch_selected(
             days[-1],
             "--image-id",
             ",".join(sorted(image_ids)),
+            "--request-byte-limit",
+            str(REQUEST_BYTE_LIMIT),
             "--output-root",
             str(cache),
         ],
