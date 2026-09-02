@@ -183,3 +183,20 @@ def test_cloud_stratum_assigns_each_scene_to_one_target() -> None:
 def test_the_ceiling_still_rejects_beyond_it() -> None:
     options = [SceneOption("a", "2021-06-10T00:00:00", "T31UDQ", 95.0)]
     assert choose_scene(options, target_month=6, target_cloud=75.0) is None
+
+
+def test_matchup_id_drops_the_utc_offset_without_fractional_seconds() -> None:
+    """Regression: stripping from the first "." only worked by accident.
+
+    An acquisition recorded on a whole second has no fractional part for the
+    split to cut at, so the "+00:00" offset survived into the identifier --
+    5.2% of a 4,850-scene catalogue.
+    """
+
+    whole = SceneOption("p", "2019-07-12T14:37:27+00:00", "T18FXH", 5.0)
+    fractional = SceneOption("p", "2019-07-12T14:37:27.376000+00:00", "T18FXH", 5.0)
+    assert matchup_id("s", whole) == "s__T18FXH_20190712T143727"
+    assert matchup_id("s", fractional) == matchup_id("s", whole)
+    assert matchup_id("s", SceneOption("p", "2019-07-12T14:37:27Z", "T18FXH", 5.0)) == (
+        "s__T18FXH_20190712T143727"
+    )

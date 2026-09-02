@@ -47,15 +47,14 @@ SCHEMA = "siac_l1c_cloudscore_winner_index_v1"
 AODLookup = Callable[[Sequence[str]], "dict[str, float | None]"]
 
 
-def scene_grid(teacher_path: Path) -> tuple[Any, tuple[float, float, float, float]]:
-    """Build the 20 m template and its WGS84 bbox from a teacher archive."""
+def grid_template(
+    crs: str, transform_values: Sequence[float], height: int, width: int
+) -> tuple[Any, tuple[float, float, float, float]]:
+    """Build a resampling template and its WGS84 bbox from a grid spec."""
     import rioxarray  # noqa: F401
     import xarray as xr
     from pyproj import Transformer
 
-    # Shared with the scout: campaign archives disagree on both the raster key
-    # and how they name the CRS, so the spec is resolved in one place.
-    crs, transform_values, height, width = archive_grid_spec(teacher_path)
     transform = np.asarray(transform_values, dtype=np.float64)
     x = transform[2] + transform[0] * (np.arange(width) + 0.5)
     y = transform[5] + transform[4] * (np.arange(height) + 0.5)
@@ -68,6 +67,14 @@ def scene_grid(teacher_path: Path) -> tuple[Any, tuple[float, float, float, floa
         [min(xs), max(xs)], [min(ys), max(ys)]
     )
     return template, (min(lon), min(lat), max(lon), max(lat))
+
+
+def scene_grid(teacher_path: Path) -> tuple[Any, tuple[float, float, float, float]]:
+    """Build the 20 m template and its WGS84 bbox from a teacher archive."""
+
+    # Shared with the scout: campaign archives disagree on both the raster key
+    # and how they name the CRS, so the spec is resolved in one place.
+    return grid_template(*archive_grid_spec(teacher_path))
 
 
 def fetch_windows(
