@@ -1743,6 +1743,14 @@ with date with everything else that drifted over those years. Both flags are
 `BooleanOptionalAction` defaulting to True, so this must be set explicitly at
 training time; it is not the default.
 
+**RT space must be set explicitly.** `--aerosol-species cci_climatology_exact`
+on `build_expanded_l1c_teacher`, which defaults to `cci_climatology_25pct`.
+Species was measured as the first knob for the catastrophic high-AOD tail, and
+`exact` is the validated arm. The failure mode is late and expensive: the
+dictionary builds happily in the wrong space and only the *teacher* rejects it,
+after the 363 s per scene has been spent. Naming the output directory
+`_cci_exact` does not make it so.
+
 **Snow support policy on.** `--snow-support-policy recurrent-library` on
 `build_optimal_m5_teacher`, which defaults to `off`. This is the gross-outlier
 case: snow in the current scene but not in the monthly composites, or in the
