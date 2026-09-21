@@ -580,6 +580,10 @@ def seasonal_extra_tree_prior(
     localizer_columns = tuple(
         composite_bands.index(name) for name in LOCALIZER_BANDS if name in composite_bands
     )
+    # A training pixel is usable when the columns this fit actually reads are
+    # finite. Testing every plane the library happens to carry would let an
+    # unsupervised band -- B09, say -- drop pixels from the fit and silently
+    # move the predictions of the bands that are supervised.
     if comp.shape[0] == 0:
         return prior
     comp = _robust_clip_composites(
@@ -657,6 +661,7 @@ def seasonal_extra_tree_prior(
 
     target_names = list(targets)
     target_cols = [int(targets[name]) for name in target_names]
+    used_columns = sorted({*anchor_columns, *localizer_columns, *target_cols})
     predictions: dict[str, list[np.ndarray]] = {name: [] for name in target_names}
     fitted_trees: list[Any] = []
     realization_anchors: list[np.ndarray] = []
@@ -676,7 +681,7 @@ def seasonal_extra_tree_prior(
         pooled_y: list[np.ndarray] = []
         for index in range(n_real):
             composite = comp[index].reshape(comp.shape[1], -1).T
-            good = np.all(np.isfinite(composite), axis=1)
+            good = np.all(np.isfinite(composite[:, used_columns]), axis=1)
             if int(np.count_nonzero(good)) < 200:
                 continue
             pooled_x.append(
@@ -714,7 +719,7 @@ def seasonal_extra_tree_prior(
                     predictions[band_name].append(np.asarray(pred[:, out_index], dtype=np.float64))
     for index in range(n_real if not pooled_fit else 0):
         composite = comp[index].reshape(comp.shape[1], -1).T
-        good = np.all(np.isfinite(composite), axis=1)
+        good = np.all(np.isfinite(composite[:, used_columns]), axis=1)
         if int(np.count_nonzero(good)) < 200:
             continue
         train_x = np.column_stack([composite[good][:, list(anchor_columns)], localizer_comp[good]])
