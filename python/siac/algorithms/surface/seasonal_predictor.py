@@ -26,6 +26,18 @@ if TYPE_CHECKING:
 
 
 ANCHOR_BANDS: tuple[str, ...] = ("B8A", "B11", "B12")
+#: Bands whose multi-year mean forms the localizer, the per-pixel visible
+#: climatology that breaks the NIR/SWIR anchor's surface-type degeneracy.
+LOCALIZER_BANDS: tuple[str, ...] = ("B01", "B02", "B03", "B04")
+#: Green pairs with SWIR16 in the recurrent-snow NDSI; resolved by name because
+#: a library without a coastal band shifts every visible column.
+_GREEN_BAND = "B03"
+_SWIR16_BAND = "B11"
+#: Column positions of the anchor and localizer bands in the seven-band
+#: composite. These are POSITIONS, valid only for ``DEFAULT_BAND_COLUMNS``'
+#: layout; a wider library puts other bands there, so any composite that is not
+#: exactly seven bands wide must name its bands and let
+#: :func:`_composite_columns` resolve the positions.
 ANCHOR_COLUMNS: tuple[int, ...] = (4, 5, 6)
 VISIBLE_COLUMNS: tuple[int, ...] = (0, 1, 2, 3)
 DEFAULT_BAND_COLUMNS: dict[str, int] = {
@@ -37,8 +49,52 @@ DEFAULT_BAND_COLUMNS: dict[str, int] = {
     "B11": 5,
     "B12": 6,
 }
+#: The seven-band libraries label their planes with role names rather than
+#: Sentinel-2 band names; the wider ones use the band names directly.
+_COMPOSITE_BAND_ALIASES: dict[str, str] = {
+    "coastal": "B01",
+    "blue": "B02",
+    "green": "B03",
+    "red": "B04",
+    "nir": "B8A",
+    "swir16": "B11",
+    "swir22": "B12",
+}
 _MAD_TO_STD = 1.4826
 logger = logging.getLogger(__name__)
+
+
+def _composite_columns(band_names: Sequence[str] | None, width: int) -> list[str]:
+    """Canonical Sentinel-2 band name of every seasonal-composite column.
+
+    Without ``band_names`` the legacy seven-band layout is assumed, and a
+    composite of any other width is rejected rather than silently mis-indexed:
+    in an eleven- or twelve-band library, columns 4/5/6 are the red-edge bands,
+    not the NIR/SWIR anchors, and training on those while calling them
+    ``B8A/B11/B12`` produces a wrong prior with no error anywhere.
+    """
+    if band_names is None:
+        if width != len(DEFAULT_BAND_COLUMNS):
+            raise ValueError(
+                f"seasonal_composites has {width} bands; a composite that is not the "
+                f"{len(DEFAULT_BAND_COLUMNS)}-band layout must pass composite_band_names "
+                "so the anchor and localizer columns can be resolved by name"
+            )
+        return sorted(DEFAULT_BAND_COLUMNS, key=lambda name: DEFAULT_BAND_COLUMNS[name])
+    names = [str(value) for value in band_names]
+    if len(names) != width:
+        raise ValueError(
+            f"composite_band_names has {len(names)} entries for a {width}-band composite"
+        )
+    canonical = [_COMPOSITE_BAND_ALIASES.get(name, name) for name in names]
+    if len(set(canonical)) != len(canonical):
+        raise ValueError(f"composite_band_names are not unique: {names}")
+    missing = [name for name in (*ANCHOR_BANDS, _GREEN_BAND) if name not in canonical]
+    if missing:
+        raise ValueError(f"seasonal composite is missing required bands {missing}")
+    if not any(name in canonical for name in LOCALIZER_BANDS):
+        raise ValueError("seasonal composite carries none of the localizer bands")
+    return canonical
 
 
 def _as_template_grid(da: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
@@ -217,16 +273,64 @@ def _correct_anchor_reflectance(
     return np.column_stack(corrected)
 
 
-def _robust_clip_composites(comp: np.ndarray, clip: float) -> np.ndarray:
+def _robust_clip_composites(
+    comp: np.ndarray,
+    clip: float,
+    *,
+    preserve_recurrent_snow_fraction: float = 0.0,
+    snow_ndsi_threshold: float = 0.4,
+    snow_green_threshold: float = 0.2,
+    green_column: int = VISIBLE_COLUMNS[2],
+    swir16_column: int = ANCHOR_COLUMNS[1],
+) -> np.ndarray:
+    """Clip temporal outliers while optionally preserving a recurrent snow mode.
+
+    A per-band temporal MAD regards a legitimate minority snow mode as an
+    outlier.  When requested, restore complete seven-band realization vectors
+    only where the green/SWIR16 snow signature recurs often enough at that
+    pixel.  Rare snow remains clipped and is handled by the scene-level teacher
+    eligibility policy.
+    """
+
     if clip <= 0.0 or comp.shape[0] < 3:
         return comp
+    preserve_fraction = float(preserve_recurrent_snow_fraction)
+    if not 0.0 <= preserve_fraction <= 1.0:
+        raise ValueError("preserve_recurrent_snow_fraction must be in [0, 1]")
     with np.errstate(invalid="ignore"):
         median = np.nanmedian(comp, axis=0)
         mad = np.nanmedian(np.abs(comp - median[np.newaxis]), axis=0) * _MAD_TO_STD
         keep = np.abs(comp - median[np.newaxis]) <= (
             float(clip) * np.maximum(mad, 1.0e-4)[np.newaxis]
         )
-    return np.where(keep, comp, np.nan)
+    clipped = np.where(keep, comp, np.nan)
+    if preserve_fraction <= 0.0:
+        return clipped
+    if comp.shape[1] <= max(green_column, swir16_column):
+        raise ValueError("recurrent-snow preservation requires green and SWIR16 columns")
+    green = np.asarray(comp[:, green_column], dtype=np.float64)
+    swir16 = np.asarray(comp[:, swir16_column], dtype=np.float64)
+    denominator = green + swir16
+    valid = (
+        np.isfinite(green) & np.isfinite(swir16) & np.isfinite(denominator) & (denominator > 1.0e-6)
+    )
+    ndsi = np.divide(
+        green - swir16,
+        denominator,
+        out=np.full(green.shape, np.nan, dtype=np.float64),
+        where=valid,
+    )
+    snow = valid & (green > float(snow_green_threshold)) & (ndsi > float(snow_ndsi_threshold))
+    valid_count = np.count_nonzero(valid, axis=0)
+    snow_count = np.count_nonzero(snow, axis=0)
+    recurrence = np.divide(
+        snow_count,
+        valid_count,
+        out=np.zeros(valid_count.shape, dtype=np.float64),
+        where=valid_count > 0,
+    )
+    preserve = snow & (recurrence[np.newaxis] >= preserve_fraction)
+    return np.where(preserve[:, np.newaxis], comp, clipped)
 
 
 def _anchor_match_weights(
@@ -274,6 +378,94 @@ def _weighted_median(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return np.where(threshold > 0.0, result, np.nan)
 
 
+def predict_visible_from_tau_payload(
+    base_prior: np.ndarray,
+    *,
+    band_names: Sequence[str],
+    tau_payload: Mapping[str, Any],
+    anchor_boa: np.ndarray,
+    aot: float | np.ndarray,
+) -> np.ndarray:
+    """Evaluate a fitted seasonal predictor at one scalar or spatial AOD.
+
+    This is the common prediction kernel used by M5's candidate-node search
+    and by teacher capture at the final accepted AOD.  Keeping both paths on
+    this function prevents an offline teacher from drifting away from the
+    surface prior that actually contributed to the solver optimum.
+    """
+
+    prior = np.asarray(base_prior, dtype=np.float64).copy()
+    anchors = np.asarray(anchor_boa, dtype=np.float64)
+    localizer = np.asarray(tau_payload["localizer_grid"], dtype=np.float64)
+    names = tuple(str(value) for value in band_names)
+    if prior.ndim != 3 or anchors.ndim != 3 or localizer.ndim != 3:
+        raise ValueError("prior, anchor_boa and localizer_grid must be band/y/x arrays")
+    if prior.shape[1:] != anchors.shape[1:] or prior.shape[1:] != localizer.shape[1:]:
+        raise ValueError("tau-predictor arrays must share one spatial grid")
+
+    flat_anchor = anchors.reshape(anchors.shape[0], -1).T
+    flat_localizer = localizer.reshape(localizer.shape[0], -1).T
+    # Sentinel-2 reflectance can legitimately exceed one over bright targets.
+    # Reject only missing/non-positive anchors here; an upper threshold would
+    # silently remove the very bright and thin-cloud cases this predictor is
+    # intended to recover.
+    valid = np.all(np.isfinite(flat_localizer), axis=1) & np.all(
+        np.isfinite(flat_anchor) & (flat_anchor > 0.0), axis=1
+    )
+    if int(np.count_nonzero(valid)) < 50:
+        return prior
+
+    features = np.column_stack([flat_anchor[valid], flat_localizer[valid]])
+    tree_predictions = np.stack([tree.predict(features) for tree in tau_payload["trees"]], axis=0)
+    aggregation_weights = tau_payload.get("aggregation_weights_grid")
+    if aggregation_weights is None:
+        predictions = np.median(tree_predictions, axis=0)
+    else:
+        weights = np.asarray(aggregation_weights, dtype=np.float64)
+        if weights.ndim != 3 or weights.shape[0] != tree_predictions.shape[0]:
+            raise ValueError(
+                "aggregation_weights_grid must have realization/y/x shape matching trees"
+            )
+        if weights.shape[1:] != prior.shape[1:]:
+            raise ValueError("aggregation weight and prior grids must match")
+        flat_weights = weights.reshape(weights.shape[0], -1)[:, valid]
+        if tree_predictions.ndim == 2:
+            predictions = _weighted_median(tree_predictions, flat_weights)
+        else:
+            predictions = np.column_stack(
+                [
+                    _weighted_median(tree_predictions[..., index], flat_weights)
+                    for index in range(tree_predictions.shape[-1])
+                ]
+            )
+    if predictions.ndim == 1:
+        predictions = predictions[:, np.newaxis]
+
+    aot_values = np.asarray(aot, dtype=np.float64)
+    if aot_values.ndim == 0:
+        flat_aot: float | np.ndarray = float(aot_values)
+    else:
+        if aot_values.shape != prior.shape[1:]:
+            raise ValueError(f"spatial AOD shape {aot_values.shape} != {prior.shape[1:]}")
+        flat_aot = aot_values.reshape(-1)[valid]
+    debias = dict(tau_payload.get("debias") or {})
+    debias_scale = float(tau_payload.get("debias_scale", 1.0))
+    valid_indices = np.flatnonzero(valid)
+    for output_index, target_name in enumerate(tau_payload["target_bands"]):
+        if target_name not in names:
+            continue
+        band_index = names.index(str(target_name))
+        intercept, slope = debias.get(target_name, (0.0, 0.0))
+        values = predictions[:, output_index] + debias_scale * (
+            float(intercept) + float(slope) * flat_aot
+        )
+        usable = np.isfinite(values) & (values > 0.001)
+        plane = prior[band_index].reshape(-1)
+        plane[valid_indices[usable]] = values[usable]
+        prior[band_index] = plane.reshape(prior.shape[1:])
+    return prior
+
+
 def _composite_reference_on_scene(
     comp: np.ndarray,
     *,
@@ -311,13 +503,16 @@ def seasonal_extra_tree_prior(
     atmo_prior: Any,
     rt_model: Any,
     anchor_aot_field: xr.DataArray | None = None,
+    composite_band_names: Sequence[str] | None = None,
     target_band_columns: Mapping[str, int] | None = None,
     debias: Mapping[str, tuple[float, float]] | None = None,
     debias_scale: float = 1.0,
     uncertainty_floor: float = 0.006,
     b01_uncertainty_floor: float | None = None,
+    relative_uncertainty_floor: float = 0.0,
     min_samples_leaf: int = 5,
     random_state: int = 0,
+    pooled_max_rows: int = 500_000,
     predictor_model: str = "extra_tree",
     robust_clip: float = 0.0,
     composite_blend_weight: float = 0.0,
@@ -325,6 +520,9 @@ def seasonal_extra_tree_prior(
     ensemble_aggregation: str = "median",
     anchor_match_scale: float = 0.05,
     scene_mean_geometry: bool = False,
+    preserve_recurrent_snow_fraction: float = 0.0,
+    snow_ndsi_threshold: float = 0.4,
+    snow_green_threshold: float = 0.2,
 ) -> SurfacePrior:
     """Replace visible prior bands with a seasonal ExtraTree ensemble prediction.
 
@@ -340,14 +538,19 @@ def seasonal_extra_tree_prior(
       climatology ``B01/B02/B03/B04``;
     - prediction is a median across realizations, optionally weighted by each
       realization's local NIR/SWIR similarity to the target scene;
-    - uncertainty is MAD*1.4826 across realization predictions, floored.
+    - uncertainty is MAD*1.4826 across realization predictions, floored by
+      ``uncertainty_floor`` and, when ``relative_uncertainty_floor`` is
+      positive, additionally by that fraction of the predicted reflectance.
+      The relative term defaults to zero, so the committed absolute-floor
+      behaviour is unchanged unless a caller opts in.
     """
     from sklearn.tree import ExtraTreeRegressor
 
-    if predictor_model == "extra_trees_20":
+    if predictor_model in {"extra_trees_20", "extra_trees_20_pooled"}:
         from sklearn.ensemble import ExtraTreesRegressor
     elif predictor_model != "extra_tree":
         raise ValueError(f"Unknown predictor_model {predictor_model!r}")
+    pooled_fit = predictor_model == "extra_trees_20_pooled"
 
     if rt_model is None or atmo_prior is None:
         raise ValueError(
@@ -367,18 +570,40 @@ def seasonal_extra_tree_prior(
         return prior
 
     comp = np.asarray(seasonal_composites, dtype=np.float64)
-    if comp.ndim != 4 or comp.shape[1] < 7:
+    if comp.ndim != 4 or comp.shape[1] < len(DEFAULT_BAND_COLUMNS):
         raise ValueError(
-            f"seasonal_composites must have shape (n_realizations, 7, y, x); got {comp.shape}"
+            f"seasonal_composites must have shape (n_realizations, band, y, x) with at least "
+            f"{len(DEFAULT_BAND_COLUMNS)} bands; got {comp.shape}"
         )
+    composite_bands = _composite_columns(composite_band_names, comp.shape[1])
+    anchor_columns = tuple(composite_bands.index(name) for name in ANCHOR_BANDS)
+    localizer_columns = tuple(
+        composite_bands.index(name) for name in LOCALIZER_BANDS if name in composite_bands
+    )
     if comp.shape[0] == 0:
         return prior
-    comp = _robust_clip_composites(comp, float(robust_clip))
+    comp = _robust_clip_composites(
+        comp,
+        float(robust_clip),
+        preserve_recurrent_snow_fraction=float(preserve_recurrent_snow_fraction),
+        snow_ndsi_threshold=float(snow_ndsi_threshold),
+        snow_green_threshold=float(snow_green_threshold),
+        green_column=composite_bands.index(_GREEN_BAND),
+        swir16_column=composite_bands.index(_SWIR16_BAND),
+    )
     aggregation = str(ensemble_aggregation).strip().lower()
     if aggregation not in {"median", "anchor_weighted"}:
         raise ValueError(f"unsupported seasonal predictor aggregation {ensemble_aggregation!r}")
     if float(anchor_match_scale) <= 0.0:
         raise ValueError("anchor_match_scale must be positive")
+    if pooled_fit and aggregation == "anchor_weighted":
+        # Anchor weighting is one weight plane per realization. A pooled fit has
+        # no per-realization axis to weight, and the shape guard in
+        # ``predict_visible_from_tau_payload`` would reject the payload.
+        raise ValueError(
+            "extra_trees_20_pooled cannot use anchor_weighted aggregation; "
+            "the weights are per realization and a pooled fit has no such axis"
+        )
 
     template = boa.isel(band=0, drop=True)
     anchor_grids = {
@@ -390,7 +615,7 @@ def seasonal_extra_tree_prior(
         axis=-1,
     )
     flat_anchor = anchor.reshape(-1, len(ANCHOR_BANDS))
-    valid = np.all(np.isfinite(flat_anchor) & (flat_anchor > 0.0) & (flat_anchor < 1.2), axis=1)
+    valid = np.all(np.isfinite(flat_anchor) & (flat_anchor > 0.0), axis=1)
     if not np.any(valid):
         return prior
 
@@ -417,10 +642,10 @@ def seasonal_extra_tree_prior(
     tr = [float(value) for value in transform]
     x = tr[2] + (np.arange(width) + 0.5) * tr[0]
     y = tr[5] + (np.arange(height) + 0.5) * tr[4]
-    mean_visible = np.nanmean(comp[:, list(VISIBLE_COLUMNS)], axis=0)
-    localizer_comp = mean_visible.reshape(len(VISIBLE_COLUMNS), -1).T
+    mean_visible = np.nanmean(comp[:, list(localizer_columns)], axis=0)
+    localizer_comp = mean_visible.reshape(len(localizer_columns), -1).T
     localizer_scene_parts = []
-    for index in range(len(VISIBLE_COLUMNS)):
+    for index in range(len(localizer_columns)):
         da = xr.DataArray(
             mean_visible[index],
             dims=("y", "x"),
@@ -436,12 +661,63 @@ def seasonal_extra_tree_prior(
     fitted_trees: list[Any] = []
     realization_anchors: list[np.ndarray] = []
     used_realizations = 0
-    for index in range(n_real):
+    if pooled_fit:
+        # One model over every realization at once, instead of one model per
+        # realization followed by a median across them. The per-realization
+        # ensemble bounds each member's output by the values seen in that one
+        # composite, so the median across members collapses toward the seasonal
+        # middle and inherits its dark bias; a pooled fit can place pixels from
+        # several composites in one leaf and interpolate between them.
+        #
+        # The forest's own trees then fill ``predictions``, so the aggregation,
+        # spread, floors, debias and blending below are reached unchanged -- the
+        # sigma becomes the spread across trees rather than across realizations.
+        pooled_x: list[np.ndarray] = []
+        pooled_y: list[np.ndarray] = []
+        for index in range(n_real):
+            composite = comp[index].reshape(comp.shape[1], -1).T
+            good = np.all(np.isfinite(composite), axis=1)
+            if int(np.count_nonzero(good)) < 200:
+                continue
+            pooled_x.append(
+                np.column_stack([composite[good][:, list(anchor_columns)], localizer_comp[good]])
+            )
+            pooled_y.append(composite[good][:, target_cols])
+            used_realizations += 1
+        if used_realizations:
+            train_x = np.concatenate(pooled_x, axis=0)
+            train_y = np.concatenate(pooled_y, axis=0)
+            del pooled_x, pooled_y
+            # Pooling multiplies the row count by the realization count; cap it so
+            # memory and fit time stay comparable to the per-realization path.
+            limit = int(pooled_max_rows)
+            if limit > 0 and train_x.shape[0] > limit:
+                keep = np.random.default_rng(int(random_state)).choice(
+                    train_x.shape[0], size=limit, replace=False
+                )
+                train_x, train_y = train_x[keep], train_y[keep]
+            forest = ExtraTreesRegressor(
+                n_estimators=20,
+                min_samples_leaf=int(min_samples_leaf),
+                random_state=int(random_state),
+                n_jobs=1,
+            ).fit(train_x, train_y)
+            # Keep the member trees, not the forest: the tau payload takes a
+            # median across ``trees``, so this makes that path agree with the
+            # aggregation below rather than returning the forest's mean.
+            fitted_trees = list(forest.estimators_)
+            for tree in fitted_trees:
+                pred = tree.predict(scene_features)
+                if pred.ndim == 1:
+                    pred = pred[:, np.newaxis]
+                for out_index, band_name in enumerate(target_names):
+                    predictions[band_name].append(np.asarray(pred[:, out_index], dtype=np.float64))
+    for index in range(n_real if not pooled_fit else 0):
         composite = comp[index].reshape(comp.shape[1], -1).T
         good = np.all(np.isfinite(composite), axis=1)
         if int(np.count_nonzero(good)) < 200:
             continue
-        train_x = np.column_stack([composite[good][:, list(ANCHOR_COLUMNS)], localizer_comp[good]])
+        train_x = np.column_stack([composite[good][:, list(anchor_columns)], localizer_comp[good]])
         train_y = composite[good][:, target_cols]
         if predictor_model == "extra_trees_20":
             # A 20-tree ensemble per realization: individually smoother
@@ -466,7 +742,7 @@ def seasonal_extra_tree_prior(
             predictions[band_name].append(np.asarray(pred[:, out_index], dtype=np.float64))
         if aggregation == "anchor_weighted":
             anchor_parts = []
-            for column in ANCHOR_COLUMNS:
+            for column in anchor_columns:
                 da = xr.DataArray(
                     comp[index, int(column)],
                     dims=("y", "x"),
@@ -503,12 +779,25 @@ def seasonal_extra_tree_prior(
     )
 
     anchor_weights = None
+    aggregation_weights_da = None
     if aggregation == "anchor_weighted":
         anchor_weights = _anchor_match_weights(
             np.stack(realization_anchors, axis=0),
             corrected_anchor,
             scale=float(anchor_match_scale),
         )
+        aggregation_weights = np.full(
+            (anchor_weights.shape[0], flat_anchor.shape[0]), np.nan, dtype=np.float32
+        )
+        aggregation_weights[:, valid] = anchor_weights.astype(np.float32)
+        aggregation_weights_da = xr.DataArray(
+            aggregation_weights.reshape(anchor_weights.shape[0], *anchor.shape[:2]),
+            dims=("realization", *template.dims),
+            coords={
+                "realization": np.arange(anchor_weights.shape[0]),
+                **{name: template.coords[name] for name in template.dims},
+            },
+        ).rio.write_crs(template.rio.crs)
 
     for band_name in target_names:
         stack = np.stack(predictions[band_name], axis=0)
@@ -525,6 +814,14 @@ def seasonal_extra_tree_prior(
             float(intercept) + float(slope) * float(anchor_aot)
         )
         floor = b01_floor if band_name == "B01" else float(uncertainty_floor)
+        if relative_uncertainty_floor > 0.0:
+            # A single absolute floor mis-states the label noise at both ends of
+            # the brightness range: it inflates sigma over dark surfaces and
+            # truncates the genuine reflectance-proportional spread over bright
+            # ones. When a relative floor is configured the effective floor
+            # tracks the prediction, so callers can set a small absolute guard
+            # and let the proportional term carry the scale.
+            floor = np.maximum(floor, float(relative_uncertainty_floor) * np.abs(ensemble))
         uncertainty = np.maximum(spread, floor)
         if blend_weight > 0.0:
             reference, reference_unc = composite_reference[band_name]
@@ -551,7 +848,7 @@ def seasonal_extra_tree_prior(
         sigma[valid] = uncertainty
         image_2d = image.reshape(anchor.shape[:2])
         sigma_2d = sigma.reshape(anchor.shape[:2])
-        ok = np.isfinite(image_2d) & (image_2d > 0.001) & (image_2d < 0.6)
+        ok = np.isfinite(image_2d) & (image_2d > 0.001)
         current = boa.sel(band=band_name).values.copy()
         current_unc = unc_new.sel(band=band_name).values.copy()
         current[ok] = image_2d[ok]
@@ -573,7 +870,7 @@ def seasonal_extra_tree_prior(
         # resample with the standard machinery), plus the fitted trees. M5 uses
         # these to re-predict the visible prior at EACH candidate AOD.
         localizer_planes = []
-        for index in range(len(VISIBLE_COLUMNS)):
+        for index in range(len(localizer_columns)):
             da = xr.DataArray(
                 mean_visible[index],
                 dims=("y", "x"),
@@ -581,7 +878,7 @@ def seasonal_extra_tree_prior(
             ).rio.write_crs(f"EPSG:{int(epsg)}")
             localizer_planes.append(_as_template_grid(da, template))
         localizer_da = xr.concat(localizer_planes, dim="band").assign_coords(
-            band=[f"loc{i}" for i in range(len(VISIBLE_COLUMNS))]
+            band=[f"loc{i}" for i in range(len(localizer_columns))]
         )
         tau_payload = {
             "trees": fitted_trees,
@@ -591,5 +888,7 @@ def seasonal_extra_tree_prior(
             "debias": {name: tuple(debias[name]) for name in debias},
             "debias_scale": float(debias_scale),
             "anchor_aot": float(anchor_aot),
+            "aggregation": aggregation,
+            "aggregation_weights": aggregation_weights_da,
         }
     return replace(prior, boa=boa_new, boa_unc=unc_new, tau_predictor=tau_payload)

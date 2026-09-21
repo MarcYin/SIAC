@@ -10,7 +10,9 @@ import xarray as xr
 from siac.algorithms.surface.seasonal_predictor import (
     _anchor_match_weights,
     _field_on_template,
+    _robust_clip_composites,
     _weighted_median,
+    predict_visible_from_tau_payload,
     seasonal_extra_tree_prior,
 )
 from siac.domain import SensorBand, SensorConfig
@@ -135,6 +137,62 @@ def test_weighted_median_uses_anchor_weights() -> None:
     weights = np.array([[0.8], [0.1], [0.1]], dtype=np.float64)
 
     assert _weighted_median(values, weights)[0] == pytest.approx(0.1)
+
+
+def test_robust_clip_preserves_only_a_recurrent_snow_mode() -> None:
+    comp = np.full((10, 7, 2, 2), 0.1, dtype=np.float32)
+    comp[:, 5] = 0.25
+    # Snow recurs in four realizations at [0,0], but only once at [0,1].
+    comp[:4, 2, 0, 0] = 0.7
+    comp[:4, 4, 0, 0] = 0.7
+    comp[:4, 5, 0, 0] = 0.07
+    comp[:4, 6, 0, 0] = 0.06
+    comp[:1, 2, 0, 1] = 0.7
+    comp[:1, 4, 0, 1] = 0.7
+    comp[:1, 5, 0, 1] = 0.07
+    comp[:1, 6, 0, 1] = 0.06
+
+    clipped = _robust_clip_composites(
+        comp,
+        1.5,
+        preserve_recurrent_snow_fraction=0.2,
+    )
+
+    assert np.isfinite(clipped[:4, :, 0, 0]).all()
+    assert np.isnan(clipped[0, 2, 0, 1])
+
+
+def test_tau_prediction_uses_archived_anchor_aggregation_weights() -> None:
+    class ConstantTree:
+        def __init__(self, value: float) -> None:
+            self.value = value
+
+        def predict(self, features):
+            return np.full((features.shape[0], 1), self.value, dtype=np.float64)
+
+    shape = (8, 8)
+    weights = np.stack(
+        [
+            np.full(shape, 0.9, dtype=np.float64),
+            np.full(shape, 0.1, dtype=np.float64),
+        ]
+    )
+    predicted = predict_visible_from_tau_payload(
+        np.full((1, *shape), 0.2, dtype=np.float64),
+        band_names=("B02",),
+        tau_payload={
+            "localizer_grid": np.full((1, *shape), 0.1, dtype=np.float64),
+            "trees": [ConstantTree(0.7), ConstantTree(0.1)],
+            "target_bands": ("B02",),
+            "debias": {},
+            "debias_scale": 1.0,
+            "aggregation_weights_grid": weights,
+        },
+        anchor_boa=np.full((3, *shape), 0.4, dtype=np.float64),
+        aot=0.1,
+    )
+
+    assert np.allclose(predicted, 0.7)
 
 
 def test_anchor_alignment_keeps_spatial_solver_field_without_explicit_crs() -> None:
@@ -410,3 +468,242 @@ def test_seasonal_extra_tree_prior_attaches_tau_predictor_payload() -> None:
         rt_model=_FakeRT(),
     )
     assert out_off.tau_predictor is None
+
+
+def test_relative_uncertainty_floor_defaults_to_the_committed_absolute_floor() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    common = {
+        "seasonal_composites": comp,
+        "epsg": 32632,
+        "transform": transform,
+        "anchor_aot": 0.4,
+        "atmo_prior": atmo,
+        "rt_model": _FakeRT(),
+    }
+    committed = seasonal_extra_tree_prior(prior, observation, **common)
+    explicit_zero = seasonal_extra_tree_prior(
+        prior, observation, relative_uncertainty_floor=0.0, **common
+    )
+    np.testing.assert_array_equal(committed.boa_unc.values, explicit_zero.boa_unc.values)
+    # Every finite value still sits at or above the committed 0.006 floor.
+    finite = committed.boa_unc.values[np.isfinite(committed.boa_unc.values)]
+    assert finite.size
+    assert float(finite.min()) >= 0.006 - 1e-9
+
+
+def test_relative_uncertainty_floor_tracks_predicted_reflectance() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    common = {
+        "seasonal_composites": comp,
+        "epsg": 32632,
+        "transform": transform,
+        "anchor_aot": 0.4,
+        "atmo_prior": atmo,
+        "rt_model": _FakeRT(),
+    }
+    # A small absolute guard plus a proportional term: the floor should follow
+    # the prediction instead of pinning every ordinary pixel to one constant.
+    relative = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        uncertainty_floor=0.001,
+        relative_uncertainty_floor=0.25,
+        **common,
+    )
+    reflectance = np.abs(relative.boa.values)
+    uncertainty = relative.boa_unc.values
+    finite = np.isfinite(reflectance) & np.isfinite(uncertainty)
+    assert finite.any()
+    # Floor is respected everywhere ...
+    assert np.all(
+        uncertainty[finite] >= np.minimum(0.25 * reflectance[finite], uncertainty[finite]) - 1e-9
+    )
+    assert np.all(uncertainty[finite] >= 0.001 - 1e-9)
+    # ... and it actually binds, so sigma is no longer a single constant.
+    proportional = np.isclose(uncertainty[finite], 0.25 * reflectance[finite], atol=1e-9)
+    assert proportional.any(), "relative floor never bound"
+    assert float(np.std(uncertainty[finite])) > 0.0
+
+
+def test_pooled_fit_trains_one_model_over_every_realization() -> None:
+    # The per-realization ensemble bounds each member by the values in one
+    # composite, so the median across members collapses toward the seasonal
+    # middle. A pooled fit sees every composite at once; the payload keeps the
+    # forest's member trees so the tau path and the aggregation agree.
+    prior, observation, atmo, comp, transform = _scene()
+    common = {
+        "seasonal_composites": comp,
+        "epsg": 32632,
+        "transform": transform,
+        "anchor_aot": 0.4,
+        "atmo_prior": atmo,
+        "rt_model": _FakeRT(),
+        "attach_tau_predictor": True,
+    }
+
+    pooled = seasonal_extra_tree_prior(
+        prior, observation, predictor_model="extra_trees_20_pooled", **common
+    )
+    per_realization = seasonal_extra_tree_prior(
+        prior, observation, predictor_model="extra_trees_20", **common
+    )
+
+    assert len(pooled.tau_predictor["trees"]) == 20
+    assert len(per_realization.tau_predictor["trees"]) == comp.shape[0]
+    assert np.isfinite(pooled.boa.sel(band="B02").values).all()
+    assert not pooled.boa.identical(per_realization.boa)
+
+
+def test_pooled_fit_still_produces_a_varying_uncertainty() -> None:
+    # The sigma changes meaning under pooling -- spread across trees rather than
+    # across realizations -- so guard that it does not degenerate to the floor.
+    prior, observation, atmo, comp, transform = _scene()
+
+    out = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        seasonal_composites=comp,
+        epsg=32632,
+        transform=transform,
+        anchor_aot=0.4,
+        atmo_prior=atmo,
+        rt_model=_FakeRT(),
+        predictor_model="extra_trees_20_pooled",
+        uncertainty_floor=0.001,
+    )
+
+    sigma = out.boa_unc.sel(band="B02").values
+    assert np.isfinite(sigma).all()
+    assert float(sigma.min()) >= 0.001
+    assert float(np.ptp(sigma)) > 0.0
+
+
+def test_pooled_fit_refuses_anchor_weighted_aggregation() -> None:
+    # Anchor weights carry one plane per realization; a pooled fit has no such
+    # axis, and the tau payload's shape guard would reject the combination.
+    prior, observation, atmo, comp, transform = _scene()
+
+    with pytest.raises(ValueError, match="pooled"):
+        seasonal_extra_tree_prior(
+            prior,
+            observation,
+            seasonal_composites=comp,
+            epsg=32632,
+            transform=transform,
+            anchor_aot=0.4,
+            atmo_prior=atmo,
+            rt_model=_FakeRT(),
+            predictor_model="extra_trees_20_pooled",
+            ensemble_aggregation="anchor_weighted",
+        )
+
+
+def test_pooled_row_cap_bounds_the_training_set() -> None:
+    # Pooling multiplies rows by the realization count; the cap keeps fit time
+    # and memory comparable to the per-realization path.
+    prior, observation, atmo, comp, transform = _scene()
+
+    capped = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        seasonal_composites=comp,
+        epsg=32632,
+        transform=transform,
+        anchor_aot=0.4,
+        atmo_prior=atmo,
+        rt_model=_FakeRT(),
+        predictor_model="extra_trees_20_pooled",
+        pooled_max_rows=64,
+    )
+
+    assert np.isfinite(capped.boa.sel(band="B02").values).all()
+
+
+def _common_kwargs(atmo, comp, transform):  # noqa: ANN001, ANN202
+    return {
+        "seasonal_composites": comp,
+        "epsg": 32632,
+        "transform": transform,
+        "anchor_aot": 0.2,
+        "atmo_prior": atmo,
+        "rt_model": _FakeRT(),
+    }
+
+
+def test_wide_composite_without_band_names_is_refused() -> None:
+    """Columns 4/5/6 of a wide library are red-edge bands, not the anchors.
+
+    The old guard only rejected composites NARROWER than seven bands, so a
+    twelve-band library trained on B05/B06/B07 while calling them B8A/B11/B12
+    and returned a wrong prior with no error anywhere.
+    """
+    prior, observation, atmo, comp, transform = _scene()
+    wide = np.concatenate([comp, comp[:, :5]], axis=1)
+
+    with pytest.raises(ValueError, match="composite_band_names"):
+        seasonal_extra_tree_prior(prior, observation, **_common_kwargs(atmo, wide, transform))
+
+
+def test_named_wide_composite_matches_the_seven_band_layout() -> None:
+    """A wide library must predict exactly what the narrow one does.
+
+    The extra planes are inserted between the visible bands and the anchors,
+    which is precisely where positional indexing goes wrong, so an identical
+    prediction is what demonstrates the columns are resolved by name.
+    """
+    prior, observation, atmo, comp, transform = _scene()
+    narrow = seasonal_extra_tree_prior(prior, observation, **_common_kwargs(atmo, comp, transform))
+
+    filler = np.full_like(comp[:, :1], 0.5)
+    wide = np.concatenate([comp[:, :4], filler, filler, filler, filler, comp[:, 4:]], axis=1)
+    names = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12"]
+    widened = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        composite_band_names=names,
+        **_common_kwargs(atmo, wide, transform),
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(widened.boa.values), np.asarray(narrow.boa.values), rtol=0, atol=0
+    )
+
+
+def test_composite_band_name_aliases_resolve() -> None:
+    """The seven-band libraries name their planes by role, not by band."""
+    prior, observation, atmo, comp, transform = _scene()
+    unnamed = seasonal_extra_tree_prior(prior, observation, **_common_kwargs(atmo, comp, transform))
+    aliased = seasonal_extra_tree_prior(
+        prior,
+        observation,
+        composite_band_names=["coastal", "blue", "green", "red", "nir", "swir16", "swir22"],
+        **_common_kwargs(atmo, comp, transform),
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(aliased.boa.values), np.asarray(unnamed.boa.values), rtol=0, atol=0
+    )
+
+
+def test_composite_missing_an_anchor_band_is_refused() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+
+    with pytest.raises(ValueError, match="missing required bands"):
+        seasonal_extra_tree_prior(
+            prior,
+            observation,
+            composite_band_names=["B01", "B02", "B03", "B04", "B8A", "B11", "B05"],
+            **_common_kwargs(atmo, comp, transform),
+        )
+
+
+def test_composite_band_names_must_match_the_composite_width() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+
+    with pytest.raises(ValueError, match="entries for a"):
+        seasonal_extra_tree_prior(
+            prior,
+            observation,
+            composite_band_names=["B01", "B02", "B03"],
+            **_common_kwargs(atmo, comp, transform),
+        )
