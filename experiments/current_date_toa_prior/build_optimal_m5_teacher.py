@@ -143,6 +143,23 @@ def _target_base_planes(t0, t0_unc, comp, target_bands, dictionary_columns):
     return np.stack(boa, axis=0), np.stack(unc, axis=0)
 
 
+def _surface_fit_groups(target_bands, grouping):
+    """Target groups for the seasonal ExtraTrees fit.
+
+    ``joint`` fits every target band in one multi-output model. ``split`` fits
+    the committed visible bands on their own and every other band in a second
+    model, so widening the output cannot move the visible prediction: with a
+    joint fit, extra targets change the split choices and shift B02/B03/B04.
+    """
+    if grouping == "joint":
+        return None
+    if grouping != "split":
+        raise ValueError(f"unknown --surface-fit-grouping {grouping!r}")
+    visible = [name for name in target_bands if name in VISIBLE]
+    extension = [name for name in target_bands if name not in VISIBLE]
+    return [group for group in (visible, extension) if group] or None
+
+
 def _parse_surface_target_bands(value):
     """Bands the teacher predicts and writes, independent of the AOD solve bands.
 
@@ -1080,6 +1097,19 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
     contract = _teacher_contract(args.solver_contract)
     solve_bands = tuple(args.solver_solve_bands)
     target_bands = tuple(getattr(args, "surface_target_bands", VISIBLE))
+    fit_grouping = str(getattr(args, "surface_fit_grouping", "joint"))
+    # The 20 m fit targets the solve bands AND the requested output bands. With
+    # the committed contract the two coincide; keeping the solve bands in the
+    # fit also leaves any arm whose solve bands differ from its output (the
+    # B01 deep-blue arm) fitting exactly the model it always did.
+    fit_targets = tuple(dict.fromkeys((*solve_bands, *target_bands)))
+    fit_groups = _surface_fit_groups(fit_targets, fit_grouping)
+    if str(args.surface_grid) != "20m" and not set(target_bands) <= set(solve_bands):
+        raise ValueError(
+            "--surface-target-bands beyond the solve bands needs --surface-grid 20m: "
+            "the 60 m path predicts only the solve bands and upsamples them"
+        )
+    replay_bands = fit_targets if str(args.surface_grid) == "20m" else tuple(solve_bands)
     band_cost_weights = args.solver_band_cost_weights
     if band_cost_weights is not None and len(band_cost_weights) != len(solve_bands):
         raise ValueError(
@@ -1778,6 +1808,7 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         -1, 3
     )
     anchor_valid = np.all(np.isfinite(flat_anchor) & (flat_anchor > 0.0), axis=1)
+    fit_group_exclusions = 0
     if str(args.surface_grid) == "20m":
         # The committed teacher predicts the surface on the 60 m aerosol grid
         # and bilinearly resamples it to 20 m, so only ~22% of the target's
@@ -1787,14 +1818,14 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         # 20 m structure. The atmospheric fields stay physically smooth, so
         # ``atmo20`` is the legitimate upsample of the same state.
         target_base, target_base_unc = _target_base_planes(
-            t0, t0_unc, comp, target_bands, dictionary_columns
+            t0, t0_unc, comp, fit_targets, dictionary_columns
         )
         prior20_base = SurfacePrior(
             boa=_grid(target_base, transform20, crs, name="boa").assign_coords(
-                band=list(target_bands)
+                band=list(fit_targets)
             ),
             boa_unc=_grid(target_base_unc, transform20, crs, name="boa_unc").assign_coords(
-                band=list(target_bands)
+                band=list(fit_targets)
             ),
             kernels=None,
             # Validity stays on the solve bands: widening the surface output must
@@ -1818,7 +1849,8 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
             atmo_prior=atmo20,
             rt_model=backend,
             composite_band_names=dictionary_band_names,
-            target_band_columns={name: dictionary_columns[name] for name in target_bands},
+            target_band_columns={name: dictionary_columns[name] for name in fit_targets},
+            target_fit_groups=fit_groups,
             uncertainty_floor=float(args.uncertainty_floor),
             relative_uncertainty_floor=float(args.uncertainty_relative_floor),
             predictor_model=effective_predictor_model,
@@ -1836,6 +1868,9 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(
                 f"{matchup_id}: native 20 m seasonal predictor produced no tau payload"
             )
+        fit_group_exclusions = int(
+            predicted20.tau_predictor.get("realizations_excluded_by_later_group", 0)
+        )
         base20 = predicted20.boa
         uncertainty20 = predicted20.boa_unc
         predictor_mask20 = np.asarray(predicted20.mask, dtype=bool)
@@ -1886,7 +1921,7 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         return (
             predict_visible_from_tau_payload(
                 np.asarray(base20),
-                band_names=target_bands,
+                band_names=replay_bands,
                 tau_payload=tau20,
                 anchor_boa=anchor_boa,
                 aot=np.asarray(aod_field),
@@ -1898,7 +1933,7 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         return surface_and_anchor_at_aod(aod_field)[0]
 
     optimal_surface_all, optimal_anchor_boa = surface_and_anchor_at_aod(aod20)
-    output_indices = list(range(len(target_bands)))
+    output_indices = [replay_bands.index(name) for name in target_bands]
     optimal_surface = np.moveaxis(np.asarray(optimal_surface_all)[output_indices], 0, -1).astype(
         np.float32
     )
@@ -1972,6 +2007,11 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         surface=optimal_surface,
         surface_uncertainty=uncertainty,
         surface_bands=np.asarray(target_bands),
+        surface_fit_grouping=np.asarray(fit_grouping),
+        surface_fit_groups_json=np.asarray(
+            json.dumps([list(group) for group in fit_groups] if fit_groups else [list(fit_targets)])
+        ),
+        surface_fit_group_exclusions=np.asarray(fit_group_exclusions, dtype=np.int64),
         anchor_boa_at_solution=optimal_anchor_boa_output,
         anchor_boa_bands=np.asarray(ANCHORS),
         anchor_boa_aod_source=np.asarray(
@@ -2405,6 +2445,16 @@ def parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated surface-driven solve bands. B02,B03,B04 is the frozen "
             "committed contract; B01,B02,B03,B04 is an experimental deep-blue arm."
+        ),
+    )
+    parser.add_argument(
+        "--surface-fit-grouping",
+        choices=("joint", "split"),
+        default="joint",
+        help=(
+            "How the seasonal ExtraTrees fit is grouped over --surface-target-bands. "
+            "joint: one multi-output model (extra targets shift the visible); split: "
+            "visible bands and the rest fitted separately (visible unchanged)."
         ),
     )
     parser.add_argument(
