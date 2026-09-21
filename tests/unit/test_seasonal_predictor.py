@@ -707,3 +707,150 @@ def test_composite_band_names_must_match_the_composite_width() -> None:
             composite_band_names=["B01", "B02", "B03"],
             **_common_kwargs(atmo, comp, transform),
         )
+
+
+def _four_band_prior(prior: SurfacePrior) -> SurfacePrior:
+    """The fixture prior widened to B01..B04 so extra bands can be targeted."""
+    one = prior.boa.isel(band=0, drop=True)
+    boa = xr.concat([one, one, one, one], dim="band").assign_coords(
+        band=["B01", "B02", "B03", "B04"]
+    )
+    return SurfacePrior(boa=boa, boa_unc=xr.full_like(boa, 0.02), kernels=None, mask=prior.mask)
+
+
+def _visible(result: SurfacePrior) -> np.ndarray:
+    return np.asarray(result.boa.sel(band=["B02", "B04"]).values)
+
+
+@pytest.mark.parametrize(
+    "predictor_model", ["extra_tree", "extra_trees_20", "extra_trees_20_pooled"]
+)
+def test_split_fit_leaves_the_first_group_bit_identical(predictor_model: str) -> None:
+    """Adding a separately fitted group must not move the bands already fitted.
+
+    A joint multi-output fit chooses every split for all targets at once, so
+    requesting more bands changes the trees of the bands already requested.
+    A group fitted on its own must predict exactly what a standalone fit of
+    those bands predicts.
+    """
+    prior, observation, atmo, comp, transform = _scene()
+    wide = _four_band_prior(prior)
+    kwargs = {**_common_kwargs(atmo, comp, transform), "predictor_model": predictor_model}
+
+    standalone = seasonal_extra_tree_prior(
+        wide, observation, target_band_columns={"B02": 1, "B04": 3}, **kwargs
+    )
+    split = seasonal_extra_tree_prior(
+        wide,
+        observation,
+        target_band_columns={"B02": 1, "B04": 3, "B01": 0, "B03": 2},
+        target_fit_groups=[["B02", "B04"], ["B01", "B03"]],
+        **kwargs,
+    )
+
+    np.testing.assert_allclose(_visible(split), _visible(standalone), rtol=0, atol=0)
+    np.testing.assert_allclose(
+        np.asarray(split.boa_unc.sel(band=["B02", "B04"]).values),
+        np.asarray(standalone.boa_unc.sel(band=["B02", "B04"]).values),
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_split_fit_still_predicts_the_added_group() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    wide = _four_band_prior(prior)
+
+    split = seasonal_extra_tree_prior(
+        wide,
+        observation,
+        target_band_columns={"B02": 1, "B04": 3, "B01": 0, "B03": 2},
+        target_fit_groups=[["B02", "B04"], ["B01", "B03"]],
+        **_common_kwargs(atmo, comp, transform),
+    )
+
+    for band in ("B01", "B03"):
+        plane = np.asarray(split.boa.sel(band=band).values)
+        assert np.isfinite(plane).all()
+        # The carrier plane was a flat 0.1; a fitted prediction varies.
+        assert float(np.std(plane)) > 0.0
+
+
+def test_split_fit_tau_replay_matches_the_standalone_fit() -> None:
+    """The teacher's archived surface comes from the tau replay, not the fit."""
+    prior, observation, atmo, comp, transform = _scene()
+    wide = _four_band_prior(prior)
+    kwargs = {**_common_kwargs(atmo, comp, transform), "attach_tau_predictor": True}
+
+    standalone = seasonal_extra_tree_prior(
+        wide, observation, target_band_columns={"B02": 1, "B04": 3}, **kwargs
+    )
+    split = seasonal_extra_tree_prior(
+        wide,
+        observation,
+        target_band_columns={"B02": 1, "B04": 3, "B01": 0, "B03": 2},
+        target_fit_groups=[["B02", "B04"], ["B01", "B03"]],
+        **kwargs,
+    )
+    assert split.tau_predictor["fit_groups"] == (("B02", "B04"), ("B01", "B03"))
+    assert split.tau_predictor["realizations_excluded_by_later_group"] == 0
+
+    anchor_boa = np.stack(
+        [np.asarray(observation.toa[name].values) for name in ("B8A", "B11", "B12")]
+    )
+    names = ["B01", "B02", "B03", "B04"]
+    base = np.asarray(wide.boa.values)
+
+    def replay(result: SurfacePrior) -> np.ndarray:
+        payload = {
+            **result.tau_predictor,
+            "localizer_grid": np.asarray(result.tau_predictor["localizer"]),
+        }
+        return predict_visible_from_tau_payload(
+            base, band_names=names, tau_payload=payload, anchor_boa=anchor_boa, aot=0.2
+        )
+
+    for band in ("B02", "B04"):
+        index = names.index(band)
+        np.testing.assert_allclose(replay(split)[index], replay(standalone)[index], rtol=0, atol=0)
+
+
+def test_default_fit_groups_keep_the_joint_fit() -> None:
+    prior, observation, atmo, comp, transform = _scene()
+    wide = _four_band_prior(prior)
+    targets = {"B02": 1, "B04": 3, "B01": 0, "B03": 2}
+    kwargs = _common_kwargs(atmo, comp, transform)
+
+    implicit = seasonal_extra_tree_prior(wide, observation, target_band_columns=targets, **kwargs)
+    explicit = seasonal_extra_tree_prior(
+        wide,
+        observation,
+        target_band_columns=targets,
+        target_fit_groups=[["B02", "B04", "B01", "B03"]],
+        **kwargs,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(explicit.boa.values), np.asarray(implicit.boa.values), rtol=0, atol=0
+    )
+
+
+@pytest.mark.parametrize(
+    ("groups", "message"),
+    [
+        ([["B02", "B04"], ["B04"]], "more than one group"),
+        ([["B02", "B04", "B07"]], "not targets"),
+        ([["B02"]], "unassigned"),
+    ],
+)
+def test_malformed_fit_groups_are_refused(groups: list[list[str]], message: str) -> None:
+    prior, observation, atmo, comp, transform = _scene()
+
+    with pytest.raises(ValueError, match=message):
+        seasonal_extra_tree_prior(
+            prior,
+            observation,
+            target_band_columns={"B02": 1, "B04": 3},
+            target_fit_groups=groups,
+            **_common_kwargs(atmo, comp, transform),
+        )

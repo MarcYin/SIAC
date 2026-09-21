@@ -97,6 +97,57 @@ def _composite_columns(band_names: Sequence[str] | None, width: int) -> list[str
     return canonical
 
 
+def _resolve_fit_groups(
+    fit_groups: Sequence[Sequence[str]] | None, target_names: Sequence[str]
+) -> list[list[int]]:
+    """Partition the target bands into independently fitted groups.
+
+    ExtraTrees is multi-output: every split is chosen to reduce the error of
+    ALL targets at once, so asking one model for more bands moves the trees --
+    and therefore the predictions -- of the bands it already had. Fitting
+    disjoint groups separately makes each group's prediction independent of
+    what else was requested. ``None`` keeps the single joint fit.
+    """
+    names = [str(name) for name in target_names]
+    if fit_groups is None:
+        return [list(range(len(names)))]
+    groups = [[str(name) for name in group] for group in fit_groups]
+    groups = [group for group in groups if group]
+    flat = [name for group in groups for name in group]
+    if len(set(flat)) != len(flat):
+        raise ValueError(f"target_fit_groups assigns a band to more than one group: {groups}")
+    unknown = sorted(set(flat) - set(names))
+    if unknown:
+        raise ValueError(f"target_fit_groups names bands that are not targets: {unknown}")
+    missing = [name for name in names if name not in flat]
+    if missing:
+        raise ValueError(f"target_fit_groups leaves targets unassigned: {missing}")
+    return [[names.index(name) for name in group] for group in groups]
+
+
+class _GroupedRegressor:
+    """One realization's per-group regressors, read out as a single model.
+
+    The aggregation below and :func:`predict_visible_from_tau_payload` both take
+    one model per realization that predicts every target. This keeps that
+    contract while each group is fitted only on its own targets.
+    """
+
+    def __init__(self, models: Sequence[Any], groups: Sequence[Sequence[int]], outputs: int):
+        if len(models) != len(groups):
+            raise ValueError("one fitted model is required per target group")
+        self.models = list(models)
+        self.groups = [list(group) for group in groups]
+        self.outputs = int(outputs)
+
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        result = np.empty((np.asarray(features).shape[0], self.outputs), dtype=np.float64)
+        for model, group in zip(self.models, self.groups, strict=True):
+            values = np.asarray(model.predict(features), dtype=np.float64)
+            result[:, group] = values[:, np.newaxis] if values.ndim == 1 else values
+        return result
+
+
 def _as_template_grid(da: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
     if "band" in da.dims:
         da = da.isel(band=0, drop=True)
@@ -505,6 +556,7 @@ def seasonal_extra_tree_prior(
     anchor_aot_field: xr.DataArray | None = None,
     composite_band_names: Sequence[str] | None = None,
     target_band_columns: Mapping[str, int] | None = None,
+    target_fit_groups: Sequence[Sequence[str]] | None = None,
     debias: Mapping[str, tuple[float, float]] | None = None,
     debias_scale: float = 1.0,
     uncertainty_floor: float = 0.006,
@@ -662,11 +714,100 @@ def seasonal_extra_tree_prior(
     target_names = list(targets)
     target_cols = [int(targets[name]) for name in target_names]
     used_columns = sorted({*anchor_columns, *localizer_columns, *target_cols})
+    fit_groups = _resolve_fit_groups(target_fit_groups, target_names)
+    grouped = len(fit_groups) > 1
+    # Each group trains on the pixels where ITS columns are finite, so a gap in
+    # one group's bands cannot remove training rows from another group.
+    group_columns = [
+        sorted({*anchor_columns, *localizer_columns, *(target_cols[i] for i in group)})
+        for group in fit_groups
+    ]
+    group_targets = [[target_cols[i] for i in group] for group in fit_groups]
+    excluded_by_later_group = 0
     predictions: dict[str, list[np.ndarray]] = {name: [] for name in target_names}
     fitted_trees: list[Any] = []
     realization_anchors: list[np.ndarray] = []
     used_realizations = 0
-    if pooled_fit:
+
+    def new_regressor() -> Any:
+        if predictor_model in {"extra_trees_20", "extra_trees_20_pooled"}:
+            return ExtraTreesRegressor(
+                n_estimators=20,
+                min_samples_leaf=int(min_samples_leaf),
+                random_state=int(random_state),
+                n_jobs=1,
+            )
+        return ExtraTreeRegressor(
+            random_state=int(random_state),
+            min_samples_leaf=int(min_samples_leaf),
+        )
+
+    def group_rows(composite: np.ndarray) -> list[np.ndarray] | None:
+        """Per-group training rows, or ``None`` when any group is too sparse.
+
+        A realization joins the ensemble only if every group can be fitted on
+        it, so each target band is a median over the same realizations. Were a
+        realization usable for the first group but not a later one, dropping it
+        would change the first group's ensemble; that is counted, so an audit
+        can confirm the added groups never moved the committed bands.
+        """
+        nonlocal excluded_by_later_group
+        rows = [np.all(np.isfinite(composite[:, columns]), axis=1) for columns in group_columns]
+        counts = [int(np.count_nonzero(good)) for good in rows]
+        if min(counts) < 200:
+            if counts[0] >= 200:
+                excluded_by_later_group += 1
+            return None
+        return rows
+
+    if pooled_fit and grouped:
+        # The pooled fit below, once per target group: every group gets its own
+        # forest on its own rows, and member i of each forest is read out
+        # together, so the tau payload still holds one model per member.
+        pooled_groups: list[tuple[list[np.ndarray], list[np.ndarray]]] = [
+            ([], []) for _ in fit_groups
+        ]
+        for index in range(n_real):
+            composite = comp[index].reshape(comp.shape[1], -1).T
+            rows = group_rows(composite)
+            if rows is None:
+                continue
+            for (group_x, group_y), good, columns in zip(
+                pooled_groups, rows, group_targets, strict=True
+            ):
+                group_x.append(
+                    np.column_stack(
+                        [composite[good][:, list(anchor_columns)], localizer_comp[good]]
+                    )
+                )
+                group_y.append(composite[good][:, columns])
+            used_realizations += 1
+        if used_realizations:
+            forests = []
+            for group_x, group_y in pooled_groups:
+                train_x = np.concatenate(group_x, axis=0)
+                train_y = np.concatenate(group_y, axis=0)
+                limit = int(pooled_max_rows)
+                if limit > 0 and train_x.shape[0] > limit:
+                    keep = np.random.default_rng(int(random_state)).choice(
+                        train_x.shape[0], size=limit, replace=False
+                    )
+                    train_x, train_y = train_x[keep], train_y[keep]
+                forests.append(new_regressor().fit(train_x, train_y))
+            del pooled_groups
+            fitted_trees = [
+                _GroupedRegressor(
+                    [forest.estimators_[member] for forest in forests],
+                    fit_groups,
+                    len(target_names),
+                )
+                for member in range(len(forests[0].estimators_))
+            ]
+            for tree in fitted_trees:
+                pred = tree.predict(scene_features)
+                for out_index, band_name in enumerate(target_names):
+                    predictions[band_name].append(np.asarray(pred[:, out_index], dtype=np.float64))
+    elif pooled_fit:
         # One model over every realization at once, instead of one model per
         # realization followed by a median across them. The per-realization
         # ensemble bounds each member's output by the values seen in that one
@@ -719,26 +860,46 @@ def seasonal_extra_tree_prior(
                     predictions[band_name].append(np.asarray(pred[:, out_index], dtype=np.float64))
     for index in range(n_real if not pooled_fit else 0):
         composite = comp[index].reshape(comp.shape[1], -1).T
-        good = np.all(np.isfinite(composite[:, used_columns]), axis=1)
-        if int(np.count_nonzero(good)) < 200:
-            continue
-        train_x = np.column_stack([composite[good][:, list(anchor_columns)], localizer_comp[good]])
-        train_y = composite[good][:, target_cols]
-        if predictor_model == "extra_trees_20":
-            # A 20-tree ensemble per realization: individually smoother
-            # predictions shrink the across-realization spread that becomes
-            # the prior sigma, sharpening the solver's cost curve.
-            tree = ExtraTreesRegressor(
-                n_estimators=20,
-                min_samples_leaf=int(min_samples_leaf),
-                random_state=int(random_state),
-                n_jobs=1,
-            ).fit(train_x, train_y)
+        if grouped:
+            rows = group_rows(composite)
+            if rows is None:
+                continue
+            tree = _GroupedRegressor(
+                [
+                    new_regressor().fit(
+                        np.column_stack(
+                            [composite[good][:, list(anchor_columns)], localizer_comp[good]]
+                        ),
+                        composite[good][:, columns],
+                    )
+                    for good, columns in zip(rows, group_targets, strict=True)
+                ],
+                fit_groups,
+                len(target_names),
+            )
         else:
-            tree = ExtraTreeRegressor(
-                random_state=int(random_state),
-                min_samples_leaf=int(min_samples_leaf),
-            ).fit(train_x, train_y)
+            good = np.all(np.isfinite(composite[:, used_columns]), axis=1)
+            if int(np.count_nonzero(good)) < 200:
+                continue
+            train_x = np.column_stack(
+                [composite[good][:, list(anchor_columns)], localizer_comp[good]]
+            )
+            train_y = composite[good][:, target_cols]
+            if predictor_model == "extra_trees_20":
+                # A 20-tree ensemble per realization: individually smoother
+                # predictions shrink the across-realization spread that becomes
+                # the prior sigma, sharpening the solver's cost curve.
+                tree = ExtraTreesRegressor(
+                    n_estimators=20,
+                    min_samples_leaf=int(min_samples_leaf),
+                    random_state=int(random_state),
+                    n_jobs=1,
+                ).fit(train_x, train_y)
+            else:
+                tree = ExtraTreeRegressor(
+                    random_state=int(random_state),
+                    min_samples_leaf=int(min_samples_leaf),
+                ).fit(train_x, train_y)
         fitted_trees.append(tree)
         pred = tree.predict(scene_features)
         if pred.ndim == 1:
@@ -895,5 +1056,7 @@ def seasonal_extra_tree_prior(
             "anchor_aot": float(anchor_aot),
             "aggregation": aggregation,
             "aggregation_weights": aggregation_weights_da,
+            "fit_groups": tuple(tuple(target_names[i] for i in group) for group in fit_groups),
+            "realizations_excluded_by_later_group": int(excluded_by_later_group),
         }
     return replace(prior, boa=boa_new, boa_unc=unc_new, tau_predictor=tau_payload)
