@@ -59,6 +59,12 @@ def run(args: argparse.Namespace) -> int:
             continue
         entry = built.get(record["matchup_id"])
         if entry is None:
+            # A handful of scenes have almost no usable same-date visible pixels
+            # -- heavy cloud, mostly zero. Carrying them on their original
+            # archive keeps the corpus identical to the campaign being compared
+            # against, so the labels stay the only difference; their visible
+            # supervision is simply the month-matched one it always was.
+            records.append(record)
             dropped += 1
             continue
         value = dict(record)
@@ -75,13 +81,17 @@ def run(args: argparse.Namespace) -> int:
         records.append(value)
         rebuilt += 1
     if dropped:
-        print(f"{dropped} S2 records had no hybrid archive and were dropped", file=sys.stderr)
+        print(
+            f"{dropped} S2 records kept their month-matched visible labels "
+            "(too few usable same-date visible pixels)",
+            file=sys.stderr,
+        )
     out = dict(release)
     out["records"] = records
     out["hybrid_label_build"] = {
         "rebuilt_s2_records": rebuilt,
         "carried_records": carried,
-        "dropped_records": dropped,
+        "records_kept_on_month_matched_visible": dropped,
         "platform_offsets": json.loads(Path(args.platform_offsets).read_text()),
         "source_release": str(Path(args.release).absolute()),
     }
