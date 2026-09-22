@@ -1033,6 +1033,8 @@ def _existing_ok(
     contract_name: str = COMMITTED_C0_CONTRACT,
     expected_policy: dict[str, Any] | None = None,
     expected_aod_extraction: str = "scene_mean",
+    expected_surface_bands: tuple[str, ...] = VISIBLE,
+    expected_fit_grouping: str = "joint",
 ) -> bool:
     if not path.is_file():
         return False
@@ -1061,10 +1063,20 @@ def _existing_ok(
                 "aod_prior_source60",
                 "maiac_prior_available",
             }
+            if not required.issubset(value.files):
+                return False
+            # Archives from before the fit-grouping field fitted all targets jointly.
+            archived_grouping = (
+                str(_scalar(value["surface_fit_grouping"]))
+                if "surface_fit_grouping" in value.files
+                else "joint"
+            )
             base_ok = bool(
-                required.issubset(value.files)
-                and str(_scalar(value["schema_version"])) == str(schema)
-                and np.asarray(value["surface"]).shape[-1] == 3
+                str(_scalar(value["schema_version"])) == str(schema)
+                and tuple(str(name) for name in np.asarray(value["surface_bands"]).ravel())
+                == tuple(expected_surface_bands)
+                and np.asarray(value["surface"]).shape[-1] == len(expected_surface_bands)
+                and archived_grouping == str(expected_fit_grouping)
                 and str(_scalar(value["solver_contract"])) == str(contract_name)
                 and int(_scalar(value["aod_axis_nodes"]))
                 == int(_teacher_contract(contract_name)["aot_axis_nodes"])
@@ -1217,6 +1229,8 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         )
     if aod_prior_reuse_sha256 is not None:
         expected_policy["aod_prior_reuse_sha256"] = aod_prior_reuse_sha256
+    if str(args.maiac_source) != "earthaccess":
+        expected_policy["maiac_source"] = str(args.maiac_source)
     if deep_blue_prior_sha256 is not None:
         expected_policy.update(
             {
@@ -1250,6 +1264,8 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         contract_name=args.solver_contract,
         expected_policy=expected_policy,
         expected_aod_extraction=aod_extraction,
+        expected_surface_bands=target_bands,
+        expected_fit_grouping=fit_grouping,
     ):
         return {"matchup_id": matchup_id, "status": "exists", "output": str(output_path)}
     for path in (current_path, fine_path, dictionary_path, reduced_path):
@@ -1471,6 +1487,9 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         float(template60.y.max() + 30.0),
     )
     maiac_error: dict[str, str] | None = None
+    # Provenance of a MAIAC read made here; None when the prior is provided or reused.
+    maiac_loose_fallback: bool | None = None
+    maiac_granules: dict[str, list[str]] | None = None
     if provided_surface_aod:
         target_aod60 = xr.full_like(
             template60, np.float32(args.surface_target_aod550)
@@ -1524,24 +1543,60 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         if close_probe is not None:
             close_probe()
         cams = cams_provider.get_prior(bounds, crs, when, 60.0)
-        maiac_provider = MCD19AODProvider(
-            cache_dir=args.maiac_cache,
-            temporal_window_days=args.maiac_temporal_window_days,
-            max_granules=args.maiac_max_granules,
-            best_quality_qa=True,
-            allow_default_prior=False,
-        )
         maiac: AtmosphericState | None = None
-        try:
-            maiac = maiac_provider.get_prior(bounds, crs, when, 60.0)
-        except Exception as exc:  # noqa: BLE001 - production fusion treats this source as absent
-            maiac_error = {"type": type(exc).__name__, "message": str(exc)}
-            logger.warning(
-                "%s: no usable QA-best MCD19 prior; production fallback is CAMS-only (%s: %s)",
-                matchup_id,
-                type(exc).__name__,
-                exc,
+        if str(args.maiac_source) == "gee":
+            # The lineage's granules (public CMR replay) and values (Earth Engine,
+            # exact production version). Only a genuine absence of MAIAC falls
+            # back to CAMS; an Earth Engine failure must fail the scene.
+            from tools.aeronet_validation.maiac_gee_native import lineage_teacher_prior
+
+            from siac.adapters.atmo.mcd19_earthaccess import NoAtmosphericDataError
+
+            try:
+                gee_prior = lineage_teacher_prior(
+                    bounds,
+                    crs,
+                    when,
+                    resolution=60.0,
+                    window_days=int(args.maiac_temporal_window_days),
+                    max_granules=int(args.maiac_max_granules),
+                )
+            except NoAtmosphericDataError as exc:
+                maiac_error = {"type": type(exc).__name__, "message": str(exc)}
+                logger.warning(
+                    "%s: no usable QA-best MCD19 prior; production fallback is CAMS-only (%s)",
+                    matchup_id,
+                    exc,
+                )
+            else:
+                maiac = gee_prior.atmospheric_state()
+                maiac_granules = {
+                    "used": list(gee_prior.granules),
+                    "loose_qa_fallback": list(gee_prior.fallback_granules),
+                }
+            maiac_loose_fallback = True
+        else:
+            maiac_provider = MCD19AODProvider(
+                cache_dir=args.maiac_cache,
+                temporal_window_days=args.maiac_temporal_window_days,
+                max_granules=args.maiac_max_granules,
+                best_quality_qa=True,
+                allow_default_prior=False,
             )
+            # The provider as committed always fell back; later revisions made it opt-in.
+            maiac_loose_fallback = bool(
+                getattr(maiac_provider, "allow_best_quality_fallback", True)
+            )
+            try:
+                maiac = maiac_provider.get_prior(bounds, crs, when, 60.0)
+            except Exception as exc:  # noqa: BLE001 - production fusion treats this source as absent
+                maiac_error = {"type": type(exc).__name__, "message": str(exc)}
+                logger.warning(
+                    "%s: no usable QA-best MCD19 prior; production fallback is CAMS-only (%s: %s)",
+                    matchup_id,
+                    type(exc).__name__,
+                    exc,
+                )
         fused_prior60 = _fuse_aod_on_grid(
             maiac,
             cams,
@@ -2063,6 +2118,7 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         ),
         maiac_prior_available=np.asarray(maiac_available),
         maiac_best_quality_qa=np.asarray(True),
+        maiac_source=np.asarray(str(args.maiac_source)),
         maiac_temporal_window_days=np.asarray(args.maiac_temporal_window_days),
         aod_prior_reuse_path=np.asarray(
             "" if aod_prior_reuse_path is None else str(aod_prior_reuse_path)
@@ -2266,12 +2322,16 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
             "maiac": {
                 "available": maiac_available,
                 "product": "MCD19A2",
+                "source": str(args.maiac_source),
                 "best_quality_qa": True,
-                "granule_local_loose_qa_fallback_when_no_best_pixels": True,
+                "granule_local_loose_qa_fallback_when_no_best_pixels": maiac_loose_fallback,
                 "temporal_window_days": args.maiac_temporal_window_days,
                 "nearest_valid_orbit_per_pixel": True,
                 "allow_default_prior": False,
-                "cache_dir": str(args.maiac_cache),
+                "cache_dir": (
+                    str(args.maiac_cache) if str(args.maiac_source) == "earthaccess" else None
+                ),
+                "granules": maiac_granules,
                 "error": maiac_error,
             },
             "cams": {
@@ -2562,6 +2622,17 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--maiac-cache", type=Path, default=ROOT / "cache/maiac_day_aod")
     parser.add_argument("--maiac-temporal-window-days", type=int, default=2)
     parser.add_argument("--maiac-max-granules", type=int, default=8)
+    parser.add_argument(
+        "--maiac-source",
+        choices=("earthaccess", "gee"),
+        default="earthaccess",
+        help=(
+            "Where the MCD19A2 prior comes from. 'earthaccess' downloads HDF granules "
+            "through the current provider; 'gee' reproduces the committed 2026-07-25 "
+            "provider exactly without an Earthdata login (public CMR replay for the "
+            "granule set, Earth Engine for the values)."
+        ),
+    )
     parser.add_argument(
         "--aod-prior-reuse-root",
         type=Path,
