@@ -917,6 +917,31 @@ def _constant_aod_for_unresolved_days(
     return {day: float(value) for day in dict.fromkeys(days) if day not in resolved}
 
 
+COVERAGE_RATIO_MODES = ("footprint", "lineage_zero")
+
+
+def _scored_coverage_ratio(
+    item: dict[str, Any],
+    scene_bounds: tuple[float, float, float, float],
+    crs: str,
+    imports: dict[str, Any],
+    mode: str,
+) -> float:
+    """The AOI-overlap term of the winner score.
+
+    ``lineage_zero`` reproduces every index built before 2026-09-01, including
+    the AERONET lineage the M5 teachers were trained on: a misplaced
+    ``CoordinateTransformation`` call was swallowed into a 0.0 overlap for every
+    acquisition. Wherever acquisitions only partly cover the AOI, the corrected
+    term picks different winners.
+    """
+    if mode == "footprint":
+        return _coverage_ratio(item, scene_bounds, crs, imports)
+    if mode == "lineage_zero":
+        return 0.0
+    raise ValueError(f"unknown coverage-ratio mode {mode!r}")
+
+
 def run_one(
     matchup_id: str,
     *,
@@ -940,7 +965,10 @@ def run_one(
     ocm_confidence_quality: bool = False,
     ocm_thin_quality_weight: float = 0.25,
     maiac_gap_policy: str = "cams_fallback",
+    coverage_ratio: str = "footprint",
 ) -> dict[str, Any]:
+    if coverage_ratio not in COVERAGE_RATIO_MODES:
+        raise ValueError(f"unknown coverage-ratio mode {coverage_ratio!r}")
     imports = _imports()
     target = output_dir / f"{matchup_id}.npz"
     summary_path = output_dir / f"{matchup_id}.json"
@@ -958,6 +986,9 @@ def run_one(
         "runtime_source": str(runtime_source),
         "scl_mode": str(scl_mode),
     }
+    # Indices built before this option have no key for it; keep them valid.
+    if coverage_ratio != "footprint":
+        index_policy["coverage_ratio"] = str(coverage_ratio)
     if not force and _valid_existing_index(target, expected_policy=index_policy):
         return {"matchup_id": matchup_id, "status": "exists", "output": str(target)}
 
@@ -1010,7 +1041,9 @@ def run_one(
         records_by_id[item_id] = {
             "idx": idx,
             "day": _item_day(item),
-            "ratio": _coverage_ratio(item, dump["scene_bounds"], dump["crs"], imports),
+            "ratio": _scored_coverage_ratio(
+                item, dump["scene_bounds"], dump["crs"], imports, coverage_ratio
+            ),
         }
     t_stac = time.perf_counter() - t0
 
@@ -1363,6 +1396,15 @@ def main() -> None:
         default="reference",
     )
     parser.add_argument(
+        "--coverage-ratio",
+        choices=COVERAGE_RATIO_MODES,
+        default="footprint",
+        help=(
+            "AOI-overlap term of the winner score. 'lineage_zero' reproduces indices "
+            "built before 2026-09-01, where the term was zero for every acquisition."
+        ),
+    )
+    parser.add_argument(
         "--aod-quality-mode",
         choices=("month_rank", "locked_raw_sigmoid"),
         default="month_rank",
@@ -1457,6 +1499,7 @@ def main() -> None:
                 ocm_confidence_quality=args.ocm_confidence_quality,
                 ocm_thin_quality_weight=args.ocm_thin_quality_weight,
                 maiac_gap_policy=args.maiac_gap_policy,
+                coverage_ratio=args.coverage_ratio,
             )
         except Exception as exc:  # noqa: BLE001 - one array task must report its own failure
             print(
