@@ -69,14 +69,29 @@ class GranuleVersionUnavailable(RuntimeError):
 
 
 class GranuleEmptyInEarthEngine(RuntimeError):
-    """Earth Engine's copy of a granule holds no retrieval anywhere in the tile.
+    """Earth Engine's copy of a granule is empty: not even AOD_QA anywhere in the tile.
 
     Seen for MCD19A2.A2020245.h12v01 (version 2023140191025): the HDF the
     lineage downloaded has 836 valid AOD pixels across 11 orbits, while Earth
-    Engine's copy of the same version is masked in every orbit over the whole
-    tile. Read as "no retrieval", it would hand those days to the CAMS gap fill
-    and publish a different index as if nothing were wrong, so it fails instead.
+    Engine's copy of the same version is masked in every band of every orbit
+    over the whole tile. Read as "no retrieval", it would hand those days to the
+    CAMS gap fill and publish a different index as if nothing were wrong, so it
+    fails instead.
+
+    A granule with no AOD but a populated AOD_QA is real, and is not this:
+    MCD19A2.A2020143.h29v06 has no valid AOD in any orbit in the HDF itself,
+    with QA, water vapour and geometry present -- the lineage simply had no
+    MAIAC from it.
     """
+
+
+#: Written wherever MODIS observed, retrieval or not, so it tells an empty copy
+#: from a granule without retrievals.
+_PRESENCE_BAND = "AOD_QA"
+
+
+def _copy_is_empty(orbits: list[dict[str, Any]]) -> bool:
+    return not any(float(orbit.get("tile_observed") or 0) > 0 for orbit in orbits)
 
 
 @dataclass
@@ -189,21 +204,21 @@ def native_granules(
             .filter(
                 ee.Filter.Or(*[ee.Filter.stringStartsWith("system:index", p) for p in prefixes])
             )
-            .select(list(bands))
+            .select(sorted({*bands, _PRESENCE_BAND}))
         )
 
         def sample(image: Any, region: Any = region) -> Any:
             out = {"index": image.get("system:index"), "time": image.get("system:time_start")}
-            first = image.select(bands[0])
-            # Retrievals anywhere in the tile, not just the AOI: an empty copy
+            presence = image.select(_PRESENCE_BAND)
+            # Observations anywhere in the tile, not just the AOI: an empty copy
             # of a granule cannot otherwise be told from a cloudy AOI.
-            out["tile_valid"] = (
-                first.mask()
+            out["tile_observed"] = (
+                presence.mask()
                 .gt(0)
                 .reduceRegion(
                     reducer=ee.Reducer.sum(),
-                    geometry=first.geometry(),
-                    crs=first.projection(),
+                    geometry=presence.geometry(),
+                    crs=presence.projection(),
                     maxPixels=1e10,
                 )
                 .values()
@@ -233,9 +248,9 @@ def native_granules(
             # Earth Engine numbers a granule's orbits _01.._NN in the HDF's layer
             # order, which the float32 orbit mean depends on.
             found.sort(key=lambda item: str(item["index"]))
-            if not any(float(item.get("tile_valid") or 0) > 0 for item in found):
+            if _copy_is_empty(found):
                 raise GranuleEmptyInEarthEngine(
-                    f"{prefix}*: every orbit is masked over the whole tile in Earth Engine"
+                    f"{prefix}*: {_PRESENCE_BAND} is masked in every orbit over the whole tile"
                 )
             values: dict[str, list[np.ndarray]] = {band: [] for band in bands}
             for orbit in found:
