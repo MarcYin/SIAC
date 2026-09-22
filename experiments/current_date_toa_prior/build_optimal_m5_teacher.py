@@ -1026,6 +1026,55 @@ def _screen_historical_comp(
     return screened, summary
 
 
+#: Label-quality thresholds on |ExtraTrees readout - 6S anchor|, worst of B8A/B11/B12.
+#: Measured on the 140-scene AERONET reference set: these are the 80th and 90th
+#: percentiles of that gap, and the median error of the VISIBLE label against the
+#: measured surface rises from 0.0046 (lowest decile) to 0.0081 above the first
+#: threshold and 0.0114 above the second -- the label is extrapolated there,
+#: because the forests cannot predict a spectrum their library never held.
+LABEL_QA_WATCH_GAP = 0.0033
+LABEL_QA_SUSPECT_GAP = 0.0055
+#: 0 usable, 1 watch, 2 suspicious, 3 no label at this pixel.
+LABEL_QA_CODES = ("0=ok", "1=watch", "2=suspicious", "3=no_label")
+
+
+def anchor_readout_quality(
+    readout: np.ndarray,
+    anchor_boa: np.ndarray,
+    valid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Compare the trees' own reading of B8A/B11/B12 with the 6S values they came from.
+
+    The anchor bands are both inputs to the seasonal forests and, in a widened
+    label, outputs of them. Where the two agree the scene spectrum sits inside the
+    library the forests were trained on; where they diverge the prediction has been
+    pulled back towards that library, and every band of the label at that pixel --
+    including the visible bands, which have no reference to check against -- is an
+    extrapolation.
+    """
+    gap = (np.asarray(readout, dtype=np.float32) - np.asarray(anchor_boa, dtype=np.float32)).astype(
+        np.float32
+    )
+    gap[~valid] = np.nan
+    worst = np.max(np.abs(np.nan_to_num(gap, nan=0.0)), axis=-1)
+    flag = np.zeros(valid.shape, dtype=np.uint8)
+    flag[worst > LABEL_QA_WATCH_GAP] = 1
+    flag[worst > LABEL_QA_SUSPECT_GAP] = 2
+    flag[~valid] = 3
+    labelled = int(np.count_nonzero(valid))
+    summary = {
+        "available": True,
+        "watch_gap": LABEL_QA_WATCH_GAP,
+        "suspect_gap": LABEL_QA_SUSPECT_GAP,
+        "labelled_pixels": labelled,
+        "watch_fraction": float(np.count_nonzero(flag == 1) / labelled) if labelled else 0.0,
+        "suspicious_fraction": float(np.count_nonzero(flag == 2) / labelled) if labelled else 0.0,
+        "median_abs_gap": float(np.median(np.abs(gap[valid]))) if labelled else float("nan"),
+        "p99_abs_gap": float(np.percentile(np.abs(gap[valid]), 99)) if labelled else float("nan"),
+    }
+    return gap, flag, summary
+
+
 def _existing_ok(
     path: Path,
     *,
@@ -2024,6 +2073,25 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
     uncertainty[~valid] = np.nan
     optimal_anchor_boa_output = np.moveaxis(np.asarray(optimal_anchor_boa, dtype=np.float32), 0, -1)
     optimal_anchor_boa_output[~valid] = np.nan
+    # Label QA. Free whenever the label already predicts the anchor bands; a
+    # three-band label has no readout of them to compare, and says so.
+    anchor_readout_gap: np.ndarray | None = None
+    label_quality_flag: np.ndarray | None = None
+    if all(name in replay_bands for name in ANCHORS):
+        anchor_readout = np.moveaxis(
+            np.asarray(optimal_surface_all)[[replay_bands.index(name) for name in ANCHORS]], 0, -1
+        )
+        anchor_readout_gap, label_quality_flag, label_quality = anchor_readout_quality(
+            anchor_readout, optimal_anchor_boa_output, valid
+        )
+    else:
+        label_quality = {
+            "available": False,
+            "reason": (
+                "this label does not predict B8A/B11/B12, so the trees' readout of the "
+                "anchor bands cannot be compared with the 6S values they were taken from"
+            ),
+        }
     aod_values = np.asarray(aod20, dtype=np.float32)
     aod_uncertainty = np.asarray(aod_unc20, dtype=np.float32)
     aod_values[~valid] = np.nan
@@ -2069,6 +2137,19 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         surface_fit_group_exclusions=np.asarray(fit_group_exclusions, dtype=np.int64),
         anchor_boa_at_solution=optimal_anchor_boa_output,
         anchor_boa_bands=np.asarray(ANCHORS),
+        anchor_readout_gap=(
+            np.full((*valid.shape, len(ANCHORS)), np.nan, dtype=np.float32)
+            if anchor_readout_gap is None
+            else anchor_readout_gap
+        ),
+        label_quality_flag=(
+            np.full(valid.shape, 3, dtype=np.uint8)
+            if label_quality_flag is None
+            else label_quality_flag
+        ),
+        label_quality_flag_codes=np.asarray(LABEL_QA_CODES),
+        label_quality_available=np.asarray(bool(label_quality["available"])),
+        label_quality_json=np.asarray(json.dumps(label_quality, sort_keys=True)),
         anchor_boa_aod_source=np.asarray(
             "caller_provided_scene_aod550" if provided_surface_aod else "m5_solution"
         ),
@@ -2368,6 +2449,7 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
                 "aeronet_role": "none",
             },
         },
+        "label_quality": label_quality,
         "toa_reflectance_domain": {
             "minimum": 0.0,
             "maximum": None,
