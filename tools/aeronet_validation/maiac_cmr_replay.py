@@ -50,7 +50,14 @@ class GranuleId:
 _CACHE = "/gws/ssde/j25a/nceo_isp/public/siac_refactor/cache/maiac_day_aod"
 
 
+def _refuse_login() -> None:
+    raise RuntimeError("the catalogue replay must never log in to Earthdata")
+
+
 def _search(provider, short_name, bounds, crs, temporal, count) -> list[GranuleId]:
+    # earthaccess searches CMR anonymously; the provider's source would only log
+    # in on a download. Make any login attempt through it fail outright.
+    provider.source._ensure_auth = _refuse_login
     granules = provider.source.search_granules(
         short_name=short_name,
         bounds=bounds,

@@ -410,10 +410,32 @@ def _whole_granule_has(granule: Any, loose: bool) -> bool:
 
 @dataclass
 class TeacherMaiacPrior:
-    aot: np.ndarray
-    aot_unc: np.ndarray
+    aot: Any  # xr.DataArray on the AOI grid, gaps median-filled
+    aot_unc: Any
     granules: list[str]
     fallback_granules: list[str]
+
+    def atmospheric_state(self) -> Any:
+        """The prior as ``MCD19AODProvider.get_prior`` returned it.
+
+        MCD19A2's water vapour is not reproduced: the teacher keeps only the
+        aerosol fields of this state and takes water vapour, ozone and
+        elevation from the scene. The provider's no-TCWV defaults stand in.
+        """
+        import xarray as xr
+
+        from siac.runtime import AtmosphericState
+
+        aot = self.aot.astype(np.float32)
+        return AtmosphericState(
+            aot=aot,
+            tcwv=xr.full_like(aot, 1.5).astype(np.float32),
+            tco3=xr.full_like(aot, 0.30).astype(np.float32),
+            aot_unc=self.aot_unc.astype(np.float32),
+            tcwv_unc=xr.full_like(aot, 0.3).astype(np.float32),
+            tco3_unc=xr.full_like(aot, 0.03).astype(np.float32),
+            elevation=xr.zeros_like(aot).astype(np.float32),
+        )
 
 
 def lineage_teacher_prior(
@@ -425,11 +447,20 @@ def lineage_teacher_prior(
     window_days: int = 2,
     max_granules: int = 8,
 ) -> TeacherMaiacPrior:
-    """The teacher's MAIAC prior on its AOI grid, as the committed provider built it."""
+    """The teacher's MAIAC prior on its AOI grid, as the committed provider built it.
+
+    Raises :class:`~siac.adapters.atmo.mcd19_earthaccess.NoAtmosphericDataError`
+    exactly where the lineage found no MAIAC for the scene -- no granule reaching
+    the AOI, or no QA-valid AOD on it -- which the teacher answers with its
+    CAMS-only fallback. Every other failure (Earth Engine errors, a missing
+    production version, an Earth Engine copy emptier than its HDF) propagates:
+    the lineage had data there, so a CAMS-only prior would not reproduce it.
+    """
     from rasterio.enums import Resampling
     from tools.aeronet_validation.maiac_cmr_replay import teacher_granules
 
     from siac.adapters.atmo.mcd19_earthaccess import (
+        NoAtmosphericDataError,
         _maiac_best_quality_mask,
         _nearest_valid_orbit_indices,
         _select_orbit_values,
@@ -484,7 +515,7 @@ def lineage_teacher_prior(
         unc_tiles.append(_tile_dataarray(_select_orbit_values(unc, indices), native))
         used.append(granule.filename)
     if not aot_tiles:
-        raise ValueError("MCD19 has no granule reaching the requested AOI")
+        raise NoAtmosphericDataError("MCD19 has no granule reaching the requested AOI")
 
     def merge(tiles):
         return merge_reprojected_tiles(
@@ -500,14 +531,16 @@ def lineage_teacher_prior(
     finite_aot = np.asarray(aot.values, dtype=np.float64)
     finite_aot = finite_aot[np.isfinite(finite_aot)]
     if finite_aot.size == 0:
-        raise ValueError("MCD19 has no QA-valid AOD after reprojection to the requested AOI")
+        raise NoAtmosphericDataError(
+            "MCD19 has no QA-valid AOD after reprojection to the requested AOI"
+        )
     finite_unc = np.asarray(aot_unc.values, dtype=np.float64)
     finite_unc = finite_unc[np.isfinite(finite_unc)]
     aot_fill = float(np.median(finite_aot))
     unc_fill = max(float(np.median(finite_unc)) if finite_unc.size else 0.10, 0.05)
     return TeacherMaiacPrior(
-        aot=np.asarray(aot.fillna(aot_fill).values, dtype=np.float32),
-        aot_unc=np.asarray(aot_unc.fillna(unc_fill).values, dtype=np.float32),
+        aot=aot.fillna(aot_fill).astype(np.float32),
+        aot_unc=aot_unc.fillna(unc_fill).astype(np.float32),
         granules=used,
         fallback_granules=fallback,
     )
