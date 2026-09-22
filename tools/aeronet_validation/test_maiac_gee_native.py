@@ -179,3 +179,10 @@ def test_catalogue_replay_refuses_to_log_in() -> None:
 
     with pytest.raises(RuntimeError, match="never log in"):
         maiac_cmr_replay._search(Provider(), "MCD19A2", (0.0, 0.0, 1.0, 1.0), CRS, None, 8)
+
+
+def test_only_a_copy_without_any_observation_counts_as_empty() -> None:
+    # A2020245.h12v01 in Earth Engine: nothing in any band of any orbit.
+    assert maiac_gee_native._copy_is_empty([{"tile_observed": 0}, {"tile_observed": None}])
+    # A2020143.h29v06: no AOD anywhere, in the HDF too, but QA fills the tile.
+    assert not maiac_gee_native._copy_is_empty([{"tile_observed": 0}, {"tile_observed": 1440000}])
