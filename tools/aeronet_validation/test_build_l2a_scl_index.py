@@ -257,3 +257,22 @@ def test_coverage_ratio_measures_real_footprint_overlap() -> None:
     half = _coverage_ratio({"geometry": footprint(0.5)}, bounds, crs, imports)
     assert full == pytest.approx(1.0, abs=0.01)
     assert half == pytest.approx(0.5, abs=0.01)
+
+
+def test_lineage_coverage_mode_reproduces_the_zeroed_overlap_term() -> None:
+    from tools.aeronet_validation.build_l2a_scl_index import _imports, _scored_coverage_ratio
+
+    imports = _imports()
+    crs = "EPSG:32631"
+    bounds = (400000.0, 4988000.0, 412000.0, 5000000.0)
+    item = {
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[2.0, 45.0], [2.1, 45.0], [2.1, 45.1], [2.0, 45.0]]],
+        }
+    }
+
+    assert _scored_coverage_ratio(item, bounds, crs, imports, "lineage_zero") == 0.0
+    assert _scored_coverage_ratio({"geometry": None}, bounds, crs, imports, "footprint") == 0.0
+    with pytest.raises(ValueError, match="unknown coverage-ratio mode"):
+        _scored_coverage_ratio(item, bounds, crs, imports, "legacy")
