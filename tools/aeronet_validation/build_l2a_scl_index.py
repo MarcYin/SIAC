@@ -783,6 +783,43 @@ def _candidate_mask(
     return candidate
 
 
+#: Day-AOD sources that carry measured MAIAC and share its gap policy and
+#: ranking. ``maiac_gee`` needs no Earthdata login: the granules come from the
+#: public CMR catalogue, their values from Earth Engine at the exact version CMR
+#: named, and the reduction is the lineage's schema-1 day-AOD, unchanged.
+MAIAC_DAY_AOD_SOURCES = ("maiac", "maiac_gee")
+#: Earth Engine is retried only for transient failures; the last one propagates.
+_GEE_ATTEMPTS = 4
+
+
+def _gee_lineage_day_aod(
+    scene_bounds: tuple[float, float, float, float], crs: str, periods: list[tuple[int, int]]
+) -> dict[str, float]:
+    """Every period's lineage-exact MAIAC day AOD from Earth Engine, or an exception.
+
+    There is deliberately no per-window fallback. A window that cannot be read is
+    not a window without retrievals: treating it as one hands every day to the
+    CAMS gap fill and publishes a different index with ``status: ok``, which is
+    how a locked Earthdata account once rebuilt a whole index on CAMS alone.
+    """
+    import time
+
+    from ee.ee_exception import EEException
+    from tools.aeronet_validation.maiac_gee_native import lineage_day_aod
+
+    measured: dict[str, float] = {}
+    for year, month in periods:
+        for attempt in range(1, _GEE_ATTEMPTS + 1):
+            try:
+                measured.update(lineage_day_aod(scene_bounds, crs, year, month))
+                break
+            except (EEException, OSError):
+                if attempt == _GEE_ATTEMPTS:
+                    raise
+                time.sleep(2.0**attempt)
+    return measured
+
+
 def _resolve_day_aod(
     *,
     source: str,
@@ -802,16 +839,19 @@ def _resolve_day_aod(
             and "aod" in reference_scalars[day]
             and np.isfinite(reference_scalars[day]["aod"])
         }
-    if source != "maiac":
+    if source not in MAIAC_DAY_AOD_SOURCES:
         raise ValueError(f"Unsupported day-AOD source {source!r}")
-    from siac.adapters.atmo.maiac_day_aod import MAIACDayAODProvider
-
     periods = sorted({(int(day[:4]), int(day[5:7])) for day in days})
-    measured = MAIACDayAODProvider(cache_dir=cache_dir).day_aod_map(
-        scene_bounds,
-        crs,
-        periods,
-    )
+    if source == "maiac_gee":
+        measured = _gee_lineage_day_aod(scene_bounds, crs, periods)
+    else:
+        from siac.adapters.atmo.maiac_day_aod import MAIACDayAODProvider
+
+        measured = MAIACDayAODProvider(cache_dir=cache_dir).day_aod_map(
+            scene_bounds,
+            crs,
+            periods,
+        )
     return {
         day: float(measured[day]) for day in days if day in measured and np.isfinite(measured[day])
     }
@@ -1090,7 +1130,7 @@ def run_one(
     )
     cams_aod_by_day: dict[str, float] = {}
     constant_aod_by_day: dict[str, float] = {}
-    if day_aod_source == "maiac":
+    if day_aod_source in MAIAC_DAY_AOD_SOURCES:
         missing_days = [day for day in days if day not in maiac_aod_by_day]
         if maiac_gap_policy == "cams_fallback":
             cams_aod_by_day = _cams_day_aod(
@@ -1113,7 +1153,7 @@ def run_one(
         else:
             raise ValueError(f"Unsupported MAIAC gap policy {maiac_gap_policy!r}")
     aod_by_day = {**constant_aod_by_day, **cams_aod_by_day, **maiac_aod_by_day}
-    if day_aod_source == "maiac":
+    if day_aod_source in MAIAC_DAY_AOD_SOURCES:
         if aod_quality_mode == "locked_raw_sigmoid":
             # Match the locked GEE recipe: cloud coverage defines candidate
             # days, missing MAIAC contributes zero to the final score, and the
@@ -1212,7 +1252,7 @@ def run_one(
         state["day"] = day
         if day in aod_by_day:
             state["aod"] = float(aod_by_day[day])
-            if day_aod_source == "maiac":
+            if day_aod_source in MAIAC_DAY_AOD_SOURCES:
                 if day in maiac_aod_by_day:
                     state["aod_source"] = "maiac"
                 elif day in cams_aod_by_day:
@@ -1261,7 +1301,7 @@ def run_one(
                 if maiac_gap_policy == "cams_fallback"
                 else "maiac_with_locked_constant_0p1_gap_fill"
             )
-            if day_aod_source == "maiac"
+            if day_aod_source in MAIAC_DAY_AOD_SOURCES
             else day_aod_source
         ),
         "aod_quality_mode": aod_quality_mode,
@@ -1319,7 +1359,7 @@ def main() -> None:
     parser.add_argument("--runtime-source", choices=("l1c", "l2a"), default="l2a")
     parser.add_argument(
         "--day-aod-source",
-        choices=("maiac", "reference", "none"),
+        choices=("maiac", "maiac_gee", "reference", "none"),
         default="reference",
     )
     parser.add_argument(
