@@ -46,3 +46,22 @@ Thumbs.db
 
 # generated run outputs
 outputs/
+
+# generated reports and experiment data (every untracked file is copied into each
+# Codex ghost snapshot under $TMPDIR -- ~155 MB per turn before these rules)
+/analysis/
+/reports/
+/notes/*/
+/.codex/visualizations/
+/experiments/*/*/**/*.html
+/experiments/*/*/**/*.csv
+/experiments/*/*/**/*.json
+/experiments/*/*/**/*.jsonl
+/experiments/*/*/**/*.npz
+/experiments/*/*/**/*.npy
+/experiments/*/*/**/*.nc
+/experiments/*/*/**/*.parquet
+/experiments/*/*/**/*.sqlite
+/experiments/*/*/**/*.png
+/experiments/*/*/**/*.webp
+/experiments/*/*/**/*.jpg
