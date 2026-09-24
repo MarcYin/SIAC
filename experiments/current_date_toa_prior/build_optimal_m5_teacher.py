@@ -1026,24 +1026,27 @@ def _screen_historical_comp(
     return screened, summary
 
 
-#: Label-quality thresholds on |ExtraTrees readout - 6S anchor|, worst of B8A/B11/B12.
-#: Measured on the 140-scene AERONET reference set: these are the 80th and 90th
-#: percentiles of that gap, and the median error of the VISIBLE label against the
-#: measured surface rises from 0.0046 (lowest decile) to 0.0081 above the first
-#: threshold and 0.0114 above the second -- the label is extrapolated there,
-#: because the forests cannot predict a spectrum their library never held.
-LABEL_QA_WATCH_GAP = 0.0033
+#: Label-quality rule on |ExtraTrees readout - 6S anchor| for B8A/B11/B12 (rule v3).
+#:
+#: Tolerance per pixel and band: max(0.0055, 5% of the 6S value). An absolute gap alone
+#: flagged bright scenes whose readout hugs the 6S line with a small uniform offset. So
+#: each band's scene-wide median difference (the offset) is removed first, and what is
+#: left (the structure) is graded by severity. A pixel is watch beyond 1x the tolerance
+#: and failed (suspicious) beyond 3x. A band whose offset itself exceeds 3x the tolerance
+#: fails wherever its raw gap does. Measured on the 140 AERONET reference scenes, failed
+#: pixels have visible-label error 0.150 against 0.011 elsewhere, and 78% of them are
+#: among the worst 10% of labels (90% on bright surfaces). Scene offsets under 1x the
+#: tolerance are unrelated to label error (Spearman -0.00); the one reference scene
+#: with an offset above 2x is catastrophic (visible error 0.21).
 LABEL_QA_SUSPECT_GAP = 0.0055
-#: On bright surfaces those absolute gaps are 1-2% of the reflectance, so a scene whose
-#: readout hugs the 6S line with a small uniform offset was flagged wholesale. Each
-#: threshold therefore also scales with the anchor: a band is off only beyond
-#: max(gap, relative * |6S|). On the same AERONET set this raises the visible error of
-#: suspicious pixels from 0.042 to 0.063 (share of them among the worst 10% labels
-#: 32% -> 37%), and it moves 785 of 2,372 training scenes out of "suspicious" -- the
-#: offset-only scenes; saturation and dark-floor failures stay flagged.
-LABEL_QA_WATCH_RELATIVE = 0.03
 LABEL_QA_SUSPECT_RELATIVE = 0.05
-#: 0 usable, 1 watch, 2 suspicious, 3 no label at this pixel.
+LABEL_QA_FAIL_MULTIPLE = 3.0
+#: A scene is suspicious when at least 5% of its labelled pixels failed or any band's
+#: offset exceeds 3x the tolerance at the band's median brightness; watch from 2% failed.
+#: An offset between 1x and 3x is only reported (scene summary "offset_note").
+LABEL_QA_SCENE_SUSPECT = 0.05
+LABEL_QA_SCENE_WATCH = 0.02
+#: 0 usable, 1 watch, 2 suspicious (failed), 3 no label at this pixel.
 LABEL_QA_CODES = ("0=ok", "1=watch", "2=suspicious", "3=no_label")
 
 
@@ -1059,30 +1062,57 @@ def anchor_readout_quality(
     library the forests were trained on; where they diverge the prediction has been
     pulled back towards that library, and every band of the label at that pixel --
     including the visible bands, which have no reference to check against -- is an
-    extrapolation.
+    extrapolation. A small uniform offset is reported, not flagged; saturation,
+    dark floors and other structure are flagged by how far they leave the line.
     """
-    gap = (np.asarray(readout, dtype=np.float32) - np.asarray(anchor_boa, dtype=np.float32)).astype(
-        np.float32
-    )
+    anchor = np.asarray(anchor_boa, dtype=np.float32)
+    gap = (np.asarray(readout, dtype=np.float32) - anchor).astype(np.float32)
     gap[~valid] = np.nan
-    magnitude = np.abs(np.nan_to_num(gap, nan=0.0))
-    brightness = np.abs(np.nan_to_num(np.asarray(anchor_boa, dtype=np.float32), nan=0.0))
-    watch = np.any(magnitude > np.maximum(LABEL_QA_WATCH_GAP, LABEL_QA_WATCH_RELATIVE * brightness), axis=-1)
-    suspect = np.any(magnitude > np.maximum(LABEL_QA_SUSPECT_GAP, LABEL_QA_SUSPECT_RELATIVE * brightness), axis=-1)
+    labelled = int(np.count_nonzero(valid))
+    bands = gap.shape[-1]
+    offset = np.zeros(bands, dtype=np.float32)
+    offset_ratio = np.zeros(bands, dtype=np.float32)
+    if labelled:
+        offset = np.median(gap[valid], axis=0).astype(np.float32)
+        median_brightness = np.median(np.abs(anchor[valid]), axis=0)
+        offset_ratio = np.abs(offset) / np.maximum(
+            LABEL_QA_SUSPECT_GAP, LABEL_QA_SUSPECT_RELATIVE * median_brightness
+        )
+    tolerance = np.maximum(
+        LABEL_QA_SUSPECT_GAP, LABEL_QA_SUSPECT_RELATIVE * np.abs(np.nan_to_num(anchor, nan=0.0))
+    )
+    raw = np.abs(np.nan_to_num(gap, nan=0.0))
+    structure = np.abs(np.nan_to_num(gap - offset, nan=0.0))
+    gross_offset = offset_ratio > LABEL_QA_FAIL_MULTIPLE
+    failed_band = (structure > LABEL_QA_FAIL_MULTIPLE * tolerance) | (
+        gross_offset & (raw > LABEL_QA_FAIL_MULTIPLE * tolerance)
+    )
+    watch = np.any(structure > tolerance, axis=-1)
+    failed = np.any(failed_band, axis=-1)
     flag = np.zeros(valid.shape, dtype=np.uint8)
     flag[watch] = 1
-    flag[suspect] = 2
+    flag[failed] = 2
     flag[~valid] = 3
-    labelled = int(np.count_nonzero(valid))
+    failed_fraction = float(np.count_nonzero(flag == 2) / labelled) if labelled else 0.0
+    if failed_fraction >= LABEL_QA_SCENE_SUSPECT or bool(gross_offset.any()):
+        scene_status = "suspicious"
+    elif failed_fraction >= LABEL_QA_SCENE_WATCH:
+        scene_status = "watch"
+    else:
+        scene_status = "ok"
     summary = {
         "available": True,
-        "watch_gap": LABEL_QA_WATCH_GAP,
+        "rule": "v3: offset removed, structure graded by severity",
         "suspect_gap": LABEL_QA_SUSPECT_GAP,
-        "watch_relative": LABEL_QA_WATCH_RELATIVE,
         "suspect_relative": LABEL_QA_SUSPECT_RELATIVE,
+        "fail_multiple": LABEL_QA_FAIL_MULTIPLE,
         "labelled_pixels": labelled,
         "watch_fraction": float(np.count_nonzero(flag == 1) / labelled) if labelled else 0.0,
-        "suspicious_fraction": float(np.count_nonzero(flag == 2) / labelled) if labelled else 0.0,
+        "suspicious_fraction": failed_fraction,
+        "offset": [float(v) for v in offset],
+        "offset_tolerance_ratio": [float(v) for v in offset_ratio],
+        "offset_note": bool((offset_ratio > 1.0).any()),
+        "scene_status": scene_status,
         "median_abs_gap": float(np.median(np.abs(gap[valid]))) if labelled else float("nan"),
         "p99_abs_gap": float(np.percentile(np.abs(gap[valid]), 99)) if labelled else float("nan"),
     }
