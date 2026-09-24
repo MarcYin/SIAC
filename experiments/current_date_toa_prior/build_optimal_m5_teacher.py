@@ -1034,6 +1034,15 @@ def _screen_historical_comp(
 #: because the forests cannot predict a spectrum their library never held.
 LABEL_QA_WATCH_GAP = 0.0033
 LABEL_QA_SUSPECT_GAP = 0.0055
+#: On bright surfaces those absolute gaps are 1-2% of the reflectance, so a scene whose
+#: readout hugs the 6S line with a small uniform offset was flagged wholesale. Each
+#: threshold therefore also scales with the anchor: a band is off only beyond
+#: max(gap, relative * |6S|). On the same AERONET set this raises the visible error of
+#: suspicious pixels from 0.042 to 0.063 (share of them among the worst 10% labels
+#: 32% -> 37%), and it moves 785 of 2,372 training scenes out of "suspicious" -- the
+#: offset-only scenes; saturation and dark-floor failures stay flagged.
+LABEL_QA_WATCH_RELATIVE = 0.03
+LABEL_QA_SUSPECT_RELATIVE = 0.05
 #: 0 usable, 1 watch, 2 suspicious, 3 no label at this pixel.
 LABEL_QA_CODES = ("0=ok", "1=watch", "2=suspicious", "3=no_label")
 
@@ -1056,16 +1065,21 @@ def anchor_readout_quality(
         np.float32
     )
     gap[~valid] = np.nan
-    worst = np.max(np.abs(np.nan_to_num(gap, nan=0.0)), axis=-1)
+    magnitude = np.abs(np.nan_to_num(gap, nan=0.0))
+    brightness = np.abs(np.nan_to_num(np.asarray(anchor_boa, dtype=np.float32), nan=0.0))
+    watch = np.any(magnitude > np.maximum(LABEL_QA_WATCH_GAP, LABEL_QA_WATCH_RELATIVE * brightness), axis=-1)
+    suspect = np.any(magnitude > np.maximum(LABEL_QA_SUSPECT_GAP, LABEL_QA_SUSPECT_RELATIVE * brightness), axis=-1)
     flag = np.zeros(valid.shape, dtype=np.uint8)
-    flag[worst > LABEL_QA_WATCH_GAP] = 1
-    flag[worst > LABEL_QA_SUSPECT_GAP] = 2
+    flag[watch] = 1
+    flag[suspect] = 2
     flag[~valid] = 3
     labelled = int(np.count_nonzero(valid))
     summary = {
         "available": True,
         "watch_gap": LABEL_QA_WATCH_GAP,
         "suspect_gap": LABEL_QA_SUSPECT_GAP,
+        "watch_relative": LABEL_QA_WATCH_RELATIVE,
+        "suspect_relative": LABEL_QA_SUSPECT_RELATIVE,
         "labelled_pixels": labelled,
         "watch_fraction": float(np.count_nonzero(flag == 1) / labelled) if labelled else 0.0,
         "suspicious_fraction": float(np.count_nonzero(flag == 2) / labelled) if labelled else 0.0,
