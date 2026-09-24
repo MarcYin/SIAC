@@ -9,6 +9,7 @@ import xarray as xr
 
 from siac.algorithms.surface.seasonal_predictor import (
     _anchor_match_weights,
+    _correct_anchor_reflectance,
     _field_on_template,
     _robust_clip_composites,
     _weighted_median,
@@ -232,6 +233,42 @@ def test_seasonal_extra_tree_prior_corrects_anchor_with_rt_model() -> None:
     assert rt_model.calls == ["B8A", "B11", "B12"]
     assert not out.boa.identical(prior.boa)
     assert float(out.boa.sel(band="B02").mean()) > 0.0
+
+
+def test_anchor_correction_accepts_extra_bands_through_the_same_rt() -> None:
+    _, observation, atmo, _, _ = _scene(height=4, width=4)
+    sensor = observation.sensor_config
+    observation = ObservationBundle(
+        toa=observation.toa,
+        geometry=observation.geometry,
+        cloud_mask=observation.cloud_mask,
+        sensor_config=SensorConfig(
+            sensor_id=sensor.sensor_id,
+            satellite_id=sensor.satellite_id,
+            bands=(*sensor.bands, SensorBand("B05", 705.0, 15.0, 20.0, 7)),
+        ),
+        metadata={},
+        crs=observation.crs,
+        bounds=observation.bounds,
+    )
+    template = observation.toa["B8A"]
+    red_edge = xr.full_like(template, 0.25)
+    valid = np.ones(template.size, dtype=bool)
+    rt_model = _FakeRT()
+
+    default = _correct_anchor_reflectance(
+        observation, atmo_prior=atmo, rt_model=rt_model, template=template,
+        anchor_grids=dict(observation.toa.data_vars), valid=valid, anchor_aot=0.2,
+    )
+    assert rt_model.calls == ["B8A", "B11", "B12"] and default.shape == (template.size, 3)
+
+    rt_model.calls.clear()
+    extra = _correct_anchor_reflectance(
+        observation, atmo_prior=atmo, rt_model=rt_model, template=template,
+        anchor_grids={"B05": red_edge}, valid=valid, anchor_aot=0.2, bands=("B05",),
+    )
+    assert rt_model.calls == ["B05"]
+    np.testing.assert_allclose(extra[:, 0], 0.25 * 0.8)  # the fake RT's xap
 
 
 def test_seasonal_extra_tree_prior_preserves_spatial_anchor_state_and_geometry() -> None:

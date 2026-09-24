@@ -271,11 +271,13 @@ def _correct_anchor_reflectance(
     anchor_aot: float,
     anchor_aot_field: xr.DataArray | None = None,
     scene_mean_geometry: bool = False,
+    bands: Sequence[str] = ANCHOR_BANDS,
 ) -> np.ndarray:
     """Correct scene anchor bands TOA->BOA with the configured RT backend.
 
     The anchor must be corrected in the same RT space the solver uses; there is
-    deliberately no analytic fallback.
+    deliberately no analytic fallback. ``bands`` defaults to the anchor bands; any
+    other band present in ``anchor_grids`` is corrected identically.
     """
     from siac.runtime import AtmosphericState, GeometryAngles
 
@@ -317,7 +319,7 @@ def _correct_anchor_reflectance(
         vaa = _scene_mean_angle(vaa, circular=True)
     geom = GeometryAngles(sza=sza, saa=saa, vza=vza, vaa=vaa)
     corrected = []
-    for band_name in ANCHOR_BANDS:
+    for band_name in bands:
         band = observation.sensor_config.get_band(band_name)
         coeffs = rt_model.compute_coefficients(geom, atmo, band)
         corrected.append(coeffs.apply_correction(anchor_grids[band_name]).values.ravel()[valid])

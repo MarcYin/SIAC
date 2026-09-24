@@ -1462,6 +1462,10 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
             band: np.asarray(current[f"local60_{band}"], dtype=np.float32)
             for band in (*solve_bands, *ANCHORS)
         }
+        extra_anchor_values = {
+            band: np.asarray(current[f"detail20_{band}"], dtype=np.float32)
+            for band in getattr(args, "extra_anchor_bands", ())
+        }
         template20 = _grid(t0[..., 0], transform20, crs, name="template20")
         template60 = _grid(toa60_values["B02"], transform60, crs, name="template60")
         geometry20 = _constant_geometry(current, template20)
@@ -2081,6 +2085,31 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         return surface_and_anchor_at_aod(aod_field)[0]
 
     optimal_surface_all, optimal_anchor_boa = surface_and_anchor_at_aod(aod20)
+    extra_anchor_payload: dict[str, np.ndarray] = {}
+    extra_bands = tuple(getattr(args, "extra_anchor_bands", ()))
+    if extra_bands:
+        extra_grids = {
+            name: _grid(extra_anchor_values[name], transform20, crs, name=name) for name in extra_bands
+        }
+        flat_extra = np.stack([extra_anchor_values[name] for name in extra_bands], axis=-1).reshape(
+            -1, len(extra_bands)
+        )
+        extra_valid = np.all(np.isfinite(flat_extra) & (flat_extra > 0.0), axis=1)
+        extra_corrected = _correct_anchor_reflectance(
+            observation20,
+            atmo_prior=atmo20,
+            rt_model=selected_backend,
+            template=template20,
+            anchor_grids=extra_grids,
+            valid=extra_valid,
+            anchor_aot=anchor_aot,
+            anchor_aot_field=aod20,
+            scene_mean_geometry=str(args.anchor_geometry) == "scene_mean",
+            bands=extra_bands,
+        )
+        extra_boa = np.full((*template20.shape, len(extra_bands)), np.nan, dtype=np.float32)
+        extra_boa.reshape(-1, len(extra_bands))[extra_valid] = extra_corrected
+        extra_anchor_payload = {"extra_anchor_bands": np.asarray(extra_bands)}
     output_indices = [replay_bands.index(name) for name in target_bands]
     optimal_surface = np.moveaxis(np.asarray(optimal_surface_all)[output_indices], 0, -1).astype(
         np.float32
@@ -2117,6 +2146,9 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
     uncertainty[~valid] = np.nan
     optimal_anchor_boa_output = np.moveaxis(np.asarray(optimal_anchor_boa, dtype=np.float32), 0, -1)
     optimal_anchor_boa_output[~valid] = np.nan
+    if extra_bands:
+        extra_boa[~valid] = np.nan
+        extra_anchor_payload["extra_anchor_boa_at_solution"] = extra_boa
     # Label QA. Free whenever the label already predicts the anchor bands; a
     # three-band label has no readout of them to compare, and says so.
     anchor_readout_gap: np.ndarray | None = None
@@ -2197,6 +2229,7 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
         anchor_boa_aod_source=np.asarray(
             "caller_provided_scene_aod550" if provided_surface_aod else "m5_solution"
         ),
+        **extra_anchor_payload,
         solver_solve_bands_csv=np.asarray(",".join(solve_bands)),
         aod=aod_values,
         aod_uncertainty=aod_uncertainty,
@@ -2833,6 +2866,16 @@ def parser() -> argparse.ArgumentParser:
         "--anchor-geometry",
         choices=("scene_mean", "native"),
         default="scene_mean",
+    )
+    parser.add_argument(
+        "--extra-anchor-bands",
+        type=lambda text: tuple(name.strip() for name in text.split(",") if name.strip()),
+        default=(),
+        help=(
+            "Comma-separated 20 m bands (e.g. B05,B06,B07) to 6S-correct at the solved AOD "
+            "exactly like the anchor bands, saved as extra_anchor_boa_at_solution. Outputs "
+            "only: nothing the solve or the label uses changes."
+        ),
     )
     parser.add_argument(
         "--predictor-model",
