@@ -1462,10 +1462,20 @@ def build_one(matchup_id: str, args: argparse.Namespace) -> dict[str, Any]:
             band: np.asarray(current[f"local60_{band}"], dtype=np.float32)
             for band in (*solve_bands, *ANCHORS)
         }
-        extra_anchor_values = {
-            band: np.asarray(current[f"detail20_{band}"], dtype=np.float32)
-            for band in getattr(args, "extra_anchor_bands", ())
-        }
+        extra_anchor_values = {}
+        extra_root = getattr(args, "extra_anchor_root", None)
+        for band in getattr(args, "extra_anchor_bands", ()):
+            if f"detail20_{band}" in current.files:
+                extra_anchor_values[band] = np.asarray(current[f"detail20_{band}"], dtype=np.float32)
+                continue
+            if extra_root is None:
+                raise ValueError(f"{matchup_id}: {band} is not in the current archive; pass --extra-anchor-root")
+            with np.load(Path(extra_root) / f"{matchup_id}.npz", allow_pickle=False) as supplement:
+                if str(_scalar(supplement["product_id"])) != str(_scalar(current["product_id"])) or not np.allclose(
+                    np.asarray(supplement["fine20_transform"], dtype=np.float64)[:6], transform20
+                ):
+                    raise ValueError(f"{matchup_id}: {band} supplement is another product or grid")
+                extra_anchor_values[band] = np.asarray(supplement[f"fine20_{band}"], dtype=np.float32)
         template20 = _grid(t0[..., 0], transform20, crs, name="template20")
         template60 = _grid(toa60_values["B02"], transform60, crs, name="template60")
         geometry20 = _constant_geometry(current, template20)
@@ -2875,6 +2885,15 @@ def parser() -> argparse.ArgumentParser:
             "Comma-separated 20 m bands (e.g. B05,B06,B07) to 6S-correct at the solved AOD "
             "exactly like the anchor bands, saved as extra_anchor_boa_at_solution. Outputs "
             "only: nothing the solve or the label uses changes."
+        ),
+    )
+    parser.add_argument(
+        "--extra-anchor-root",
+        type=Path,
+        default=None,
+        help=(
+            "Directory of <mid>.npz fine20 archives (capture_fine20_visible_l1c --bands) "
+            "supplying extra anchor bands the current archive lacks, e.g. B08."
         ),
     )
     parser.add_argument(
