@@ -54,7 +54,7 @@ def run(args: argparse.Namespace) -> int:
     if absent:
         print(f"{absent} excluded ids are not in this release (ignored)", file=sys.stderr)
     records = []
-    rebuilt = carried = dropped = 0
+    rebuilt = carried = dropped = dense_only_dropped = 0
     for record in release["records"]:
         if record.get("matchup_id") in excluded:
             continue
@@ -63,6 +63,11 @@ def run(args: argparse.Namespace) -> int:
             carried += 1
             continue
         entry = built.get(record["matchup_id"])
+        if entry is None and record.get("library_labels_sufficient") is False:
+            # A dense-only sample has almost no library labels of its own: without the
+            # full-spectrum block it would train on nothing, so it leaves the release.
+            dense_only_dropped += 1
+            continue
         if entry is None:
             # A handful of scenes have almost no usable same-date visible pixels
             # -- heavy cloud, mostly zero. Carrying them on their original
@@ -96,11 +101,15 @@ def run(args: argparse.Namespace) -> int:
         "rebuilt_s2_records": rebuilt,
         "carried_records": carried,
         "s2_records_kept_on_original_archive": dropped,
+        "dense_only_records_dropped_without_label": dense_only_dropped,
         "platform_offsets": json.loads(Path(args.platform_offsets).read_text()),
         "source_release": str(Path(args.release).absolute()),
         "excluded_train_scenes": sorted(excluded),
         "exclusion_source": str(Path(args.exclude).absolute()) if args.exclude else None,
     }
+    # Scene counts changed (exclusion, dense-only drops): describe the sampling actually used.
+    from experiments.current_date_toa_prior.release_joint_multisensor import sampling_plan
+    out["training_sampling"] = sampling_plan(records)
     for split in ("train", "development"):
         if not any(r["split"] == split for r in records):
             raise ValueError(f"No {split} records survived the rebuild")
