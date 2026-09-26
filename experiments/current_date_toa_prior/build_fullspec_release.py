@@ -43,9 +43,21 @@ def run(args: argparse.Namespace) -> int:
         for entry in json.loads(shard.read_text()):
             if entry.get("status") in ("prepared", "cached"):
                 built[entry["matchup_id"]] = entry
+    # Scene-level label QA: TRAIN scenes whose label the QA calls suspicious are removed
+    # (development/holdout are never altered, so scores stay comparable).
+    excluded = set(json.loads(Path(args.exclude).read_text())) if args.exclude else set()
+    splits = {r.get("matchup_id"): r.get("split") for r in release["records"] if r.get("matchup_id")}
+    protected = sorted(m for m in excluded if splits.get(m) not in (None, "train"))
+    if protected:
+        raise ValueError(f"{len(protected)} excluded ids are development/holdout records: {protected[:3]}")
+    absent = len([m for m in excluded if m not in splits])
+    if absent:
+        print(f"{absent} excluded ids are not in this release (ignored)", file=sys.stderr)
     records = []
     rebuilt = carried = dropped = 0
     for record in release["records"]:
+        if record.get("matchup_id") in excluded:
+            continue
         if "original_prepared" not in record.get("inputs", {}):
             records.append(record)
             carried += 1
@@ -86,6 +98,8 @@ def run(args: argparse.Namespace) -> int:
         "s2_records_kept_on_original_archive": dropped,
         "platform_offsets": json.loads(Path(args.platform_offsets).read_text()),
         "source_release": str(Path(args.release).absolute()),
+        "excluded_train_scenes": sorted(excluded),
+        "exclusion_source": str(Path(args.exclude).absolute()) if args.exclude else None,
     }
     for split in ("train", "development"):
         if not any(r["split"] == split for r in records):
@@ -108,6 +122,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--status", required=True)
     value.add_argument("--platform-offsets", required=True)
     value.add_argument("--out", required=True)
+    value.add_argument("--exclude", default=None,
+                       help="JSON list of TRAIN matchup ids to remove (scene-level label QA)")
     return value
 
 
