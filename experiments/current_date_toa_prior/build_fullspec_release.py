@@ -1,8 +1,9 @@
 """Assemble the full-spectrum prepared release from the joint campaign's release.
 
 S2 records point at the archives rebuilt by ``build_fullspec_multisensor_labels`` --
-the acquisition's own M5 teacher on every land band (ExtraTrees B01-B04, 6S at the
-M5-solved AOD B05-B12) -- and declare that provenance. Landsat records have no
+the acquisition's own M5 teacher on every land band (ExtraTrees B01-B04; B05-B12 from
+6S at the M5-solved AOD or, with ``--nonvisible-source trees``, ExtraTrees too) -- and
+declare that provenance. Landsat records have no
 same-date teacher and are carried through untouched, archive and digest included.
 S2 scenes without a usable full-spectrum label keep their original archive.
 """
@@ -16,9 +17,14 @@ from pathlib import Path
 
 LAND = ("B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12")
 CONTRACT = "siac_multisensor_same_date_fullspec_trees_visible_6s_extension_v1"
+TREES_CONTRACT = "siac_multisensor_same_date_fullspec_trees_all_bands_v1"
+EXTENSION_SOURCES = {
+    "6s": "6S correction of the scene TOA at the M5-solved AOD (B05-B08, B8A, B11, B12)",
+    "trees": "same-date M5 teacher ExtraTrees surface (B05-B08, B8A, B11, B12)",
+}
 
 
-def fullspec_provenance(original: dict) -> dict:
+def fullspec_provenance(original: dict, nonvisible_source: str = "6s") -> dict:
     value = dict(original)
     value.update(
         month_matched=False,
@@ -26,7 +32,7 @@ def fullspec_provenance(original: dict) -> dict:
         state_qa_applied=True,
         dense_label_bands=list(LAND),
         visible_label_source="same-date M5 teacher ExtraTrees surface (B01-B04)",
-        extension_label_source="6S correction of the scene TOA at the M5-solved AOD (B05-B08, B8A, B11, B12)",
+        extension_label_source=EXTENSION_SOURCES[nonvisible_source],
         platform_correction="measured constant to canonical S2A on B02-B04; zero elsewhere (unmeasured)",
         simultaneous_surface_truth=False,
         scientific_accuracy_validated=False,
@@ -80,8 +86,9 @@ def run(args: argparse.Namespace) -> int:
         value = dict(record)
         value["prepared_path"] = entry["prepared_path"]
         value["prepared_sha256"] = entry["prepared_sha256"]
-        value["teacher_contract"] = CONTRACT
-        value["teacher_provenance"] = fullspec_provenance(record.get("teacher_provenance", {}))
+        value["teacher_contract"] = TREES_CONTRACT if args.nonvisible_source == "trees" else CONTRACT
+        value["teacher_provenance"] = fullspec_provenance(
+            record.get("teacher_provenance", {}), args.nonvisible_source)
         value["query_count"] = entry.get("query_count", value.get("query_count"))
         value["dense_queries"] = entry.get("dense_queries")
         value["labelled_band_values"] = entry.get("extension_labels", 0) + len(LAND) * entry.get(
@@ -102,6 +109,7 @@ def run(args: argparse.Namespace) -> int:
         "carried_records": carried,
         "s2_records_kept_on_original_archive": dropped,
         "dense_only_records_dropped_without_label": dense_only_dropped,
+        "nonvisible_label_source": args.nonvisible_source,
         "platform_offsets": json.loads(Path(args.platform_offsets).read_text()),
         "source_release": str(Path(args.release).absolute()),
         "excluded_train_scenes": sorted(excluded),
@@ -133,6 +141,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--out", required=True)
     value.add_argument("--exclude", default=None,
                        help="JSON list of TRAIN matchup ids to remove (scene-level label QA)")
+    value.add_argument("--nonvisible-source", choices=tuple(EXTENSION_SOURCES), default="6s",
+                       help="must match the label build: B05-B12 from 6S (default) or ExtraTrees")
     return value
 
 

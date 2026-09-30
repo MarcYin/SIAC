@@ -5,10 +5,12 @@ For each S2 sample a dense query block is drawn from the acquisition's own
 full-spectrum M5 teacher (``fullspec_training_labels_20260925/teacher_fullspec``):
 
 * B01-B04: the ExtraTrees surface prediction (the label's visible construction);
-* B05, B06, B07, B08, B8A, B11, B12: the 6S correction of the scene's own TOA at the
-  M5-solved AOD (``extra_anchor_boa_at_solution`` / ``anchor_boa_at_solution``), which
-  beats the tree readout of those bands against the AERONET measured-aerosol reference
-  (B05/B06/B11/B12 better, B07/B8A tied).
+* B05, B06, B07, B08, B8A, B11, B12: with ``--nonvisible-source 6s`` (the default), the
+  6S correction of the scene's own TOA at the M5-solved AOD (``extra_anchor_boa_at_solution``
+  / ``anchor_boa_at_solution``), which beats the tree readout of those bands against the
+  AERONET measured-aerosol reference (B05/B06/B11/B12 better, B07/B8A tied); with
+  ``--nonvisible-source trees``, the ExtraTrees prediction, so every band shares one
+  label construction.
 
 The month-matched library labels on those bands are masked off, so the library block
 only keeps its role in the native RT closure. Landsat samples are left untouched.
@@ -40,25 +42,30 @@ from experiments.current_date_toa_prior.build_hybrid_multisensor_labels import (
 LAND = ("B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12")
 TREE_BANDS = ("B01", "B02", "B03", "B04")
 SIXS_BANDS = ("B05", "B06", "B07", "B08", "B8A", "B11", "B12")
+NONVISIBLE_SOURCES = ("6s", "trees")
 TARGET = [BANDS.index(b) for b in LAND]
 FULLSPEC_SCHEMA = "siac_multisensor_fullspec_prepared_npz_v1"
 CONTRACT = "siac_multisensor_same_date_fullspec_trees_visible_6s_extension_v1"
 
 
-def dense_label(teacher_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def dense_label(teacher_path: Path, nonvisible_source: str = "6s") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(H, W, 11) values and sigma in LAND order, plus the label's own validity."""
+    if nonvisible_source not in NONVISIBLE_SOURCES:
+        raise ValueError(f"Unknown non-visible label source {nonvisible_source!r}")
+    tree_bands = LAND if nonvisible_source == "trees" else TREE_BANDS
     with np.load(teacher_path, allow_pickle=False) as z:
         names = [str(b) for b in z["surface_bands"]]
         surface, sigma = z["surface"], z["surface_uncertainty"]
         anchors = {str(b): z["anchor_boa_at_solution"][..., k] for k, b in enumerate(z["anchor_boa_bands"])}
         extra = {str(b): z["extra_anchor_boa_at_solution"][..., k] for k, b in enumerate(z["extra_anchor_bands"])}
         valid = np.asarray(z["valid"]).astype(bool)
-    value = np.stack([surface[..., names.index(b)] if b in TREE_BANDS else {**anchors, **extra}[b] for b in LAND], -1)
+    value = np.stack([surface[..., names.index(b)] if b in tree_bands else {**anchors, **extra}[b] for b in LAND], -1)
     spread = np.stack([sigma[..., names.index(b)] for b in LAND], -1)
     return value.astype(np.float32), spread.astype(np.float32), valid
 
 
-def build_one(record: dict, out_dir: Path, *, teacher_root: Path, queries: int, offsets: dict) -> dict:
+def build_one(record: dict, out_dir: Path, *, teacher_root: Path, queries: int, offsets: dict,
+              nonvisible_source: str = "6s") -> dict:
     source = Path(record["prepared_path"])
     original = Path(record["inputs"]["original_prepared"]["path"])
     teacher_path = teacher_root / f"{record['matchup_id']}.npz"
@@ -68,7 +75,7 @@ def build_one(record: dict, out_dir: Path, *, teacher_root: Path, queries: int, 
         data = {key: archive[key] for key in archive.files}
     with np.load(original, allow_pickle=False) as archive:
         weight_map = np.asarray(archive["weight"], dtype=np.float32)
-    dense, dense_sigma, label_valid_map = dense_label(teacher_path)
+    dense, dense_sigma, label_valid_map = dense_label(teacher_path, nonvisible_source)
     height, width = dense.shape[:2]
     if data["local_toa"].shape[:2] != (height, width) or weight_map.shape != (height, width):
         raise ValueError("The full-spectrum teacher and the joint sample use different grids")
@@ -130,7 +137,10 @@ def build_one(record: dict, out_dir: Path, *, teacher_root: Path, queries: int, 
     data["schema_version"] = np.asarray(SCHEMA)
     data["fullspec_schema_version"] = np.asarray(FULLSPEC_SCHEMA)
     data["dense_label_bands"] = np.asarray(LAND)
-    data["dense_label_source"] = np.asarray("same-date full-spectrum M5 teacher: trees B01-B04, 6S at M5 AOD B05-B12")
+    data["dense_label_source"] = np.asarray(
+        "same-date full-spectrum M5 teacher: trees B01-B12" if nonvisible_source == "trees"
+        else "same-date full-spectrum M5 teacher: trees B01-B04, 6S at M5 AOD B05-B12")
+    data["dense_nonvisible_source"] = np.asarray(nonvisible_source)
     data["dense_query_count"] = np.asarray(count, np.int32)
     data["library_query_count"] = np.asarray(library_queries, np.int32)
     data["platform_offset"] = offset
@@ -162,7 +172,8 @@ def run(args: argparse.Namespace) -> int:
                 entry.update(status="cached", prepared_path=str(path), prepared_sha256=digest(path))
             else:
                 entry.update(build_one(record, out_dir, teacher_root=Path(args.teacher_root),
-                                       queries=args.queries, offsets=offsets))
+                                       queries=args.queries, offsets=offsets,
+                                       nonvisible_source=args.nonvisible_source))
         except Exception as exc:  # noqa: BLE001 - one scene must not sink the shard
             failures += 1
             traceback.print_exc()
@@ -182,6 +193,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--queries", type=int, default=4096)
     value.add_argument("--shards", type=int, default=1)
     value.add_argument("--shard", type=int, default=0)
+    value.add_argument("--nonvisible-source", choices=NONVISIBLE_SOURCES, default="6s",
+                       help="label B05-B12 with 6S at the M5 AOD (default) or the ExtraTrees prediction")
     value.add_argument("--force", action="store_true")
     return value
 
