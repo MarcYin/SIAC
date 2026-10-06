@@ -128,7 +128,7 @@ def build_preprocessor_runtime(
     except KeyError as exc:
         raise SensorNotSupportedError(
             f"Sensor {sensor_name!r} has no registered scene preprocessor. "
-            "Sentinel-2 ('s2') is the only end-to-end processing sensor currently available."
+            "Registered sensors: Sentinel-2 ('s2') and Landsat 8/9 OLI ('l8', 'l9')."
         ) from exc
 
     if input_path is not None and hasattr(preprocessor_obj, "get_metadata"):

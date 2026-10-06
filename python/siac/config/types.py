@@ -26,6 +26,8 @@ class SIACEnum(str, Enum):
 
 class SensorName(SIACEnum):
     S2 = "s2"
+    L8 = "l8"
+    L9 = "l9"
     AUTO = "auto"
 
 
@@ -258,6 +260,9 @@ class CloudMaskMode(SIACEnum):
 
 class CloudMaskProvider(SIACEnum):
     OMNICLOUDMASK = "omnicloudmask"
+    # Cloud/shadow classification shipped with the Level-1 product
+    # (Landsat Collection-2 QA_PIXEL).
+    PRODUCT_QA = "product_qa"
 
 
 class ResolutionPolicy(SIACEnum):

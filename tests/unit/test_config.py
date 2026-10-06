@@ -243,7 +243,11 @@ class TestSIACConfig:
 
     def test_unsupported_processing_sensor_is_rejected(self):
         with pytest.raises(ValidationError):
-            SIACConfig(sensor="l8")
+            SIACConfig(sensor="l5")
+
+    @pytest.mark.parametrize("sensor", ["l8", "l9"])
+    def test_landsat_processing_sensors_are_accepted(self, sensor):
+        assert SIACConfig(sensor=sensor).sensor.value == sensor
 
     def test_resolve_uses_python_only_sensor_and_aoi_defaults(self):
         config = SIACConfig(sensor="s2", aoi="/tmp/aoi.geojson")

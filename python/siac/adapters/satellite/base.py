@@ -397,11 +397,20 @@ def detect_sensor(input_path: str | Path) -> str:
         return "s2"
 
     # Check for Landsat MTL
-    mtl_files = list(input_path.glob("*_MTL.txt")) + list(input_path.glob("*_MTL.xml"))
+    if input_path.is_file() and input_path.name.upper().endswith(("_MTL.TXT", "_MTL.JSON")):
+        mtl_files = [input_path]
+    else:
+        mtl_files = [
+            *input_path.glob("*_MTL.txt"),
+            *input_path.glob("*_MTL.json"),
+            *input_path.glob("*_MTL.xml"),
+        ]
     if mtl_files:
         # Check if Landsat 8/9 or older
         mtl_content = mtl_files[0].read_text()
-        if "LANDSAT_8" in mtl_content or "LANDSAT_9" in mtl_content:
+        if "LANDSAT_9" in mtl_content:
+            return "l9"
+        if "LANDSAT_8" in mtl_content:
             return "l8"
         elif "LANDSAT_5" in mtl_content or "LANDSAT_7" in mtl_content:
             return "l5"

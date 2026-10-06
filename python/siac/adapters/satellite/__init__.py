@@ -47,4 +47,5 @@ from siac.adapters.satellite.base import (
 )
 
 # Import sensor-specific preprocessors to trigger registration
+from siac.adapters.satellite.landsat import LandsatPreprocessor as LandsatPreprocessor
 from siac.adapters.satellite.sentinel2 import Sentinel2Preprocessor as Sentinel2Preprocessor
