@@ -16,7 +16,9 @@ import xarray as xr
 
 try:
     from pyhdf.SD import SD, SDC  # type: ignore[import-untyped]
-except ModuleNotFoundError:  # pragma: no cover - optional dependency
+except ImportError as exc:
+    if not isinstance(exc, ModuleNotFoundError) or exc.name != "pyhdf":
+        raise ImportError("pyhdf is installed but failed to import.") from exc
 
     class _MissingSDC:
         READ = 0

@@ -95,6 +95,8 @@ def _load_optional_dependency(module_name: str, install_hint: str) -> Any:
     try:
         return import_module(module_name)
     except ModuleNotFoundError as exc:  # pragma: no cover - env-dependent
+        if exc.name != module_name:
+            raise
         raise AuthenticationError(install_hint) from exc
 
 

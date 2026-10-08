@@ -81,11 +81,8 @@ class OmniCloudMaskProvider:
         try:
             omnicloudmask = import_module("omnicloudmask")
         except ImportError as exc:
-            # Narrowed from ``except Exception`` (REVIEW.md §2.1):
-            # only swallow import-time failures here. Other exception
-            # classes (a partial install raising AttributeError during
-            # module init, for example) should propagate so the user can
-            # see the real cause.
+            if not isinstance(exc, ModuleNotFoundError) or exc.name != "omnicloudmask":
+                raise ImportError("omnicloudmask is installed but failed to import.") from exc
             raise ImportError(
                 "omnicloudmask is required for SIAC cloud masking. "
                 "Install the 'omnicloudmask' package."
