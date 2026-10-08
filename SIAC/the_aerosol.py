@@ -523,11 +523,28 @@ class solve_aerosol(object):
         forcast_times = []
         for i in range(nbands):
             band = g.GetRasterBand(i+1)
-            netcdf_time = int(band.GetMetadata()['NETCDF_DIM_time'])
+            _md = band.GetMetadata()
+            if 'NETCDF_DIM_time' not in _md:
+                forcast_times = None
+                break
+            netcdf_time = int(_md['NETCDF_DIM_time'])
             forcast_time = netcdf_start_time + timedelta(hours=netcdf_time)
             forcast_times.append(forcast_time)  
-        time_diff = np.array(forcast_times) - self.obs_time
-        time_ind = np.abs(time_diff).argmin()
+        if forcast_times:
+            time_diff = np.array(forcast_times) - self.obs_time
+            time_ind = np.abs(time_diff).argmin()
+        else:
+            # GRIB-derived CAMS tifs carry forecast_reference_time and
+            # forecast_period instead of NETCDF_DIM_time. Fall back to the
+            # band-count rule: bands are hourly (25) or 3-hourly (9) steps
+            # over the observation day, indexed by hour of day.
+            _oh = self.obs_time.hour + self.obs_time.minute / 60. + self.obs_time.second / 3600.
+            if nbands == 9:
+                time_ind = int(np.abs(_oh - np.arange(0, 25, 3)).argmin())
+            elif nbands == 25:
+                time_ind = int(np.abs(_oh - np.arange(0, 25, 1)).argmin())
+            else:
+                time_ind = int(np.abs(_oh - np.linspace(0, 24, nbands)).argmin())
 
         # if nbands == 9:
         #     time_ind    = np.abs((self.obs_time.hour  + self.obs_time.minute/60. + \
@@ -546,6 +563,10 @@ class solve_aerosol(object):
                 g      = var_g.GetRasterBand(int(time_ind+1))
                 offset = g.GetOffset()            
                 scale  = g.GetScale()             
+                # GRIB-derived CAMS tifs hold physical values with no GDAL
+                # scale/offset (None); default to the identity transform.
+                if scale  is None: scale  = 1.0
+                if offset is None: offset = 0.0
                 data   = prior_g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
             else:
                 data   = prior_g.ReadAsArray()

@@ -343,6 +343,10 @@ class atmospheric_correction(object):
                                             0, dstNodata=np.nan, outputType= gdal.GDT_Float32).g
                     offset   = var_g.GetOffset()            
                     scale    = var_g.GetScale()             
+                    # GRIB-derived CAMS tifs hold physical values with no GDAL
+                    # scale/offset (None); default to the identity transform.
+                    if scale  is None: scale  = 1.0
+                    if offset is None: offset = 0.0
                     data     = _g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
                     atmos[i] = data * self.cams_scale[i]
                     if atmo_uncs[i] is None:
