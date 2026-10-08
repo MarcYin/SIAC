@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 
 from siac.adapters.atmo import CAMSProvider
+from siac.adapters.auth import CredentialManager
 from siac.adapters.earthdata import earthaccess_source_from_auth
 from siac.app.registry import (
     ATMO_PROVIDER_REGISTRY,
@@ -18,7 +19,6 @@ from siac.app.registry import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from siac.adapters.auth import CredentialManager
     from siac.algorithms.surface.brdf_monthly_composite import MonthlyCompositeCollection
     from siac.domain.protocols import AtmosphericPriorProvider, MonthlyCompositeProvider
     from siac.runtime import ObservationBundle
@@ -47,7 +47,7 @@ def _build_cams_provider(
             atmo_config.data_path,
             temporal_interp=atmo_config.temporal_interpolation == "linear",
             download_missing=atmo_config.download_missing,
-            auth=auth,
+            auth=auth if auth is not None else CredentialManager.from_config(config),
             cache_dir=atmo_config.cache_dir,
         ),
     )
