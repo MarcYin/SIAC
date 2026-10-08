@@ -208,7 +208,7 @@ def daily_vrt_jasmin(fnames_date, vrt_dir = None):
     ''' this maybe problematic when reading and writing the same time
     all_files = []
     for fname in fnames:
-        all_files += glob(os.path.dirname(fname) + '/MCD43A1.A%s.h??v??.006.*.hdf'%date)
+        all_files += glob(os.path.dirname(fname) + '/MCD43A1.A%s.h??v??.*.hdf'%date)
     '''
     if vrt_dir is None:
         vrt_dir = './MCD43_VRT/' 
@@ -236,7 +236,7 @@ def daily_vrt(fnames_date, vrt_dir = None):
     fnames = list(map(os.path.abspath, fnames))
     all_files = []
     for fname in fnames:
-        all_files += glob(os.path.dirname(fname) + '/MCD43A1.A%s.h??v??.006.*.hdf'%date)
+        all_files += glob(os.path.dirname(fname) + '/MCD43A1.A%s.h??v??.*.hdf'%date)
     if vrt_dir is None:
         vrt_dir = './MCD43_VRT/'
     if not os.path.exists(vrt_dir):

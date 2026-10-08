@@ -190,7 +190,7 @@ class solve_aerosol(object):
         self.mcd43_gee_folder = mcd43_gee_folder
         self.boa_wv      = [645, 859, 469, 555, 1640, 2130]
         self.aero_res    = aero_res
-        self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.006.*.hdf'
+        self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.*.hdf'
         
         self.toa_dir     =  os.path.abspath('/'.join(toa_bands[0].split('/')[:-1]))
         try:
