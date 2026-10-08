@@ -13,7 +13,10 @@ from scipy import ndimage, signal
 from datetime import datetime, timedelta
 from scipy.linalg import get_lapack_funcs
 if (sys.version_info[0] == 3) & (sys.version_info[1] >= 4):
-    multiprocessing.set_start_method('spawn', force=True)
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # start method already fixed by the importing process
 
 procs =  psutil.cpu_count()
 # def warp_data(fname, aoi,  xRes, yRes):

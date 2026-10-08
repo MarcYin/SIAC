@@ -40,7 +40,10 @@ from SIAC.read_MCD43 import get_kernel_weights, get_bounds, smooth, get_kk, getK
 from SIAC.MCD43_GEE import read_MCD3_GEE
 
 if (sys.version_info[0] == 3) & (sys.version_info[1] >= 4):
-    multiprocessing.set_start_method('spawn', force=True)
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # start method already fixed by the importing process
 
 procs =  psutil.cpu_count()
 
