@@ -128,6 +128,33 @@ def _tile_indices(tile: str) -> tuple[int, int]:
 _EE_SINUSOIDAL = "SR-ORG:6974"
 
 
+#: MODLAND rows touching a pole. Earth Engine's footprint of a granule there is unbounded or has no
+#: computable bounds (h16-h19 v00, scenes at 80 N), and ``reduceRegion`` refuses to run over it.
+_POLAR_ROWS = frozenset({0, 17})
+
+
+def _bounded_footprint(footprint: Any, tile: str) -> Any:
+    """``footprint``, or for a polar-row tile the whole tile in the sinusoidal projection.
+
+    Every other tile keeps its own footprint, so it is reduced exactly as before.
+    """
+    import ee
+
+    from siac.adapters.earthdata_common import modland_tile_coords
+
+    h, v = _tile_indices(tile)
+    if v not in _POLAR_ROWS:
+        return footprint
+    x, y = modland_tile_coords(h, v, MODLAND_PIXELS, MODLAND_PIXELS)
+    size = float(x[1] - x[0])
+    left, top = float(x[0]) - size / 2.0, float(y[0]) + size / 2.0
+    return ee.Geometry.Rectangle(
+        [left, top - MODLAND_PIXELS * size, left + MODLAND_PIXELS * size, top],
+        proj=ee.Projection(_EE_SINUSOIDAL),
+        geodesic=False,
+    )
+
+
 def _native_window(tile: str, extent, crs: str, margin: int):
     """Tile pixel-centre coordinates and the native block covering ``extent``."""
     from pyproj import Transformer
@@ -207,7 +234,7 @@ def native_granules(
             .select(sorted({*bands, _PRESENCE_BAND}))
         )
 
-        def sample(image: Any, region: Any = region) -> Any:
+        def sample(image: Any, region: Any = region, tile: str = tile) -> Any:
             out = {"index": image.get("system:index"), "time": image.get("system:time_start")}
             presence = image.select(_PRESENCE_BAND)
             # Observations anywhere in the tile, not just the AOI: an empty copy
@@ -217,7 +244,7 @@ def native_granules(
                 .gt(0)
                 .reduceRegion(
                     reducer=ee.Reducer.sum(),
-                    geometry=presence.geometry(),
+                    geometry=_bounded_footprint(presence.geometry(), tile),
                     crs=presence.projection(),
                     maxPixels=1e10,
                 )
@@ -383,6 +410,9 @@ def _whole_granule_has(granule: Any, loose: bool) -> bool:
         )
         .filter(ee.Filter.stringStartsWith("system:index", prefix))
     )
+    # A polar-row orbit masked everywhere keeps a footprint without computable bounds through
+    # unmask(); unmask it over an unbounded footprint there (the region still limits it to the tile).
+    same_footprint = _tile_indices(granule.tile)[1] not in _POLAR_ROWS
 
     def flag(image: Any) -> Any:
         aod, unc, qa = (image.select(b) for b in ("Optical_Depth_055", "AOD_Uncertainty", "AOD_QA"))
@@ -405,12 +435,12 @@ def _whole_granule_has(granule: Any, loose: bool) -> bool:
             )
         )
         value = (
-            passing.unmask(0)
+            passing.unmask(0, same_footprint)
             .reduceRegion(
                 reducer=ee.Reducer.max(),
                 # Bands do not share one projection; these three are on the
                 # 1 km MODLAND grid, the QA band stands for them.
-                geometry=qa.geometry(),
+                geometry=_bounded_footprint(qa.geometry(), granule.tile),
                 crs=qa.projection(),
                 maxPixels=1e10,
             )
