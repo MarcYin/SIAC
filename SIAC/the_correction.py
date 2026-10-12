@@ -343,6 +343,10 @@ class atmospheric_correction(object):
                                             0, dstNodata=np.nan, outputType= gdal.GDT_Float32).g
                     offset   = var_g.GetOffset()            
                     scale    = var_g.GetScale()             
+                    # GRIB-derived CAMS tifs hold physical values with no GDAL
+                    # scale/offset (None); default to the identity transform.
+                    if scale  is None: scale  = 1.0
+                    if offset is None: offset = 0.0
                     data     = _g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
                     atmos[i] = data * self.cams_scale[i]
                     if atmo_uncs[i] is None:
@@ -411,8 +415,12 @@ class atmospheric_correction(object):
                 xhs[ei].append(array_to_raster(temp, self.example_file, band_axis=2))
             
         self._saa; del self._sza; del self._ele; del self._aot; del self._tcwv; del self._tco3#; del self._aot_unc; del self._tcwv_unc; del self._tco3_unc
-        self.xap_H, self.xbp_H, self.xcp_H    = np.array(xps)
-        self.xap_dH, self.xbp_dH, self.xcp_dH = np.array(xhs)
+        # Keep these as plain lists of MEM gdal.Datasets. np.array() under
+        # modern numpy recurses into each Dataset as array-like and yields an
+        # object array that gdal.Warp rejects ("object of wrong
+        # GDALDatasetShadow"). Scalar indexing works the same on a list.
+        self.xap_H, self.xbp_H, self.xcp_H    = xps
+        self.xap_dH, self.xbp_dH, self.xcp_dH = xhs
 
 
     def _get_bounds(self, g):                                                                                                                                 

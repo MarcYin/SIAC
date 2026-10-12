@@ -37,10 +37,12 @@ from sklearn.linear_model import HuberRegressor
 from SIAC.reproject import reproject_data, array_to_raster
 from scipy.ndimage import binary_dilation, binary_erosion
 from SIAC.read_MCD43 import get_kernel_weights, get_bounds, smooth, get_kk, getKernelWeights
-from SIAC.MCD43_GEE import read_MCD3_GEE
 
 if (sys.version_info[0] == 3) & (sys.version_info[1] >= 4):
-    multiprocessing.set_start_method('spawn', force=True)
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # start method already fixed by the importing process
 
 procs =  psutil.cpu_count()
 
@@ -67,8 +69,8 @@ def fill_nan(array):
 def gaussian(xstd, ystd, norm = True):
     winx = 2*int(np.ceil(1.96*xstd))
     winy = 2*int(np.ceil(1.96*ystd))
-    xgaus = signal.gaussian(winx, xstd)
-    ygaus = signal.gaussian(winy, ystd)
+    xgaus = signal.windows.gaussian(winx, xstd)
+    ygaus = signal.windows.gaussian(winy, ystd)
     gaus  = np.outer(xgaus, ygaus)
     if norm:
         return gaus/gaus.sum()
@@ -188,7 +190,7 @@ class solve_aerosol(object):
         self.mcd43_gee_folder = mcd43_gee_folder
         self.boa_wv      = [645, 859, 469, 555, 1640, 2130]
         self.aero_res    = aero_res
-        self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.006.*.hdf'
+        self.mcd43_tmp   = '%s/MCD43A1.A%d%03d.%s.*.hdf'
         
         self.toa_dir     =  os.path.abspath('/'.join(toa_bands[0].split('/')[:-1]))
         try:
@@ -521,11 +523,28 @@ class solve_aerosol(object):
         forcast_times = []
         for i in range(nbands):
             band = g.GetRasterBand(i+1)
-            netcdf_time = int(band.GetMetadata()['NETCDF_DIM_time'])
+            _md = band.GetMetadata()
+            if 'NETCDF_DIM_time' not in _md:
+                forcast_times = None
+                break
+            netcdf_time = int(_md['NETCDF_DIM_time'])
             forcast_time = netcdf_start_time + timedelta(hours=netcdf_time)
             forcast_times.append(forcast_time)  
-        time_diff = np.array(forcast_times) - self.obs_time
-        time_ind = np.abs(time_diff).argmin()
+        if forcast_times:
+            time_diff = np.array(forcast_times) - self.obs_time
+            time_ind = np.abs(time_diff).argmin()
+        else:
+            # GRIB-derived CAMS tifs carry forecast_reference_time and
+            # forecast_period instead of NETCDF_DIM_time. Fall back to the
+            # band-count rule: bands are hourly (25) or 3-hourly (9) steps
+            # over the observation day, indexed by hour of day.
+            _oh = self.obs_time.hour + self.obs_time.minute / 60. + self.obs_time.second / 3600.
+            if nbands == 9:
+                time_ind = int(np.abs(_oh - np.arange(0, 25, 3)).argmin())
+            elif nbands == 25:
+                time_ind = int(np.abs(_oh - np.arange(0, 25, 1)).argmin())
+            else:
+                time_ind = int(np.abs(_oh - np.linspace(0, 24, nbands)).argmin())
 
         # if nbands == 9:
         #     time_ind    = np.abs((self.obs_time.hour  + self.obs_time.minute/60. + \
@@ -544,6 +563,10 @@ class solve_aerosol(object):
                 g      = var_g.GetRasterBand(int(time_ind+1))
                 offset = g.GetOffset()            
                 scale  = g.GetScale()             
+                # GRIB-derived CAMS tifs hold physical values with no GDAL
+                # scale/offset (None); default to the identity transform.
+                if scale  is None: scale  = 1.0
+                if offset is None: offset = 0.0
                 data   = prior_g.GetRasterBand(int(time_ind+1)).ReadAsArray() * scale + offset
             else:
                 data   = prior_g.ReadAsArray()
@@ -714,6 +737,7 @@ class solve_aerosol(object):
                                             cache_mcd43 = True,
                                             cache_name = self.toa_dir + '/mcd43_cache.npz')
         else:
+            from SIAC.MCD43_GEE import read_MCD3_GEE  # only needed when Gee=True
             das, ws, mg = read_MCD3_GEE(self.mcd43_gee_folder, self.boa_bands, outputBounds,  self.aero_res*0.5,  self.aero_res*0.5, dstSRS)
         self.mg = mg
         hg = self.example_file

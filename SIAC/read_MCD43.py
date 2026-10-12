@@ -13,7 +13,10 @@ from scipy import ndimage, signal
 from datetime import datetime, timedelta
 from scipy.linalg import get_lapack_funcs
 if (sys.version_info[0] == 3) & (sys.version_info[1] >= 4):
-    multiprocessing.set_start_method('spawn', force=True)
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # start method already fixed by the importing process
 
 procs =  psutil.cpu_count()
 # def warp_data(fname, aoi,  xRes, yRes):
@@ -139,8 +142,8 @@ def get_bounds(aoi, toa, pix_res):
 def gaussian(xstd, ystd, norm = True):
     winx = 2*int(np.ceil(1.96*xstd))
     winy = 2*int(np.ceil(1.96*ystd))
-    xgaus = signal.gaussian(winx, xstd)
-    ygaus = signal.gaussian(winy, ystd)
+    xgaus = signal.windows.gaussian(winx, xstd)
+    ygaus = signal.windows.gaussian(winy, ystd)
     gaus  = np.outer(xgaus, ygaus)
     if norm:
         return gaus/gaus.sum()
