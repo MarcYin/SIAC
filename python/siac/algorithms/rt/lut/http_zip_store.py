@@ -557,6 +557,8 @@ def _build_s3_filesystem(storage_options: dict[str, Any]) -> AsyncFileSystem:
     try:
         import s3fs  # type: ignore[import-untyped]
     except ImportError as exc:
+        if not isinstance(exc, ModuleNotFoundError) or exc.name != "s3fs":
+            raise ImportError("s3fs is installed but failed to import.") from exc
         raise ImportError(
             "s3fs is required to read s3:// LUT zip paths. Install with `pip install s3fs`."
         ) from exc

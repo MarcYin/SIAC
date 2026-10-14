@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 
 from siac.adapters.atmo import CAMSProvider
+from siac.adapters.auth import CredentialManager
 from siac.algorithms.surface.brdf_whittaker import BRDFWhittakerDeriver
 from siac.algorithms.surface.kernel_model import KernelModelDeriver
 from siac.app._assembly_providers import (
@@ -20,7 +21,6 @@ from siac.app.registry import SURFACE_PRIOR_METHOD_REGISTRY
 from siac.observability import current_execution_observer, observe_stage
 
 if TYPE_CHECKING:
-    from siac.adapters.auth import CredentialManager
     from siac.domain.sensors import SensorConfig
     from siac.runtime import AtmosphericState, ObservationBundle, SurfacePrior
     from siac.workflows.pipeline import SurfacePriorFn
@@ -730,7 +730,7 @@ def _resolve_bestpixel_anchor_atmo_source(
         data_path,
         temporal_interp=False,
         download_missing=True,
-        auth=auth,
+        auth=auth if auth is not None else CredentialManager.from_config(config),
         cache_dir=cache_dir,
     )
     return provider.get_prior

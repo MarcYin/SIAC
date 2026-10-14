@@ -1183,7 +1183,9 @@ class CAMSProvider:
         """Download CAMS data using the official CDS API request pattern."""
         try:
             cdsapi = self._import_cdsapi()
-        except ImportError:
+        except ImportError as exc:
+            if not isinstance(exc, ModuleNotFoundError) or exc.name != "cdsapi":
+                raise ImportError("cdsapi is installed but failed to import.") from exc
             logger.warning("cdsapi is not installed; cannot auto-download CAMS data")
             return None
 

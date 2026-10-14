@@ -58,7 +58,9 @@ class EarthAccessSource:
         if self._earthaccess is None:
             try:
                 self._earthaccess = importlib.import_module("earthaccess")
-            except ImportError as exc:  # pragma: no cover - env-dependent
+            except ImportError as exc:
+                if not isinstance(exc, ModuleNotFoundError) or exc.name != "earthaccess":
+                    raise ImportError("earthaccess is installed but failed to import.") from exc
                 raise ImportError(
                     "earthaccess is required for NASA Earthdata access. "
                     "Install with `pip install earthaccess`."
